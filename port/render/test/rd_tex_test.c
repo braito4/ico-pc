@@ -20,6 +20,9 @@
  *   cache    rd_tex keys: hit, generation miss, a baked TEXA variant as a
  *            separate entry, in-place update, a new size retired and
  *            destroyed two frame ticks later, drop;
+ *   relief   flat and substantially transparent RGBA textures are rejected;
+ *            opaque detailed textures receive a material-detail score, which
+ *            is recomputed after a full update;
  *   resolve  tex_TransTexture's packet decodes to TEX1/TEST/TEX0 with the
  *            cached texture bound, and no register is left undecoded;
  *   pixels   (Vulkan, lavapipe in the container) one PSMT8 sprite and one
@@ -718,6 +721,45 @@ static void cacheChecks(void)
     CHECK(rd__tex_rec(d.id) == NULL && rd__tex_rec(b.id) == NULL, "dropped textures destroyed");
 }
 
+/* ----------------------------------------- adaptive material relief score */
+
+static void reliefChecks(void)
+{
+    enum { W = 32, H = 32 };
+    uint8_t px[W * H * 4];
+
+    for (int i = 0; i < W * H; i++) {
+        px[i * 4 + 0] = 96;
+        px[i * 4 + 1] = 96;
+        px[i * 4 + 2] = 96;
+        px[i * 4 + 3] = 128;
+    }
+    const RdTex t = rd_create_texture(W, H, px, RD_TEXA_80_80, "relief score");
+    const RdTexRec *r = rd__tex_rec(t.id);
+    CHECK(r && r->relief == 0, "a flat texture has no relief (%u)", r ? r->relief : 0);
+
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            const uint8_t v = ((x ^ y) & 1) ? 208 : 40;
+            uint8_t *p = &px[(y * W + x) * 4];
+            p[0] = v;
+            p[1] = v;
+            p[2] = v;
+            p[3] = 128;
+        }
+    }
+    rd_update_texture(t, px);
+    CHECK(r && r->relief > 0, "an opaque detailed texture has relief (%u)", r ? r->relief : 0);
+
+    for (int i = 0; i < W * H; i += 4) {
+        px[i * 4 + 3] = 0;
+    }
+    rd_update_texture(t, px);
+    CHECK(r && r->relief == 0, "a substantially transparent texture has no relief (%u)",
+          r ? r->relief : 0);
+    rd_destroy_texture(t);
+}
+
 /* ------------------------------------------------------- texture packs */
 
 static int s_released;
@@ -1325,6 +1367,7 @@ int main(void)
     samplerChecks();
     scrollChecks();
     cacheChecks();
+    reliefChecks();
     r8Checks();
     replacementChecks();
     dl_Clear();

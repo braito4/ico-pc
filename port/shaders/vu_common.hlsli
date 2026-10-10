@@ -646,6 +646,36 @@ Texture2D<float4> g_texture : register(t1, space2);
 SamplerState g_sampler : register(s1, space2);
 Texture2D<float> g_dateSnap : register(t2, space2);
 
+float vu_relief_height(float3 c)
+{
+    return dot(c, float3(0.299, 0.587, 0.114));
+}
+
+/* Apparent material depth from the colour texture when no authored height
+ * or normal map exists.  CPU analysis enables this only for detailed,
+ * substantially opaque textures on rigid lit geometry.  The flat-normal
+ * reference is subtracted, so a constant texture keeps exactly its original
+ * brightness.  Four neighbouring samples make the result stable in texture
+ * space rather than embossing it in screen space. */
+uint3 vu_relief_rgb(float2 uv, float q, uint3 rgb)
+{
+    if ((g_mode.x & DF_TEXTURE_RELIEF) == 0u || g_param.x <= 0.0) {
+        return rgb;
+    }
+    const float2 px = g_param.yz;
+    const float hl = vu_relief_height(gs_sample(g_texture, g_sampler, uv - float2(px.x, 0.0), q).rgb);
+    const float hr = vu_relief_height(gs_sample(g_texture, g_sampler, uv + float2(px.x, 0.0), q).rgb);
+    const float hu = vu_relief_height(gs_sample(g_texture, g_sampler, uv - float2(0.0, px.y), q).rgb);
+    const float hd = vu_relief_height(gs_sample(g_texture, g_sampler, uv + float2(0.0, px.y), q).rgb);
+    const float detail = saturate((abs(hl - hr) + abs(hu - hd)) * 3.0);
+    const float2 slope = float2(hl - hr, hu - hd) * g_param.x;
+    const float3 n = normalize(float3(slope, 1.0));
+    const float3 light = normalize(float3(-0.45, -0.55, 1.0));
+    const float emboss = dot(n, light) - light.z;
+    const float shade = clamp(1.0 + emboss * (0.55 + detail * 0.35), 0.72, 1.25);
+    return uint3(min(float3(rgb) * shade + 0.5, 255.0));
+}
+
 // sprite_ps with STQ: the texel at S/Q, T/Q (the texture is padded to
 // 2^TW x 2^TH, so STQ is normalised already; a texture with GS levels at
 // the GS's level by Q, gs_sample), texture function, TEXA, alpha test,
@@ -665,6 +695,7 @@ DualOut vu_pixel(VuVSOut i)
         float2 uv = gs_block_uv(i.stq.xy / i.stq.z); // widescreen reflections: the pool's grids
         uint4 t = uint4(floor(gs_sample(g_texture, g_sampler, uv, i.stq.z) * 255.0 + 0.5));
         t = gs_texa_expand(t, g_mode.y & 0xFFu, g_mode.y >> 8);
+        t.rgb = vu_relief_rgb(uv, i.stq.z, t.rgb);
         col = gs_texture_function(t, col, g_mode.x);
     }
     if (gs_alpha_discard(g_mode.z, g_mode.w, col.a)) {
@@ -692,6 +723,7 @@ DualOut vu_pixel_texa(VuVSOut i)
         uint4 t = (g_mode.x & DF_GS_LOD) != 0u
                       ? gs_texa_texture_lod(g_texture, uv, i.stq.z, g_mode.x)
                       : gs_texa_texture(g_texture, g_sampler, uv, g_mode.x);
+        t.rgb = vu_relief_rgb(uv, i.stq.z, t.rgb);
         col = gs_texture_function(t, col, g_mode.x);
     }
     if (gs_alpha_discard(g_mode.z, g_mode.w, col.a)) {

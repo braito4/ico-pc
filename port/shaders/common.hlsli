@@ -114,6 +114,10 @@ float2 gs_block_uv(float2 uv)
 // sample at the GS's level of detail (gs_lod_level) with TEX1's fields in
 // g_blend.w. Every entry that samples a game texture honours it.
 #define DF_GS_LOD 262144u
+// Suitable opaque lit textures: derive a small normal perturbation from
+// neighbouring texels (vu_common.hlsli).  g_param.x is its analysed strength,
+// g_param.yz one actual source texel in normalised coordinates.
+#define DF_TEXTURE_RELIEF 524288u
 
 // TEST.DATE. snap is the R8 DATE snapshot (1.0 where the destination alpha
 // had its MSB set when the snapshot was taken). Returns true when the

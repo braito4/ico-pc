@@ -92,7 +92,10 @@ enum {
     ICO_DF_NODUAL_ALPHA_PASS = 131072,
     /* the texture has its GS mipmap levels: sample at the GS's level from
      * Q and TEX1's fields in DrawCB.blend[3] (common.hlsli gs_lod) */
-    ICO_DF_GS_LOD = 262144
+    ICO_DF_GS_LOD = 262144,
+    /* Suitable opaque lit textures: derive a small normal perturbation
+     * from neighbouring texels (vu_common.hlsli). */
+    ICO_DF_TEXTURE_RELIEF = 524288
 };
 
 /* DrawCB.mode[1] bits 8..: TEXFMT_* in gs_math.hlsli. */

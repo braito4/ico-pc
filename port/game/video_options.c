@@ -87,6 +87,7 @@ void ico_video_defaults_for(IcoVideoOptions *o, int android)
     o->effectFog = 1;
     o->effectCinematicBars = 1;
     o->effectsDepth = 1;
+    o->textureRelief = 0;
 }
 
 void ico_video_defaults(IcoVideoOptions *o)
@@ -387,6 +388,7 @@ static void sanitize(IcoVideoOptions *o)
     o->effectFog = !!o->effectFog;
     o->effectCinematicBars = !!o->effectCinematicBars;
     o->effectsDepth = !!o->effectsDepth;
+    o->textureRelief = !!o->textureRelief;
 }
 
 static void read_config(void)
@@ -487,6 +489,7 @@ static void read_config(void)
     o.effectCinematicBars = ico_config_get_bool("video.effect_cinematic_bars", 1);
     /* the depth handed to an effects program (ReShade) */
     o.effectsDepth = ico_config_get_bool("video.effects_depth", 1);
+    o.textureRelief = ico_config_get_bool("video.texture_relief", 0);
     /* the preset is a shortcut over the four rows: only "enhanced" and
        "custom" take them as written; "original", no key, or anything else
        (a misspelling) is the PS2 picture whatever they say */
@@ -602,6 +605,7 @@ int ico_video_save(void)
     if (!o.effectsDepth || ico_config_get_bool("video.effects_depth", 2) != 2) {
         r |= ico_config_set_bool("video.effects_depth", o.effectsDepth);
     }
+    r |= ico_config_set_bool("video.texture_relief", o.textureRelief);
     return r != 0 ? -1 : ico_config_save();
 }
 

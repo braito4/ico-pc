@@ -134,6 +134,7 @@ RhiShader rd__make_shader(const char *name)
 /* rhi_init succeeded: rd__gpu_shutdown has a device to tear down (without a
  * Vulkan loader rhi_init fails and there is nothing to wait on or destroy). */
 static bool s_rhiUp;
+static bool s_textureReliefLogged;
 
 bool rd__gpu_init(void *sdlWindow)
 {
@@ -147,6 +148,7 @@ bool rd__gpu_init(void *sdlWindow)
     }
     rd__perf_reset(); /* the new device's counters start at 0 */
     s_rhiUp = true;
+    s_textureReliefLogged = false;
     const RhiLimits *lim = rhi_limits();
     if (!lim->stencilWrap) {
         rd__log("device lacks stencil wrap");
@@ -3305,6 +3307,25 @@ static void vuDraw(Replay *r, const RdStateBlock *s, const DrawSetup *ds, RhiBin
         }
         IcoDrawCB cb;
         fillDrawCB(r, &dp[i], ds, &cb);
+        const int reliefGeometry =
+            prog == RD_PROG_PRELIT || prog == RD_PROG_LIT || prog == RD_PROG_LIT_SPEC;
+        const RdTexRec *reliefTex = rd__tex_rec(r->st.tex);
+        if (g_rd.settings.textureRelief && reliefGeometry && ds->textured &&
+            !r->st.ds.abe && r->st.ds.texFn == RD_TEXFN_MODULATE) {
+            const RdTexRec *t = reliefTex;
+            if (t && t->kind == RD_TEXKIND_IMAGE && t->rhi.id == ds->tex.id && t->relief && t->w &&
+                t->h) {
+                cb.mode[0] |= ICO_DF_TEXTURE_RELIEF;
+                cb.param[0] = 0.75f + 2.25f * (float)t->relief / 255.0f;
+                cb.param[1] = 1.0f / (float)t->w;
+                cb.param[2] = 1.0f / (float)t->h;
+                if (!s_textureReliefLogged) {
+                    rd__log("texture relief active: %s (%ux%u, detail %u)", t->name, t->w, t->h,
+                            t->relief);
+                    s_textureReliefLogged = true;
+                }
+            }
+        }
         const uint64_t dOff = ringCopy(&cb, sizeof(cb), ua);
         const uint64_t vOff = ringCopy(vcb, sizeof(*vcb), ua);
         if (dOff == ~0ull || vOff == ~0ull) {

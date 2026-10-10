@@ -521,6 +521,9 @@ typedef struct RdTexRec {
      * own texture is decoded again in its place. */
     uint8_t replacement;
     uint8_t refused;
+    /* 0: flat/transparent/unsuitable; 1..255: contrast-derived strength
+     * for optional texture relief on opaque lit geometry. */
+    uint8_t relief;
     uint32_t uvW, uvH;
     struct TexpackImage *pending;
     /* What the draws of a game texture with Enhanced mips do

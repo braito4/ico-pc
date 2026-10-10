@@ -240,6 +240,7 @@ static void video_settings(RdSettings *rs, int w, int h)
     rs->dumpTextures = (uint8_t)(o.dumpTextures != 0 && ico_opt_developer_mode());
     /* the depth for an effects program (ReShade) */
     rs->effectsDepth = (uint8_t)(o.effectsDepth != 0);
+    rs->textureRelief = (uint8_t)(o.textureRelief != 0);
     rs->modelPack = (uint8_t)(o.modelPack != 0);
     rs->dumpModels = (uint8_t)(o.dumpModels != 0 && ico_opt_developer_mode());
     /* rd presents between ticks, in both presets; ICO_RD_S2_LEGACY=1 takes
@@ -324,6 +325,8 @@ static void video_log_changes(const IcoVideoOptions *o)
                     ico_video_filter_name(o->filter));
     video_log_field(line, sizeof(line), "height", p->fullHeight ? "full" : "half",
                     o->fullHeight ? "full" : "half");
+    video_log_field(line, sizeof(line), "texture relief", p->textureRelief ? "on" : "off",
+                    o->textureRelief ? "on" : "off");
     video_log_field(line, sizeof(line), "framerate",
                     ico_video_framerate_name(p->framerate, a, sizeof(a)),
                     ico_video_framerate_name(o->framerate, b, sizeof(b)));
@@ -857,7 +860,8 @@ int ico_window_open(unsigned int gsW, unsigned int gsH)
         ico_video_get(&o);
         fprintf(stderr,
                 "window: %dx%d pixels%s, %s on %s, %s preset (resolution %s, aspect %s, "
-                "texture filter %s, %s height, framerate %s), vsync %s, texture pack %s, "
+                "texture filter %s, %s height, framerate %s), texture relief %s, vsync %s, "
+                "texture pack %s, "
                 "dump textures %s, model pack %s, dump models %s, depth %s\n",
                 w, h, s_fullscreen ? " fullscreen" : "",
                 rhi_backend() == RHI_BACKEND_D3D12 ? "D3D12" : "Vulkan", rhi_adapter_name(),
@@ -865,6 +869,7 @@ int ico_window_open(unsigned int gsW, unsigned int gsH)
                 ico_video_aspect_name(o.aspect), ico_video_filter_name(o.filter),
                 o.fullHeight ? "full" : "half",
                 ico_video_framerate_name(ico_video_framerate(), fr, sizeof(fr)),
+                o.textureRelief ? "on" : "off",
                 o.vsync ? "on" : "off", o.texturePack ? "on" : "off",
                 o.dumpTextures && ico_opt_developer_mode() ? "on" : "off",
                 o.modelPack ? "on" : "off", o.dumpModels && ico_opt_developer_mode() ? "on" : "off",

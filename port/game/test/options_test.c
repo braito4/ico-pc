@@ -589,6 +589,45 @@ static void test_video_models(const char *dir)
     ico_video_reload();
 }
 
+/* Optional texture relief is independent of the preset, defaults off,
+   and survives a config round trip. */
+static void test_video_texture_relief(const char *dir)
+{
+    char path[512];
+    IcoVideoOptions o;
+    const char *text;
+    FILE *f;
+
+    ico_video_defaults(&o);
+    CHECK(o.textureRelief == 0);
+    snprintf(path, sizeof(path), "%s/options_texture_relief_test.toml", dir);
+    f = fopen(path, "wb");
+    if (f == NULL) {
+        fprintf(stderr, "cannot write %s\n", path);
+        failures++;
+        return;
+    }
+    fputs("[video]\ntexture_relief = true\n", f);
+    fclose(f);
+    ico_config_reset(path, "/nonexistent/options_test.ini");
+    ico_video_reload();
+    ico_video_get(&o);
+    CHECK(o.textureRelief == 1);
+    CHECK(ico_video_preset(&o) == ICO_VIDEO_ORIGINAL);
+    o.textureRelief = 3;
+    ico_video_set(&o);
+    ico_video_get(&o);
+    CHECK(o.textureRelief == 1);
+    CHECK(ico_video_save() == 0);
+    text = read_text(path);
+    CHECK(text != NULL && strstr(text, "texture_relief = true") != NULL);
+    ico_video_set_preset(&o, ICO_VIDEO_ENHANCED);
+    CHECK(o.textureRelief == 1);
+    remove(path);
+    ico_config_reset("/nonexistent/options_test.toml", "/nonexistent/options_test.ini");
+    ico_video_reload();
+}
+
 /* Resolution "auto" (parsed, named, read, saved and read
    back, kept by sanitize) on any build; the Android rules (checked here on
    any computer through ico_video_set_android / ico_video_defaults_for): the
@@ -766,6 +805,7 @@ int main(int argc, char **argv)
     test_video_effects_depth(argc > 1 ? argv[1] : ".");
     test_video_full_pixel(argc > 1 ? argv[1] : ".");
     test_video_models(argc > 1 ? argv[1] : ".");
+    test_video_texture_relief(argc > 1 ? argv[1] : ".");
     test_video_auto(argc > 1 ? argv[1] : ".");
     test_video_interpolate();
     if (failures != 0) {

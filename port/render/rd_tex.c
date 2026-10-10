@@ -801,6 +801,14 @@ int rdtex_replace(uint32_t id, uint32_t gen, int texa, RdTex rep)
     if (e == NULL || e->gen != gen || rep.id == 0 || rd__tex_rec(rep.id) == NULL) {
         return -1;
     }
+    RdTexRec *replacement = rd__tex_rec(rep.id);
+    const RdTexRec *original = rd__tex_rec(e->tex.id);
+    if (replacement && replacement->replacement && original) {
+        /* Classify the material from the game's RGBA8 picture.  DDS packs
+         * may be block-compressed and have no CPU-readable texels, but map
+         * to the same material and inherit its conservative decision. */
+        replacement->relief = original->relief;
+    }
     if (e->tex.id != rep.id) {
         releaseReplaced(e); /* a replacement replaced again */
         if (rd__tex_rec(e->tex.id) != NULL) {

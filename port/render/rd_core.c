@@ -954,6 +954,57 @@ static void texDirtyAll(RdTexRec *t)
     t->dirtyY1 = t->h;
 }
 
+/* A conservative material-detail score from an RGBA8 base level.  Smooth
+ * gradients and flat colours stay at zero; detailed opaque pictures gain a
+ * strength from their luminance variance and neighbouring-pixel edges.
+ * Textures with many fully transparent texels are masks, foliage, effects
+ * or UI and are deliberately left alone. */
+static uint8_t textureRelief(const uint8_t *px, uint32_t w, uint32_t h, uint8_t format)
+{
+    if (!px || format != RD_TEXEL_RGBA8 || w < 16 || h < 16) {
+        return 0;
+    }
+    uint32_t step = 1;
+    while ((uint64_t)((w + step - 1) / step) * ((h + step - 1) / step) > 65536u) {
+        step++;
+    }
+    uint64_t sum = 0, sum2 = 0, edge = 0, samples = 0, transparent = 0, comparisons = 0;
+    for (uint32_t y = 0; y < h; y += step) {
+        for (uint32_t x = 0; x < w; x += step) {
+            const uint8_t *p = px + ((size_t)y * w + x) * 4;
+            const uint32_t l = (77u * p[0] + 150u * p[1] + 29u * p[2]) >> 8;
+            sum += l;
+            sum2 += (uint64_t)l * l;
+            transparent += p[3] == 0;
+            samples++;
+            if (x + step < w) {
+                const uint8_t *q = px + ((size_t)y * w + x + step) * 4;
+                const uint32_t r = (77u * q[0] + 150u * q[1] + 29u * q[2]) >> 8;
+                edge += l > r ? l - r : r - l;
+                comparisons++;
+            }
+            if (y + step < h) {
+                const uint8_t *q = px + ((size_t)(y + step) * w + x) * 4;
+                const uint32_t d = (77u * q[0] + 150u * q[1] + 29u * q[2]) >> 8;
+                edge += l > d ? l - d : d - l;
+                comparisons++;
+            }
+        }
+    }
+    if (samples < 64 || transparent * 20 > samples || comparisons == 0) {
+        return 0;
+    }
+    const uint64_t mean = sum / samples;
+    const uint64_t variance = sum2 / samples > mean * mean ? sum2 / samples - mean * mean : 0;
+    const uint64_t meanEdge = edge / comparisons;
+    if (variance < 64 || meanEdge < 3) {
+        return 0;
+    }
+    uint64_t score = 32 + (meanEdge - 2) * 4 + variance / 32;
+    score = score > 192 ? 192 : score;
+    return score >= 80 ? (uint8_t)score : 0;
+}
+
 RdTex rd__create_texture_fmt(uint32_t w, uint32_t h, const void *px, uint8_t format, RdTexSrc src,
                              const char *debugName)
 {
@@ -981,6 +1032,7 @@ RdTex rd__create_texture_fmt(uint32_t w, uint32_t h, const void *px, uint8_t for
     } else {
         memset(t->pixels, 0, bytes);
     }
+    t->relief = textureRelief(t->pixels, w, h, format);
     texDirtyAll(t);
     snprintf(t->name, sizeof(t->name), "%s", debugName ? debugName : "texture");
     return (RdTex){id};
@@ -1064,6 +1116,7 @@ void rd_update_texture(RdTex tex, const void *rgba8)
         return;
     }
     memcpy(t->pixels, rgba8, bytes);
+    t->relief = textureRelief(t->pixels, t->w, t->h, t->format);
     texDirtyAll(t);
     g_rd.texFullUpdates++;
 }
@@ -1141,6 +1194,7 @@ void rd_update_texture_rect(RdTex tex, uint32_t x, uint32_t y, uint32_t w, uint3
     if (!changed) {
         return; /* nothing changed: nothing to upload */
     }
+    t->relief = textureRelief(t->pixels, t->w, t->h, t->format);
     g_rd.texRectUpdates++;
     if (!t->dirty) {
         g_rd.texDirtyCount++;
