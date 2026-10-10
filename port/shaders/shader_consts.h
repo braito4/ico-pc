@@ -285,14 +285,15 @@ enum {
     ICO_VU_CLIP_NONE = 1,    /* normal_c code 34: no test, X/Y wrap to 16 bits */
     ICO_VU_CLIP_SCISSOR = 2, /* code 36: clip-space flags, trivial reject, GPU clipping */
     ICO_VU_CLIP_MASK = 3,
-    ICO_VU_PROBE = 16,      /* tests: one value per pixel of a 16-wide RGBA8_UINT target */
-    ICO_VU_CUT_ONLY = 32,   /* scissor: only the triangles SCISSOR_COMMON draws (first draw) */
-    ICO_VU_KICK_ONLY = 64,  /* scissor: only the triangles the strip kicks (second draw) */
-    ICO_VU_DROP_WIDE = 128, /* the triangles marked ICO_VU_INDEX_WIDE are not drawn (the
-                              * parts of a wide target outside the 4:3 picture) */
-    ICO_VU_BEHIND_EYE = 256 /* region test and particle window: a failing triangle or
-                              * sprite is GPU-clipped everywhere, not dropped (photo
-                              * mode's free camera, RdCamera.freeCamera) */
+    ICO_VU_PROBE = 16,        /* tests: one value per pixel of a 16-wide RGBA8_UINT target */
+    ICO_VU_CUT_ONLY = 32,     /* scissor: only the triangles SCISSOR_COMMON draws (first draw) */
+    ICO_VU_KICK_ONLY = 64,    /* scissor: only the triangles the strip kicks (second draw) */
+    ICO_VU_DROP_HIDDEN = 128, /* the triangles marked ICO_VU_INDEX_HIDE43 are not drawn
+                               * (the parts of a frame-wide target beside the 4:3
+                               * columns, rd_replay.c doVu) */
+    ICO_VU_BEHIND_EYE = 256   /* region test and particle window: a failing triangle or
+                               * sprite is GPU-clipped everywhere, not dropped (photo
+                               * mode's free camera, RdCamera.freeCamera) */
 };
 
 /* The native frame's constants (port/include/ico_frame.h ICO_FRAME_BASE_W,
@@ -316,14 +317,21 @@ enum {
  * triangle of its mesh in the same plane (RdMeshRec.drawIndex; static
  * prelit and lit meshes only), which vu_later_out draws in front of it;
  * vu_common.hlsli's VU_INDEX_LATER and VU_INDEX_MASK.  The kick stays
- * below 2^27 for either mark (rd_mesh.c marks no larger mesh) */
+ * below ICO_VU_INDEX_KICK_LIMIT for any mark (rd_mesh.c marks no larger
+ * mesh) */
 #define ICO_VU_INDEX_LATER 0x40000000u
-/* Set on the three indices of a triangle of a stage closing plane
- * (rd_mesh.c markWideHidden): a draw with ICO_VU_DROP_WIDE skips it, which
- * rd_replay.c does only beside the 4:3 picture of a wide target;
- * vu_common.hlsli's VU_INDEX_WIDE */
-#define ICO_VU_INDEX_WIDE 0x20000000u
-#define ICO_VU_INDEX_MASK 0x1FFFFFFFu
+/* The content table (port/render/rd_content_hide.c, rd_mesh.c
+ * markContentHidden), set on the three indices of a triangle of a listed
+ * artist trick: HIDE, drawn nowhere; HIDE43, drawn only inside the 4:3
+ * columns of a frame-wide target and there as the PS2 draws it (a draw
+ * with ICO_VU_DROP_HIDDEN skips it: rd_replay.c's parts beside the
+ * columns).  vu_common.hlsli's VU_INDEX_HIDE, VU_INDEX_HIDE43 */
+#define ICO_VU_INDEX_HIDE 0x20000000u
+#define ICO_VU_INDEX_HIDE43 0x10000000u
+#define ICO_VU_INDEX_MASK 0x0FFFFFFFu
+/* kick * 4 + corner below 2^28: the meshes rd_mesh.c marks have fewer
+ * vertices */
+#define ICO_VU_INDEX_KICK_LIMIT (1u << 26)
 #define ICO_VU_PROBE_FIELDS 16
 
 _Static_assert(offsetof(IcoVuCB, mem) == 0, "vu mem");

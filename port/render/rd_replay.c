@@ -3236,30 +3236,29 @@ static void vuDraw(Replay *r, const RdStateBlock *s, const DrawSetup *ds, RhiBin
     r->st = saved;
 }
 
-/* The parts of a draw of mesh m that has closing planes (RdMeshRec.wideHidden,
- * rd_mesh.c markWideHidden) on a target under the wide x scale f: the 4:3
- * picture, GS pixels 0..w of the target before the scale, which lands on
- * texels (w/2)(1 - f) sx .. (w/2)(1 + f) sx (rounded outwards, so a texel
- * the 4:3 picture touches stays in it), and the two sides beside it, each
- * met with the draw's scissor.  dropWide[k] is set for the sides, which
- * draw without the planes (ICO_VU_DROP_WIDE).  Every texel is in one part,
- * and a part draws its triangles in the same order as the single draw:
- * inside the 4:3 picture the result is that draw's, bit for bit.  0 (draw
- * once, the scissor as bound) for a mesh without planes, f 1 (4:3, the
- * Original preset, a stretched draw, a target that is not wide) or an
- * empty scissor. */
-static int vuWideParts(const Replay *r, const DrawSetup *ds, const RdMeshRec *m, RhiRect *part,
-                       int *dropWide)
+/* The parts of a draw of mesh m that has HIDE43 triangles (RdMeshRec.hidden43:
+ * the content table's verb, rd_content_hide.c) on a frame-wide target: the
+ * 4:3 columns, texels (w/2 - 256) sx .. (w/2 + 256) sx (FrameCB frame43,
+ * rounded outwards so a texel the columns touch stays in them), and the
+ * two sides beside them, each met with the draw's scissor.  dropHidden[k]
+ * is set for the sides, which draw without those triangles
+ * (ICO_VU_DROP_HIDDEN).  Every texel is in one part, and a part draws its
+ * triangles in the same order as the single draw: inside the 4:3 columns
+ * the result is that draw's, bit for bit.  0 (draw once, the scissor as
+ * bound) for a mesh without HIDE43 triangles, a target that is not
+ * frame-wide (rd__region_scale 1: every target at 4:3) or an empty
+ * scissor. */
+static int hide43Parts(const Replay *r, const DrawSetup *ds, const RdMeshRec *m, RhiRect *part,
+                       int *dropHidden)
 {
     const RdTargetRec *tc = ds->tc;
-    const float f = rd__region_scale(tc); /* the 4:3 columns' share (W2-VU: frame43) */
     RhiRect sc;
-    if (!m || !m->wideHidden || f == 1.0f || !scissorRect(r, tc, &sc)) {
+    if (!m || !m->hidden43 || rd__region_scale(tc) == 1.0f || !scissorRect(r, tc, &sc)) {
         return 0;
     }
-    const float c = (float)tc->w * 0.5f;
-    int64_t x0 = (int64_t)floorf((c - f * c) * tc->sx);
-    int64_t x1 = (int64_t)ceilf((c + f * c) * tc->sx);
+    const float c = (float)tc->w * 0.5f, half = (float)(ICO_FRAME_BASE_W / 2);
+    int64_t x0 = (int64_t)floorf((c - half) * tc->sx);
+    int64_t x1 = (int64_t)ceilf((c + half) * tc->sx);
     x0 = x0 < 0 ? 0 : (x0 > (int64_t)tc->tw ? (int64_t)tc->tw : x0);
     x1 = x1 < x0 ? x0 : (x1 > (int64_t)tc->tw ? (int64_t)tc->tw : x1);
     const RhiRect side[3] = {
@@ -3270,7 +3269,7 @@ static int vuWideParts(const Replay *r, const DrawSetup *ds, const RdMeshRec *m,
     int n = 0;
     for (int i = 0; i < 3; i++) {
         if (side[i].w && rectMeet(side[i], sc, &part[n])) {
-            dropWide[n++] = i != 0;
+            dropHidden[n++] = i != 0;
         }
     }
     return n;
@@ -3410,18 +3409,18 @@ static void doVu(Replay *r, const RdFrame *f, const RdCmd *c)
     if (last > m->batchCount || p.batchCount == 0) {
         last = m->batchCount;
     }
-    /* a mesh with closing planes on a wide target: once per part of the
-     * scissor, the 4:3 picture with every triangle and the sides beside it
-     * without the planes (vuWideParts); else once as it is */
+    /* a mesh with HIDE43 triangles on a frame-wide target: once per part
+     * of the scissor, the 4:3 columns with every triangle and the sides
+     * beside them without those (hide43Parts); else once as it is */
     RhiRect part[3];
-    int dropWide[3];
-    const int nParts = vuWideParts(r, &ds, m, part, dropWide);
+    int dropHidden[3];
+    const int nParts = hide43Parts(r, &ds, m, part, dropHidden);
     for (int k = 0; k < (nParts > 0 ? nParts : 1); k++) {
         IcoVuCB pv = vcb;
         if (nParts > 0) {
             rhi_cmd_set_scissor(s_cl, &part[k]);
-            if (dropWide[k]) {
-                pv.draw[2] |= ICO_VU_DROP_WIDE;
+            if (dropHidden[k]) {
+                pv.draw[2] |= ICO_VU_DROP_HIDDEN;
             }
         }
         if (p.clip != RD_VU_CLIP_SCISSOR) {

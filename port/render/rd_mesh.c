@@ -426,7 +426,8 @@ static void markLaterOverlaps(RdMeshRec *m)
     free(m->drawIndex);
     m->drawIndex = NULL;
     const uint32_t nt = m->indexCount / 3, qpv = m->qwPerVertex;
-    if (nt < 2 || (qpv != RD_VU_QW_PRELIT && qpv != RD_VU_QW_LIT) || m->vertexCount >= (1u << 27)) {
+    if (nt < 2 || (qpv != RD_VU_QW_PRELIT && qpv != RD_VU_QW_LIT) ||
+        m->vertexCount >= ICO_VU_INDEX_KICK_LIMIT) {
         return;
     }
     /* a corner position (its float bits) to the triangles at it so far */
@@ -527,54 +528,90 @@ done:
     free(seen);
 }
 
-/* ------------------------------------------ closing planes beside 4:3
+/* ------------------------------------------------- the content table
  *
- * A stage is modelled for the PS2's 4:3 picture, and a few of its faces are
- * closing planes that picture never reaches: black faces (vertex colour
- * 0, 0, 0, which MODULATE turns black whatever the texel, and the fog then
- * a flat grey) that seal the model where the camera was not meant to look.
- * A wide picture shows more on either side, and one such plane showed
- * there as a flat grey block through the arch at the end of the long
- * walkway (st08a_p4): a box 846 units wide, its top a four-vertex mesh of
- * its own and its two sides the last eight vertices of the next one, with
- * the textured stonework drawn behind it.  The triangles of such a plane
- * carry ICO_VU_INDEX_WIDE, and rd_replay.c draws the mesh twice on a wide
- * target: everything inside the 4:3 picture, as before, and beside it
- * without them.
- *
- * Black vertex colour alone does not tell a closing plane: the stages also
- * use it for faces in full shade, the same flat fogged colour, that the
- * 4:3 picture shows as well.  In the player's 32:9 dumps opaque black
- * triangles reach past the 4:3 picture's edges in 37 of 46 frames (69 to
- * 369 a frame by the bench, st17a, 67 to 108 at the pool, st09a), and by
- * the bench they are the shaded faces of the statues' pedestals (dropping
- * that draw leaves the walkway seen through them), with the same faces of
- * the pillar beside them inside the 4:3 picture.  So the planes are listed by their
- * corners, the position bits of the stream (prelit and lit layouts), and a
- * triangle is marked when its three vertices are black and are corners of
- * one listed plane: a model pack's replacement or any other geometry never
- * matches by accident. */
+ * rd_content_hide.c lists the stage geometry made for the PS2's 4:3 picture
+ * by the stream bits of its black corners; a triangle whose three vertices
+ * are black corners of one entry carries the entry's verb as an index bit
+ * in the draw's list (ICO_VU_INDEX_HIDE, ICO_VU_INDEX_HIDE43), the mesh's
+ * own list untouched. */
 
-typedef struct ClosingPlane {
-    const char *model; /* where it is, for the reader */
-    uint32_t count;
-    uint32_t corner[8][3]; /* x, y, z float bits */
-} ClosingPlane;
+/* the verbs applied: the table's, or an override (rd__content_hide_set);
+ * s_verbSet once the environment has been read or a spec given */
+static RdHideVerb s_verb[RD_CONTENT_HIDE_MAX];
+static int s_verbSet;
 
-static const ClosingPlane kClosingPlanes[] = {
-    {"st08a_p4: the box through the arch at the walkway's end",
-     7,
-     {{0xc518a521u, 0xc51a5cc4u, 0xc431a218u},   /* -2442.32 -2469.80  -710.53 */
-      {0xc518a521u, 0xc5696b2bu, 0xc431a218u},   /* -2442.32 -3734.70  -710.53 */
-      {0xc518a521u, 0xc51a5cc4u, 0xc4a092d2u},   /* -2442.32 -2469.80 -1284.59 */
-      {0xc518a521u, 0xc5696b2bu, 0xc4a092d2u},   /* -2442.32 -3734.70 -1284.59 */
-      {0xc4c78446u, 0xc51a5cc4u, 0xc42abb35u},   /* -1596.13 -2469.80  -682.93 */
-      {0xc4c78446u, 0xc5696b2bu, 0xc42abb35u},   /* -1596.13 -3734.70  -682.93 */
-      {0xc4c78446u, 0xc5696b2bu, 0xc45c93adu}}}, /* -1596.13 -3734.70  -882.31 */
-};
+static int parseVerb(const char *t, size_t n, RdHideVerb *v)
+{
+    static const struct {
+        const char *name;
+        RdHideVerb verb;
+    } kVerbs[] = {{"off", RD_HIDE_OFF}, {"hide", RD_HIDE}, {"hide43", RD_HIDE43}};
 
-/* the listed closing plane that vertex v of m is a black corner of (-1: none) */
-static int closingPlaneOf(const RdMeshRec *m, uint32_t v)
+    for (size_t i = 0; i < sizeof(kVerbs) / sizeof(kVerbs[0]); i++) {
+        if (strlen(kVerbs[i].name) == n && strncmp(t, kVerbs[i].name, n) == 0) {
+            *v = kVerbs[i].verb;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+bool rd__content_hide_set(const char *spec)
+{
+    const int n =
+        rd__content_hide_count < RD_CONTENT_HIDE_MAX ? rd__content_hide_count : RD_CONTENT_HIDE_MAX;
+    RdHideVerb v[RD_CONTENT_HIDE_MAX];
+    for (int i = 0; i < n; i++) {
+        v[i] = rd__content_hide[i].verb;
+    }
+    for (const char *t = spec; t && *t;) {
+        const char *end = strchr(t, ',');
+        const size_t len = end ? (size_t)(end - t) : strlen(t);
+        const char *eq = memchr(t, '=', len);
+        RdHideVerb verb;
+        if (eq) {
+            char *stop = NULL;
+            const long e = strtol(t, &stop, 10);
+            if (stop != eq || e < 0 || e >= n ||
+                !parseVerb(eq + 1, len - (size_t)(eq + 1 - t), &verb)) {
+                return false;
+            }
+            v[e] = verb;
+        } else if (len == 5 && strncmp(t, "table", 5) == 0) {
+            for (int i = 0; i < n; i++) {
+                v[i] = rd__content_hide[i].verb;
+            }
+        } else if (parseVerb(t, len, &verb)) {
+            for (int i = 0; i < n; i++) {
+                v[i] = verb;
+            }
+        } else {
+            return false;
+        }
+        t = end ? end + 1 : t + len;
+    }
+    memcpy(s_verb, v, (size_t)n * sizeof(v[0]));
+    s_verbSet = 1;
+    return true;
+}
+
+RdHideVerb rd__content_hide_verb(int i)
+{
+    if (!s_verbSet) {
+        const char *e = getenv("ICO_RD_CONTENT_HIDE");
+        if (!rd__content_hide_set(e)) {
+            fprintf(stderr, "rd: ICO_RD_CONTENT_HIDE=\"%s\" not understood: the table as listed\n",
+                    e);
+            rd__content_hide_set(NULL);
+        }
+    }
+    return i >= 0 && i < rd__content_hide_count && i < RD_CONTENT_HIDE_MAX ? s_verb[i]
+                                                                           : RD_HIDE_OFF;
+}
+
+/* the entry that vertex v of m is a black corner of (-1: none) */
+static int contentEntryOf(const RdMeshRec *m, uint32_t v)
 {
     const float *q = m->stream[(size_t)v * m->qwPerVertex];
     const float *col = m->stream[(size_t)v * m->qwPerVertex + m->qwPerVertex - 1u];
@@ -583,9 +620,9 @@ static int closingPlaneOf(const RdMeshRec *m, uint32_t v)
     }
     uint32_t bits[3];
     memcpy(bits, q, sizeof(bits));
-    for (int p = 0; p < (int)(sizeof(kClosingPlanes) / sizeof(kClosingPlanes[0])); p++) {
-        for (uint32_t c = 0; c < kClosingPlanes[p].count; c++) {
-            if (memcmp(bits, kClosingPlanes[p].corner[c], sizeof(bits)) == 0) {
+    for (int p = 0; p < rd__content_hide_count; p++) {
+        for (uint32_t c = 0; c < rd__content_hide[p].count; c++) {
+            if (memcmp(bits, rd__content_hide[p].corner[c], sizeof(bits)) == 0) {
                 return p;
             }
         }
@@ -593,18 +630,18 @@ static int closingPlaneOf(const RdMeshRec *m, uint32_t v)
     return -1;
 }
 
-/* ICO_VU_INDEX_WIDE into m->drawIndex (a copy of m->index made when
- * markLaterOverlaps left none) on every triangle of a listed closing plane;
- * m->wideHidden when there is one.  The colour is the layout's last
- * quadword (prelit 2, lit 3). */
-static void markWideHidden(RdMeshRec *m)
+/* The entry's index bit into m->drawIndex (a copy of m->index made when
+ * markLaterOverlaps left none) on every triangle of a listed entry whose
+ * verb is not off; m->hidden43 when one is HIDE43.  The colour is the
+ * layout's last quadword (prelit 2, lit 3). */
+static void markContentHidden(RdMeshRec *m)
 {
-    m->wideHidden = 0;
+    m->hidden43 = 0;
     const uint32_t nt = m->indexCount / 3, qpv = m->qwPerVertex;
     if (qpv != RD_VU_QW_PRELIT && qpv != RD_VU_QW_LIT) {
         return;
     }
-    if (m->vertexCount >= (1u << 27)) {
+    if (m->vertexCount >= ICO_VU_INDEX_KICK_LIMIT) {
         return;
     }
     for (uint32_t t = 0; t < nt; t++) {
@@ -612,8 +649,12 @@ static void markWideHidden(RdMeshRec *m)
         if (kick < 2 || kick >= m->vertexCount) {
             continue;
         }
-        const int p = closingPlaneOf(m, kick - 2u);
-        if (p < 0 || closingPlaneOf(m, kick - 1u) != p || closingPlaneOf(m, kick) != p) {
+        const int p = contentEntryOf(m, kick - 2u);
+        if (p < 0 || contentEntryOf(m, kick - 1u) != p || contentEntryOf(m, kick) != p) {
+            continue;
+        }
+        const RdHideVerb verb = rd__content_hide_verb(p);
+        if (verb == RD_HIDE_OFF) {
             continue;
         }
         if (!m->drawIndex) {
@@ -623,10 +664,13 @@ static void markWideHidden(RdMeshRec *m)
             }
             memcpy(m->drawIndex, m->index, (size_t)m->indexCount * 4);
         }
+        const uint32_t bit = verb == RD_HIDE ? ICO_VU_INDEX_HIDE : ICO_VU_INDEX_HIDE43;
         for (int c = 0; c < 3; c++) {
-            m->drawIndex[t * 3 + (uint32_t)c] |= ICO_VU_INDEX_WIDE;
+            m->drawIndex[t * 3 + (uint32_t)c] |= bit;
         }
-        m->wideHidden = 1;
+        if (verb == RD_HIDE43) {
+            m->hidden43 = 1;
+        }
     }
 }
 
@@ -634,14 +678,14 @@ bool rd__vu_mesh_copy_draw_index(RdMeshRec *dst, const RdMeshRec *src)
 {
     free(dst->drawIndex);
     dst->drawIndex = NULL;
-    dst->wideHidden = 0;
+    dst->hidden43 = 0;
     if (!src->drawIndex || dst->indexCount != src->indexCount) {
         return !src->drawIndex;
     }
     dst->drawIndex = malloc((size_t)src->indexCount * 4);
     if (dst->drawIndex) {
         memcpy(dst->drawIndex, src->drawIndex, (size_t)src->indexCount * 4);
-        dst->wideHidden = src->wideHidden;
+        dst->hidden43 = src->hidden43;
     }
     return dst->drawIndex != NULL;
 }
@@ -680,7 +724,7 @@ uint32_t rd__vu_mesh_create_raw(const float (*stream)[4], uint32_t vertexCount,
     }
     snprintf(m->name, sizeof(m->name), "%s", name ? name : "vu mesh");
     markLaterOverlaps(m); /* issue 25 */
-    markWideHidden(m);
+    markContentHidden(m);
     return id;
 }
 

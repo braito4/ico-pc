@@ -611,12 +611,14 @@ typedef struct RdMeshRec {
     /* issue 25: the index list the device draws, index with
      * ICO_VU_INDEX_LATER on each triangle that overlaps an earlier
      * triangle of the mesh in its plane (rd_mesh.c markLaterOverlaps);
-     * NULL when none does (rd__mesh_draw_index); also ICO_VU_INDEX_WIDE
-     * on each triangle of a stage closing plane (rd_mesh.c markWideHidden) */
+     * NULL when none does (rd__mesh_draw_index); also ICO_VU_INDEX_HIDE
+     * or ICO_VU_INDEX_HIDE43 on each triangle of a content table entry
+     * (rd_content_hide.c, rd_mesh.c markContentHidden) */
     uint32_t *drawIndex;
-    /* drawIndex holds an ICO_VU_INDEX_WIDE triangle: rd_replay.c draws
-     * the mesh beside the 4:3 picture of a wide target without them */
-    uint8_t wideHidden;
+    /* drawIndex holds an ICO_VU_INDEX_HIDE43 triangle: rd_replay.c draws
+     * the mesh on a frame-wide target in three parts, the sides beside the
+     * 4:3 columns without them */
+    uint8_t hidden43;
     uint32_t indexCount;
     RdVuBatchRec *batches;
     uint32_t lastUsed;   /* g_rd.frameCounter of the last draw recorded */
@@ -683,10 +685,37 @@ static inline const uint32_t *rd__mesh_draw_index(const RdMeshRec *m)
     return m->drawIndex ? m->drawIndex : m->index;
 }
 
-/* dst's drawIndex (and wideHidden) becomes a copy of src's (none when src
+/* dst's drawIndex (and hidden43) becomes a copy of src's (none when src
  * has none): the interpolation's scratch meshes draw their source's (rd_interp.c);
  * false on no memory (dst then has none) */
 bool rd__vu_mesh_copy_draw_index(RdMeshRec *dst, const RdMeshRec *src);
+
+/* The content table (rd_content_hide.c): stage geometry made for the PS2's
+ * 4:3 picture, by the stream bits of its black corners, and what the
+ * renderer does with it.  RD_HIDE_OFF is never listed (an override's
+ * "off"). */
+typedef enum RdHideVerb { RD_HIDE_OFF = 0, RD_HIDE = 1, RD_HIDE43 = 2 } RdHideVerb;
+
+typedef struct RdContentHide {
+    const char *model; /* where it is, for the reader */
+    RdHideVerb verb;
+    uint32_t count;
+    uint32_t corner[8][3]; /* x, y, z float bits */
+} RdContentHide;
+
+extern const RdContentHide rd__content_hide[];
+extern const int rd__content_hide_count;
+#define RD_CONTENT_HIDE_MAX 256 /* the table's size at most (rd_content_hide.c asserts) */
+
+/* rd_mesh.c: the verbs the meshes created from now on are marked with,
+ * for tools/content_table_check.py (the environment variable
+ * ICO_RD_CONTENT_HIDE, read when the first mesh is marked) and the tests.
+ * spec: comma-separated "off", "hide", "hide43" or "table" for every entry
+ * (table: as listed), or "N=verb" for entry N; NULL is "table".  False
+ * (nothing changed) on a bad spec. */
+bool rd__content_hide_set(const char *spec);
+/* the verb entry i is applied with (RD_HIDE_OFF for an index outside) */
+RdHideVerb rd__content_hide_verb(int i);
 /* rd_mesh.c: the per-list VU images (rd_set_vu_common updates all 13). */
 void rd__vu_init(void);
 void rd__vu_shutdown(void);
