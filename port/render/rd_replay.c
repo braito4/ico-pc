@@ -1035,7 +1035,8 @@ static void beginPass(Replay *r, RdTargetRec *c, RdTargetRec *d, uint32_t cid, u
  *    SV_SampleIndex) and keeps the epoch open; otherwise its depth read
  *    closes it and it fogs the resolved picture;
  *  - integer-aligned sprites drawn inside it cover whole pixels (doScreen:
- *    msaaSpriteExpand), so clears and backdrops keep full coverage;
+ *    msaaSpriteExpand), so clears and backdrops keep full coverage; the
+ *    per-sample fog's sprite too (doFog);
  *  - the stencil of SCENE_MS is not the shadow window's: the shadow
  *    commands draw on SCENE's own depth after the epoch closed. */
 static void msaaFree(void)
@@ -4327,7 +4328,6 @@ static void doFog(Replay *r, const RdFrame *f, const RdCmd *c)
     setUvShift(tc->sx, tc->sy); /* the fog sprite on a scaled target */
     const uint32_t nv = expand(v, 2, RD_PRIM_SPRITES, 1, (float)tz->w, (float)tz->h, noOff, out,
                                &topo, r->st.gouraud != 0);
-    memcpy(g_rd.ringMap[s_slot] + vOff, out, (size_t)nv * sizeof(out[0]));
     memcpy(g_rd.ringMap[s_slot] + lOff, f->payload + p.lutOffset, 256 * 4);
 
     endPass(r);
@@ -4385,6 +4385,14 @@ static void doFog(Replay *r, const RdFrame *f, const RdCmd *c)
     if (!bindDraw(r, &ds).id) {
         return;
     }
+    /* per sample in the epoch the sprite covers whole pixels, as doScreen's
+     * integer-aligned sprites (msaaSpriteExpand): drawn as is, its top and
+     * left edges would lie on the pixel centres of the frame's first row
+     * and column, leaving half their samples unfogged */
+    const bool msExpand =
+        fogMs && g_rd.passSamples > 1 && msaaSpriteExpand(r, tc, RD_PRIM_SPRITES, out, nv);
+    const RdUniform frame = msExpand ? msaaFrame(r, &ds) : r->frameBG;
+    memcpy(g_rd.ringMap[s_slot] + vOff, out, (size_t)nv * sizeof(out[0]));
     RhiBinding b[3];
     memset(b, 0, sizeof(b));
     b[0].slot = 1;
@@ -4418,7 +4426,7 @@ static void doFog(Replay *r, const RdFrame *f, const RdCmd *c)
         cb.scale[0] = tz->sx;                      /* the depth's texels per GS pixel */
         cb.scale[1] = tz->sy;
         rhi_cmd_set_pipeline(s_cl, pipe);
-        rd__bind_uniform(s_cl, 0, r->frameBG);
+        rd__bind_uniform(s_cl, 0, frame);
         rd__bind_uniform(s_cl, 1, rd__draw_group(&cb));
         rhi_cmd_set_bind_group(s_cl, 2, g2);
         rhi_cmd_draw(s_cl, nv, 0, 1);

@@ -3878,10 +3878,11 @@ static void layoutPage(Page *pg, int id)
     }
 }
 
-/* the notes shown only while their row is locked */
+/* the notes shown only while their row is locked (Anti-aliasing's says
+   what the row does: on the cursor, locked or not) */
 static int lockedNote(const Row *r)
 {
-    return isExtrasOpt(r->opt) || r->opt == UI_OPT_RESOLUTION || r->opt == UI_OPT_ANTI_ALIAS;
+    return isExtrasOpt(r->opt) || r->opt == UI_OPT_RESOLUTION;
 }
 
 /* a row's x, width and text size (0: the page's) */

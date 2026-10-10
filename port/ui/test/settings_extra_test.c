@@ -1623,10 +1623,16 @@ static void testAntiAlias(void)
     enterMainKeep(1);
     CHECK(strcmp(ui_settings_value_text(UI_OPT_ANTI_ALIAS), "MSAA 2x") == 0, "msaa2 from the file");
 
-    /* Original: Off, greyed, no step */
-    useConfig("version = 1\n[video]\npreset = \"original\"\nanti_aliasing = \"ssaa2\"\n");
+    /* Original: Off, greyed, no step.  Loading preset "original" applies the
+       Original shortcut, which puts the stored option off too (options_test
+       test_video_anti_alias), so the stored ssaa2 is set at run time under
+       the Original rows: kept, off in force */
+    useConfig("version = 1\n[video]\npreset = \"original\"\n");
     {
         const int mainL = enterMainKeep(1);
+        ico_video_get(&o);
+        o.antiAlias = ICO_AA_SSAA2;
+        ico_video_set(&o);
         const int dispL = openPage(mainL, 0, UI_PAGE_DISPLAY);
         frame(0);
         CHECK(strcmp(ui_settings_value_text(UI_OPT_ANTI_ALIAS), "Off") == 0,
