@@ -394,18 +394,28 @@ static void namedTargetDesc(int id, uint32_t gsW, uint32_t gsH, uint32_t *w, uin
         *w = gsW;
         *h = gsH / 2;
         break;
+    /* The work buffers and the shadow levels: the PS2's sizes per 512
+     * columns of the frame (Shadow.c, staticBlur.c and GsBase.c's softening
+     * draw them as ico_frame_x of their 4:3 widths), so a buffer pixel
+     * covers the screen pixels it covers on the PS2 at every aspect: W / 2,
+     * W / 4 or W / 8 across for the 256, 128 and 64 of the 4:3 frame
+     * (W = gsW, the native frame's width, a multiple of 16), the PS2's
+     * heights; at 4:3 the PS2's sizes. */
     case RD_TARGET_SHADOW0:
-        *w = *h = 256;
+        *w = gsW / 2;
+        *h = 256;
         break;
     case RD_TARGET_SHADOW1:
-        *w = *h = 128;
+        *w = gsW / 4;
+        *h = 128;
         break;
     case RD_TARGET_SHADOW2:
-        *w = *h = 64;
+        *w = gsW / 8;
+        *h = 64;
         break;
     case RD_TARGET_WORK0:
-    case RD_TARGET_WORK3: /* TBP 0x3000, 256 x 128 */
-        *w = 256;
+    case RD_TARGET_WORK3: /* TBP 0x3000, 256 x 128 at 4:3 */
+        *w = gsW / 2;
         *h = 128;
         break;
     case RD_TARGET_WORK2: /* TBP 0x2E00, the scene-sized flare mask */
@@ -415,16 +425,18 @@ static void namedTargetDesc(int id, uint32_t gsW, uint32_t gsH, uint32_t *w, uin
         break;
     case RD_TARGET_WORK1:
     case RD_TARGET_AA0:
-        *w = *h = 256;
+        *w = gsW / 2;
+        *h = 256;
         break;
     case RD_TARGET_AA1:
-    case RD_TARGET_FEED128:
+    case RD_TARGET_FEED128: /* 128 x 128 at 4:3, whatever the name says */
     case RD_TARGET_FEED_HELD:
     case RD_TARGET_AURA_TAP:
-        *w = *h = 128;
+        *w = gsW / 4;
+        *h = 128;
         break;
     case RD_TARGET_WORK2_PAD:
-        *w = 256;
+        *w = gsW / 2;
         *h = 64;
         break;
     case RD_TARGET_DATE_SNAPSHOT:
@@ -436,6 +448,9 @@ static void namedTargetDesc(int id, uint32_t gsW, uint32_t gsH, uint32_t *w, uin
         *w = *h = 1;
         break;
     }
+    if (*w == 0) {
+        *w = 1; /* a test's frame narrower than 8 pixels */
+    }
     /* the work buffers' resolution scale (rd.h rd_work_target_scale) applies
      * to the texture, not to the GS size: rd__target_scale_of */
 }
@@ -444,8 +459,9 @@ static void namedTargetDesc(int id, uint32_t gsW, uint32_t gsH, uint32_t *w, uin
  * frame-sized buffers (SCENE, WORK2, AURA_WORK, the DATE snapshot), DISPLAY
  * and its held copy.  Their GS width is the native frame's (g_rd.gsW: the
  * frame head's gsW, GsBase.c gsFrame.w), so a wide picture has more GS
- * pixels, not wider ones.  The other named targets are the fixed work
- * buffers, scaled by rd_work_target_scale. */
+ * pixels, not wider ones.  The other named targets are the work buffers,
+ * as wide as the frame per 512 columns (namedTargetDesc), scaled by
+ * rd_work_target_scale. */
 static int sceneClass(int id)
 {
     return id == RD_TARGET_SCENE || id == RD_TARGET_DISPLAY || id == RD_TARGET_WORK2 ||
@@ -459,13 +475,16 @@ static int displayClass(int id)
     return id == RD_TARGET_DISPLAY || id == RD_TARGET_DISPLAY_HELD;
 }
 
-/* Shadow.c's blur levels (SHADOW0..2) keep the PS2 sizes at every scale.
- * The shadow's blur is not a GS distance there but the levels' resolution
- * itself (each level a bilinear half of the one before, 256, 128 and 64
- * texels over the screen, composited back with bilinear magnification), so
- * levels at the work scale would halve the penumbra: at 4x the softest level
- * would need a further Gaussian of about 4 GS pixels to match the Original
- * preset's. */
+/* Shadow.c's blur levels (SHADOW0..2) keep the PS2 sizes per 512 columns at
+ * every scale (W / 2, W / 4 and W / 8 across, 256, 128 and 64 lines: their
+ * GS sizes, namedTargetDesc).  The shadow's blur is not a GS distance there
+ * but the levels' resolution itself (each level a bilinear half of the one
+ * before, 256, 128 and 64 texels over 512 screen columns, composited back
+ * with bilinear magnification), so levels at the work scale would halve the
+ * penumbra: at 4x the softest level would need a further Gaussian of about 4
+ * GS pixels to match the Original preset's.  On a wide frame the levels are
+ * as much wider as the frame, so the penumbra is the same number of screen
+ * pixels at every aspect. */
 static int shadowLevel(int id)
 {
     return id == RD_TARGET_SHADOW0 || id == RD_TARGET_SHADOW1 || id == RD_TARGET_SHADOW2;

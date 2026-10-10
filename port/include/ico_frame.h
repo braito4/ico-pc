@@ -104,4 +104,18 @@ static inline int ico_frame_tw(int texels)
     return n;
 }
 
+/* TEX0's TBW (bits 14..19) and TW (bits 26..29) for a buffer that is the
+   4:3 width v at the frame's width, n = ico_frame_x(f, v) texels across:
+   (n + 63) / 64 and ico_frame_tw(n).  The work buffers the post passes and
+   the shadow levels use are sized so ("PS2 sizes per 512 columns"); at 4:3
+   these are the PS2's fields: v 128 gives 0x1C008000, 256 0x20010000, 512
+   (the frame) 0x24020000.  OR them with the TBP, TH, TCC, TFX and PSM of
+   the word the game wrote. */
+static inline long long ico_frame_tex0_w(const IcoFrame *f, int v)
+{
+    const int n = ico_frame_x(f, v);
+
+    return ((long long)((n + 63) / 64) << 14) | ((long long)ico_frame_tw(n) << 26);
+}
+
 #endif /* ICO_FRAME_H */

@@ -70,7 +70,7 @@ float center_Y;
               width, port/include/ico_frame.h; ico_frame_x for a 4:3
               length), equal to ScreenWidth at 4:3, so every such
               expression is the same integer there.  No FRAME use reads
-              ScreenWidth any more, but staticBlur.c's (W4's).
+              ScreenWidth any more.
    Every other ScreenWidth in ico2 carries one of the first three tags. */
 int ScreenWidth;
 
@@ -304,7 +304,8 @@ void gsb_Reduction(void)
        width fw and its FBW (gsFrame.fbw, (fw + 63) / 64); 512 and 8 at 4:3,
        the same words as ever.  The scissor keeps its 2 .. fw - 3 columns, the
        UV its 8 .. fw * 16 + 8 (inside the 16 bits the decoder reads on a wide
-       frame) */
+       frame); TEX0's TW is ceil(log2 fw) (9 at 4:3) so those UVs stay on
+       the texture */
     const int fw = gsFrame.w;
     long long pk[44] = {
         0x1000000000008015LL,
@@ -337,7 +338,7 @@ void gsb_Reduction(void)
         ((long long)(fw - 3) << 16) | 2 | ((long long)(systemStatus[0] == 0 ? 2 : 8) << 32) |
             ((long long)(ScreenHeight / 2 - 1 - (systemStatus[0] == 0 ? 2 : 8)) << 48),
         0x40,
-        ((long long)gsFrame.fbw << 14) | 0x664000800LL,
+        ((long long)gsFrame.fbw << 14) | ((long long)ico_frame_tw(fw) << 26) | 0x640000800LL,
         6,
         0x60,
         0x14,
@@ -465,7 +466,9 @@ static void gsb_KeepFrameBuffer(void)
     gif_SetGsReg(0x4E, 0x1300000C0LL);
     gif_SetGsReg(0x4A, 0);
     gif_SetGsReg(0x3B, 0x8000000080LL);
-    gif_SetGsReg(6, ((long long)gsFrame.fbw << 14) | (0xC482LL << 19));
+    /* PC port: FRAME, TBW and TW (0xC482 << 19 is TW 9) of the frame's width */
+    gif_SetGsReg(6, ((long long)gsFrame.fbw << 14) | ((long long)ico_frame_tw(gsFrame.w) << 26) |
+                        0x600100000LL);
     spriteUV(&r0.x, &r1.x, keepFrameColor, 0x116);
     gif_EndPacket();
 #endif

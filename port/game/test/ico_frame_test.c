@@ -11,6 +11,11 @@
  *           exactly; 16:9 FBW 11, wExact 512 x 4/3, aspect 16/9
  *   x       ico_frame_x: v itself at 512; v * 688 / 512 towards zero at 16:9
  *   tw      ico_frame_tw: ceil(log2 n), 0 for n <= 1
+ *   tex0    ico_frame_tex0_w at 4:3 rebuilds every literal TEX0 word the
+ *           post passes, the shadow levels and the reflection blocks wrote
+ *           (staticBlur.c, Shadow.c, puddle.c, pool.c, queen_barrier_disp.c,
+ *           GsBase.c), each as its call site spells it now; at 16:9 and
+ *           48:9 the TBW and TW of W / 2, W / 4 and W
  *   options ico_video_frame: the defaults (4:3) 512, aspect 16:9 688, 48:9
  *           2048
  */
@@ -130,6 +135,74 @@ static void checkTw(void)
     }
 }
 
+/* the TEX0 word of a buffer the 4:3 width v at this frame, ORed with the
+   rest of the literal (TBP, TH, TCC, TFX, PSM), as the call sites build it */
+static long long w0(const IcoFrame *f, int v, long long rest)
+{
+    return ico_frame_tex0_w(f, v) | rest;
+}
+
+static void checkTex0(void)
+{
+    IcoFrame f;
+    ico_frame_make(&f, 4.0f / 3.0f, 448);
+
+    static const struct {
+        int v;
+        long long rest, literal;
+        const char *where;
+    } kWords[] = {
+        /* staticBlur.c */
+        {256, 0x15C0000000LL, 0x20010000LL | 0x15C0000000LL, "blurPass, depthFieldPass"},
+        {256, 0x5C0000000LL, 0x20010000LL | 0x5C0000000LL, "Work0/Work1/Work3 reads"},
+        {256, 0x1600000000LL, 0x20010000LL | 0x1600000000LL, "copyToWork2"},
+        {128, 0x5C0000000LL, 0x1C008000LL | 0x5C0000000LL, "blendWork0ToWork1"},
+        {128, 0x3F00LL | 0x5C0000000LL, 0x5DC00BF00LL, "pasteFeedBackAreaToFB, addTap"},
+        {512, 0x640000000LL, (512LL / 64 << 14) | 0x664000000LL, "frame-sized reads"},
+        {512, 0x640000800LL, (512LL / 64 << 14) | 0x664000800LL, "SCENE reads"},
+        {512, 0x640100000LL, (512LL / 64 << 14) | 0x664100000LL, "MotionBlur's DISPLAY"},
+        /* Shadow.c, level i at TEX0 TBW (512 >> i) / 64, TW 9 - i */
+        {512, 0, (8LL << 14) | (9LL << 26), "shadow level 0 (the count)"},
+        {256, 0, (4LL << 14) | (8LL << 26), "shadow level 1"},
+        {128, 0, (2LL << 14) | (7LL << 26), "shadow level 2"},
+        {64, 0, (1LL << 14) | (6LL << 26), "shadow level 3"},
+        /* puddle.c, pool.c: the reflection block */
+        {256, 0x600000000LL, 0x20010000LL | 0x600000000LL, "puddle/pool block"},
+        /* queen_barrier_disp.c */
+        {512, 0x600000000LL, 0x24020000LL | 0x600000000LL, "barrier block"},
+        {512, 0x640000800LL, (8LL << 14) | 0x664000800LL, "barrier/pool scene copy"},
+        /* GsBase.c */
+        {512, 0x640000800LL, (8LL << 14) | 0x664000800LL, "gsb_Reduction"},
+        {512, 0x600100000LL, (8LL << 14) | (0xC482LL << 19), "gsb_KeepFrameBuffer"},
+    };
+
+    for (size_t i = 0; i < sizeof(kWords) / sizeof(kWords[0]); i++) {
+        const long long got = w0(&f, kWords[i].v, kWords[i].rest);
+        CHECK(got == kWords[i].literal, "tex0 4:3 %s: 0x%llx, the literal 0x%llx", kWords[i].where,
+              (unsigned long long)got, (unsigned long long)kWords[i].literal);
+    }
+
+    /* 16:9 (688): W / 2 344 is TBW 6 TW 9, W / 4 172 TBW 3 TW 8, W TBW 11
+       TW 10; 48:9 (2048): 1024 TBW 16 TW 10, 512 TBW 8 TW 9, 2048 TBW 32
+       TW 11 */
+    static const struct {
+        float aspect;
+        int v;
+        int tbw, tw;
+    } kWide[] = {{16.0f / 9.0f, 256, 6, 9},   {16.0f / 9.0f, 128, 3, 8},
+                 {16.0f / 9.0f, 512, 11, 10}, {16.0f / 3.0f, 256, 16, 10},
+                 {16.0f / 3.0f, 128, 8, 9},   {16.0f / 3.0f, 512, 32, 11},
+                 {16.0f / 3.0f, 64, 4, 8}};
+
+    for (size_t i = 0; i < sizeof(kWide) / sizeof(kWide[0]); i++) {
+        ico_frame_make(&f, kWide[i].aspect, 448);
+        const long long got = ico_frame_tex0_w(&f, kWide[i].v);
+        const long long want = ((long long)kWide[i].tbw << 14) | ((long long)kWide[i].tw << 26);
+        CHECK(got == want, "tex0 W %d, v %d: 0x%llx, want TBW %d TW %d", f.w, kWide[i].v,
+              (unsigned long long)got, kWide[i].tbw, kWide[i].tw);
+    }
+}
+
 static void checkOptions(void)
 {
     IcoVideoOptions o;
@@ -157,6 +230,7 @@ int main(void)
     checkMake();
     checkX();
     checkTw();
+    checkTex0();
     checkOptions();
     if (failures) {
         printf("ico_frame_test: %d failures\n", failures);
