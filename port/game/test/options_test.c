@@ -504,13 +504,17 @@ static void test_video_anti_alias(const char *dir)
         failures++;
         return;
     }
-    /* Original rows: kept as written, off in force */
+    /* no preset (Original): the shortcut puts it off */
     fputs("[video]\nanti_aliasing = \"msaa4\"\n", f);
     fclose(f);
     ico_config_reset(path, "/nonexistent/options_test.ini");
     ico_video_reload();
     ico_video_get(&o);
     CHECK(ico_video_preset(&o) == ICO_VIDEO_ORIGINAL);
+    CHECK(o.antiAlias == ICO_AA_OFF && ico_video_anti_alias() == ICO_AA_OFF);
+    /* Original rows with it set at run time: off in force */
+    o.antiAlias = ICO_AA_MSAA4;
+    ico_video_set(&o);
     CHECK(ico_video_anti_alias() == ICO_AA_OFF);
     /* Enhanced: in force */
     ico_video_set_preset(&o, ICO_VIDEO_ENHANCED);
