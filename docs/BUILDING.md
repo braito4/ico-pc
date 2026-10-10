@@ -428,6 +428,56 @@ allocations; `rhi_vk_mali` also checks that what goes past them is refused
 by the limit's name, and `rd_perf_mali` creates the whole reachable pipeline
 set). On a device, the log is mirrored to logcat: `adb logcat -s ico-pc`.
 
+## Native frame gates
+
+Two checks guard the renderer rework (they need saved frame dumps and a
+Vulkan device, so they are developer tools, not part of CI). Both are
+`tools/native_frame_check.py` (Python 3 and Pillow; run it with `python3 -I`)
+over `rd_replay_tool`, and both are ctests that skip (exit 77) without
+`ICO_DUMPS`, the dumps, a device or Pillow:
+
+- **Gate A** (`native_frame_gate_a`): the Original preset at 4:3, 1x, and
+  Enhanced at 4:3, 2x, must stay byte-identical. It renders every dump of the
+  dump list at both settings, every named target (SCENE, DISPLAY, the shadow
+  maps, WORK0..3, AA0/1, FEED128, the aura and held buffers) plus the
+  presented picture, and compares the SHA-256 of the RGBA pixels with
+  `docs/native_frame_baseline.json`. A mismatch names the dump, the settings
+  and the target; with the baseline pictures kept (`--ref-dir`) it also gives
+  the first differing pixel.
+- **Gate B** (`native_frame_gate_b`): the centre of a wide picture equals the
+  4:3 picture. Give it one game state captured at 4:3, 16:9, 32:9, 48:9 and
+  60:9 (a zip, a folder or PNG files; the file or folder name holds the
+  aspect: `4x3`, `16x9`, ...). Columns `[(W/2 - 256) * s, + 512 * s)` of
+  each wide picture must equal the 4:3 picture byte for byte. `--effects R`
+  allows a band of R pixels at each old edge (a blur kernel's radius) and
+  reports the largest difference in it. A continuity check compares the
+  gradient at each old edge column with the 99th percentile of the
+  neighbourhood (16 columns each side), per channel. `--allow FILE.json`
+  lists explained differences (`{"diffs": [{"group", "aspect", "cols",
+  "rows", "reason"}], "continuity": [{"group", "aspect", "edge", "reason"}]}`).
+  `native_frame_check_selftest` always runs the logic on synthetic pictures.
+
+The dump list is a text file of paths (`tools/native_frame_dumps.txt` is the
+default; it holds this machine's paths and is machine-local; the dumps are
+never committed). `ICO_DUMPS` names a list file or a folder of `.rddump` and
+`.zip` files; `ICO_SWEEPS` names the Gate B sweeps (paths separated by `:`);
+`ICO_REPLAY_TOOL` the tool (default `build-host/linux-x64/port/render/`).
+A run holds `build-host/tmp/replay.lock` and renders with 3 workers
+(`--jobs`).
+
+```
+ICO_DUMPS=tools/native_frame_dumps.txt ctest --preset linux-x64 -R native_frame_gate_a
+python3 -I tools/native_frame_check.py gate-a --tool build-host/linux-x64/port/render/rd_replay_tool
+python3 -I tools/native_frame_check.py gate-b --effects 0 sweep-bridge.zip
+```
+
+After an intended change to Original at 4:3 (a bug fix that changes pixels),
+check the difference by eye first, then rebuild the manifest from the new
+build with `python3 -I tools/native_frame_check.py baseline --ref-dir
+build-host/tmp/native_frame_ref` and commit `docs/native_frame_baseline.json`
+with the change. The manifest holds hashes only (plus the harness commit, the
+settings, and each dump's name, size and SHA-256).
+
 ## Frame captures (F12)
 
 F12 in the running game saves the frame on the screen, for a bug report or

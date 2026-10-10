@@ -641,6 +641,24 @@ if(ICO_RUN_TESTS)
                      -P "${CMAKE_CURRENT_SOURCE_DIR}/test/rd_replay_tool_list.cmake")
     set_tests_properties(rd_replay_tool_list PROPERTIES SKIP_REGULAR_EXPRESSION "SKIP:"
                                                         FIXTURES_REQUIRED rd_dump)
+    # the native frame gates (tools/native_frame_check.py, docs/BUILDING.md "Native frame
+    # gates"): Gate A re-renders the dump list ICO_DUMPS names and compares with
+    # docs/native_frame_baseline.json; Gate B checks the aspect sweeps ICO_SWEEPS names.
+    # Both skip (77) without the variable, the dumps, a device or Pillow; the selftest
+    # of the Gate B logic always runs.
+    if(Python3_FOUND)
+        set(ICO_NFC "${CMAKE_SOURCE_DIR}/tools/native_frame_check.py")
+        add_test(NAME native_frame_gate_a
+                 COMMAND "${Python3_EXECUTABLE}" -I "${ICO_NFC}" gate-a --ctest
+                         --tool $<TARGET_FILE:rd_replay_tool>)
+        add_test(NAME native_frame_gate_b
+                 COMMAND "${Python3_EXECUTABLE}" -I "${ICO_NFC}" gate-b --ctest)
+        add_test(NAME native_frame_check_selftest
+                 COMMAND "${Python3_EXECUTABLE}" -I "${ICO_NFC}" selftest)
+        set_tests_properties(native_frame_gate_a native_frame_gate_b native_frame_check_selftest
+                             PROPERTIES SKIP_RETURN_CODE 77)
+        set_tests_properties(native_frame_gate_a PROPERTIES TIMEOUT 3600)
+    endif()
     add_test(NAME rd_water COMMAND rd_water_test)
     set_tests_properties(rd_water PROPERTIES SKIP_RETURN_CODE 77)
     add_test(NAME rd_raw COMMAND rd_raw_test WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")

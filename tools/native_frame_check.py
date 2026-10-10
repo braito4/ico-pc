@@ -319,7 +319,14 @@ def first_diff(a, b):
     return None
 
 
+def ctest_guard(args):
+    if args.ctest and not os.environ.get("ICO_DUMPS"):
+        print("native_frame_check: SKIP: ICO_DUMPS is not set")
+        sys.exit(EXIT_SKIP)
+
+
 def cmd_gate_a(args):
+    ctest_guard(args)
     need_pillow()
     from PIL import Image
     if not os.path.exists(args.manifest):
@@ -559,6 +566,7 @@ def allowed_cont(allow, name, asp, label):
 
 
 def cmd_gate_b(args):
+    ctest_guard(args)
     need_pillow()
     srcs = list(args.sweep)
     env = os.environ.get("ICO_SWEEPS")
@@ -671,6 +679,8 @@ def main():
     def common(p):
         p.add_argument("--tool", help="rd_replay_tool (default: ICO_REPLAY_TOOL or build-host/linux-x64/...)")
         p.add_argument("--dumps", help="dump list file or folder (default: ICO_DUMPS, then tools/native_frame_dumps.txt)")
+        p.add_argument("--ctest", action="store_true",
+                       help="skip (77) unless ICO_DUMPS is set (the ctests)")
         p.add_argument("--only", help="only dumps whose file name contains this text")
         p.add_argument("--manifest", default=DEFAULT_MANIFEST)
         p.add_argument("--jobs", type=int, default=int(os.environ.get("ICO_NFC_JOBS", "3")))
@@ -684,6 +694,7 @@ def main():
     common(p)
     p = sub.add_parser("gate-b", help="centre columns of an aspect sweep against its 4:3 picture")
     p.add_argument("sweep", nargs="*", help="zip, folder or PNG files of one state (default: ICO_SWEEPS)")
+    p.add_argument("--ctest", action="store_true", help="skip (77) unless ICO_DUMPS is set (the ctests)")
     p.add_argument("--effects", type=int, default=0, metavar="R",
                    help="Effects on: allow a band of R pixels at each old edge (a kernel radius)")
     p.add_argument("--allow", help="allow-list json: {\"diffs\": [{group, aspect, cols, rows, reason}], "
