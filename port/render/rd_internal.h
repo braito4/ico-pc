@@ -795,6 +795,13 @@ typedef enum RdFsId {
     /* aa_reduce_ps: supersampling, DISPLAY box-averaged to the present box
      * (rd_present.c) */
     RD_FS_AA_REDUCE,
+    /* MSAA (rd_replay.c, the MSAA epoch): fog_lut_ms_ps, the fog per sample
+     * reading the multisampled depth (created only with sample-rate
+     * shading); depth_resolve_ps and depth_upsample_ps, the scene depth
+     * between its multisampled and single-sampled textures */
+    RD_FS_FOG_MS,
+    RD_FS_DEPTH_RESOLVE,
+    RD_FS_DEPTH_UPSAMPLE,
     RD_FS_COUNT
 } RdFsId;
 
@@ -1012,6 +1019,12 @@ int rd__aa_mode(void);
 uint32_t rd__aa_ssaa_factor(int mode);
 /* ", anti-aliasing <name>" for the display log line */
 const char *rd__aa_label(int mode);
+/* Tests: the fog inside the MSAA epoch reads the resolved depth (the epoch
+ * closes) even where it could run per sample (rd_replay.c doFog). */
+void rd__msaa_test_fog_resolved(bool on);
+/* Frees the MSAA epoch's multisampled scene pair (rd_replay.c; remade at
+ * the next replay that wants it). */
+void rd__msaa_free(void);
 /* The multisampled scene pair's budget on a tile-based GPU, in bytes
  * (rd__apply_display halves the scale until it fits). */
 #define RD_MSAA_TILER_BUDGET (384ull << 20)
@@ -1332,6 +1345,10 @@ typedef struct RdContext {
      * to fall back (sceneFellBack) */
     float sceneReqSx, sceneReqSy;
     bool sceneFellBack;
+    /* the sample count of the render pass being recorded (rd_replay.c
+     * beginPass): 1, or the MSAA epoch's count; rd__get_pipeline makes the
+     * pipelines of that pass with it (RdPipelineKey.msaa) */
+    uint8_t passSamples;
     /* the supersampling factor in force (rd__apply_display): 1, 2 or 4,
      * already in sceneReqSx/Sy; rd_scene_scale_lowered divides it out */
     float ssaa;

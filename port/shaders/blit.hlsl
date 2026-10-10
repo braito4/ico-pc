@@ -136,6 +136,35 @@ float4 aa_reduce_ps(BlitVSOut i) : SV_Target0
     return float4((sum + area / 2u) / area) * (1.0 / 255.0);
 }
 
+// MSAA (rd_replay.c, the MSAA epoch). depth_resolve_ps: the multisampled
+// scene depth (t1, Texture2DMS read with Load at each sample) into the
+// single-sampled one as SV_Depth, the largest sample (the depth grows with
+// GS Z and the game tests GEQUAL: the nearest surface any sample saw), in a
+// depth-only pass over the whole target, test ALWAYS with writes.
+// depth_upsample_ps: the other way, the single-sampled depth (t1) into
+// every sample of the multisampled one, when an epoch starts on a scene
+// that already holds a picture.
+Texture2DMS<float> g_msDepth : register(t1, space2);
+
+float depth_resolve_ps(BlitVSOut i) : SV_Depth
+{
+    uint w, h, n;
+    g_msDepth.GetDimensions(w, h, n);
+    int2 p = int2(i.pos.xy);
+    float d = 0.0;
+    for (uint s = 0u; s < n; s++) {
+        d = max(d, g_msDepth.Load(p, int(s)));
+    }
+    return d;
+}
+
+Texture2D<float> g_ssDepth : register(t1, space2);
+
+float depth_upsample_ps(BlitVSOut i) : SV_Depth
+{
+    return g_ssDepth.Load(int3(int2(i.pos.xy), 0));
+}
+
 // camera_probe_ps (tests only, rd__camera_probe): FrameCB's
 // matrices applied to the point DrawCB.g_param, written as raw float bits so
 // the HLSL column_major packing can be compared with the C side. Target 4 x 3

@@ -313,6 +313,16 @@ target_compile_options(rd_mirror_test PRIVATE ${ICO_SEMANTIC_OPTIONS} ${ICO_PORT
 target_include_directories(rd_mirror_test PRIVATE "${CMAKE_SOURCE_DIR}/port/rhi")
 target_link_libraries(rd_mirror_test PRIVATE ico_render)
 
+# rd_msaa_test: the anti-aliasing's MSAA epoch: MSAA4 against no
+# anti-aliasing on a synthetic scene (identical away from edges, integer
+# sprites identical), a DATE draw closing the epoch, the fog per sample and
+# through the resolved depth, the Original preset unchanged; 77 without a
+# device that takes 4 samples.
+add_executable(rd_msaa_test test/rd_msaa_test.c)
+target_compile_options(rd_msaa_test PRIVATE ${ICO_SEMANTIC_OPTIONS} ${ICO_PORT_WARNINGS})
+target_include_directories(rd_msaa_test PRIVATE "${CMAKE_SOURCE_DIR}/port/rhi")
+target_link_libraries(rd_msaa_test PRIVATE ico_render)
+
 # rd_perf_test: a synthetic game-shaped frame replayed 200
 # times and recorded 200 times: no resource is created or destroyed and no
 # texture or static mesh uploaded again in steady state, and the CPU time of
@@ -599,7 +609,7 @@ target_link_libraries(texpack_e2e_test PRIVATE ico_render)
 ico_copy_sdl3_dll(texpack_test texpack_e2e_test rd_replay_tool rd_state_test rd_pixel_test
                   rd_layout_test rd_tex_test rd_gsbase_test rd_mesh_test modelpack_test
                   rd_shadow_test rd_fog_test rd_fog_selftest_test rd_blur_test rd_water_test rd_raw_test rd_debug_test
-                  rd_present_test rd_filter_test rd_interp_test rd_mirror_test rd_mip_test
+                  rd_present_test rd_filter_test rd_interp_test rd_mirror_test rd_msaa_test rd_mip_test
                   rd_perf_test rd_boot_present_test rd_crt_test texpack_load_test gsb_cull_test
                   rd_native_test)
 
@@ -697,6 +707,8 @@ if(ICO_RUN_TESTS)
     add_test(NAME rd_interp COMMAND rd_interp_test)
     add_test(NAME rd_mirror COMMAND rd_mirror_test)
     set_tests_properties(rd_mirror PROPERTIES SKIP_RETURN_CODE 77)
+    add_test(NAME rd_msaa COMMAND rd_msaa_test)
+    set_tests_properties(rd_msaa PROPERTIES SKIP_RETURN_CODE 77)
     add_test(NAME rd_perf COMMAND rd_perf_test)
     set_tests_properties(rd_perf PROPERTIES SKIP_RETURN_CODE 77)
     add_test(NAME rd_boot_present COMMAND rd_boot_present_test "${ICO_BOOT_DUMP_DIR}")
@@ -719,7 +731,7 @@ if(ICO_RUN_TESTS)
     if(_env)
         set_tests_properties(rd_water PROPERTIES ENVIRONMENT "${_env}")
         set_tests_properties(rd_pixel rd_replay_tool rd_layout rd_tex rd_gsbase rd_mesh modelpack
-                             rd_shadow rd_fog rd_blur rd_raw rd_debug rd_present rd_crt rd_interp rd_mirror rd_perf rd_native PROPERTIES ENVIRONMENT
+                             rd_shadow rd_fog rd_blur rd_raw rd_debug rd_present rd_crt rd_interp rd_mirror rd_msaa rd_perf rd_native PROPERTIES ENVIRONMENT
                                                                            "${_env}")
     endif()
     # the same tests and expectations in the two-pass blend
@@ -735,8 +747,10 @@ if(ICO_RUN_TESTS)
     add_test(NAME rd_raw_nodual COMMAND rd_raw_test)
     add_test(NAME rd_mirror_nodual COMMAND rd_mirror_test)
     add_test(NAME rd_interp_nodual COMMAND rd_interp_test)
+    add_test(NAME rd_msaa_nodual COMMAND rd_msaa_test)
     set_tests_properties(rd_pixel_nodual rd_present_nodual rd_fog_nodual rd_shadow_nodual
                          rd_water_nodual rd_raw_nodual rd_mirror_nodual rd_interp_nodual
+                         rd_msaa_nodual
                          PROPERTIES SKIP_RETURN_CODE 77 WORKING_DIRECTORY "${_nd}"
                                     ENVIRONMENT "${_env_nodual}")
     # the fog on the 24-bit depth buffer a phone GPU without a sampled

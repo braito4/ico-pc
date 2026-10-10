@@ -1415,7 +1415,8 @@ const RdStats *rd_get_stats(void);
  * own targets AURA_WORK, AURA_TAP, FEED128 and its sprites), GLOW (flare,
  * bloom and the sun's eye blur), DOF (depth of field), SOFTEN (the screen
  * softening: the AA0/AA1 passes and the pass into SCENE right after them),
- * CRT (the CRT filter's passes in the present). */
+ * CRT (the CRT filter's passes in the present), MSAA (the anti-aliasing's
+ * resolve of the multisampled SCENE, rd_replay.c msaaEnd). */
 enum {
     RD_PERF_POST_REDUCTION = 0,
     RD_PERF_POST_FOG,
@@ -1425,6 +1426,8 @@ enum {
     RD_PERF_POST_DOF,
     RD_PERF_POST_SOFTEN,
     RD_PERF_POST_CRT,
+    /* the MSAA epoch's resolves of SCENE (rd_replay.c msaaEnd) */
+    RD_PERF_POST_MSAA,
     RD_PERF_POST_COUNT
 };
 
@@ -1469,6 +1472,9 @@ typedef struct RdPerfRecord {
        effect, or the scene, before them) */
     uint8_t gpuPostPartial;
     uint8_t _pad2[2];
+    /* MSAA (RdSettings.antiAlias): the replay's sample count (0 without)
+     * and the epoch's resolves of SCENE (0 or 1 a replay) */
+    uint32_t msaaSamples, msaaResolves;
 } RdPerfRecord;
 
 /* The oldest finished record not yet popped (a queue of 64; the oldest are

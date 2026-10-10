@@ -185,6 +185,8 @@ static struct {
     unsigned gpuPostPartial;            /* replays whose effects were not all timed apart */
     uint64_t draws, passes, pipeBinds, groupBinds, groups, barriers, copies, bytes, meshBytes;
     uint64_t texUploads, meshUploads, dateSnaps, exact, pipeCreates;
+    uint64_t msaaResolves;
+    uint32_t msaaSamples; /* the block's largest count (0: no MSAA) */
     uint64_t bufCreated, bufDestroyed, texCreated, texDestroyed, allocs, fenceWaits, waitIdles,
         readbacks;
 } s_perf;
@@ -1881,6 +1883,10 @@ static void perf_drain(void)
         s_perf.dateSnaps += r.dateSnapshots;
         s_perf.exact += r.exactBlends;
         s_perf.pipeCreates += r.pipelineCreates;
+        s_perf.msaaResolves += r.msaaResolves;
+        if (r.msaaSamples > s_perf.msaaSamples) {
+            s_perf.msaaSamples = r.msaaSamples;
+        }
         s_perf.bufCreated += r.buffersCreated;
         s_perf.bufDestroyed += r.buffersDestroyed;
         s_perf.texCreated += r.texturesCreated;
@@ -1972,6 +1978,12 @@ static void perf_log(void)
             (unsigned long long)s_perf.texDestroyed, (unsigned long long)s_perf.allocs,
             (unsigned long long)s_perf.pipeCreates, (unsigned long long)s_perf.fenceWaits,
             (unsigned long long)s_perf.waitIdles, (unsigned long long)s_perf.readbacks);
+    if (s_perf.msaaSamples) {
+        /* the anti-aliasing's cost: its resolves' GPU time is the effects'
+           "MSAA resolve" above */
+        fprintf(stderr, "window: msaa: %u samples, resolves %.1f per replay\n", s_perf.msaaSamples,
+                (double)s_perf.msaaResolves / n);
+    }
     {
         /* the graphics allocations against the device's limit (a
            phone GPU allows 4096) and the process's memory (a phone ends a
