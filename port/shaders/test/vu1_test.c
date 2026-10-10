@@ -1590,7 +1590,7 @@ static const Case kCases[] = {
     {"prelit card enh", "vu_prelit_vs", P_NORMALC, 32, ICO_VU_CLIP_REGION, 3, 1, 2, 12, 0, 0, 0,
      0.375f, DEPART_CARD, VU1REF_ENHANCED, MARK_NONE},
     /* a particle past the window: Original drops it, Enhanced and the free
-     * camera draw it whole */
+     * camera draw its whole quad, which the GPU clips */
     {"particle past", "vu_particle_vs", P_PARTICLE, 18, 0, 2, 6, 1, 12, 0, 0, 0, 1.0f,
      DEPART_SPRITE, VU1REF_ORIGINAL, MARK_NONE},
     {"particle past enh", "vu_particle_vs", P_PARTICLE, 18, 0, 2, 6, 1, 12, 0, 0, 0, 0.375f,
@@ -2034,8 +2034,10 @@ static int gpuTests(void)
             }
             portIn += pin;
             portDropped += c->preset == VU1REF_ORIGINAL && c->mark == MARK_NONE ? nnone : 0;
-        } else if (c->clip == ICO_VU_CLIP_REGION &&
+        } else if (c->prog != P_PARTICLE && c->clip == ICO_VU_CLIP_REGION &&
                    (c->depart != DEPART_NONE || c->wide != 1.0f || c->mark != MARK_NONE)) {
+            /* a particle has no index list (its clip field is 0, which reads
+             * as REGION): the sprites the VU skips are checked below */
             FAILF("%s: no triangle the port draws other than exactly\n", c->name);
         }
         /* the marks: HIDE and HIDE43 beside the 4:3 columns draw nothing at

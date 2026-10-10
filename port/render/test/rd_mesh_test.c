@@ -850,7 +850,13 @@ static void recordFullFrame(void)
 
 /* at 16:9 the scene is the native frame, 688 GS pixels across: the
    unflagged draw is the 4:3 one at its GS X (nothing compressed), the
-   flagged one the same, and a full-frame item covers the frame's width */
+   flagged one the same, and a full-frame item covers the frame's width.
+   The same triangles 88 pixels to the right are not interpolated to the
+   same bytes: the rasteriser evaluates colour and STQ at the pixel's
+   position in the target (llvmpipe: a plane through the target's origin),
+   and the 4:3 render itself drawn with its origin moved 88 pixels has 7
+   pixels 1 LSB off (measured 2026-10-10).  So the centre's coverage is
+   exact and its colour within 1 LSB per channel. */
 static void stretchWidePixels(void)
 {
     CHECK(g_rd.gsW == WT && s_sceneW == WT, "stretch 16:9: the frame is %u wide", g_rd.gsW);
@@ -859,22 +865,35 @@ static void stretchWidePixels(void)
     recordPrelit(&s_objA, 1);
     const int a = wideColumns(&a0, &a1);
     memcpy(s_wideA, s_wideImg, sizeof(s_wideA));
-    int same = a && s_have43, outside = 0;
+    int same = a && s_have43, outside = 0, coverage = 0, lsb = 0, maxd = 0;
     for (int y = 0; a && y < 512; y++) {
         for (int x = 0; x < WT; x++) {
             const uint8_t *p = &s_wideA[(y * WT + x) * 4];
             if (x >= WX0 && x < WX0 + 512) {
-                same &= memcmp(p, &s_stretch43[(y * 512 + x - WX0) * 4], 4) == 0;
+                const uint8_t *q = &s_stretch43[(y * 512 + x - WX0) * 4];
+                const int clearP = p[0] == 40 && p[1] == 40 && p[2] == 60;
+                const int clearQ = q[0] == 40 && q[1] == 40 && q[2] == 60;
+                coverage += clearP != clearQ;
+                int d = 0;
+                for (int k = 0; k < 4; k++) {
+                    const int e = p[k] > q[k] ? p[k] - q[k] : q[k] - p[k];
+                    d = e > d ? e : d;
+                }
+                lsb += d != 0;
+                maxd = d > maxd ? d : maxd;
             } else {
                 outside += p[0] != 40 || p[1] != 40 || p[2] != 60;
             }
         }
     }
-    printf("  stretch 16:9: the scene draw's columns %d..%d of %d\n", a0, a1, WT);
+    same &= coverage == 0 && maxd <= 1;
+    printf("  stretch 16:9: the scene draw's columns %d..%d of %d; against the 4:3 picture %d "
+           "pixels covered differently, %d off by up to %d\n",
+           a0, a1, WT, coverage, lsb, maxd);
     CHECK(a && same && outside == 0,
           "stretch 16:9: a world draw is the Enhanced 4:3 picture at its GS X, columns %d..%d (%d "
-          "drawn beside)",
-          WX0, WX0 + 511, outside);
+          "covered differently, %d pixels off by up to %d, %d drawn beside)",
+          WX0, WX0 + 511, coverage, lsb, maxd, outside);
     s_fullFrameModel = "test_prelit";
     gsFrame.w = WT; /* GsBase.c's latch: reg_DispObj widens by the frame's width / 512 */
     recordPrelit(&s_objA, 1);
