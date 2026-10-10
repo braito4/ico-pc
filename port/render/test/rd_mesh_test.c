@@ -117,6 +117,69 @@ static int memEq(const float *a, const float *b, int qw)
     return memcmp(a, b, (size_t)qw * 16) == 0;
 }
 
+/* A single rigid, lit triangle.  Its endpoint normals curve every edge out
+ * of the original plane, so the generated midpoint positions are also a
+ * check that this is Phong subdivision rather than plain linear splitting. */
+static void tessellationChecks(void)
+{
+    float qw[1 + 3 * RD_VU_QW_LIT][4];
+    memset(qw, 0, sizeof(qw));
+    const uint32_t tag = 0x8000u | 3u;
+    memcpy(qw[0], &tag, 4);
+    static const float pos[3][3] = {{0, 0, 0}, {2, 0, 0}, {0, 2, 0}};
+    static const float normal[3][3] = {{1, 0, 1}, {-1, 0, 1}, {0, -1, 1}};
+    for (uint32_t v = 0; v < 3; v++) {
+        memcpy(qw[1 + v * RD_VU_QW_LIT], pos[v], 3 * sizeof(float));
+        qw[1 + v * RD_VU_QW_LIT][3] = 1.0f;
+        memcpy(qw[2 + v * RD_VU_QW_LIT], normal[v], 3 * sizeof(float));
+        qw[3 + v * RD_VU_QW_LIT][0] = (float)v * 0.5f;
+        qw[3 + v * RD_VU_QW_LIT][2] = 1.0f;
+        qw[3 + v * RD_VU_QW_LIT][3] = v ? 1.0f : 0.0f;
+        qw[4 + v * RD_VU_QW_LIT][0] = 127.0f;
+        qw[4 + v * RD_VU_QW_LIT][1] = 127.0f;
+        qw[4 + v * RD_VU_QW_LIT][2] = 127.0f;
+        qw[4 + v * RD_VU_QW_LIT][3] = 127.0f;
+    }
+    const RdVuBatchDesc batch = {0, 0, 0};
+    const RdVuMeshDesc desc = {(const float (*)[4])qw, 1 + 3 * RD_VU_QW_LIT,
+                               RD_VU_QW_LIT, 1, &batch, 1, "tessellation test"};
+    const uint8_t old = g_rd.settings.tessellation;
+    g_rd.settings.tessellation = 1;
+    const RdMesh mesh = rd_create_vu_mesh(&desc);
+    RdMeshRec *r = rd__mesh_rec(mesh.id);
+    CHECK(r && r->vertexCount == 12 && r->indexCount == 12,
+          "tessellation: one triangle becomes four (%u vertices, %u indices)",
+          r ? r->vertexCount : 0, r ? r->indexCount : 0);
+    CHECK(r && r->tessSourceVertexCount == 3 && r->tessSource && r->tessMap &&
+              r->tessBatchVertexCount && r->tessBatchVertexCount[0] == 3,
+          "tessellation: the original stream and update mapping are retained");
+    if (r) {
+        const float *ab = r->stream[RD_VU_QW_LIT];
+        CHECK(fabsf(ab[0] - 1.0f) < 1e-6f && fabsf(ab[1]) < 1e-6f &&
+                  fabsf(ab[2] + 0.25f) < 1e-6f,
+              "tessellation: curved AB midpoint is (1, 0, -0.25), got (%g, %g, %g)",
+              (double)ab[0], (double)ab[1], (double)ab[2]);
+        int indicesOk = 1;
+        for (uint32_t v = 0; v < 12; v++) {
+            const uint32_t c = v % 3;
+            indicesOk &= r->index[v] == ICO_VU_INDEX(v - c + 2, c);
+        }
+        CHECK(indicesOk, "tessellation: four independent triangle-list indices");
+    }
+    qw[1 + RD_VU_QW_LIT][0] = 4.0f;
+    CHECK(rd_update_vu_mesh(mesh, (const float (*)[4])qw),
+          "tessellation: a morph rebuilds the subdivided stream");
+    r = rd__mesh_rec(mesh.id);
+    if (r) {
+        const float *ab = r->stream[RD_VU_QW_LIT];
+        CHECK(fabsf(ab[0] - 2.0f) < 1e-6f && fabsf(ab[2] + 0.5f) < 1e-6f,
+              "tessellation: updated AB midpoint is (2, 0, -0.5), got (%g, %g, %g)",
+              (double)ab[0], (double)ab[1], (double)ab[2]);
+    }
+    rd_destroy_vu_mesh(mesh);
+    g_rd.settings.tessellation = old;
+}
+
 /* The EE uploads of a normal object: +0x140 = +0x100 x node, +0x200 x node,
  * +0x80 x node (reg_setNMatrixPacket_setMatrix) */
 static void normalMatrices(const Model *m, float out[12][4])
@@ -1826,6 +1889,7 @@ static void buildModels(void)
 
 static void recordingChecks(void)
 {
+    tessellationChecks();
     CHECK(packetA() && packetA()->next == NULL, "one packet for the prelit model");
     CHECK(packetB() && packetB()->next == NULL, "one packet for the cluster model");
     if (!packetA() || !packetB()) {

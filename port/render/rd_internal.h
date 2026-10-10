@@ -607,6 +607,15 @@ typedef struct RdMeshRec {
     /* VU meshes */
     uint32_t qwPerVertex, batchCount, srcQw;
     float (*stream)[4]; /* vertexCount * qwPerVertex quadwords */
+    /* Optional one-level Phong tessellation.  tessSource is the original
+     * tagless stream; every output vertex maps to two source vertices in
+     * tessMap (the same vertex twice for an original corner).  The per-batch
+     * source counts let rd_update_vu_mesh rebuild the subdivided stream when
+     * a morph rewrites its packet. */
+    float (*tessSource)[4];
+    uint32_t tessSourceVertexCount;
+    uint32_t *tessMap; /* vertexCount * 2 */
+    uint32_t *tessBatchVertexCount; /* batchCount */
     uint32_t *index;
     /* issue 25: the index list the device draws, index with
      * ICO_VU_INDEX_LATER on each triangle that overlaps an earlier

@@ -358,6 +358,7 @@ Under `[video]`:
 | --- | --- |
 | `window_mode = "windowed"` | The Window mode row: `"windowed"`, `"borderless"` or `"fullscreen"`. A `config.toml` from an older version has a `fullscreen` line instead, and it is still read. |
 | `effect_glow = true` and the five other `effect_` lines | The six switches of the Effects page. |
+| `tessellation = false` | Experimental one-level Phong subdivision for lit geometry. Each triangle becomes four; curved surfaces use their normals while flat surfaces stay flat. It takes effect on the next start and leaves collision and game logic unchanged. |
 | `crt = false`, `crt_mode = "consumer"`, `crt_strength = 1.0` | The CRT filter and CRT strength rows. `crt_mode` is `"scanlines"`, `"consumer"`, `"trinitron"`, `"pvm"` or `"shadow"`. `crt_strength` goes from `0.0` to `1.0`. |
 | `crt_scanlines`, `crt_mask`, `crt_halation`, `crt_bloom` | Fine tuning of the CRT filter, each from `0.0` to `1.0`: how strong the dark lines are, how strong the fine pattern of dots or stripes is, how much glow surrounds bright spots and how much bright areas spread softly. A line that is missing, or a negative number, keeps the chosen style's own value. |
 | `crt_curvature` | How much the screen bulges, from `0.0` to `0.25`. Missing keeps the style's own value. |

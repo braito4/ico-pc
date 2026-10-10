@@ -336,6 +336,9 @@ typedef struct RdSettings {
      * not under the CRT filter.  0 in a zeroed RdSettings: no depth
      * buffer is written. */
     uint8_t effectsDepth;
+    /* [video] tessellation: one-level CPU Phong subdivision for lit VU
+     * meshes.  Read at mesh creation; changing it requires a restart. */
+    uint8_t tessellation;
     /* Model packs ([video] model_pack, dump_models): replacement models
      * drawn in place of the game's, and each model part saved as glTF.
      * Both 0 in a zeroed RdSettings. */

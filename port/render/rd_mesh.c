@@ -239,10 +239,16 @@ static void meshFree(RdMeshRec *m)
         m->hist[i].stream = NULL;
     }
     free(m->stream);
+    free(m->tessSource);
+    free(m->tessMap);
+    free(m->tessBatchVertexCount);
     free(m->index);
     free(m->drawIndex);
     free(m->batches);
     m->stream = NULL;
+    m->tessSource = NULL;
+    m->tessMap = NULL;
+    m->tessBatchVertexCount = NULL;
     m->index = NULL;
     m->drawIndex = NULL;
     m->batches = NULL;
@@ -573,11 +579,11 @@ static const ClosingPlane kClosingPlanes[] = {
       {0xc4c78446u, 0xc5696b2bu, 0xc45c93adu}}}, /* -1596.13 -3734.70  -882.31 */
 };
 
-/* the listed closing plane that vertex v of m is a black corner of (-1: none) */
-static int closingPlaneOf(const RdMeshRec *m, uint32_t v)
+/* the listed closing plane that vertex v is a black corner of (-1: none) */
+static int closingPlaneOfStream(const float (*stream)[4], uint32_t qpv, uint32_t v)
 {
-    const float *q = m->stream[(size_t)v * m->qwPerVertex];
-    const float *col = m->stream[(size_t)v * m->qwPerVertex + m->qwPerVertex - 1u];
+    const float *q = stream[(size_t)v * qpv];
+    const float *col = stream[(size_t)v * qpv + qpv - 1u];
     if (col[0] != 0.0f || col[1] != 0.0f || col[2] != 0.0f) {
         return -1;
     }
@@ -612,8 +618,10 @@ static void markWideHidden(RdMeshRec *m)
         if (kick < 2 || kick >= m->vertexCount) {
             continue;
         }
-        const int p = closingPlaneOf(m, kick - 2u);
-        if (p < 0 || closingPlaneOf(m, kick - 1u) != p || closingPlaneOf(m, kick) != p) {
+        const int p = closingPlaneOfStream((const float (*)[4])m->stream, qpv, kick - 2u);
+        if (p < 0 ||
+            closingPlaneOfStream((const float (*)[4])m->stream, qpv, kick - 1u) != p ||
+            closingPlaneOfStream((const float (*)[4])m->stream, qpv, kick) != p) {
             continue;
         }
         if (!m->drawIndex) {
@@ -783,6 +791,199 @@ static uint32_t batchIndices(const float (*stream)[4], uint32_t qpv, uint32_t v,
     return ni;
 }
 
+/* ---------------------------------------------------- Phong subdivision
+ *
+ * The VU shaders encode a triangle as three indices for one `kick`: the
+ * three consecutive stream vertices kick - 2, kick - 1, kick.  Arbitrary
+ * shared midpoint indices therefore cannot be used.  The tessellated stream
+ * is a triangle list instead: every source triangle becomes four triples.
+ * This costs more stream memory but keeps the PS2 shader path unchanged.
+ */
+#define RD_TESS_MAX_STREAM_BYTES (32u << 20)
+
+typedef struct TessBuild {
+    float (*stream)[4];
+    uint32_t *index;
+    uint32_t *map; /* two source vertex ids per output vertex */
+    uint32_t *batchVertexCount;
+    RdVuBatchRec *batches;
+    uint32_t vertexCount, indexCount;
+} TessBuild;
+
+static bool s_tessLogged;
+
+static void normaliseTess(float n[3])
+{
+    const double d = sqrt((double)n[0] * n[0] + (double)n[1] * n[1] + (double)n[2] * n[2]);
+    if (d > 1.0e-20 && isfinite(d)) {
+        n[0] = (float)(n[0] / d);
+        n[1] = (float)(n[1] / d);
+        n[2] = (float)(n[2] / d);
+    }
+}
+
+/* One original corner (a == b), or an edge midpoint.  The midpoint uses
+ * Phong tessellation: project it onto both endpoint tangent planes and move
+ * halfway towards their average.  Equal face normals leave a plane exactly
+ * unchanged; smoothly differing normals bow a coarse edge into its implied
+ * surface. */
+static void tessVertex(float (*out)[4], const float (*src)[4], uint32_t qpv, uint32_t a,
+                       uint32_t b)
+{
+    const float (*va)[4] = src + (size_t)a * qpv;
+    const float (*vb)[4] = src + (size_t)b * qpv;
+    if (a == b) {
+        memcpy(out, va, (size_t)qpv * 16);
+        return;
+    }
+    for (uint32_t q = 0; q < qpv; q++) {
+        for (int k = 0; k < 4; k++) {
+            out[q][k] = (va[q][k] + vb[q][k]) * 0.5f;
+        }
+    }
+
+    float na[3] = {va[1][0], va[1][1], va[1][2]};
+    float nb[3] = {vb[1][0], vb[1][1], vb[1][2]};
+    normaliseTess(na);
+    normaliseTess(nb);
+    const float mid[3] = {out[0][0], out[0][1], out[0][2]};
+    float qa[3], qb[3];
+    float da = 0.0f, db = 0.0f;
+    for (int k = 0; k < 3; k++) {
+        da += (mid[k] - va[0][k]) * na[k];
+        db += (mid[k] - vb[0][k]) * nb[k];
+    }
+    for (int k = 0; k < 3; k++) {
+        qa[k] = mid[k] - da * na[k];
+        qb[k] = mid[k] - db * nb[k];
+        out[0][k] = mid[k] + ((qa[k] + qb[k]) * 0.5f - mid[k]) * 0.5f;
+    }
+    float n[3] = {out[1][0], out[1][1], out[1][2]};
+    normaliseTess(n);
+    out[1][0] = n[0];
+    out[1][1] = n[1];
+    out[1][2] = n[2];
+    out[qpv - 2][3] = 1.0f; /* no strip restart in the triangle-list stream */
+}
+
+static void tessBuildFree(TessBuild *t)
+{
+    free(t->stream);
+    free(t->index);
+    free(t->map);
+    free(t->batchVertexCount);
+    free(t->batches);
+    memset(t, 0, sizeof(*t));
+}
+
+/* One level for the lit, rigid layout only.  Prelit geometry has no normals
+ * to define curvature; skinned geometry keeps the original topology and
+ * weights.  False also means the mesh is too large or malformed, and the
+ * caller simply keeps the original. */
+static bool tessBuild(const float (*stream)[4], uint32_t vertexCount, uint32_t qpv,
+                      const uint32_t *index, uint32_t indexCount, const RdVuBatchRec *batches,
+                      uint32_t batchCount, TessBuild *t)
+{
+    memset(t, 0, sizeof(*t));
+    if (!g_rd.settings.tessellation || qpv != RD_VU_QW_LIT || indexCount % 3 != 0) {
+        return false;
+    }
+    const uint64_t outVertices = (uint64_t)(indexCount / 3) * 12;
+    const uint64_t streamBytes = outVertices * qpv * 16;
+    if (!outVertices || outVertices >= (1u << 27) || streamBytes > RD_TESS_MAX_STREAM_BYTES) {
+        return false;
+    }
+    t->vertexCount = t->indexCount = (uint32_t)outVertices;
+    t->stream = malloc((size_t)streamBytes);
+    t->index = malloc((size_t)t->indexCount * 4);
+    t->map = malloc((size_t)t->vertexCount * 2 * 4);
+    t->batchVertexCount = malloc((size_t)batchCount * 4);
+    t->batches = calloc(batchCount ? batchCount : 1, sizeof(*t->batches));
+    if (!t->stream || !t->index || !t->map || !t->batchVertexCount || !t->batches) {
+        tessBuildFree(t);
+        return false;
+    }
+
+    uint32_t ov = 0;
+    for (uint32_t bi = 0; bi < batchCount; bi++) {
+        const RdVuBatchRec *in = &batches[bi];
+        RdVuBatchRec *out = &t->batches[bi];
+        *out = *in;
+        out->firstVertex = out->firstIndex = ov;
+        t->batchVertexCount[bi] = in->vertexCount;
+        if (in->firstIndex > indexCount || in->indexCount > indexCount - in->firstIndex ||
+            in->indexCount % 3 != 0) {
+            tessBuildFree(t);
+            return false;
+        }
+        for (uint32_t ii = in->firstIndex; ii < in->firstIndex + in->indexCount; ii += 3) {
+            uint32_t v[3];
+            for (uint32_t c = 0; c < 3; c++) {
+                const uint32_t encoded = index[ii + c] & ICO_VU_INDEX_MASK;
+                const uint32_t kick = encoded / 4;
+                const uint32_t corner = encoded & 3u;
+                if (corner > 2 || kick < 2) {
+                    tessBuildFree(t);
+                    return false;
+                }
+                v[c] = kick - 2 + corner;
+                if (v[c] < in->firstVertex || v[c] >= in->firstVertex + in->vertexCount ||
+                    v[c] >= vertexCount) {
+                    tessBuildFree(t);
+                    return false;
+                }
+            }
+            const uint32_t pair[12][2] = {
+                {v[0], v[0]}, {v[0], v[1]}, {v[2], v[0]},
+                {v[0], v[1]}, {v[1], v[1]}, {v[1], v[2]},
+                {v[2], v[0]}, {v[1], v[2]}, {v[2], v[2]},
+                {v[0], v[1]}, {v[1], v[2]}, {v[2], v[0]},
+            };
+            for (uint32_t k = 0; k < 12; k++, ov++) {
+                t->map[(size_t)ov * 2] = pair[k][0];
+                t->map[(size_t)ov * 2 + 1] = pair[k][1];
+                tessVertex(t->stream + (size_t)ov * qpv, stream, qpv, pair[k][0], pair[k][1]);
+                const uint32_t corner = k % 3;
+                t->index[ov] = ICO_VU_INDEX(ov - corner + 2, corner);
+            }
+        }
+        out->vertexCount = out->indexCount = ov - out->firstVertex;
+    }
+    if (ov != t->vertexCount) {
+        tessBuildFree(t);
+        return false;
+    }
+    return true;
+}
+
+/* markWideHidden normally recognises the original corners.  Subdivision
+ * introduces midpoints, so carry that decision from each source triangle
+ * to all four generated triangles while preserving any overlap marks. */
+static void markTessWideHidden(RdMeshRec *m, const float (*source)[4], const uint32_t *map)
+{
+    for (uint32_t base = 0; base + 11 < m->vertexCount; base += 12) {
+        const uint32_t a = map[(size_t)base * 2];
+        const uint32_t b = map[(size_t)(base + 4) * 2];
+        const uint32_t c = map[(size_t)(base + 8) * 2];
+        const int p = closingPlaneOfStream(source, m->qwPerVertex, a);
+        if (p < 0 || closingPlaneOfStream(source, m->qwPerVertex, b) != p ||
+            closingPlaneOfStream(source, m->qwPerVertex, c) != p) {
+            continue;
+        }
+        if (!m->drawIndex) {
+            m->drawIndex = malloc((size_t)m->indexCount * 4);
+            if (!m->drawIndex) {
+                return;
+            }
+            memcpy(m->drawIndex, m->index, (size_t)m->indexCount * 4);
+        }
+        for (uint32_t i = 0; i < 12; i++) {
+            m->drawIndex[base + i] |= ICO_VU_INDEX_WIDE;
+        }
+        m->wideHidden = 1;
+    }
+}
+
 uint64_t rd_vu_mesh_desc_hash(const RdVuMeshDesc *d, uint32_t *vertexCount, float *normalW)
 {
     uint32_t nv = 0;
@@ -838,14 +1039,52 @@ RdMesh rd_create_vu_mesh(const RdVuMeshDesc *d)
         br[b].indexCount = ni - br[b].firstIndex;
         v += n;
     }
-    uint32_t id = rd__vu_mesh_create_raw(stream, nv, d->qwPerVertex, index, ni, br, d->batchCount,
-                                         d->debugName);
+    TessBuild tess;
+    const bool tessellated = tessBuild(stream, nv, d->qwPerVertex, index, ni, br, d->batchCount,
+                                       &tess);
+    const float (*drawStream)[4] = tessellated ? (const float (*)[4])tess.stream : stream;
+    const uint32_t drawVertices = tessellated ? tess.vertexCount : nv;
+    const uint32_t *drawIndex = tessellated ? tess.index : index;
+    const uint32_t drawIndices = tessellated ? tess.indexCount : ni;
+    const RdVuBatchRec *drawBatches = tessellated ? tess.batches : br;
+    uint32_t id = rd__vu_mesh_create_raw(drawStream, drawVertices, d->qwPerVertex, drawIndex,
+                                         drawIndices, drawBatches, d->batchCount, d->debugName);
     RdMeshRec *m = rd__mesh_rec(id);
     if (m) {
         m->materialCount = d->materialCount;
         m->srcQw = d->qwCount;
         m->hash = xxh3_64(buf, bytes);
+        if (tessellated) {
+            markTessWideHidden(m, stream, tess.map);
+            m->tessSource = malloc((size_t)nv * d->qwPerVertex * 16);
+            if (m->tessSource) {
+                memcpy(m->tessSource, stream, (size_t)nv * d->qwPerVertex * 16);
+                m->tessSourceVertexCount = nv;
+                m->tessMap = tess.map;
+                m->tessBatchVertexCount = tess.batchVertexCount;
+                tess.map = NULL;
+                tess.batchVertexCount = NULL;
+                if (!s_tessLogged) {
+                    rd__log("tessellation: Phong subdivision active (%u to %u vertices, %s)", nv,
+                            drawVertices, d->debugName ? d->debugName : "unnamed mesh");
+                    s_tessLogged = true;
+                }
+            } else {
+                /* It still draws correctly; only a later morph cannot be
+                 * rebuilt, so discard and recreate the original mesh. */
+                rd_destroy_vu_mesh((RdMesh){id});
+                id = rd__vu_mesh_create_raw(stream, nv, d->qwPerVertex, index, ni, br,
+                                             d->batchCount, d->debugName);
+                m = rd__mesh_rec(id);
+                if (m) {
+                    m->materialCount = d->materialCount;
+                    m->srcQw = d->qwCount;
+                    m->hash = xxh3_64(buf, bytes);
+                }
+            }
+        }
     }
+    tessBuildFree(&tess);
     free(buf);
     free(index);
     free(br);
@@ -969,6 +1208,31 @@ bool rd_update_vu_mesh(RdMesh mesh, const float (*qw)[4])
         return false; /* a replaced mesh: its stream is not the packet's layout */
     }
     keepVersion(m);
+    if (m->tessSource && m->tessMap && m->tessBatchVertexCount) {
+        uint32_t sourceAt = 0;
+        for (uint32_t b = 0; b < m->batchCount; b++) {
+            const RdVuBatchRec *br = &m->batches[b];
+            const uint32_t n = m->tessBatchVertexCount[b];
+            if (sourceAt > m->tessSourceVertexCount || n > m->tessSourceVertexCount - sourceAt) {
+                return false;
+            }
+            memcpy(m->tessSource + (size_t)sourceAt * m->qwPerVertex, qw[br->srcQw + 1],
+                   (size_t)n * m->qwPerVertex * 16);
+            sourceAt += n;
+        }
+        if (sourceAt != m->tessSourceVertexCount) {
+            return false;
+        }
+        for (uint32_t v = 0; v < m->vertexCount; v++) {
+            const uint32_t a = m->tessMap[(size_t)v * 2];
+            const uint32_t b = m->tessMap[(size_t)v * 2 + 1];
+            tessVertex(m->stream + (size_t)v * m->qwPerVertex,
+                       (const float (*)[4])m->tessSource, m->qwPerVertex, a, b);
+        }
+        m->replaySeen = 0;
+        m->gpuDirty = 1;
+        return true;
+    }
     for (uint32_t b = 0; b < m->batchCount; b++) {
         const RdVuBatchRec *br = &m->batches[b];
         memcpy(m->stream[(size_t)br->firstVertex * m->qwPerVertex], qw[br->srcQw + 1],
