@@ -53,6 +53,12 @@
  *             sprite in every present, and its head copies FEED128 into
  *             FEED_HELD in a tick's first present and back in the later
  *             ones; neither copy without the read or the write
+ *   native    (W5) the record-only context at the native widths 688,
+ *             1376, 2560: a draw left behind beside the 4:3 columns but
+ *             inside the native frame is not of prev alone (outsideCur at
+ *             W / 2), one past the frame's edge is; at 2560 a CPU-projected
+ *             triangle past 0xFFFF (XYZ2_HI) re-projects, at 512 it stays
+ *             as its tick drew it; pool.c's grids at usc 1 / 1376
  * On a device (skipped without one):
  *   pixels    replays of the blended frame at alpha 0 and 1 equal the
  *             previous and current frames' replays byte for byte; at 0.5 the
@@ -4128,6 +4134,10 @@ static void poolBlock(const double *q, const double *v, RdVuBlock *vu, double *s
     }
 }
 
+/* pool.c's usc: 1 / gsFrame.w (512 at 4:3; testNativeWidths sets the
+ * native frame's) */
+static float s_poolSx = 1.0f / 512.0f;
+
 /* Tick k (0, 1) of the 60 unit, 8 degree camera (lockCamera; with still,
  * tick 0's camera in both): per formula (SURFACE, REFLECT) an unlit grid
  * sampling WORK1 with pool.c's STs at the tick's camera, its wave heights
@@ -4168,7 +4178,7 @@ static void poolFrame(int k, int still)
         for (int i = 0; i < POOL_VERTS; i++) {
             double pos[4], h, st[2];
             poolVertex(k, i, pos, &h);
-            poolStRef(kKinds[n], s, eye, pos, h, 1.0f / 512.0f, 1.0f / 448.0f, st);
+            poolStRef(kKinds[n], s, eye, pos, h, s_poolSx, 1.0f / 448.0f, st);
             for (int c = 0; c < 4; c++) {
                 g[3 + i * 2][c] = (float)pos[c];
             }
@@ -4177,7 +4187,7 @@ static void poolFrame(int k, int still)
             g[4 + i * 2][2] = 1.0f;
             g[4 + i * 2][3] = (float)h;
         }
-        rd_grid_screen_st(kKinds[n], 1.0f / 512.0f, 1.0f / 448.0f);
+        rd_grid_screen_st(kKinds[n], s_poolSx, 1.0f / 448.0f);
         rd_draw_vu_grid(&gd, RD_KEY(&kObjPool, n * 2, 20));
         rd_draw_vu_grid(&gd, RD_KEY(&kObjPool, n * 2 + 1, 20)); /* the formula went with the draw */
     }
@@ -5341,6 +5351,220 @@ static void testReprojectOneTick(void)
           screen3);
 }
 
+/* ------------------------------------------- the native frame (W5)
+ *
+ * The record-only context at a native width W (688, 1376, 2560: 16:9, 32:9,
+ * 60:9; GsBase.c's gsFrame.w), the frames' gsW:
+ *   outside   (outsideCur at hw = W / 2) testPairedOrKept's B, left behind
+ *             by the 28 degree turn at GS x 2332, beside the 4:3 columns
+ *             (past 2304) but inside the native frame: not of prev alone,
+ *             not drawn; a B past the native frame's edge (W / 2 + 40
+ *             beyond the centre at 28 degrees) is, through the blended
+ *             camera
+ *   reproject (reprojProject's window) at W 2560 a CPU-projected triangle
+ *             of one tick whose vertices pass 0xFFFF (XYZ2_HI's signed 32
+ *             bits: GS x about 4900 half way) moves with the blended camera,
+ *             each vertex where it puts the world point; at 512 the same
+ *             triangle stays whole as its tick drew it (the GS's 16 bits)
+ *   pool      (W 1376) pool.c's grids with usc 1 / 1376: the command keeps
+ *             the scale, and the STs half way are the formula's through the
+ *             blended camera at that scale */
+
+/* the world point the 28 degree camera of aloneFrame sees at GS x gx, y
+ * 2048, depth zv */
+static void alonePointAt(double gx, double zv, double o[3])
+{
+    double eye[3], v[16];
+    s6OrbitEye(28.0, eye);
+    s6View(28.0, eye, v);
+    const double pv[3] = {(gx - 2048.0) * zv / s6Focal, 0.0, zv};
+    for (int c = 0; c < 3; c++) {
+        o[c] = 0.0;
+        for (int r = 0; r < 3; r++) {
+            o[c] += v[c * 4 + r] * (pv[r] - v[12 + r]);
+        }
+    }
+}
+
+static void nativeOutside(uint32_t W)
+{
+    RdMesh mesh = makeMesh();
+    RdInterpStats st;
+    const RdKey kb = RD_KEY(&kObjAl, 2, 32);
+    const double bOut[3] = {250.0, 0.0, 100.0};
+    aloneFrame(mesh, 0.0, bOut, 0);
+    aloneFrame(mesh, 28.0, NULL, 0);
+    const RdFrame *f = rd__interp_frame(rd__prev_frame(), rd__last_frame(), 0.5f, 1, &st);
+    CHECK(f && f->gsW == W && st.prevKept == 0 && drawsOf(f, 0, kb, RDC_MESH) == 0,
+          "native %u: B beside the 4:3 columns, inside the frame, is not of prev alone (kept "
+          "%u, drawn %d)",
+          W, st.prevKept, f ? drawsOf(f, 0, kb, RDC_MESH) : -1);
+    double bFar[3];
+    alonePointAt(2048.0 + 0.5 * (double)W + 40.0, 300.0, bFar);
+    aloneFrame(mesh, 0.0, bFar, 0);
+    aloneFrame(mesh, 28.0, NULL, 0);
+    f = rd__interp_frame(rd__prev_frame(), rd__last_frame(), 0.5f, 1, &st);
+    const RdCmd *c = f ? findKey(f, 0, kb, 0) : NULL;
+    const float (*m)[4] = c ? vuBlock(f, c) : NULL;
+    double got[2] = {0.0, 0.0}, want[2];
+    if (m) {
+        s6ProjectF(m, kS6PointB, got);
+    }
+    aloneExpected(0.5, bFar, want);
+    CHECK(m && st.prevKept == 1 && st.prevHeld == 0 && drawsOf(f, 0, kb, RDC_MESH) == 1 &&
+              hypot(got[0] - want[0], got[1] - want[1]) < 0.01,
+          "native %u: B past the frame's edge is of prev alone, at %.3f %.3f (want %.3f %.3f; "
+          "kept %u, held %u)",
+          W, got[0], got[1], want[0], want[1], st.prevKept, st.prevHeld);
+    rd_destroy_vu_mesh(mesh);
+}
+
+/* a triangle of the wall at z 300 from world x x0, 20 across and up */
+static void nwTri(const double *v, const double *q, double x0, RdScreenVtx *o)
+{
+    const double w[3][3] = {{x0, 0.0, 300.0}, {x0 + 20.0, 0.0, 300.0}, {x0, 20.0, 300.0}};
+    for (int k = 0; k < 3; k++) {
+        rpCpuVertex(v, q, w[k], 0.0f, 0.0f, &o[k]);
+    }
+}
+
+/* tick k of lockCamera's camera: in list 7, marked, a key-0 triangle at
+ * world x 1300 (GS x about 4270 at tick 0, 5920 at tick 1: 12.4 past
+ * 0xFFFF) */
+static void nwFrame(int k, RdScreenVtx tri[3])
+{
+    rd_begin_frame();
+    frameHead();
+    double v[16], q[16];
+    lockCamera((double)k, v);
+    rpProj(q);
+    RdCamera cam;
+    memset(&cam, 0, sizeof(cam));
+    for (int i = 0; i < 16; i++) {
+        cam.view[i] = (float)v[i];
+        cam.proj[i] = (float)q[i];
+    }
+    cam.zoom = (float)LOCK_ZOOM;
+    rd_set_camera(&cam);
+    rd_select_list(7);
+    rd_frame_projected(1);
+    nwTri(v, q, 1300.0, tri);
+    rd_screen_prims(RD_PRIM_TRIANGLES, tri, 3, RD_SPACE_WORLD, 0, 0);
+    rd_frame_projected(0);
+    rd_end_frame(0);
+}
+
+static void nativeReproject(uint32_t W)
+{
+    RdInterpStats st;
+    RdScreenVtx t0[3], t1[3];
+    nwFrame(0, t0);
+    nwFrame(1, t1);
+    const RdFrame *cu = rd__last_frame();
+    const RdScreenVtx *c = screenVtx(cu, rpScreen(cu, 7, 0));
+    const RdFrame *f = rd__interp_frame(rd__prev_frame(), cu, 0.5f, 1, &st);
+    const RdScreenVtx *o = f ? screenVtx(f, rpScreen(f, 7, 0)) : NULL;
+    if (!c || !o) {
+        CHECK(0, "native %u: the wide triangle drawn", W);
+        return;
+    }
+    CHECK(c[0].x > 0xFFFF && t0[0].x > 0xFFFF,
+          "native %u: the triangle's vertices past 0xFFFF at both ticks (%d, %d)", W, t0[0].x,
+          c[0].x);
+    double vt[16], q[16], qv[16];
+    lockCamera(0.5, vt);
+    rpProj(q);
+    mul4(q, vt, qv);
+    const double w[3][3] = {{1300.0, 0.0, 300.0}, {1320.0, 0.0, 300.0}, {1300.0, 20.0, 300.0}};
+    int at = 0, kept = 0, past = 0;
+    for (int i = 0; i < 3; i++) {
+        double want[2];
+        s6Project(qv, w[i], want);
+        at += fabs(o[i].x / 16.0 - want[0]) < 0.2 && fabs(o[i].y / 16.0 - want[1]) < 0.2;
+        kept += o[i].x == c[i].x && o[i].y == c[i].y && o[i].z == c[i].z;
+        past += o[i].x > 0xFFFF;
+    }
+    if (W == ICO_FRAME_BASE_W) {
+        CHECK(kept == 3,
+              "512: the triangle past the GS's 16 bits stays whole as its tick drew "
+              "it (%d of 3)",
+              kept);
+    } else {
+        CHECK(at == 3 && past == 3,
+              "native %u: the triangle past 0xFFFF through the blended camera (%d of 3 where it "
+              "puts the world points, %d past 0xFFFF; x %.3f)",
+              W, at, past, o[0].x / 16.0);
+    }
+}
+
+static void nativePool(uint32_t W)
+{
+    s_poolSx = 1.0f / (float)W;
+    poolFrame(0, 0);
+    poolFrame(1, 0);
+    const RdInterpStats *st = build(0.5f, 1);
+    CHECK(st->gridStCamera == 2, "native %u pool: two grids through the camera (%u)", W,
+          st->gridStCamera);
+    const RdFrame *o = built(0.5f);
+    double vt[16], q[16], qv[16];
+    lockCamera(0.5, vt);
+    lockProj(LOCK_ZOOM, q);
+    mul4(q, vt, qv);
+    const double eye[3] = {0.0, 0.0, -30.0};
+    for (int n = 0; n < 2; n++) {
+        const RdCmd *cf = findKey(o, 4, RD_KEY(&kObjPool, n * 2, 20), 0);
+        const float (*b)[4] = cf ? vuBlock(o, cf) : NULL;
+        const float (*sf)[4] = gridStream(o, RD_KEY(&kObjPool, n * 2, 20));
+        if (!cf || !b || !sf) {
+            CHECK(0, "native %u pool: grid %d drawn", W, n);
+            continue;
+        }
+        double m[16];
+        for (int cc = 0; cc < 4; cc++) {
+            for (int r = 0; r < 4; r++) {
+                m[cc * 4 + r] = b[16 + cc][r];
+            }
+        }
+        float worst = 0.0f;
+        for (int i = 0; i < POOL_VERTS; i++) {
+            const float *pf = sf[3 + i * 2], *tf = sf[4 + i * 2];
+            const double pos[4] = {pf[0], pf[1], pf[2], pf[3]};
+            double want[2];
+            poolStRef(n ? RD_GRID_ST_REFLECT : RD_GRID_ST_SURFACE, m, eye, pos, (double)tf[3],
+                      s_poolSx, 1.0f / 448.0f, want);
+            worst =
+                fmaxf(worst, fmaxf(fabsf(tf[0] - (float)want[0]), fabsf(tf[1] - (float)want[1])));
+        }
+        CHECK(cf->f[0] == s_poolSx && worst < 1e-5f,
+              "native %u pool: grid %d keeps usc 1 / %u (%.9g) and its STs are the formula's at "
+              "it through the blended camera (worst %.3g)",
+              W, n, W, (double)cf->f[0], (double)worst);
+    }
+    s_poolSx = 1.0f / 512.0f;
+}
+
+static void testNativeWidths(void)
+{
+    static const uint32_t kW[4] = {512, 688, 1376, 2560};
+    for (int i = 0; i < 4; i++) {
+        if (!rd__init_record_only(kW[i], 512)) {
+            CHECK(0, "native %u: no record-only context", kW[i]);
+            return;
+        }
+        rd__set_not_implemented_fatal(false);
+        if (kW[i] != ICO_FRAME_BASE_W) {
+            nativeOutside(kW[i]);
+        }
+        if (kW[i] == ICO_FRAME_BASE_W || kW[i] == 2560) {
+            nativeReproject(kW[i]);
+        }
+        if (kW[i] == 1376) {
+            nativePool(kW[i]);
+        }
+        rd_shutdown();
+    }
+}
+
 static void runCpu(void)
 {
     testRotationBlend();
@@ -5389,6 +5613,7 @@ int main(void)
     rd__set_not_implemented_fatal(false);
     runCpu();
     rd_shutdown();
+    testNativeWidths();
 
     RdSettings s;
     memset(&s, 0, sizeof(s));

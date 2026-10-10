@@ -7,10 +7,17 @@
  * 0) nothing here runs.
  *
  * The filter works on the source grid: the PS2 picture's pixels, 512
- * across at 4:3 (wider with the Enhanced aspect, as DISPLAY is) and
- * DISPLAY's lines (the PS2's field lines; 512 with full_height).  With the
- * filter on the scene renders at 1x (rd__apply_display), so DISPLAY is that
- * grid; a larger one is box-reduced to it all the same.  Then:
+ * across at 4:3, and DISPLAY's lines (the PS2's field lines; 512 with
+ * full_height).  On a wider frame the grid is the native frame's columns
+ * that the picture shows: its exact width (rd__frame_wexact) in whole GS
+ * pixels, the (gsW - wExact) / 2 columns past it at each side, rounded,
+ * left out (rd__crt_crop; the box blit crops the same columns unrounded),
+ * so a phosphor triad covers one of the picture's pixels at every aspect,
+ * in a box of the grid's shape (rd__crt_box: a source pixel as many output
+ * pixels across as at 4:3), and the mirror flips it about the native
+ * centre.  With the filter on the scene renders at 1x (rd__apply_display),
+ * so DISPLAY is the native frame; a larger one is box-reduced to it all the
+ * same, and the crop is a nearest copy of the grid's columns.  Then:
  *   0. the overlay (the port's popups, hints, photo HUD) when it has prims:
  *      the source line-doubled into a layer of the frame's lines (nearest,
  *      flipped by the mirror mode), the overlay drawn into it at the
@@ -339,14 +346,37 @@ float rd__crt_beam(float c, float d, float beamMin, float beamMax)
     return c * expf(-0.5f * d * d / (sig * sig)) / (sig * 2.5066283f);
 }
 
+uint32_t rd__crt_crop(void)
+{
+    /* (gsW - wExact) / 2 rounded to whole GS pixels; none at 512 (4:3) */
+    const uint32_t gw = g_rd.gsW ? g_rd.gsW : ICO_FRAME_BASE_W;
+    if (gw == ICO_FRAME_BASE_W) {
+        return 0;
+    }
+    const float we = rd__frame_wexact();
+    if (!(we < (float)gw)) {
+        return 0;
+    }
+    const uint32_t c = (uint32_t)(((float)gw - we) * 0.5f + 0.5f);
+    return 2u * c < gw ? c : 0u;
+}
+
 void rd__crt_grid(uint32_t *vw, uint32_t *vh)
 {
-    /* the native frame's GS width (512 at 4:3), a column a pixel of the
-       PS2's grid at every aspect (W5 narrows it to the exact width) */
-    const uint32_t w = g_rd.gsW ? g_rd.gsW : 512, gh = g_rd.gsH ? g_rd.gsH : 512;
+    /* the native frame's GS width less the crop (512 at 4:3), a column a
+       pixel of the PS2's grid at every aspect */
+    const uint32_t gw = g_rd.gsW ? g_rd.gsW : ICO_FRAME_BASE_W, gh = g_rd.gsH ? g_rd.gsH : 512;
+    const uint32_t w = gw - 2u * rd__crt_crop();
     const uint32_t h = (gh / 2) * (g_rd.fullHeight ? 2u : 1u);
     *vw = w ? w : 1;
     *vh = h ? h : 1;
+}
+
+void rd__crt_box(uint32_t outW, uint32_t outH, RhiRect *box)
+{
+    uint32_t vw, vh;
+    rd__crt_grid(&vw, &vh);
+    rd__present_box(outW, outH, vw == ICO_FRAME_BASE_W ? 4.0f / 3.0f : (float)vw / 384.0f, box);
 }
 
 bool rd__crt_on(void)
@@ -365,7 +395,7 @@ typedef struct CrtTex {
     RhiFormat fmt;
 } CrtTex;
 
-static CrtTex s_src, s_layer, s_comp, s_glowA, s_glowB;
+static CrtTex s_src, s_crop, s_layer, s_comp, s_glowA, s_glowB;
 /* the films' own (rd__crt_record_film): their grid is not the game's, so
  * the game's targets are not resized at every film's start and end */
 static CrtTex s_filmSrc, s_filmGlowA, s_filmGlowB;
@@ -392,9 +422,9 @@ static bool ensure(CrtTex *c, uint32_t w, uint32_t h, RhiFormat fmt, const char 
 
 void rd__crt_shutdown(void)
 {
-    CrtTex *all[8] = {&s_src,   &s_layer,   &s_comp,      &s_glowA,
+    CrtTex *all[9] = {&s_src,   &s_crop,    &s_layer,     &s_comp,     &s_glowA,
                       &s_glowB, &s_filmSrc, &s_filmGlowA, &s_filmGlowB};
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < 9; i++) {
         if (all[i]->t.id) {
             rhi_destroy_texture(all[i]->t);
         }
@@ -548,18 +578,34 @@ bool rd__crt_record(RhiCommandList cl, const RdTargetRec *disp, RhiTexture out, 
     if (!rd__crt_resolve(&g_rd.settings, &p) || !disp || !disp->color.id) {
         return false;
     }
-    /* the source grid: DISPLAY's GS width (the native frame's), its lines
+    /* the source grid: the native frame's columns its exact width shows
+     * (rd__crt_grid: DISPLAY's GS width less crop at each side), its lines
      * (the full-height scene's 512) */
     uint32_t vw, vh;
     rd__crt_grid(&vw, &vh);
+    const uint32_t crop = rd__crt_crop(), fw = vw + 2u * crop;
     RhiTexture src = disp->color;
-    if (disp->tw != vw || disp->th != vh) {
-        /* a larger DISPLAY: its exact box average at the grid's size */
-        if (!ensure(&s_src, vw, vh, RHI_FMT_RGBA8_UNORM, "rd crt source") ||
+    if (disp->tw != fw || disp->th != vh) {
+        /* a larger DISPLAY: its exact box average at the frame's GS size */
+        if (!ensure(&s_src, fw, vh, RHI_FMT_RGBA8_UNORM, "rd crt source") ||
             !boxReduce(cl, disp->color, disp->tw, disp->th, &s_src)) {
             return false;
         }
         src = s_src.t;
+    }
+    if (crop) {
+        /* the columns past the exact width left out: a nearest copy, one
+         * texel a pixel (the source rectangle crop .. fw - crop lands each
+         * pixel centre on a texel centre); none at 4:3 */
+        if (!ensure(&s_crop, vw, vh, RHI_FMT_RGBA8_UNORM, "rd crt crop")) {
+            return false;
+        }
+        rd__transition(cl, s_crop.t, &s_crop.state, RHI_STATE_RENDER_TARGET);
+        const RhiRect all = {0, 0, vw, vh};
+        rd__present_blit(cl, src, fw, vh, s_crop.t, RHI_FMT_RGBA8_UNORM, vw, vh, RHI_LOAD_DONT_CARE,
+                         &all, RD_FILTER_NEAREST, 0, (float)crop);
+        rd__transition(cl, s_crop.t, &s_crop.state, RHI_STATE_SHADER_READ);
+        src = s_crop.t;
     }
     /* 0. the overlay into the grid: the source line-doubled (and flipped by
      * the mirror mode) into the layer of the frame's lines, the prims over
@@ -572,7 +618,7 @@ bool rd__crt_record(RhiCommandList cl, const RdTargetRec *disp, RhiTexture out, 
         rd__transition(cl, s_layer.t, &s_layer.state, RHI_STATE_RENDER_TARGET);
         const RhiRect all = {0, 0, vw, lh};
         rd__present_blit(cl, src, vw, vh, s_layer.t, RHI_FMT_RGBA8_UNORM, vw, lh,
-                         RHI_LOAD_DONT_CARE, &all, RD_FILTER_NEAREST, mirror);
+                         RHI_LOAD_DONT_CARE, &all, RD_FILTER_NEAREST, mirror, 0.0f);
         rd__overlay_grid_draw(cl, s_layer.t, RHI_FMT_RGBA8_UNORM, vw, lh);
         rd__transition(cl, s_layer.t, &s_layer.state, RHI_STATE_SHADER_READ);
         if (lh == vh) {
@@ -591,8 +637,10 @@ bool rd__crt_record(RhiCommandList cl, const RdTargetRec *disp, RhiTexture out, 
 
 void rd__crt_film_grid(uint32_t dispH, uint32_t *vw, uint32_t *vh)
 {
+    /* the films' box is 4:3 at every frame width (rd_video.c), so their
+     * tube is the 4:3 one's: 512 triads across */
     const uint32_t lines = dispH ? dispH : 576;
-    *vw = g_rd.gsW ? g_rd.gsW : 512;
+    *vw = ICO_FRAME_BASE_W;
     *vh = g_rd.fullHeight ? lines : (lines + 1) / 2;
 }
 

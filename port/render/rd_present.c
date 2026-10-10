@@ -70,7 +70,9 @@
  * rows draw as quads into the scene, as in the Original preset), the
  * overlay's prims are laid out on the filter's source grid and drawn into it,
  * and rd__crt_record draws the box from DISPLAY in place of steps 1 and 2 (no
- * line doubling: the scanlines are DISPLAY's own lines).  The filter is the
+ * line doubling: the scanlines are DISPLAY's own lines), cropped as step 2
+ * crops but to whole GS pixels, in a box of that grid's shape (rd__crt_box;
+ * the 4:3 box at 512).  The filter is the
  * present's last pass but for the top layer below.  Off, steps 1 and 2 draw
  * the box.
  *
@@ -213,8 +215,8 @@ void rd__ui_box(uint32_t outW, uint32_t outH, RhiRect *box)
 
 /* The texels of a source sw wide that step 2 leaves out at each side: the
  * frame's columns past its exact width, (gsW - wExact) / 2 GS pixels at
- * sw / gsW texels each (W5 refines it with the interpolation and the CRT
- * filter).  0 at 512 (4:3). */
+ * sw / gsW texels each (the CRT filter crops the same columns rounded to
+ * whole GS pixels: rd_crt.c rd__crt_grid).  0 at 512 (4:3). */
 static float sourceCrop(uint32_t sw)
 {
     const uint32_t gw = g_rd.gsW ? g_rd.gsW : ICO_FRAME_BASE_W;
@@ -437,9 +439,9 @@ static void blit(RhiCommandList cl, RhiTexture src, uint32_t sw, uint32_t sh, Rh
 
 void rd__present_blit(RhiCommandList cl, RhiTexture src, uint32_t sw, uint32_t sh, RhiTexture dst,
                       RhiFormat dstFmt, uint32_t dw, uint32_t dh, RhiLoadOp load,
-                      const RhiRect *box, RdFilter filter, int mirror)
+                      const RhiRect *box, RdFilter filter, int mirror, float crop)
 {
-    blit(cl, src, sw, sh, dst, dstFmt, dw, dh, load, box, filter, mirror, 0.0f, false);
+    blit(cl, src, sw, sh, dst, dstFmt, dw, dh, load, box, filter, mirror, crop, false);
 }
 
 /* ------------------------------------------------------ the effects depth
@@ -952,14 +954,20 @@ static bool textRegion(const TextPending *t, const TextSeg *g, RhiRect *out)
     float y0 = by + (float)t->sc[1] * bh / H;
     float y1 = by + (float)(t->sc[3] + 1) * bh / H;
     /* the reduction's crop (rd_post.c postReduction): 2 pixels left and
-     * right, 8 lines of DISPLAY's H / 2 top and bottom (2 below 512), which
-     * the picture holds black.  With full pixel on the reduction draws
-     * the whole frame (rd_replay.c), so there is no black strip to keep
-     * the text out of */
+     * right of the native frame, 8 lines of DISPLAY's H / 2 top and bottom
+     * (2 below 512), which the picture holds black.  The box shows the
+     * frame's exact width we, (W - we) / 2 columns left out at each side
+     * (sourceCrop), so what is left of the 2 columns is 2 less that, none
+     * once the crop passes them (all of them at 4:3).  With full pixel on
+     * the reduction draws the whole frame (rd_replay.c), so there is no
+     * black strip to keep the text out of */
     if (!g_rd.settings.fullPixel) {
         const float crop = (float)rd__reduction_crop(t->gsH), half = H * 0.5f;
-        x0 = fmaxf(x0, bx + bw * 2.0f / W);
-        x1 = fminf(x1, bx + bw * (W - 2.0f) / W);
+        const float wf = rd__frame_wexact();
+        const float we = wf > 0.0f && wf < W ? wf : W;
+        const float edge = fmaxf(0.0f, 2.0f - (W - we) * 0.5f);
+        x0 = fmaxf(x0, bx + bw * edge / we);
+        x1 = fminf(x1, bx + bw * (we - edge) / we);
         y0 = fmaxf(y0, by + bh * crop / half);
         y1 = fminf(y1, by + bh * (half - crop) / half);
     }
@@ -1405,6 +1413,10 @@ void rd__present_record(RhiCommandList cl)
     const int mirror = pr->mirror && rd__mirror_on();
     bool filtered = false, uiInPicture = false;
     if (rd__crt_on()) {
+        /* the filter's box: its grid's shape (the exact width in whole
+         * columns, rd__crt_grid), box at 4:3 */
+        RhiRect cbox;
+        rd__crt_box(s_outW, s_outH, &cbox);
         if (depthWanted()) {
             /* the filter replaces the box blit that carries the effects depth */
             rd__log_once(RD_ONCE_EFFECTS_DEPTH_CRT,
@@ -1419,15 +1431,16 @@ void rd__present_record(RhiCommandList cl)
              * the CRT filter that UI is inside the filtered picture, so the
              * capture takes a pass without it and the shown picture a
              * second pass with it */
-            capOk = rd__crt_record(cl, disp, out, s_outFormat, s_outW, s_outH, &box, mirror, false);
+            capOk =
+                rd__crt_record(cl, disp, out, s_outFormat, s_outW, s_outH, &cbox, mirror, false);
             if (capOk) {
                 captureRecord(cl, out, outState, false);
             }
         }
         /* a failed capture pass: the box blit below, the capture before the
          * overlay as without the filter */
-        filtered =
-            capOk && rd__crt_record(cl, disp, out, s_outFormat, s_outW, s_outH, &box, mirror, true);
+        filtered = capOk &&
+                   rd__crt_record(cl, disp, out, s_outFormat, s_outW, s_outH, &cbox, mirror, true);
         uiInPicture = filtered && ui;
         rd__perf_post(cl, -1);
     }

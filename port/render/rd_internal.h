@@ -1000,10 +1000,17 @@ void rd__crt_shoulder(float c[3], float st);
 float rd__crt_beam(float c, float d, float beamMin, float beamMax);
 /* True when the present draws the CRT filter (a mode, strength > 0). */
 bool rd__crt_on(void);
-/* The filter's source grid: the PS2 picture's pixels, vw across (512 at
- * 4:3, wider with the aspect) and vh lines (DISPLAY's, 512 with
- * full_height); the overlay's layer is vw x gsH (the frame's lines). */
+/* The filter's source grid: the PS2 picture's pixels, vw across and vh
+ * lines (DISPLAY's, 512 with full_height); the overlay's layer is vw x gsH
+ * (the frame's lines).  vw is the native frame's width less rd__crt_crop
+ * columns at each side: the columns of its exact width (rd__frame_wexact)
+ * in whole GS pixels, 512 at 4:3.  rd__crt_box: the filter's box in an
+ * outW x outH output, of the grid's shape vw / 384 (the 4:3 box at 512),
+ * so a source pixel spans as many output pixels as at 4:3 (the box of the
+ * exact width, rd_present.c, differs from it by less than a column). */
 void rd__crt_grid(uint32_t *vw, uint32_t *vh);
+uint32_t rd__crt_crop(void);
+void rd__crt_box(uint32_t outW, uint32_t outH, RhiRect *box);
 /* From rd__present_record, in place of the line doubling and
  * the box blit: disp (SHADER_READ), with the overlay drawn into the source
  * grid (rd__overlay_grid_draw), through the glow passes, then the composite
@@ -1015,7 +1022,8 @@ void rd__crt_grid(uint32_t *vw, uint32_t *vh);
 bool rd__crt_record(RhiCommandList cl, const RdTargetRec *disp, RhiTexture out, RhiFormat outFmt,
                     uint32_t outW, uint32_t outH, const RhiRect *box, int mirror, bool overlay);
 /* The films under the filter.  rd__crt_film_grid is a film's
- * grid: the game's tube (its 512 triads across the 4:3 box: GS width) and
+ * grid: the game's tube (its 512 triads across the 4:3 box, whatever the
+ * frame's width: the films stay 4:3) and
  * the film's field lines in its PS2 display area (dispH / 2, every line
  * with full_height, as the game's).  rd__crt_record_film: pic (pw x ph, the
  * film in its display area, already mirrored, SHADER_READ), box-reduced
@@ -1547,10 +1555,11 @@ void rd__overlay_collect(const RdFrame *f, int keep);
  * laid out on the output and drawn on it after the filter. */
 bool rd__overlay_grid_pending(void);
 void rd__overlay_grid_draw(RhiCommandList cl, RhiTexture t, RhiFormat fmt, uint32_t w, uint32_t h);
-/* rd_present.c's blit: src (sw x sh) into box of dst, filter, x flipped */
+/* rd_present.c's blit: src (sw x sh) into box of dst, filter, x flipped,
+ * crop texels of src left out at each side (0: all of it) */
 void rd__present_blit(RhiCommandList cl, RhiTexture src, uint32_t sw, uint32_t sh, RhiTexture dst,
                       RhiFormat dstFmt, uint32_t dw, uint32_t dh, RhiLoadOp load,
-                      const RhiRect *box, RdFilter filter, int mirror);
+                      const RhiRect *box, RdFilter filter, int mirror, float crop);
 /* rd_core.c, from rd_post: records the RD_OTEXT_OP of a post
  * pass of kind (FADE, LETTERBOX, BRIGHTNESS, KEEP, REDUCTION) when the frame being
  * recorded has deferred text already; nothing otherwise */
