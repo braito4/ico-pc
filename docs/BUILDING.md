@@ -463,7 +463,10 @@ never committed). `ICO_DUMPS` names a list file or a folder of `.rddump` and
 `.zip` files; `ICO_SWEEPS` names the Gate B sweeps (paths separated by `:`);
 `ICO_REPLAY_TOOL` the tool (default `build-host/linux-x64/port/render/`).
 A run holds `build-host/tmp/replay.lock` and renders with 3 workers
-(`--jobs`).
+(`--jobs`), one `rd_replay_tool --pass-dump` process per dump and setting
+(every target and the presented picture from one run; a tool without that
+switch, or `--per-target`, gets one process per target, about ten times
+slower).
 
 ```
 ICO_DUMPS=tools/native_frame_dumps.txt ctest --preset linux-x64 -R native_frame_gate_a
@@ -489,7 +492,7 @@ syncs since start:
 | file | holds |
 | --- | --- |
 | `.png` | the picture on the screen at that moment (optional for a report; large at a high Resolution, so it stays a loose file) |
-| `.zip` | the `.rddump` (`port/render/rd_dump.c`, format version 9, `RD_DUMP_VERSION`) and a copy of `logs/ico-pc.log`, for a GitHub issue, which refuses `.rddump` files. With no log file (the program started with `--console`) it holds the dump alone |
+| `.zip` | the `.rddump` (`port/render/rd_dump.c`, format version 10, `RD_DUMP_VERSION`) and a copy of `logs/ico-pc.log`, for a GitHub issue, which refuses `.rddump` files. With no log file (the program started with `--console`) it holds the dump alone |
 
 The game writes the `.rddump` first, zips it, and deletes the loose file once
 the zip is written; if the zip cannot be written the `.rddump` stays and the
@@ -499,7 +502,30 @@ resolution, aspect ratio and filtering of a replay are given on the
 command line. A replacement texture from a texture pack is stored blank
 (the dump carries the game's own textures, which are the disc's, so keep
 dumps out of the repository and public places). The version number is
-checked on load; versions 3 to 9 are read.
+checked on load; versions 3 to 10 are read. Version 10 adds, after the GS
+size, the frame's display aspect, its visible width (`wExact`) and the
+native GS width the game culled and drew the frame at; versions 3 to 9 load
+as the 4:3 frame (aspect 4/3, 512 and 512). A dump holds the picture at the
+width it was drawn: it can be shown narrower (cropped) but never wider.
+
+### The aspect sweep (Shift+F12 in photo mode)
+
+One game state at every aspect, for Gate B and for looking at the sides.
+Pause the game in photo mode, then press Shift+F12 (PC; there is no key on
+Android). The game re-renders the paused frame at 4:3, 16:9, 32:9, 48:9 and
+60:9, one after the other for a second or two (the window shows each
+width as it goes; the game itself is not touched), and writes
+`<pref>/dumps/sweep-<yyyymmdd-hhmmss>.zip` holding `4x3.rddump`, `4x3.png`,
+`16x9.rddump`, `16x9.png`, ... For each aspect the game's frame is rebuilt
+at that width: the frame width is set, the scene is remade
+(`rd_reset_scene`) and the paused camera rebuilds the game's matrices,
+the cull included, so a draw beside the 4:3 picture is really drawn
+there. Each `.png` is the frame's DISPLAY target at its native width, not
+cropped. Afterwards the live width and scene come back by themselves. Leaving photo mode
+during a sweep ends it with what was captured so far; the log says
+`aspect sweep:` for each step. The zip is also a valid input to
+`rd_replay_tool` (its first `.rddump` is the 4:3 one) and, as a folder
+or zip of PNGs, to `native_frame_check.py gate-b`.
 
 `rd_replay_tool` (`port/render/tools/rd_replay_tool.c`, built with the
 `ico_render` library; its usage comment lists every switch) renders a dump
@@ -513,7 +539,17 @@ The switches used most:
   no-ops, to find the draw behind a pixel.
 - `--aspect A`, `--resolution Nx` (or `WxH`), `--full-height` and
   `--enhanced` give the replay the display options the dump does not carry;
-  without them it renders the PS2 picture.
+  without them it renders the PS2 picture. `--aspect` defaults to the
+  dump's own aspect (`--list` prints it). A narrower aspect crops the
+  `--present` picture to the centre columns; a wider one is refused (`a dump
+  drawn at 4:3 cannot show 16:9: capture an aspect sweep`), and dumps before
+  version 10 are 4:3 dumps.
+- `--pass-dump DIR` renders the frame once and writes `<TARGET>.png` into
+  DIR (which must exist) for each named target (`SCENE`, `DISPLAY`,
+  `SHADOW0`..`2`, `WORK0`..`3`, `AA0`, `AA1`, `FEED128`, `AURA_WORK`,
+  `AURA_TAP`, `WORK2_PAD`, `FEED_HELD`, `DISPLAY_HELD`) and, with
+  `--present WxH`, `PRESENT.png`. `<out.png>` is unused (give `-`). An
+  unknown `--target` name exits 1 and lists the names.
 - `--interp T PREV` replays the frame between the dump PREV and the dump at
   alpha T; `--dump-textures DIR` writes every texture of the dump as a PNG;
   `--mesh NAME` prints the vertices of the meshes of that name.

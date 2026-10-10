@@ -644,9 +644,16 @@ float ico_video_aspect(void)
     }
 }
 
+static float s_forceAspect; /* ico_video_frame_force_aspect, 0: none */
+
+void ico_video_frame_force_aspect(float aspect)
+{
+    s_forceAspect = aspect > 0.0f ? aspect : 0.0f;
+}
+
 void ico_video_frame(IcoFrame *out, int h)
 {
-    ico_frame_make(out, ico_video_aspect(), h);
+    ico_frame_make(out, s_forceAspect > 0.0f ? s_forceAspect : ico_video_aspect(), h);
 }
 
 /* W3-WINDOWS removes this */

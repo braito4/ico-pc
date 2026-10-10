@@ -166,3 +166,99 @@ void *ico_dump_zip_extract(const char *zip_path, size_t *size, char *name, size_
     free(zip);
     return data;
 }
+
+static const char *const kSweepName[ICO_SWEEP_COUNT] = {"4x3", "16x9", "32x9", "48x9", "60x9"};
+
+const char *ico_sweep_aspect_name(int i)
+{
+    return i >= 0 && i < ICO_SWEEP_COUNT ? kSweepName[i] : "";
+}
+
+float ico_sweep_aspect_value(int i)
+{
+    static const float v[ICO_SWEEP_COUNT] = {4.0f / 3.0f, 16.0f / 9.0f, 32.0f / 9.0f, 48.0f / 9.0f,
+                                             60.0f / 9.0f};
+
+    return i >= 0 && i < ICO_SWEEP_COUNT ? v[i] : 0.0f;
+}
+
+int ico_sweep_zip(const char *zip_path, const char *prefix, char *why, size_t why_size)
+{
+    mz_zip_archive z;
+    void *out = NULL;
+    size_t out_size = 0;
+    char path[2][4096], entry[2][32];
+    int have[ICO_SWEEP_COUNT] = {0}, added = 0, r = -1;
+    static const char *const kExt[2] = {"rddump", "png"};
+
+    memset(&z, 0, sizeof(z));
+    if (!mz_zip_writer_init_heap(&z, 0, 0)) {
+        say(why, why_size, "cannot start the archive",
+            mz_zip_get_error_string(mz_zip_get_last_error(&z)));
+        return -1;
+    }
+    for (int i = 0; i < ICO_SWEEP_COUNT; i++) {
+        void *data[2] = {NULL, NULL};
+        size_t size[2] = {0, 0};
+        int ok = 1;
+
+        for (int k = 0; k < 2; k++) {
+            snprintf(path[k], sizeof(path[k]), "%s%s.%s", prefix, kSweepName[i], kExt[k]);
+            snprintf(entry[k], sizeof(entry[k]), "%s.%s", kSweepName[i], kExt[k]);
+            data[k] = read_all(path[k], &size[k]);
+            ok = ok && data[k] != NULL;
+        }
+        for (int k = 0; ok && k < 2; k++) {
+            ok = mz_zip_writer_add_mem(&z, entry[k], data[k], size[k], MZ_DEFAULT_LEVEL) != 0;
+        }
+        free(data[0]);
+        free(data[1]);
+        if (ok) {
+            have[i] = 1;
+            added++;
+        } else if (data[0] != NULL || data[1] != NULL) {
+            /* one file of the pair is missing: that aspect is left out (a
+               member half added cannot be taken back, so a failed add ends
+               the archive) */
+            if (mz_zip_get_last_error(&z) != MZ_ZIP_NO_ERROR) {
+                say(why, why_size, "cannot add to the archive",
+                    mz_zip_get_error_string(mz_zip_get_last_error(&z)));
+                mz_zip_writer_end(&z);
+                return -1;
+            }
+        }
+    }
+    if (added == 0) {
+        say(why, why_size, "no aspect has both its dump and its picture", prefix);
+        mz_zip_writer_end(&z);
+        return -1;
+    }
+    if (!mz_zip_writer_finalize_heap_archive(&z, &out, &out_size)) {
+        say(why, why_size, "cannot finish the archive",
+            mz_zip_get_error_string(mz_zip_get_last_error(&z)));
+        mz_zip_writer_end(&z);
+        return -1;
+    }
+    mz_zip_writer_end(&z);
+    FILE *f = ico_fopen(zip_path, "wb");
+    const int wrote = f != NULL && fwrite(out, 1, out_size, f) == out_size;
+
+    if (f != NULL && fclose(f) != 0) {
+        r = -1;
+    } else if (wrote) {
+        r = added;
+    }
+    if (r < 0) {
+        say(why, why_size, "cannot write", zip_path);
+        remove(zip_path);
+    } else {
+        for (int i = 0; i < ICO_SWEEP_COUNT; i++) {
+            for (int k = 0; have[i] && k < 2; k++) {
+                snprintf(path[k], sizeof(path[k]), "%s%s.%s", prefix, kSweepName[i], kExt[k]);
+                remove(path[k]);
+            }
+        }
+    }
+    mz_free(out);
+    return r;
+}

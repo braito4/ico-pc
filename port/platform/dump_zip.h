@@ -26,4 +26,23 @@ int ico_frame_dump_zip(const char *zip_path, const char *dump_path, const char *
    no such entry. rd_replay_tool takes a F12 zip with this. */
 void *ico_dump_zip_extract(const char *zip_path, size_t *size, char *name, size_t name_size);
 
+/* The aspect sweep (Shift+F12 in photo mode, window_host.c): one paused
+   frame captured at ICO_SWEEP_COUNT aspects.  Aspect i has the name
+   ico_sweep_aspect_name(i) ("4x3", "16x9", "32x9", "48x9", "60x9": the tokens
+   tools/native_frame_check.py reads) and the value ico_sweep_aspect_value(i)
+   (4/3, 16/9, 32/9, 48/9 and 60/9, the widest the frame holds). */
+#define ICO_SWEEP_COUNT 5
+const char *ico_sweep_aspect_name(int i);
+float ico_sweep_aspect_value(int i);
+
+/* Writes zip_path holding, for each aspect whose two files exist, the entries
+   <name>.rddump and <name>.png from the files <prefix><name>.rddump and
+   <prefix><name>.png (no log).  The 4:3 member comes first, so
+   rd_replay_tool, which takes a zip's first .rddump, replays it.  Returns the
+   number of aspects in the zip (0 to ICO_SWEEP_COUNT), the loose files of
+   those deleted; -1 with nothing written (and the loose files kept) when no
+   aspect has both files or the zip cannot be written, why (when not NULL)
+   holding the reason. */
+int ico_sweep_zip(const char *zip_path, const char *prefix, char *why, size_t why_size);
+
 #endif /* ICO_PLATFORM_DUMP_ZIP_H */

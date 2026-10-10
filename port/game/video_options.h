@@ -228,6 +228,14 @@ float ico_video_aspect(void);
    a frame height h: 512 wide at 4:3 exactly.  GsBase.c latches it at each
    flip (gsFrame, with ScreenHeight). */
 void ico_video_frame(IcoFrame *out, int h);
+/* The aspect sweep (window_host.c, Shift+F12 in photo mode): the native
+   frame ico_video_frame makes is built for this aspect instead of the one in
+   force, until it is set to 0 again.  The next flip latches it
+   (GsBase.c gsbHostFrameLatch: rd_reset_scene at a new width), the paused
+   photo camera rebuilds the cull (+0x280) at that width in the same tick,
+   and clearing it brings the live width back the same way.  Only the frame
+   follows: the presentation (ico_video_aspect) is untouched. */
+void ico_video_frame_force_aspect(float aspect);
 /* The frame's width as a multiple of the 4:3 one, ico_frame_width_for(
    ico_video_aspect()) / 512, for the game's callers not yet on gsFrame
    (particleEffect.c).  W3-WINDOWS removes this. */
