@@ -59,6 +59,19 @@
  *      alpha 0.5 and a later one at 1, the shine moving between ticks): the
  *      face band's interior (mask 0) is untouched and FEED128's alpha as the
  *      paste reads it is the mask, not SCENE's alpha, in every present.
+ *   w  (W4, issue 61) the native frame: CPU only, every effect recorded at
+ *      W = 2048 (48:9) draws each buffer at its own GS width (the work
+ *      buffers W / 2, W / 4 across, the frame-sized ones W), reads each
+ *      with TEX0's TW of the source's width, keeps every rect and UV on
+ *      its buffer, and covers as many buffers whole as at 4:3 (no 4:3
+ *      extent left in a wider buffer); on the device the aura's feedback
+ *      chain (AURA_WORK -> WORK0 -> FEED -> SCENE and back) in modes 2
+ *      (the Queen's mirage), 1 and 3 at W = 512 and W = 2048, every target
+ *      against the CPU model exactly, the 4:3 columns of the wide SCENE the
+ *      512 run's byte for byte (mode 2 all of them; modes 1 and 3, whose
+ *      taps spread one feedback texel a frame, away from the 4:3 edges by 4
+ *      pixels a frame), and FEED's alpha as the paste reads it at most
+ *      0x80 (the mask's, never extrapolating the paste).
  * Tolerance 0 everywhere (but q's scaled runs).  Every pipeline created is enumerated; no
  * validation errors; no stubbed command replayed. */
 #include <math.h>
@@ -97,6 +110,9 @@ static int failures;
 
 /* ------------------------------------------------- what the files import */
 int ScreenWidth = 512, ScreenHeight = 512;
+/* GsBase.c's native frame (gsFrame, latched at the flip): 4:3 unless a case
+   sets another width with setFrameWidth */
+IcoFrame gsFrame = {512, 512, 8, 512.0f, 4.0f / 3.0f};
 float center_X = 2048.0f, center_Y = 2048.0f;
 int screenOffsetX, screenOffsetY;
 int fbKeep;
@@ -676,6 +692,183 @@ static void checkRecordingMotionBlur(int h)
     systemStatus[0] = 1;
 }
 
+/* ===================================== (w) the native frame, recorded */
+
+/* a native frame fw wide, as GsBase.c's latch leaves it: gsFrame and the GIF
+   decoder's width (gif_HostSetFrameWidth); 512 is the 4:3 frame */
+static void setFrameWidth(int fw)
+{
+    gsFrame.w = fw;
+    gsFrame.fbw = (fw + 63) / 64;
+    gsFrame.wExact = (float)fw;
+    gsFrame.aspect = fw == W ? 4.0f / 3.0f : 4.0f / 3.0f * (float)fw / (float)W;
+    gif_HostSetFrameWidth(fw);
+}
+
+static const struct {
+    int post, feed;
+} kWideCases[] = {{1, 0}, {2, 0}, {3, 0}, {4, 0}, {5, 0}, {6, 0}, {7, 0}, {0, 1}, {0, 2}, {0, 3}};
+
+#define N_WIDE_CASES ((int)(sizeof(kWideCases) / sizeof(kWideCases[0])))
+
+/* every case recorded at the frame's width fw (the rd targets made for
+ * it): each sprite drawn with its buffer's own GS width (a 4:3 width left
+ * in a wider buffer would put the pass in its left part), each read with
+ * TEX0's TW of its source's width (the GS model's texture size: a 4:3 TW
+ * on a wider buffer clamps or wraps the reads), every rect on its buffer
+ * (within a pixel) and every UV range on its source (within the 4 texels
+ * reduceWork2ToWork0's UV, 64 .. W * 16 + 64, runs past it on the PS2 too);
+ * whole[k] the sprites
+ * of case k that cover their buffer across */
+static void recordWide(int fw, int whole[N_WIDE_CASES])
+{
+    for (int k = 0; k < N_WIDE_CASES; k++) {
+        char what[64];
+        snprintf(what, sizeof(what), "(w) W %d post %d feed %d", fw, kWideCases[k].post,
+                 kWideCases[k].feed);
+        setStage(kWideCases[k].post, kWideCases[k].feed, 64);
+        FullScreenEffectBefore();
+        FullScreenEffectAfter();
+        dl_Swap();
+        collectFrame(rd__last_frame());
+        whole[k] = 0;
+        int env = 0, tw = 0, offT = 0, offS = 0;
+        for (int i = 0; i < s_nspr; i++) {
+            const Spr *p = &s_spr[i];
+            const RdTargetRec *t = rd__target_rec(p->st.color);
+            if (!t) {
+                env++;
+                continue;
+            }
+            env += p->st.gsW != t->w || p->st.gsH > t->h;
+            const float ox = (float)(0x8000 - (int32_t)(p->st.gsW / 2) * 16);
+            const float x0 = p->r.rect[0], x1 = p->r.rect[2];
+            offT += x0 < ox - 16.0f || x1 > ox + (float)(t->w * 16 + 16);
+            whole[k] += x1 - x0 >= (float)((t->w - 4) * 16);
+            const uint32_t src = texTarget(&p->st, NULL);
+            const RdTargetRec *s = src ? rd__target_rec(src) : NULL;
+            if (s) {
+                tw += p->r.scalar[0] != (float)(1u << ico_frame_tw((int)s->w));
+                const float u0 = p->r.uv[0] < p->r.uv[2] ? p->r.uv[0] : p->r.uv[2];
+                const float u1 = p->r.uv[0] < p->r.uv[2] ? p->r.uv[2] : p->r.uv[0];
+                offS += u0 < -16.0f || u1 > (float)(s->w * 16 + 64);
+            }
+        }
+        CHECK(s_nspr > 0 && env == 0, "%s: %d of %d sprites not at their buffer's GS width", what,
+              env, s_nspr);
+        CHECK(tw == 0, "%s: %d sprites read a buffer with a TEX0 TW not its width's", what, tw);
+        CHECK(offT == 0 && offS == 0,
+              "%s: %d rects off their buffer, %d UV ranges off their source", what, offT, offS);
+    }
+}
+
+/* (w) the screen softening's passes (rd_post.c AA_DOWNSAMPLE and
+ * AA_COMPOSITE, as gsb_antiAlias records them) at the frame's width fw:
+ * SCENE (fw x H) into AA0 (fw / 2 x 256), AA0 into AA1 (fw / 4 x 128),
+ * both composited over SCENE (fw x 512), each sprite across its whole
+ * target and each UV across its whole source (the PS2's at 512) */
+static void checkAaRecordAt(int fw)
+{
+    RdPostParams pp;
+    dl_SetDLPriority(10);
+    memset(&pp, 0, sizeof(pp));
+    pp.lines = 2;
+    rd_post(RD_POST_AA_DOWNSAMPLE, &pp);
+    memset(&pp, 0, sizeof(pp));
+    pp.rgba[0] = pp.rgba[1] = 64;
+    rd_post(RD_POST_AA_COMPOSITE, &pp);
+    dl_Swap();
+    const RdFrame *f = rd__last_frame();
+    const RdCmdList *l = f ? &f->lists[10] : NULL;
+    uint32_t tgt[8], nt = 0;
+    RdScreenVtx v[8];
+    uint32_t nv = 0;
+    for (uint32_t i = 0; l && i < l->count; i++) {
+        const RdCmd *c = &l->cmds[i];
+        if (c->type == RDC_TARGET && nt < 8) {
+            tgt[nt++] = c->u[2];
+        } else if (c->type == RDC_SCREEN && c->u[1] == 2 && nv < 8) {
+            memcpy(&v[nv], f->payload + c->u[0], 2 * sizeof(RdScreenVtx));
+            nv += 2;
+        }
+    }
+    const uint32_t hw = (uint32_t)fw / 2, qw = (uint32_t)fw / 4;
+    CHECK(nt == 4 && tgt[0] == (hw | 256u << 16) && tgt[1] == (qw | 128u << 16) &&
+              tgt[2] == ((uint32_t)fw | 512u << 16) && tgt[3] == ((uint32_t)fw | (uint32_t)H << 16),
+          "(w) W %d: the softening's targets AA0 %ux256, AA1 %ux128, SCENE %dx512 (%u records)", fw,
+          hw, qw, fw, nt);
+    /* AA0 from SCENE, AA1 from AA0, AA1 and AA0 over SCENE: corners at
+       -0.25 px of each target's left edge, UV 4 .. the source's width */
+    const int32_t dstW[4] = {(int32_t)hw, (int32_t)qw, fw, fw};
+    const int32_t srcW[4] = {fw, (int32_t)hw, (int32_t)qw, (int32_t)hw};
+    int bad = nv != 8;
+    for (uint32_t s = 0; !bad && s < 4; s++) {
+        const RdScreenVtx *a = &v[2 * s];
+        bad += a[0].x != 0x8000 - dstW[s] / 2 * 16 - 4 || a[1].x != a[0].x + dstW[s] * 16 ||
+               a[0].s != 4.0f || a[1].s != (float)(4 + srcW[s] * 16);
+    }
+    CHECK(!bad, "(w) W %d: the softening's sprites span their targets and sources", fw);
+}
+
+/* (w) recording: the effects at 4:3 and on a 2048-wide frame (48:9, the
+ * work buffers four times as wide), the sun on (the eye blur's ghosts) */
+static void checkRecordingWide(void)
+{
+    const int fw = 2048;
+    int at43[N_WIDE_CASES], wide[N_WIDE_CASES];
+
+    InitStaticBlur(0, (float[4]){0.3f, -0.2f, -1.0f, 0.0f});
+    recordWide(W, at43);
+    checkAaRecordAt(W);
+    rd_shutdown();
+    setFrameWidth(fw);
+    if (!rd__init_record_only((uint32_t)fw, H)) {
+        CHECK(0, "(w) rd__init_record_only at W %d", fw);
+        setFrameWidth(W);
+        rd__init_record_only(W, H);
+        return;
+    }
+    gif_HostForgetTextures();
+    gif_HostFrameReset();
+    dl_Clear();
+
+    static const struct {
+        int id;
+        uint32_t w, h;
+    } kSizes[] = {{RD_TARGET_SCENE, 2048, H},      {RD_TARGET_DISPLAY, 2048, H / 2},
+                  {RD_TARGET_SHADOW0, 1024, 256},  {RD_TARGET_SHADOW1, 512, 128},
+                  {RD_TARGET_SHADOW2, 256, 64},    {RD_TARGET_WORK0, 1024, 128},
+                  {RD_TARGET_WORK1, 1024, 256},    {RD_TARGET_WORK2, 2048, H},
+                  {RD_TARGET_WORK3, 1024, 128},    {RD_TARGET_AA0, 1024, 256},
+                  {RD_TARGET_AA1, 512, 128},       {RD_TARGET_FEED128, 512, 128},
+                  {RD_TARGET_AURA_WORK, 2048, H},  {RD_TARGET_AURA_TAP, 512, 128},
+                  {RD_TARGET_WORK2_PAD, 1024, 64}, {RD_TARGET_FEED_HELD, 512, 128}};
+
+    for (size_t i = 0; i < sizeof(kSizes) / sizeof(kSizes[0]); i++) {
+        const RdTargetRec *t = rd__target_rec(rd_target((RdTargetId)kSizes[i].id).id);
+        CHECK(t && t->w == kSizes[i].w && t->h == kSizes[i].h,
+              "(w) W %d: %s is %ux%u (want %ux%u: the PS2's per 512 columns)", fw,
+              kTargetNames[kSizes[i].id], t ? t->w : 0, t ? t->h : 0, kSizes[i].w, kSizes[i].h);
+    }
+    recordWide(fw, wide);
+    checkAaRecordAt(fw);
+    for (int k = 0; k < N_WIDE_CASES; k++) {
+        CHECK(wide[k] == at43[k],
+              "(w) post %d feed %d: %d sprites cover their buffer across at W %d, %d at 4:3",
+              kWideCases[k].post, kWideCases[k].feed, wide[k], fw, at43[k]);
+    }
+    printf("  (w) %d cases recorded at W %d and 512: buffers at their widths, TEX0 TW, rects "
+           "and UVs on their buffers%s\n",
+           N_WIDE_CASES, fw, failures ? ": FAILED" : "");
+    InitializeStaticBlur(); /* sun off */
+    rd_shutdown();
+    setFrameWidth(W);
+    rd__init_record_only(W, H);
+    gif_HostForgetTextures();
+    gif_HostFrameReset();
+    dl_Clear();
+}
+
 /* ================================================= the CPU model of the GS */
 
 typedef struct CpuT {
@@ -694,6 +887,19 @@ static CpuT *cpuT(uint32_t id)
     return n >= 0 && s_cpu[n].c ? &s_cpu[n] : NULL;
 }
 
+/* the largest named RGBA8 target's bytes (SCENE's, W x H at 1x) */
+static size_t cpuMaxBytes(void)
+{
+    size_t m = (size_t)W * H * 4;
+    for (int i = 0; i < RD_TARGET_COUNT; i++) {
+        const RdTargetRec *t = rd__target_rec((uint32_t)i + 1);
+        if (t && (size_t)t->w * t->h * 4 > m) {
+            m = (size_t)t->w * t->h * 4;
+        }
+    }
+    return m;
+}
+
 static void cpuInit(void)
 {
     for (int i = 0; i < RD_TARGET_COUNT; i++) {
@@ -708,7 +914,7 @@ static void cpuInit(void)
             s_cpu[i].z = calloc((size_t)t->w * t->h, 4);
         }
     }
-    s_old = malloc((size_t)W * H * 4);
+    s_old = malloc(cpuMaxBytes());
 }
 
 static int s_unexpected;
@@ -960,6 +1166,21 @@ static void cpuSprite(const RdStateBlock *s, const RdPostRec *r)
     }
 }
 
+/* (w) the feedback area's alpha as the mirage's paste reads it (the CPU
+   model's FEED128 just before the paste: equal to the GPU's, which every
+   frame compares): its largest value and the texels the mask set */
+static int s_feedProbe, s_feedMaxA, s_feedSetA;
+
+static void feedProbe(void)
+{
+    const CpuT *t = &s_cpu[RD_TARGET_FEED128];
+    for (int i = 0; t->c && i < t->w * t->h; i++) {
+        const int a = t->c[i * 4 + 3];
+        s_feedMaxA = a > s_feedMaxA ? a : s_feedMaxA;
+        s_feedSetA += a != 0;
+    }
+}
+
 static void cpuCmd(void *user, int list, uint32_t index, const RdCmd *c, const RdStateBlock *s)
 {
     const RdFrame *f = user;
@@ -983,6 +1204,10 @@ static void cpuCmd(void *user, int list, uint32_t index, const RdCmd *c, const R
     if (c->type == RDC_POST_STUB && rd__is_blur_kind(c->b[0])) {
         RdPostRec r;
         memcpy(&r, f->payload + c->u[1], sizeof(r));
+        if (s_feedProbe && s->color == rd_target(RD_TARGET_SCENE).id &&
+            texTarget(s, NULL) == rd_target(RD_TARGET_FEED128).id) {
+            feedProbe();
+        }
         cpuSprite(s, &r);
         return;
     }
@@ -1021,7 +1246,9 @@ static void cpuFrame(const RdFrame *f)
     rd__walk(f, 0, &st, cpuCmd, (void *)f);
 }
 
-static uint8_t s_gpu[W * H * 4];
+static uint8_t *s_gpu;
+
+static size_t s_gpuSize;
 
 /* the targets the effects touch, GPU against the CPU model; returns the
  * largest difference */
@@ -1037,7 +1264,12 @@ static int compareAll(const char *what, int verbose)
         const CpuT *c = &s_cpu[kCompared[k]];
         uint32_t w = 0, h = 0;
         rhi_wait_frame(); /* a readback that changes the target's state takes a command list */
-        if (!rd__read_target(rd_target((RdTargetId)kCompared[k]), s_gpu, sizeof(s_gpu), &w, &h) ||
+        if (s_gpuSize < cpuMaxBytes()) {
+            free(s_gpu);
+            s_gpuSize = cpuMaxBytes();
+            s_gpu = malloc(s_gpuSize);
+        }
+        if (!rd__read_target(rd_target((RdTargetId)kCompared[k]), s_gpu, s_gpuSize, &w, &h) ||
             (int)w != c->w || (int)h != c->h) {
             CHECK(0, "%s: read %s", what, kTargetNames[kCompared[k]]);
             continue;
@@ -1657,9 +1889,11 @@ static RdTex s_qShineTex;
  * alpha 0x40 (failing the alpha test: RGB only) */
 static void qShine(int n)
 {
+    /* on a frame wider than 4:3 (w) the same place in its 4:3 columns */
+    const int fw = gsFrame.w;
     (void)n;
     dl_SetDLPriority(8);
-    rd_set_target(rd_target(RD_TARGET_AURA_WORK), rd_target(RD_TARGET_SCENE), W, QH, 0);
+    rd_set_target(rd_target(RD_TARGET_AURA_WORK), rd_target(RD_TARGET_SCENE), (uint32_t)fw, QH, 0);
     rd_test_gs(0x5346D);
     rd_z_write(1);
     rd_abe(1);
@@ -1672,10 +1906,10 @@ static void qShine(int n)
     rd_gouraud(0);
     RdPostParams p;
     memset(&p, 0, sizeof(p));
-    const int dx = 0;
-    p.rect[0] = (float)(0x8000 - W / 2 * 16 + (100 + dx) * 16);
+    const int dx = (fw - W) / 2;
+    p.rect[0] = (float)(0x8000 - fw / 2 * 16 + (100 + dx) * 16);
     p.rect[1] = (float)(0x8000 - QH / 2 * 16 + 150 * 16);
-    p.rect[2] = (float)(0x8000 - W / 2 * 16 + (400 + dx) * 16);
+    p.rect[2] = (float)(0x8000 - fw / 2 * 16 + (400 + dx) * 16);
     p.rect[3] = (float)(0x8000 - QH / 2 * 16 + 300 * 16);
     p.uv[0] = 0.0f;
     p.uv[1] = 0.0f;
@@ -1755,12 +1989,12 @@ static void qInit(const char *what, int preset, float scale, int fullHeight)
     RdSettings st;
     memset(&st, 0, sizeof(st));
     st.preset = (uint8_t)preset;
-    st.aspect = 4.0f / 3.0f;
+    st.aspect = gsFrame.aspect; /* 4:3 but in (w) */
     st.outputWidth = 640;
     st.outputHeight = 480;
     st.sceneScale = scale;
     st.fullHeightScene = (uint8_t)fullHeight;
-    if (!rd_init(W, QH, &st, NULL)) {
+    if (!rd_init((uint32_t)gsFrame.w, QH, &st, NULL)) {
         CHECK(0, "(q) rd_init %s", what);
         return;
     }
@@ -2158,6 +2392,158 @@ static void checkMotionBlurPresentsScaled(void)
     rd_shutdown();
 }
 
+/* ================== (w) the aura's feedback chain on a wide frame (issue 61)
+ *
+ * The Queen's mirage (feedback mode 2: AURA_WORK's alpha reduced into
+ * WORK0, copied into FEED128's alpha, FEED128 pasted over SCENE through
+ * that alpha, SCENE copied back into FEED128) and the auras of modes 1 and
+ * 3 (FEED128 tapped into AURA_TAP, blended into AURA_WORK and SCENE, then
+ * reduced back into FEED128), run the same frames at W = 512 and W = 2048:
+ * the scene the 512-wide picture in the frame's 4:3 columns (repeated
+ * beside them), the shine at the same place in them.  Every target against
+ * the CPU model exactly at both widths; the 4:3 columns of the wide SCENE
+ * are the 4:3 run's byte for byte (mode 2 every column: its mask is zero
+ * near the 4:3 edges, so what lies beside them never reaches the paste;
+ * modes 1 and 3 their taps reach a feedback texel (4 pixels) and more a
+ * frame, compared 8 pixels a frame in from the edges); in mode 2 the
+ * feedback area's alpha as the paste reads it is at most 0x80 and set
+ * somewhere (the mask). */
+static uint8_t s_wCentre[2][W * QH * 4];
+
+/* the image across a target fw wide, its 4:3 columns the image's columns
+ * 0 .. 511 (REPEAT beside them), nearest, Z ALWAYS */
+static void putImageAt(RdTarget t, RdTarget depth, int fw, int gh, int py0, int py1, uint32_t z,
+                       int zwrite)
+{
+    const int side = (fw - W) / 2;
+    const int u0 = ((W - side % W) % W) * 16;
+    rd_set_target(t, depth, (uint32_t)fw, (uint32_t)gh, 0);
+    rd_test_gs(0x30000);
+    rd_z_write(zwrite);
+    rd_abe(0);
+    rd_fba(0);
+    rd_pabe(0);
+    rd_sampler_filter(RD_FILTER_NEAREST, RD_FILTER_NEAREST);
+    rd_sampler_wrap(RD_WRAP_REPEAT, RD_WRAP_CLAMP);
+    rd_texture(s_imgTex, RD_TEXFN_MODULATE, RD_TCC_RGBA);
+    rd_gouraud(0);
+    RdPostParams p;
+    memset(&p, 0, sizeof(p));
+    p.rect[0] = (float)(0x8000 - fw / 2 * 16);
+    p.rect[1] = (float)(0x8000 - gh / 2 * 16 + py0 * 16);
+    p.rect[2] = (float)(0x8000 + fw / 2 * 16);
+    p.rect[3] = (float)(0x8000 - gh / 2 * 16 + py1 * 16);
+    p.uv[0] = (float)u0;
+    p.uv[1] = (float)(py0 * 16);
+    p.uv[2] = (float)(u0 + fw * 16);
+    p.uv[3] = (float)(py1 * 16);
+    p.rgba[0] = p.rgba[1] = p.rgba[2] = p.rgba[3] = 0x80;
+    p.z = z;
+    p.scalar[0] = p.scalar[1] = 512.0f;
+    p.scalar[2] = 1.0f;
+    rd_post(RD_POST_FLARE, &p);
+}
+
+static void cpuFree(void)
+{
+    for (int i = 0; i < RD_TARGET_COUNT; i++) {
+        free(s_cpu[i].c);
+        free(s_cpu[i].z);
+    }
+    memset(s_cpu, 0, sizeof(s_cpu));
+    free(s_old);
+    s_old = NULL;
+}
+
+static void checkFeedbackWide(void)
+{
+    static const int kW[2] = {W, 2048}, kModes[3] = {2, 1, 3};
+    const int screenHeight = ScreenHeight, status0 = systemStatus[0];
+    ScreenHeight = QH;
+    systemStatus[0] = 0; /* NTSC, the Queen's dumps' */
+    GlobalTimer = 0;
+    rd_shutdown();
+    cpuFree();
+    for (int m = 0; m < 3; m++) {
+        const int mode = kModes[m];
+        int worst = 0;
+        for (int r = 0; r < 2; r++) {
+            const int fw = kW[r];
+            char what[64];
+            setFrameWidth(fw);
+            setStage(0, mode, mode == 2 ? 128 : 0x40);
+            if (mode == 2) { /* the Queen's feedbackCol */
+                GlobalStageSetting.feedbackCol[0] = GlobalStageSetting.feedbackCol[1] =
+                    GlobalStageSetting.feedbackCol[2] = 64;
+            }
+            snprintf(what, sizeof(what), "(w) mode %d W %d", mode, fw);
+            qInit(what, RD_PRESET_ORIGINAL, 0.0f, 0);
+            cpuInit();
+            clearAll();
+            s_feedMaxA = s_feedSetA = 0;
+            s_feedProbe = mode == 2;
+            for (int n = 0; n < Q_FRAMES; n++) {
+                dl_SetDLPriority(0);
+                putImageAt(rd_target(RD_TARGET_SCENE), rd_target(RD_TARGET_SCENE), fw, QH, 0, QH, 0,
+                           1);
+                putImageAt(rd_target(RD_TARGET_SCENE), rd_target(RD_TARGET_SCENE), fw, QH, 180, 260,
+                           Q_Z_FACE, 1);
+                FullScreenEffectBefore();
+                qShine(n);
+                FullScreenEffectAfter();
+                snprintf(what, sizeof(what), "(w) mode %d W %d frame %d", mode, fw, n);
+                const int d = runFrame(what, failures < 10);
+                worst = d > worst ? d : worst;
+            }
+            s_feedProbe = 0;
+            const CpuT *sc = &s_cpu[RD_TARGET_SCENE];
+            const int c0 = (fw - W) / 2;
+            for (int y = 0; sc->c && sc->w == fw && y < QH; y++) {
+                memcpy(&s_wCentre[r][(size_t)y * W * 4], &sc->c[((size_t)y * fw + c0) * 4],
+                       (size_t)W * 4);
+            }
+            CHECK(sc->c && sc->w == fw && sc->h == QH, "(w) mode %d W %d: SCENE %dx%d", mode, fw,
+                  sc->w, sc->h);
+            if (mode == 2) {
+                printf("  (w) mirage at W %d: FEED128's alpha at the paste at most 0x%02x, %d "
+                       "texel reads set\n",
+                       fw, s_feedMaxA, s_feedSetA);
+                CHECK(s_feedSetA > 0 && s_feedMaxA <= 0x80,
+                      "(w) mode 2 W %d: the paste reads FEED128's alpha up to 0x%x (want the "
+                      "mask's, <= 0x80: above it the paste extrapolates)",
+                      fw, s_feedMaxA);
+            }
+            CHECK(rhi_vk_validation_error_count() == 0, "(w) mode %d W %d: %u validation errors",
+                  mode, fw, rhi_vk_validation_error_count());
+            rd_shutdown();
+            cpuFree();
+        }
+        const int margin = mode == 2 ? 0 : 8 * (Q_FRAMES + 2);
+        int bad = 0, n = 0, darkened = 0;
+        for (int y = 0; y < QH; y++) {
+            for (int x = margin; x < W - margin; x++) {
+                const size_t i = ((size_t)y * W + x) * 4;
+                bad += memcmp(&s_wCentre[0][i], &s_wCentre[1][i], 4) != 0;
+                darkened += memcmp(&s_wCentre[0][i], &s_img[((size_t)y * W + x) * 4], 3) != 0;
+                n++;
+            }
+        }
+        printf("  (w) mode %d, %d frames at W 512 and 2048 (max difference against the model %d "
+               "LSB): %d of %d pixels of the 4:3 columns (%d in from their edges) differ, %d "
+               "changed by the effect\n",
+               mode, Q_FRAMES, worst, bad, n, margin, darkened);
+        CHECK(bad == 0,
+              "(w) mode %d: the wide frame's 4:3 columns differ from the 4:3 run's in %d "
+              "pixels",
+              mode, bad);
+        CHECK(darkened > 1000, "(w) mode %d: the effect changed the picture (%d pixels)", mode,
+              darkened);
+    }
+    setFrameWidth(W);
+    ScreenHeight = screenHeight;
+    systemStatus[0] = status0;
+}
+
 static void checkPipelines(void)
 {
     static RdPipeKeyInt keys[512];
@@ -2234,6 +2620,7 @@ int main(void)
     checkRecordingMotionBlur(448);
     checkRecordingMotionBlur(512);
     checkRecordingMotionBlurOff();
+    checkRecordingWide();
     rd_shutdown();
     printf("  (r) recording checks: %s\n", failures ? "FAILED" : "ok");
     if (failures) {
@@ -2269,6 +2656,7 @@ int main(void)
     checkQueenMirage(); /* re-initialises rd (NTSC, 1x, 4x) */
     checkQueenPresents();
     checkMotionBlurPresentsScaled(); /* issue 28: re-initialises rd (2x) */
+    checkFeedbackWide();             /* W4, issue 61: re-initialises rd (W 512, 2048) */
     if (failures) {
         printf("rd_blur_test: %d failures\n", failures);
         return 1;
