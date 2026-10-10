@@ -733,6 +733,7 @@ typedef enum RdVsId {
 typedef enum RdFsId {
     RD_FS_SPRITE = 0,
     RD_FS_BLIT,
+    RD_FS_REMASTER,
     RD_FS_BLEND_INT,
     RD_FS_DATE_SNAP,    /* destination alpha MSB into the R8 DATE snapshot */
     RD_FS_CAMERA_PROBE, /* FrameCB matrices applied to a point, as bytes (tests) */

@@ -86,6 +86,7 @@ static const char *const s_vsNames[RD_VS_COUNT] = {"sprite_ui_vs" /* indexed by 
 
 static const char *const s_fsNames[RD_FS_COUNT] = {"sprite_ps" /* indexed by RD_FS_* */,
                                                    "blit_ps",
+                                                   "remaster_ps",
                                                    "blend_int_ps",
                                                    "date_snap_ps",
                                                    "camera_probe_ps",

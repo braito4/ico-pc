@@ -1125,11 +1125,17 @@ uint32_t rd__enumerate_reachable_screen(RdPipeKeyInt *out, uint32_t max)
     }
     const RdPipeKeyInt blitA = rd__post_key(RD_VS_BLIT, RD_FS_BLIT, RHI_FMT_RGBA8_UNORM);
     const RdPipeKeyInt blitB = rd__post_key(RD_VS_BLIT, RD_FS_BLIT, RHI_FMT_BGRA8_UNORM);
+    const RdPipeKeyInt remasterA =
+        rd__post_key(RD_VS_BLIT, RD_FS_REMASTER, RHI_FMT_RGBA8_UNORM);
+    const RdPipeKeyInt remasterB =
+        rd__post_key(RD_VS_BLIT, RD_FS_REMASTER, RHI_FMT_BGRA8_UNORM);
     const RdPipeKeyInt exact = rd__post_key(RD_VS_BLEND_INT, RD_FS_BLEND_INT, RHI_FMT_RGBA8_UINT);
     const RdPipeKeyInt dateSnap = rd__post_key(RD_VS_BLIT, RD_FS_DATE_SNAP, RHI_FMT_R8_UNORM);
     n = rd__add_pipe_key(out, max, n, &dateSnap);
     n = rd__add_pipe_key(out, max, n, &blitA);
     n = rd__add_pipe_key(out, max, n, &blitB);
+    n = rd__add_pipe_key(out, max, n, &remasterA);
+    n = rd__add_pipe_key(out, max, n, &remasterB);
     /* the box blit with the effects depth, on both outputs */
     const RdPipeKeyInt depthA = rd__present_depth_key(RHI_FMT_RGBA8_UNORM);
     const RdPipeKeyInt depthB = rd__present_depth_key(RHI_FMT_BGRA8_UNORM);

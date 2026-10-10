@@ -336,12 +336,15 @@ typedef struct RdSettings {
      * not under the CRT filter.  0 in a zeroed RdSettings: no depth
      * buffer is written. */
     uint8_t effectsDepth;
+    /* [video] remaster: FXAA-style edge smoothing and mild sharpening in
+     * the final box blit.  The CRT path intentionally ignores it. */
+    uint8_t remaster;
     /* Model packs ([video] model_pack, dump_models): replacement models
      * drawn in place of the game's, and each model part saved as glTF.
      * Both 0 in a zeroed RdSettings. */
     uint8_t modelPack;
     uint8_t dumpModels;
-    uint8_t _pad[2];
+    uint8_t _pad[1];
     /* The internal scene resolution, in texels: the scene's
      * texture is sceneWidth x sceneHeight (GS coordinates unchanged); 0 x 0
      * with sceneScale 0 = the presentation box in the window under the

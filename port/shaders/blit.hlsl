@@ -43,6 +43,57 @@ float4 blit_ps(BlitVSOut i) : SV_Target0
     return float4(blit_color(i.uv)) * (1.0 / 255.0);
 }
 
+// remaster_ps: a light post-process for modern displays.  It combines an
+// FXAA-style edge search with a restrained unsharp mask.  It is used only by
+// the final presentation blit, so the port's text and overlay remain crisp
+// and the game continues to render its effects exactly as before.
+float remaster_luma(float3 c)
+{
+    return dot(c, float3(0.299, 0.587, 0.114));
+}
+
+float4 remaster_ps(BlitVSOut i) : SV_Target0
+{
+    const float2 px = g_tex.zw;
+    const float4 centre = g_texture.Sample(g_sampler, i.uv);
+    const float3 north = g_texture.Sample(g_sampler, i.uv + float2(0.0, -px.y)).rgb;
+    const float3 south = g_texture.Sample(g_sampler, i.uv + float2(0.0, px.y)).rgb;
+    const float3 west = g_texture.Sample(g_sampler, i.uv + float2(-px.x, 0.0)).rgb;
+    const float3 east = g_texture.Sample(g_sampler, i.uv + float2(px.x, 0.0)).rgb;
+
+    const float lm = remaster_luma(centre.rgb);
+    const float ln = remaster_luma(north);
+    const float ls = remaster_luma(south);
+    const float lw = remaster_luma(west);
+    const float le = remaster_luma(east);
+    const float lo = min(lm, min(min(ln, ls), min(lw, le)));
+    const float hi = max(lm, max(max(ln, ls), max(lw, le)));
+    const float range = hi - lo;
+
+    float3 aa = centre.rgb;
+    if (range >= max(1.0 / 32.0, hi * 0.125)) {
+        float2 dir = float2(-(ln - ls), lw - le);
+        const float reduce = max((ln + ls + lw + le) * (0.25 / 8.0), 1.0 / 128.0);
+        const float invMin = 1.0 / (min(abs(dir.x), abs(dir.y)) + reduce);
+        dir = clamp(dir * invMin, -8.0, 8.0) * px;
+
+        const float3 aaA = 0.5 *
+            (g_texture.Sample(g_sampler, i.uv + dir * (1.0 / 3.0 - 0.5)).rgb +
+             g_texture.Sample(g_sampler, i.uv + dir * (2.0 / 3.0 - 0.5)).rgb);
+        const float3 aaB = aaA * 0.5 + 0.25 *
+            (g_texture.Sample(g_sampler, i.uv + dir * -0.5).rgb +
+             g_texture.Sample(g_sampler, i.uv + dir * 0.5).rgb);
+        const float lb = remaster_luma(aaB);
+        aa = (lb < lo || lb > hi) ? aaA : aaB;
+    }
+
+    // g_param.x is deliberately modest: recover high-resolution detail
+    // without ringing around Ico's high-contrast silhouettes.
+    const float3 blur = 0.25 * (north + south + west + east);
+    const float3 sharpened = saturate(aa + (aa - blur) * g_param.x);
+    return float4(sharpened, centre.a);
+}
+
 // blit_depth_ps (rd_present.c): blit_ps's colour, and
 // SV_Depth from t2, the scene's depth (sampled in place), at the same normalised uv
 // (the source rectangle covers the whole scene; a mirrored blit flips both)

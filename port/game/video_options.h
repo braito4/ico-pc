@@ -52,6 +52,8 @@
  *                                       the picture for an effects program (ReShade's depth
  *                                       effects), drawn only when one is loaded; not with
  *                                       the CRT filter, never on Android
+ *   [video] remaster        false       final display edge smoothing and mild
+ *                                       sharpening; ignored by the CRT filter
  *
  * Every option applies on its own.  preset is not an option but a
  * shortcut over four of them, read and written as such: "enhanced" or
@@ -153,6 +155,8 @@ typedef struct IcoVideoOptions {
     /* an output-size depth buffer in the presentation for an
        effects program (rd.h RdSettings.effectsDepth); 1 = on */
     int effectsDepth;
+    /* a modern-display post-process, outside the preset */
+    int remaster;
 } IcoVideoOptions;
 
 /* IcoVideoOptions.texturePackBudgetMb: the default and the range a value

@@ -439,7 +439,7 @@ typedef enum UiStrId {
     UI_STR_MODEL_PACK_NOTE,
     UI_STR_OPT_DUMP_MODELS,
     UI_STR_DUMP_MODELS_NOTE,
-    /* Options > Effects (issue 11): the page, its five switches, its note */
+    /* Options > Effects (issue 11): the page, its switches, its note */
     UI_STR_SECTION_EFFECTS,
     UI_STR_OPT_EFFECT_GLOW,
     UI_STR_OPT_EFFECT_DEPTH_OF_FIELD,

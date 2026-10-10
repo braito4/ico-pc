@@ -299,7 +299,7 @@ bool rd__present_acquire(void)
  * pass open for the caller to draw more into dst and end it */
 static void blit(RhiCommandList cl, RhiTexture src, uint32_t sw, uint32_t sh, RhiTexture dst,
                  RhiFormat dstFmt, uint32_t dw, uint32_t dh, RhiLoadOp load, const RhiRect *box,
-                 RdFilter filter, int mirror, bool keepOpen)
+                 RdFilter filter, int mirror, bool keepOpen, RdFsId fs)
 {
     RhiRenderPassDesc p;
     memset(&p, 0, sizeof(p));
@@ -312,7 +312,7 @@ static void blit(RhiCommandList cl, RhiTexture src, uint32_t sw, uint32_t sh, Rh
     RhiViewport vp = {(float)box->x, (float)box->y, (float)box->w, (float)box->h, 0.0f, 1.0f};
     rhi_cmd_set_viewport(cl, &vp);
     rhi_cmd_set_scissor(cl, box);
-    RdPipeKeyInt k = rd__post_key(RD_VS_BLIT, RD_FS_BLIT, dstFmt);
+    RdPipeKeyInt k = rd__post_key(RD_VS_BLIT, fs, dstFmt);
     RhiPipeline pipe = rd__get_pipeline(&k);
     if (pipe.id) {
         IcoDrawCB cb;
@@ -331,6 +331,9 @@ static void blit(RhiCommandList cl, RhiTexture src, uint32_t sw, uint32_t sh, Rh
         cb.tex[1] = (float)sh;
         cb.tex[2] = 1.0f / (float)sw;
         cb.tex[3] = 1.0f / (float)sh;
+        if (fs == RD_FS_REMASTER) {
+            cb.param[0] = 0.20f;
+        }
         rhi_cmd_set_pipeline(cl, pipe);
         rd__bind_uniform(cl, 0, rd__frame_group(dw, dh, 0.0f, 0.0f));
         rd__bind_uniform(cl, 1, rd__draw_group(&cb));
@@ -347,7 +350,7 @@ void rd__present_blit(RhiCommandList cl, RhiTexture src, uint32_t sw, uint32_t s
                       RhiFormat dstFmt, uint32_t dw, uint32_t dh, RhiLoadOp load,
                       const RhiRect *box, RdFilter filter, int mirror)
 {
-    blit(cl, src, sw, sh, dst, dstFmt, dw, dh, load, box, filter, mirror, false);
+    blit(cl, src, sw, sh, dst, dstFmt, dw, dh, load, box, filter, mirror, false, RD_FS_BLIT);
 }
 
 /* ------------------------------------------------------ the effects depth
@@ -1348,7 +1351,7 @@ void rd__present_record(RhiCommandList cl)
         rd__transition(cl, g_rd.presentLines, &g_rd.presentLinesState, RHI_STATE_RENDER_TARGET);
         const RhiRect full = {0, 0, lw, lh};
         blit(cl, disp->color, disp->tw, disp->th, g_rd.presentLines, RHI_FMT_RGBA8_UNORM, lw, lh,
-             RHI_LOAD_DONT_CARE, &full, pr->doubleFilter, 0, false);
+             RHI_LOAD_DONT_CARE, &full, pr->doubleFilter, 0, false, RD_FS_BLIT);
         rd__transition(cl, g_rd.presentLines, &g_rd.presentLinesState, RHI_STATE_SHADER_READ);
         src = g_rd.presentLines;
         sw = lw;
@@ -1375,7 +1378,8 @@ void rd__present_record(RhiCommandList cl)
         if (!depth) {
             open = !rd__crt_on();
             blit(cl, src, sw, sh, out, s_outFormat, s_outW, s_outH, RHI_LOAD_CLEAR, &box,
-                 pr->scaleFilter, mirror, open);
+                 pr->scaleFilter, mirror, open,
+                 g_rd.settings.remaster && !rd__crt_on() ? RD_FS_REMASTER : RD_FS_BLIT);
         }
     }
     /* the deferred text, drawn in list order with the regions and colours
