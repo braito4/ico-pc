@@ -37,6 +37,19 @@ if(ICO_RUN_TESTS)
     add_test(NAME options COMMAND options_test "${CMAKE_CURRENT_BINARY_DIR}")
 endif()
 
+# IsPointIsInScreen's x bound (ico2/omori/src/poly-flat.c, compiled into the
+# test) at gsFrame.w = 512 and wider: the PS2's window at 4:3, the native width
+# otherwise.  Stubs for the projection and the packet writers.
+add_executable(poly_flat_test test/poly_flat_test.c)
+target_include_directories(poly_flat_test PRIVATE ${_ico_options_incs})
+target_compile_definitions(poly_flat_test PRIVATE ${ICO_GAME_DEFINITIONS})
+target_compile_options(poly_flat_test PRIVATE ${ICO_SEMANTIC_OPTIONS} ${ICO_GAME_LAYOUT_OPTIONS}
+                       ${ICO_GAME_WARNINGS} -Wno-unused-parameter -Wno-unused-variable
+                       -Wno-unused-function)
+if(ICO_RUN_TESTS)
+    add_test(NAME poly_flat COMMAND poly_flat_test)
+endif()
+
 # The doorway fix (issue 53): the arm and the grace with the option off and
 # on, holding hands or not, the stage it leads to, the frame count, and a copy
 # of the exit check's guard driven through an arrival frame by frame. CPU

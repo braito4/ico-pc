@@ -246,6 +246,68 @@ static void test_through_libpad(void)
     ico_pad_script_clear();
 }
 
+/* The header's frame lines, the "# tick N gs_width W" line when the width
+   changes mid-run, and the replay's warning when the header's frame differs. */
+static void test_frame_lines(void)
+{
+    char path[1100], line[128], msg[128], text[2048];
+    char hdr[256];
+    size_t n = 0;
+    FILE *f;
+    const IcoPadFrame cross = {0x4000, 128, 128, 128, 128};
+
+    CHECK(ico_input_record_frame_lines(line, sizeof(line), 512, 4.0f / 3.0f) ==
+          (int)strlen("# effective gs_width = 512\n# effective aspect = 1.3333\n"));
+    CHECK(strcmp(line, "# effective gs_width = 512\n# effective aspect = 1.3333\n") == 0);
+    ico_input_record_frame_lines(line, sizeof(line), 688, 16.0f / 9.0f);
+    CHECK(strcmp(line, "# effective gs_width = 688\n# effective aspect = 1.7778\n") == 0);
+
+    /* the warning: same frame silent, other width or aspect reported, other lines ignored */
+    CHECK(ico_input_record_frame_diff("# effective gs_width = 512", 512, 4.0f / 3.0f, msg,
+                                      sizeof(msg)) == 0);
+    CHECK(ico_input_record_frame_diff("# effective aspect = 1.3333", 512, 4.0f / 3.0f, msg,
+                                      sizeof(msg)) == 0);
+    CHECK(ico_input_record_frame_diff("# effective gs_width = 688", 512, 4.0f / 3.0f, msg,
+                                      sizeof(msg)) == 1);
+    CHECK(strcmp(msg, "gs_width = 688; this run has 512") == 0);
+    CHECK(ico_input_record_frame_diff("# effective aspect = 1.7778", 512, 4.0f / 3.0f, msg,
+                                      sizeof(msg)) == 1);
+    CHECK(strcmp(msg, "aspect = 1.7778; this run has 1.3333") == 0);
+    CHECK(ico_input_record_frame_diff("# effective stick_fix = 0", 512, 4.0f / 3.0f, msg,
+                                      sizeof(msg)) == 0);
+    CHECK(ico_input_record_frame_diff("# config video.video_mode = 0", 512, 4.0f / 3.0f, msg,
+                                      sizeof(msg)) == 0);
+
+    /* the width noted mid-run: the first call silent, a repeat silent, a change a comment */
+    ico_input_record_frame_lines(hdr, sizeof(hdr), 512, 4.0f / 3.0f);
+    path_in_dir(path, sizeof(path), "input-width.txt");
+    ico_input_record_note_width(1, 600); /* no recording: nothing */
+    CHECK(ico_input_record_open(path, hdr) == 0);
+    ico_input_record_note_width(0, 512);
+    ico_input_record_note_width(5, 512);
+    ico_input_record_sample(9, &cross);
+    ico_input_record_note_width(10, 688);
+    ico_input_record_note_width(11, 688);
+    ico_input_record_poll(12);
+    ico_input_record_note_width(20, 512);
+    ico_input_record_close();
+    f = fopen(path, "rb");
+    CHECK(f != NULL);
+    if (f != NULL) {
+        n = fread(text, 1, sizeof(text) - 1, f);
+        text[n] = '\0';
+        fclose(f);
+        CHECK(strstr(text, "# effective gs_width = 512\n# effective aspect = 1.3333\n") == text);
+        CHECK(strstr(text, "# tick 10 gs_width 688\n") != NULL);
+        CHECK(strstr(text, "# tick 20 gs_width 512\n") != NULL);
+        CHECK(strstr(text, "# tick 5 ") == NULL && strstr(text, "# tick 11 ") == NULL);
+        CHECK(strstr(text, "9 4000 128 128 128 128\n") != NULL);
+    }
+    /* the comments do not disturb the script reader */
+    CHECK(ico_pad_script_load(path) == 0);
+    ico_pad_script_clear();
+}
+
 int main(int argc, char **argv)
 {
     snprintf(dir, sizeof(dir), "%s", argc > 1 ? argv[1] : ".");
@@ -253,6 +315,7 @@ int main(int argc, char **argv)
     test_round_trip();
     test_rules();
     test_through_libpad();
+    test_frame_lines();
     printf("input_record_test: %s\n", failures ? "FAILED" : "ok");
     return failures ? 1 : 0;
 }

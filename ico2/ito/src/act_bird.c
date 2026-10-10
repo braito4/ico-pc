@@ -629,7 +629,8 @@ void subBirdBrainMain(void *volatile gobj)
 
                 sx = sv[0] / (ScreenWidth / 2);
                 sy = sv[1] / (ScreenHeight / 2);
-                if (sv[3] > 0.0f && __builtin_fabsf(sx) < 0.6f && sy > -1.3f && sy < 0.5f) {
+                if (sv[3] > 0.0f && __builtin_fabsf(sx) < 0.6f * ((float)gsFrame.w / 512.0f) &&
+                    sy > -1.3f && sy < 0.5f) {
                     float dy;
 
                     sceVu0InversMatrix(im, (char *)matrixptr + 128);
