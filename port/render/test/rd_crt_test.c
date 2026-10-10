@@ -1350,8 +1350,13 @@ static void rowChannels(const RhiRect *b, uint32_t outW, uint32_t y, int *ch)
 }
 
 /* A 688 frame at 16:9 through the filter: the grid is 682 columns (3 a
- * side cropped); white columns 0..2 and 685..687 never reach the box, 3
- * and 684 do, at its edges; and under Trinitron's grille at strength 1 the
+ * side cropped); white columns 0..2 and 686..687 never reach the box, 3
+ * and 684 do, at its edges.  Column 685 is cropped too, but the reduction
+ * samples DISPLAY x at SCENE x + 0.75 (rd_blur.c: texels x and x + 1 at
+ * 12/16 and 4/16, the PS2's bias), so a quarter of it reaches DISPLAY 684,
+ * the box's last column: alone it lights only that column, dimmer than 684
+ * lights it (a crop one column short would show it at full).  Under
+ * Trinitron's grille at strength 1 the
  * columns of the box's row light the same channels as the 4:3 run's, the
  * same period (3 output pixels a source pixel at 1152 lines) */
 static void checkWideCrop(void)
@@ -1365,8 +1370,8 @@ static void checkWideCrop(void)
     s.crtHalation = s.crtBloom = s.crtCurvature = 0.0f;
     s.crtScanlines = 0.0f;
     s.crtMask = 1.0f;
-    static const int kOut[6] = {0, 1, 2, 685, 686, 687}, kIn[2] = {3, 684};
-    if (!presentWide(&s, W, aspect, 0, kOut, 6)) {
+    static const int kOut[5] = {0, 1, 2, 686, 687}, kIn[2] = {3, 684};
+    if (!presentWide(&s, W, aspect, 0, kOut, 5)) {
         return;
     }
     uint32_t vw = 0, vh = 0;
@@ -1378,6 +1383,31 @@ static void checkWideCrop(void)
     }
     CHECK(lit == 0, "wide crop: the columns past the exact width are left out (%u pixels lit)",
           lit);
+    /* 685's quarter in DISPLAY 684 against 684 itself: the brightest
+     * channel each lights and where (the box's last source pixel: its last
+     * 3 output pixels, 2046 / 682 a source pixel) */
+    RhiRect eb;
+    rd__present_box(ow, oh, 682.0f / 384.0f, &eb);
+    uint8_t peak[2] = {0, 0};
+    uint32_t outside = 0;
+    for (int k = 0; k < 2; k++) {
+        static const int kEdge[2] = {685, 684};
+        if (!presentWide(&s, W, aspect, 0, &kEdge[k], 1)) {
+            return;
+        }
+        for (size_t i = 0; i < (size_t)ow * oh; i++) {
+            const uint8_t *c = &s_out[i * 4];
+            const uint8_t m =
+                c[0] > c[1] ? (c[0] > c[2] ? c[0] : c[2]) : (c[1] > c[2] ? c[1] : c[2]);
+            const uint32_t x = (uint32_t)(i % ow);
+            peak[k] = m > peak[k] ? m : peak[k];
+            outside += k == 0 && m != 0 && (x + 3 < eb.x + eb.w || x >= eb.x + eb.w);
+        }
+    }
+    CHECK(outside == 0 && peak[0] > 0 && 2u * peak[0] < peak[1],
+          "wide crop: column 685 reaches the box only as the reduction's quarter in its last "
+          "column (%u pixels elsewhere, peak %u against 684's %u)",
+          outside, peak[0], peak[1]);
     if (!presentWide(&s, W, aspect, 0, kIn, 2)) {
         return;
     }

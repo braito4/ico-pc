@@ -1489,7 +1489,9 @@ static void setUvShift(float sx, float sy)
  * exactly the mirrored pixels for any 12.4 edge, and the attributes taken
  * at q are then the original's at p + 1/16: each triangle's UVs are moved
  * back by a sixteenth of a pixel's worth of their x gradient (sprites and
- * quads of the layout and the font: exact UVs).  Colours and Z are not
+ * quads of the layout and the font: exact UVs), and then on by
+ * kMirrorUvBias where they have one, so a sample on a texel's edge stays in
+ * the texel the GS takes.  Colours and Z are not
  * moved (1/16 of a pixel's step of a gradient).  Points are drawn as
  * one-pixel quads, so they follow the triangles.  Lines are reflected about
  * the pixel centre, X' = C - 1 - X.  On a scaled target "1" is one texel,
@@ -1508,6 +1510,11 @@ static uint16_t mirrorX(int32_t c16, float x)
     const int32_t i = (int32_t)(m < 0.0f ? m - 0.5f : m + 0.5f);
     return (uint16_t)(i < 0 ? 0 : (i > 0xFFFF ? 0xFFFF : i));
 }
+
+/* 1/512 texel: above the float error of an interpolated UV, under the
+ * GS's own steps (1/16 texel at a vertex), and not lost to a GPU's 8-bit
+ * subtexel nearest (it rounds onto the edge, which is the GS's texel) */
+static const float kMirrorUvBias = 1.0f / 512.0f;
 
 static void mirrorVerts(IcoSpriteVertex *o, uint32_t n, uint8_t topo, int32_t c16, float texel16)
 {
@@ -1528,9 +1535,16 @@ static void mirrorVerts(IcoSpriteVertex *o, uint32_t n, uint8_t topo, int32_t c1
             dudx = ((t[1].u - t[0].u) * by - (t[2].u - t[0].u) * ay) / det;
             dvdx = ((t[1].v - t[0].v) * by - (t[2].v - t[0].v) * ay) / det;
         }
+        /* the mirrored samples run against the gradient, so a GS sample on
+         * a texel's left edge (a 2x sprite's u = 0.5 + 0.5 k) can come out
+         * a hair under it where the target's NDC is not exact (688 wide)
+         * and the nearest texel is the one before: kMirrorUvBias moves
+         * the sample that much into the texel the GS takes (floor) */
+        const float bu = dudx != 0.0f ? kMirrorUvBias : 0.0f;
+        const float bv = dvdx != 0.0f ? kMirrorUvBias : 0.0f;
         for (int k = 0; k < 3; k++) {
-            t[k].u -= dudx;
-            t[k].v -= dvdx;
+            t[k].u += bu - dudx;
+            t[k].v += bv - dvdx;
             t[k].x = mirrorX(c16, (float)t[k].x + texel16 - 1.0f);
         }
     }
