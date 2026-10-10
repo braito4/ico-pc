@@ -144,20 +144,6 @@ static void ring(float cx, float cy, float r, float th, const uint8_t c[4])
     }
 }
 
-/* a stroke from (x0, y0) to (x1, y1), th thick */
-static void line(float x0, float y0, float x1, float y1, float th, const uint8_t c[4])
-{
-    float dx = x1 - x0, dy = y1 - y0;
-    const float len = sqrtf(dx * dx + dy * dy);
-
-    if (len <= 0.0f) {
-        return;
-    }
-    dx *= 0.5f * th / len;
-    dy *= 0.5f * th / len;
-    quad(x0 - dy, y0 + dx, x1 - dy, y1 + dx, x1 + dy, y1 - dx, x0 + dy, y0 - dx, c);
-}
-
 /* The game's own picture for a zone (layout_ext.h LtExtGlyph), -1 for
    the zones that have none: Up, Down, Start and Select are words. */
 static int glyphOf(int zone)
