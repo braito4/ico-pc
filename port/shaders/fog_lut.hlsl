@@ -16,7 +16,8 @@
 //       binds no depth attachment), where the GS reads a copy of the Z buffer
 //   t2  the 256x1 RGBA8 LUT in index order (ZFog.c's CLUT unswizzled from
 //       its CSM1 storage order)
-//   g_tex.xy   size of the depth source in GS pixels (the UV's texel units)
+//   g_tex.xy   size of the depth source in GS pixels (the UV's texel units;
+//              the native frame's width, rd_replay.c doFog)
 //   g_col.x    the sprite's GS Z
 //   g_col.y    the Z test (RdZTest: ALWAYS 1, GEQUAL 2, GREATER 3, NEVER 0)
 //   g_param.x  the depth source's GS Z scale (PSMZ32: 2^-33 on a float

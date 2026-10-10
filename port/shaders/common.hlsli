@@ -41,7 +41,15 @@ cbuffer FrameCB : register(b0, space0)
     float4 g_origin;    // xy GS window coordinate of the target's top-left pixel
                         // (XYOFFSET / 16), zw added to the result (GS pixel-centre
                         // convention; 0 puts GS integer coordinates on pixel edges)
-    float4 g_space[2];  // [0] WORLD, [1] UI: ndc = ndc * xy + zw (scale xy, offset zw)
+    // The native frame (port/include/ico_frame.h). g_frameRegs[0] (g_frame):
+    // x the region scale, 512 / W on a target as wide as the native frame W
+    // (the PS2's 4:3 window test compares x' = (x - 2048) * scale + 2048),
+    // exactly 1 on every other target and at 4:3; yzw reserved.
+    // g_frameRegs[1] (g_frame43): xy the 4:3 columns of the bound target in
+    // its texels, (w / 2 -+ 256) * sx on a frame-wide target, 0 .. w * sx on
+    // the others; zw reserved. Nothing transforms a position: a GS X is
+    // drawn where the game put it, at every aspect.
+    float4 g_frameRegs[2];
     float4 g_z;         // x scale (1 / 2^24), yz the bound target's texels per GS
                         // pixel (1 in Original), w 1: the VU programs output
                         // unquantised X, Y (only the developer switch
@@ -65,9 +73,7 @@ cbuffer FrameCB : register(b0, space0)
 //   g_param  kind-specific: each entry's header says what it reads (e.g.
 //            blend_int's source offset in pixels, xy)
 //   g_scale  xy t1 texels per GS texel: 1 for images and unscaled targets,
-//            the target's scale for a scaled one; zw the x addressing
-//            of a widened render-to-texture block, u' = u * z + w (0, 0:
-//            none; gs_block_uv)
+//            the target's scale for a scaled one; zw reserved (0)
 cbuffer DrawCB : register(b1, space1)
 {
     uint4 g_col;
@@ -78,14 +84,6 @@ cbuffer DrawCB : register(b1, space1)
     float4 g_param;
     float4 g_scale;
 };
-
-// Widescreen reflections: a draw that samples a render-to-texture block
-// widened by the display aspect maps its 4:3 u into the block (rd_replay.c
-// fillDrawCB). z = 0 everywhere else, which returns uv as it is.
-float2 gs_block_uv(float2 uv)
-{
-    return g_scale.z != 0.0 ? float2(uv.x * g_scale.z + g_scale.w, uv.y) : uv;
-}
 
 #define DF_TEXTURED 1u   // PRIM.TME
 #define DF_DECAL 2u      // TFX DECAL (else MODULATE)
@@ -128,9 +126,19 @@ bool gs_date_discard(uint flags, float snap)
     return msb != want;
 }
 
-// Space index into g_space.
+#define g_frame g_frameRegs[0]
+#define g_frame43 g_frameRegs[1]
+
+// W2-VU compatibility until the native window rule lands in
+// vu_common.hlsli and vu_particle.hlsl: their g_space[SPACE_WORLD].x reads
+// are g_frame.x, the region scale (512 / W on a frame-wide target, the old
+// world x factor's value there; exactly 1 elsewhere). The W2-VU package
+// replaces every g_space[SPACE_WORLD].x with g_frame.x and deletes these
+// two aliases. (The space tags RD_SPACE_* stay on the C side: sprite_ui_vs
+// and sprite_world_vs keep their entries, but no space transforms a
+// position.)
 #define SPACE_WORLD 0
-#define SPACE_UI 1
+#define g_space g_frameRegs
 
 // ------------------------------------------------------------ vector forms
 
@@ -174,7 +182,7 @@ uint4 gs_texa_expand(uint4 t, uint mode, uint fmt)
 // floor of the weighted sum >> 8), as fx_sprite_ps does. Addressing is the
 // sampler's: REPEAT or CLAMP at t1's own size. MAG or MIN by the
 // footprint (rho > 1 texel: minified), as the sampler picks it. uvn is the
-// normalised UV (after gs_block_uv); flags g_mode.x.
+// normalised UV; flags g_mode.x.
 uint4 gs_texa_load(Texture2D<float4> tex, int2 c, int2 size, uint flags)
 {
     c.x = (flags & DF_TEXA_CLAMP_S) != 0u ? clamp(c.x, 0, size.x - 1)
@@ -463,19 +471,18 @@ DualOut gs_dual_out(uint4 col, uint flags, uint fix)
 
 // ------------------------------------------------------- vertex helpers
 
-// A 12.4 GS window coordinate (as two u16 in a uint2) to clip space in the
-// given space (SPACE_WORLD or SPACE_UI).  precise (here and in gs_depth,
+// A 12.4 GS window coordinate (as two u16 in a uint2) to clip space, the
+// same for every space tag.  precise (here and in gs_depth,
 // vu_common.hlsli vu_ndc and vu_homogeneous_position): no fused
 // multiply-add, so every pipeline that draws a primitive gets the same
 // position and depth bits (the two-pass blend of a device without
 // dual-source blending draws it twice, the second pass GEQUAL against the
 // depth the first wrote: rd_pipeline.c).
-float2 gs_xy_to_ndc(uint2 xy, int space)
+float2 gs_xy_to_ndc(uint2 xy)
 {
     precise float2 px = float2(xy) * (1.0 / 16.0) - g_origin.xy + g_origin.zw;
     precise float2 ndc = float2(px.x * g_target.z * 2.0 - 1.0, 1.0 - px.y * g_target.w * 2.0);
-    precise float2 r = ndc * g_space[space].xy + g_space[space].zw;
-    return r;
+    return ndc;
 }
 
 float gs_depth(uint z)

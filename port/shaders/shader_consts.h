@@ -2,7 +2,7 @@
  * rd_core fills these; the static asserts pin each offset to the HLSL
  * cbuffer packing (every member is a 16-byte register or a 64-byte matrix,
  * so there is no packing ambiguity). Change this file and common.hlsli
- * together. The constants mirrored from an .hlsli (ICO_DF_*, ICO_SPACE_*:
+ * together. The constants mirrored from an .hlsli (ICO_DF_*:
  * common.hlsli; ICO_TEXFMT_*: gs_math.hlsli; ICO_VU_*: vu_common.hlsli;
  * ICO_SHEET_*: sheet_text.hlsli) hold the same values as their HLSL twins;
  * ICO_SHEET_* and ICO_TEXFMT_* are static-asserted (port/render/test/
@@ -22,12 +22,30 @@ typedef struct IcoFrameCB {
     float clip[4];      /* near, far, zoom, aspect */
     float target[4];    /* w, h of the bound target in GS pixels, 1/w, 1/h */
     float origin[4];    /* xy GS window coordinate of the target's top-left, zw added after */
-    float space[2][4];  /* [0] WORLD, [1] UI: ndc = ndc * xy + zw */
-    float z[4];         /* x = 1 / 2^24 (PSMZ24 scale); yz the bound target's
-                         * texels per GS pixel (1 in Original); w = 1: the VU
-                         * programs output unquantised X, Y (only the developer
-                         * switch ICO_RD_VU_OFFGRID; Enhanced, a scaled target) */
-    float misc[4];      /* x frame counter, y preset */
+
+    /* The native frame (common.hlsli g_frame, g_frame43): frame[0] the
+     * region scale, 512 / W on a target as wide as the native frame W,
+     * exactly 1 on every other target and at 4:3 (rd_replay.c
+     * rd__frame_group_ex); frame43[0..1] the bound target's 4:3 columns in
+     * its texels, (w / 2 -+ 256) sx on a frame-wide target, 0 .. w sx on
+     * the others.  The rest reserved (0).  No position is transformed.
+     * space[0][0] aliases frame[0] for the VU tests until the W2-VU
+     * package moves them to frame (vu1_test.c). */
+    union {
+        struct {
+            float frame[4];
+            float frame43[4];
+        };
+
+        float space[2][4];
+    };
+
+    /* x = 1 / 2^24 (PSMZ24 scale); yz the bound target's texels per GS
+     * pixel (1 in Original); w = 1: the VU programs output unquantised X, Y
+     * (only the developer switch ICO_RD_VU_OFFGRID; Enhanced, a scaled
+     * target) */
+    float z[4];
+    float misc[4]; /* x frame counter, y preset */
 } IcoFrameCB;
 
 /* DrawCB: group 1, slot 1 (register b1, space1). */
@@ -40,8 +58,7 @@ typedef struct IcoDrawCB {
     float tex[4];      /* w, h of t1 in texels, 1/w, 1/h */
     float param[4];    /* kind specific */
     float scale[4];    /* xy t1 texels per GS texel (1, or a scaled target's
-                        * scale); zw a widened block's x addressing, u' = u z + w
-                        * (0 0: none; common.hlsli gs_block_uv) */
+                        * scale); zw reserved (0) */
 } IcoDrawCB;
 
 /* crt.hlsl's CrtCB, group 1, slot 1 (register b1, space1),
@@ -97,9 +114,6 @@ enum {
 
 /* DrawCB.mode[1] bits 8..: TEXFMT_* in gs_math.hlsli. */
 enum { ICO_TEXFMT_RGBA32 = 0, ICO_TEXFMT_RGB24 = 1, ICO_TEXFMT_RGBA16 = 2 };
-
-#define ICO_SPACE_WORLD 0
-#define ICO_SPACE_UI 1
 
 /* font_sheet_ps's constants, SHEET_* in
  * sheet_text.hlsli (the same values; port/render/test/sheet_ref.c
@@ -194,7 +208,11 @@ _Static_assert(offsetof(IcoFrameCB, target) == 224, "target");
 
 _Static_assert(offsetof(IcoFrameCB, origin) == 240, "origin");
 
-_Static_assert(offsetof(IcoFrameCB, space) == 256, "space");
+_Static_assert(offsetof(IcoFrameCB, frame) == 256, "frame");
+
+_Static_assert(offsetof(IcoFrameCB, frame43) == 272, "frame43");
+
+_Static_assert(offsetof(IcoFrameCB, space) == 256, "space (frame's alias)");
 
 _Static_assert(offsetof(IcoFrameCB, z) == 288, "z");
 

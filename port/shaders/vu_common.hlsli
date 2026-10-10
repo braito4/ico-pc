@@ -268,15 +268,14 @@ struct VuVSOut
     VK_LOC(2) nointerpolation uint beside : TEXCOORD1;
 };
 
-// GS pixels (XYOFFSET-relative window coordinates / 16) to clip space in
-// WORLD space; gs_xy_to_ndc for signed and wider-than-16-bit values.
+// GS pixels (XYOFFSET-relative window coordinates / 16) to clip space;
+// gs_xy_to_ndc for signed and wider-than-16-bit values.
 // precise: common.hlsli gs_xy_to_ndc.
 float2 vu_ndc(float2 px)
 {
     precise float2 q = px - g_origin.xy + g_origin.zw;
     precise float2 ndc = float2(q.x * g_target.z * 2.0 - 1.0, 1.0 - q.y * g_target.w * 2.0);
-    precise float2 r = ndc * g_space[SPACE_WORLD].xy + g_space[SPACE_WORLD].zw;
-    return r;
+    return ndc;
 }
 
 // The vertex as the GS gets it: X, Y and Z as integers, w = 1, no
@@ -301,11 +300,9 @@ float4 vu_gs_position(int3 gs, bool wrap)
 float4 vu_homogeneous_position(float4 h)
 {
     float2 o = g_origin.xy - g_origin.zw;
-    float2 s = g_space[SPACE_WORLD].xy;
-    float2 t = g_space[SPACE_WORLD].zw;
     // precise: common.hlsli gs_xy_to_ndc
-    precise float x = ((h.x - o.x * h.w) * g_target.z * 2.0 - h.w) * s.x + t.x * h.w;
-    precise float y = (h.w - (h.y - o.y * h.w) * g_target.w * 2.0) * s.y + t.y * h.w;
+    precise float x = (h.x - o.x * h.w) * g_target.z * 2.0 - h.w;
+    precise float y = h.w - (h.y - o.y * h.w) * g_target.w * 2.0;
     precise float z = 16.0 * h.z * g_z.x; // gs_z_to_depth's z * scale
     return float4(x, y, z, h.w);
 }
@@ -662,7 +659,7 @@ DualOut vu_pixel(VuVSOut i)
     }
     uint4 col = uint4(floor(i.col + 0.5));
     if ((g_mode.x & DF_TEXTURED) != 0u) {
-        float2 uv = gs_block_uv(i.stq.xy / i.stq.z); // widescreen reflections: the pool's grids
+        float2 uv = i.stq.xy / i.stq.z;
         uint4 t = uint4(floor(gs_sample(g_texture, g_sampler, uv, i.stq.z) * 255.0 + 0.5));
         t = gs_texa_expand(t, g_mode.y & 0xFFu, g_mode.y >> 8);
         col = gs_texture_function(t, col, g_mode.x);
@@ -688,7 +685,7 @@ DualOut vu_pixel_texa(VuVSOut i)
     }
     uint4 col = uint4(floor(i.col + 0.5));
     if ((g_mode.x & DF_TEXTURED) != 0u) {
-        float2 uv = gs_block_uv(i.stq.xy / i.stq.z);
+        float2 uv = i.stq.xy / i.stq.z;
         uint4 t = (g_mode.x & DF_GS_LOD) != 0u
                       ? gs_texa_texture_lod(g_texture, uv, i.stq.z, g_mode.x)
                       : gs_texa_texture(g_texture, g_sampler, uv, g_mode.x);
