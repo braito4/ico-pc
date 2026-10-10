@@ -12,8 +12,9 @@
  *   (version 10: f32 aspect, f32 wExact, u32 cullW: the native frame the
  *            game built the tick for.  aspect is the display aspect
  *            (gsFrame.aspect), wExact the visible width in GS pixels
- *            (512 k; the presenter crops (gsW - wExact) / 2 a side), cullW
- *            the width the cull and the draws used, = gsW.  A version 3 to
+ *            (512 k; the presenter crops (cullW - wExact) / 2 a side), cullW
+ *            the width the cull and the draws used (the head's gsW; the
+ *            frame's own gsW is the renderer context's).  A version 3 to
  *            9 dump has none and loads as aspect 4/3, wExact 512, cullW 512)
  *   u32      number, keep, hasCamera
  *   RdCamera camera (raw)
@@ -326,13 +327,15 @@ static bool rf32(FILE *fp, float *v)
 }
 
 /* the version 10 frame fields must be a frame the renderer can size: an
- * aspect from 4:3 to the widest, a visible width within the native width,
- * a native width up to the widest frame (ico_frame.h) */
-static bool frameFieldsOk(float aspect, float wExact, uint32_t cullW, uint32_t gsW)
+ * aspect from 4:3 to the widest, a native (cull) width from 512 to the
+ * widest frame and a visible width within it (ico_frame.h).  cullW is the
+ * head's gsW; the frame's own gsW is the renderer's context width (512 at
+ * 4:3 and in a record-only test), so the two are not compared. */
+static bool frameFieldsOk(float aspect, float wExact, uint32_t cullW)
 {
     return aspect >= 4.0f / 3.0f - 1e-4f && aspect <= ICO_FRAME_ASPECT_MAX + 1e-4f &&
-           wExact >= (float)ICO_FRAME_BASE_W - 1e-3f && cullW == gsW && gsW <= ICO_FRAME_W_MAX &&
-           wExact <= (float)gsW + 1e-3f;
+           wExact >= (float)ICO_FRAME_BASE_W - 1e-3f && cullW >= (uint32_t)ICO_FRAME_BASE_W &&
+           cullW <= (uint32_t)ICO_FRAME_W_MAX && wExact <= (float)cullW + 1e-3f;
 }
 
 bool rd__dump_peek(const char *path, RdDumpInfo *info)
@@ -356,7 +359,7 @@ bool rd__dump_peek(const char *path, RdDumpInfo *info)
     info->cullW = ICO_FRAME_BASE_W;
     if (ok && info->version >= 10u) {
         ok = rf32(fp, &info->aspect) && rf32(fp, &info->wExact) && r32(fp, &info->cullW) &&
-             frameFieldsOk(info->aspect, info->wExact, info->cullW, info->gsW);
+             frameFieldsOk(info->aspect, info->wExact, info->cullW);
     }
     fclose(fp);
     return ok;
@@ -531,7 +534,7 @@ bool rd__load_frame(const char *path, RdFrame *out)
     out->cullW = ICO_FRAME_BASE_W;
     if (ok && ver >= 10u) {
         ok = rf32(fp, &out->aspect) && rf32(fp, &out->wExact) && r32(fp, &out->cullW) &&
-             frameFieldsOk(out->aspect, out->wExact, out->cullW, out->gsW);
+             frameFieldsOk(out->aspect, out->wExact, out->cullW);
     }
     ok = ok && r32(fp, &out->number) && r32(fp, &out->keep) && r32(fp, &out->hasCamera) &&
          rraw(fp, &out->camera, sizeof(out->camera)) && rraw(fp, &out->startState, szState) &&

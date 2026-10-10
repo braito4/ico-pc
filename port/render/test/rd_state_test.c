@@ -770,13 +770,13 @@ static void testDumpV10(const char *dir)
     snprintf(path, sizeof(path), "%s/rd_state_test_v10.rddump", dir);
     CHECK(rd__dump_frame(f, path), "v10 dump written");
     RdDumpInfo info;
-    CHECK(rd__dump_peek(path, &info) && info.version == 10u && info.gsW == 1376u &&
-              info.gsH == 448u && info.aspect == h.aspect && info.wExact == h.wExact &&
+    CHECK(rd__dump_peek(path, &info) && info.version == 10u && info.gsW == 512u &&
+              info.gsH == 512u && info.aspect == h.aspect && info.wExact == h.wExact &&
               info.cullW == 1376u,
           "v10 header peeked");
     RdFrame g;
     if (rd__load_frame(path, &g)) {
-        CHECK(g.gsW == 1376u && g.aspect == h.aspect && g.wExact == h.wExact && g.cullW == 1376u &&
+        CHECK(g.gsW == 512u && g.aspect == h.aspect && g.wExact == h.wExact && g.cullW == 1376u &&
                   g.number == f->number && g.lists[7].count == f->lists[7].count,
               "v10 dump round trip (%u, %g, %g, %u)", g.gsW, (double)g.aspect, (double)g.wExact,
               g.cullW);

@@ -1047,6 +1047,10 @@ int main(int argc, char **argv)
             }
             char name[1024];
             snprintf(name, sizeof(name), "%s/%s.png", passDir, kNames[k]);
+            /* each readback may open a command list for its barrier and the
+             * Vulkan backend allows 8 a frame (VKR_MAX_CMD_LISTS): a new
+             * frame slot per target (the targets keep their contents) */
+            rhi_wait_frame();
             if (writeTarget(k, name)) {
                 written++;
             } else {

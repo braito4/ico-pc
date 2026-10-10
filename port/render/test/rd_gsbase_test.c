@@ -1809,7 +1809,7 @@ static void checkDecoderAt(int fw)
     tick();
     gsFrame.w = fw;
     gsFrame.fbw = (fw + 63) / 64;
-    rd_reset_scene((uint32_t)fw, 448u); /* the decoder reads rd_scene_gs_width */
+    rd_reset_scene((uint32_t)fw, H); /* the decoder reads rd_scene_gs_width */
     gif_StartPacketPri(DEC_LIST);
     gif_SetDrawEnviroment(0x800, 0, (unsigned int)fw, (unsigned int)fh, 1, 0);
     gif_SetGsReg(0x40,
@@ -1914,7 +1914,7 @@ static void checkDecoderTex(int fw)
     tick();
     gsFrame.w = fw;
     gsFrame.fbw = (fw + 63) / 64;
-    rd_reset_scene((uint32_t)fw, 448u); /* the decoder reads rd_scene_gs_width */
+    rd_reset_scene((uint32_t)fw, H); /* the decoder reads rd_scene_gs_width */
     for (int pass = 0; pass < 2; pass++) {
         const int tw = ico_frame_tw(pass ? fw / 2 : fw / 4);
         gif_StartPacketPri(DEC_LIST);
@@ -1947,7 +1947,7 @@ static void checkDecoder(void)
     }
     gsFrame.w = ICO_FRAME_BASE_W;
     gsFrame.fbw = ICO_FRAME_BASE_W / 64;
-    rd_reset_scene(ICO_FRAME_BASE_W, 448u);
+    rd_reset_scene(ICO_FRAME_BASE_W, H);
     tick();
 }
 
