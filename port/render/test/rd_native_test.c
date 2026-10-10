@@ -17,7 +17,7 @@
  *     one with a vertex behind the eye (w < 0): drawn nowhere, at any W;
  *   - a textured UI sprite covering the 4:3 frame (RD_SPACE_UI, a 512 x 448
  *     texture 1:1), blended;
- *   - a full-frame tagged flat sprite (RD_SPACE_FULLSCREEN), blended;
+ *   - a full-frame tagged flat sprite (RD_SPACE_FULLFRAME), blended;
  *   - a second flat full-frame sprite standing in for the fog pass (the
  *     real RD_POST_FOG needs the depth LUT of rd_fog_test; the fog's 4:3
  *     rule is that test's and W2-SPACES' business);
@@ -291,8 +291,8 @@ static void drawFrame(int W, RdTex tex, const RdMesh *meshes)
     /* the full-frame items: a tint, and the fog stand-in */
     static const uint8_t tint[4] = {30, 60, 120, 0x28}, fog[4] = {0xA0, 0xB0, 0xC0, 0x18};
     rd_texture_off();
-    spriteAbs(l, top, r, bot, tint, RD_SPACE_FULLSCREEN, 0, 0, 0, 0);
-    spriteAbs(l, top, r, bot, fog, RD_SPACE_FULLSCREEN, 0, 0, 0, 0);
+    spriteAbs(l, top, r, bot, tint, RD_SPACE_FULLFRAME, 0, 0, 0, 0);
+    spriteAbs(l, top, r, bot, fog, RD_SPACE_FULLFRAME, 0, 0, 0, 0);
 
     rd_select_list(12);
     RdPostParams pp;

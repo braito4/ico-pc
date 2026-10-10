@@ -322,7 +322,7 @@ static void fogHostDraw(const int *rc0, const int *rc1, const unsigned char *cl,
             v[i].q = 1.0f;
             memcpy(v[i].rgba, cl2, 4);
         }
-        rd_screen_prims(RD_PRIM_SPRITES, v, 2, RD_SPACE_FULLSCREEN, 1, 0);
+        rd_screen_prims(RD_PRIM_SPRITES, v, 2, RD_SPACE_FULLFRAME, 1, 0);
         rd_test_gs(0x50000);
     }
     rd_z_write(1); /* ZBUF_1 0xC0, write on */

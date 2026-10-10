@@ -694,11 +694,8 @@ typedef struct Replay {
     uint32_t passColor, passDepth;
     RdUniform frameBG;
     uint32_t frameKey[5]; /* colour, gsW, gsH, useOffset, pass serial */
-    /* the draw being bound is tagged full-screen (screenStretch; a tag that
-     * changes no transform: W3-UI deletes it) */
-    int stretch;
-    int mirror;    /* the draw being bound is a flipped UI draw (scissor too) */
-    int halfAdded; /* sceneKeepsHalf gave the target in force the frame head's half pixel */
+    int mirror;           /* the draw being bound is a flipped UI draw (scissor too) */
+    int halfAdded;        /* sceneKeepsHalf gave the target in force the frame head's half pixel */
     uint32_t passSerial;
     uint32_t writeSerial; /* bumped by every action that may change a target's alpha */
     uint32_t dateFor;     /* target id the DATE snapshot holds, 0 = none */
@@ -1699,57 +1696,44 @@ bool rd__date_retake(uint32_t heldFor, uint32_t heldSerial, const RhiRect *held,
     return true;
 }
 
-/* A sprite (vertices i and i + 1) the layout draws as a full-width band:
- * the first and last pixel it covers (ceil(x0), ceil(x1) - 1 in the target's
- * pixels) are within one of the target's two edges.  True for such a band. */
-static int bandSprite(const Replay *r, const RdTargetRec *tc, const RdScreenVtx *v, uint32_t i,
-                      int32_t *first, int32_t *last)
-{
-    const int32_t ox = 2048 - (int32_t)(r->st.gsW >> 1);
-    int32_t a = v[i].x, b = v[i + 1].x;
-    if (a > b) {
-        const int32_t t = a;
-        a = b;
-        b = t;
-    }
-    *first = -floorDiv16(-a) - ox;
-    *last = -floorDiv16(-b) - 1 - ox;
-    return *first <= 1 && *last >= (int32_t)tc->w - 2;
-}
-
-/* Whether a screen-prim command is tagged full-screen (RD_SPACE_FULLSCREEN:
- * rd_post.c's passes, the fog, layout_texture.c's primary sprite).  A tag
- * only: the native frame draws it at its own GS X as every other draw (the
- * game draws a full-frame item at the frame's width), and Replay.stretch
- * changes no transform.  W3-UI renames the tag RD_SPACE_FULLFRAME and
- * deletes this with Replay.stretch. */
-static int screenStretch(uint8_t space)
-{
-    return space == RD_SPACE_FULLSCREEN;
-}
-
-/* Full pixel: the screen bands one pixel short of the target's edge
- * (bandSprite) reach the edge, so the strip the option shows beside them
- * is not a column of the picture under the bar.  Only the sprite's x
+/* Full pixel: a sprite the game tags RD_SPACE_FULLFRAME (a bar or fade that
+ * spans the frame: layout_texture.c's spanning items and primary sprite,
+ * the posts' rects) that ends one pixel short of the target's edge is moved
+ * to the edge, so the strip the option shows beside it is not a column of
+ * the picture under the bar.  "One pixel short" is the first and last pixel
+ * it covers (ceil(x0), ceil(x1) - 1 in the target's pixels) within tol of
+ * the target's two edges; tol is 1 and grows by one per 640 pixels of the
+ * target's width (the layout bars are inset 0.75 of a 640-grid unit on the
+ * right, which is more than a pixel on a wide frame).  Only the sprite's x
  * moves; its u stays, so the added pixel reads the sprite's own end texel
  * and the texture is never extrapolated.  Returns v, or a copy with the
- * bands moved (the recorded frame is never written).  Off, a
- * full-screen-space prim, a target that is not frame-sized or no short
- * band: v itself.  (W3-UI replaces the band test with the FULLFRAME tag.) */
-static const RdScreenVtx *widenBands(const Replay *r, const RdTargetRec *tc, const RdScreenVtx *v,
-                                     uint32_t n, uint8_t prim, uint8_t space)
+ * bands moved (the recorded frame is never written).  Off, a space that is
+ * not FULLFRAME, a target that is not frame-sized or no short band: v
+ * itself.  The tag is the whole rule: nothing is detected from the pixels. */
+static const RdScreenVtx *extendFullFrame(const Replay *r, const RdTargetRec *tc,
+                                          const RdScreenVtx *v, uint32_t n, uint8_t prim,
+                                          uint8_t space)
 {
     static RdScreenVtx *s_wv;
     static uint32_t s_wvCap;
-    if (!g_rd.settings.fullPixel || !tc || !frameSized(tc) || space == RD_SPACE_FULLSCREEN ||
+    if (!g_rd.settings.fullPixel || !tc || !frameSized(tc) || space != RD_SPACE_FULLFRAME ||
         prim != RD_PRIM_SPRITES || n < 2) {
         return v;
     }
     const RdScreenVtx *src = v;
     const int32_t ox = 2048 - (int32_t)(r->st.gsW >> 1);
+    const int32_t tol = 1 + ((int32_t)tc->w - 1) / 640;
     for (uint32_t i = 0; i + 1 < n; i += 2) {
-        int32_t first, last;
-        if (!bandSprite(r, tc, v, i, &first, &last) || (first <= 0 && last >= (int32_t)tc->w - 1)) {
+        int32_t a = v[i].x, b = v[i + 1].x;
+        if (a > b) {
+            const int32_t t = a;
+            a = b;
+            b = t;
+        }
+        const int32_t first = -floorDiv16(-a) - ox;
+        const int32_t last = -floorDiv16(-b) - 1 - ox;
+        if (first > tol || last < (int32_t)tc->w - 1 - tol ||
+            (first <= 0 && last >= (int32_t)tc->w - 1)) {
             continue;
         }
         if (src == v) {
@@ -1810,7 +1794,7 @@ static int screenCopy(const Replay *r, const DrawSetup *ds, uint8_t prim, uint8_
     if (prim != RD_PRIM_SPRITES) {
         return 0;
     }
-    if (space == RD_SPACE_FULLSCREEN) {
+    if (space == RD_SPACE_FULLFRAME) {
         return 1;
     }
     if (!ds->textured || !r->st.ds.texEnabled) {
@@ -1869,8 +1853,7 @@ static int drawGsLevels(const Replay *r, const DrawSetup *ds)
 static bool prepareDraw(Replay *r, DrawSetup *ds, const RhiRect *dateArea)
 {
     memset(ds, 0, sizeof(*ds));
-    r->stretch = 0; /* doScreen decides for screen prims after this */
-    r->mirror = 0;  /* likewise */
+    r->mirror = 0; /* likewise */
     ds->tc = rd__target_rec(r->st.color);
     if (!ds->tc || !ds->tc->color.id) {
         return false;
@@ -2466,7 +2449,7 @@ static void doScreen(Replay *r, const RdFrame *f, const RdCmd *c)
     }
     const uint32_t n = c->u[1];
     const RdScreenVtx *v = (const RdScreenVtx *)(f->payload + c->u[0]);
-    v = widenBands(r, rd__target_rec(r->st.color), v, n, c->b[0], c->b[1]);
+    v = extendFullFrame(r, rd__target_rec(r->st.color), v, n, c->b[0], c->b[1]);
     RhiRect dateArea;
     const RhiRect *dateAt = dateAreaFor(r, c, v, n, &dateArea) ? &dateArea : NULL;
     if (!prepareDraw(r, &ds, dateAt)) {
@@ -2475,7 +2458,6 @@ static void doScreen(Replay *r, const RdFrame *f, const RdCmd *c)
     ds.screenCopy = screenCopy(r, &ds, c->b[0], c->b[1]);
 
     /* geometry */
-    r->stretch = screenStretch(c->b[1]);
     setUvShift(ds.tc->sx, ds.tc->sy);
     uint8_t topo;
     IcoSpriteVertex *out = vxScratch((uint64_t)n * 6);
@@ -2912,7 +2894,6 @@ static void doScreenWrap(Replay *r, const RdFrame *f, const RdCmd *c)
     ds.screenCopy = screenCopy(r, &ds, c->b[0], c->b[1]);
     RdTargetRec *tc = ds.tc;
     RdTargetRec *td = ds.tdId ? rd__target_rec(ds.tdId) : NULL;
-    r->stretch = screenStretch(c->b[1]);
     setUvShift(tc->sx, tc->sy);
     if (tc->format != RHI_FMT_RGBA8_UNORM || (td && (td->tw != tc->tw || td->th != tc->th))) {
         rd__log_once(RD_ONCE_WRAP, "COLCLAMP 0 draw on a non-RGBA8 target or a depth of another "
@@ -3300,10 +3281,6 @@ static void doVu(Replay *r, const RdFrame *f, const RdCmd *c)
     if (!prepareDraw(r, &ds, NULL)) {
         return;
     }
-    /* a model the game draws as a full-screen item (rd_mesh.c pushVu's
-     * b[3]) is stretched across a wide target like a full-screen sprite
-     * (screenStretch): no wide x scale, the whole width's scissor */
-    r->stretch = c->b[3] != 0; /* the tag only (W3-UI deletes it with rd_mesh.c's b[3]) */
     const uint64_t ua = rhi_limits()->uniformAlign;
     /* bones: VuBoneCB (VU memory 16..255); a zero block for the others */
     uint64_t bonesOff;
@@ -3954,8 +3931,7 @@ static void doFog(Replay *r, const RdFrame *f, const RdCmd *c)
     ds.screenCopy = 1; /* it reads the depth texel under each pixel */
     /* no prepareDraw here: the per-draw flags it resets are reset here, so
      * the previous draw's mirror (scissorRect) is not inherited.  The fog
-     * sprite covers the native frame as drawn: nothing stretched */
-    r->stretch = 0;
+     * sprite covers the native frame as drawn */
     r->mirror = 0;
     if (!bindDraw(r, &ds).id) {
         return;
@@ -4197,7 +4173,7 @@ static void doBlurSpriteDraw(Replay *r, const RdFrame *f, const RdCmd *c)
         RdCmd sc = *c;
         sc.type = RDC_SCREEN;
         sc.b[0] = RD_PRIM_SPRITES;
-        sc.b[1] = RD_SPACE_FULLSCREEN;
+        sc.b[1] = RD_SPACE_FULLFRAME;
         sc.b[2] = 1;
         sc.u[0] = screenVtx;
         sc.u[1] = 2;
@@ -4259,8 +4235,7 @@ static void doBlurSpriteDraw(Replay *r, const RdFrame *f, const RdCmd *c)
     const int selfSample = src == tc;
     /* as doFog: prepareDraw's other per-draw flags, not the previous draw's
      * (the scissor and blurSnapArea read mirror); fx_rect_vs covers the
-     * target in its own GS pixels, nothing stretched */
-    r->stretch = 0;
+     * target in its own GS pixels */
     r->mirror = 0;
     if (blurSpriteClears(r, tc, &p, textured, dstRead, useDepth)) {
         /* a clear instead of a full-target draw (blurSpriteClears) */

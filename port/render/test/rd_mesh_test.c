@@ -23,16 +23,16 @@
  *            a new count, and a live emitter drawn every tick keeps its
  *            count while 8192 other emitters are stamped (three in four
  *            deleted, the rest never drawn again)
- *   stretch  the prelit model named a full-screen title model
- *            (title_logo.c ico_title_stretch_model, stubbed): reg_DispObj
- *            records its draw with the stretch byte (b[3] 1, 0 for any
- *            other model) and ends the space override; on the device at
- *            4:3 its picture is byte-identical to the unflagged draw's; at
- *            16:9 on the native frame (688 x 512) the unflagged draw is the
- *            Enhanced 1x 4:3 picture at its GS X (columns 88..599, nothing compressed),
- *            the flagged one the same (the tag transforms nothing), and a
- *            full-frame item the game draws at the frame's width covers all
- *            688 columns
+ *   full-frame  the prelit model named a full-frame title model
+ *            (title_logo.c ico_title_fullframe_model, stubbed): reg_DispObj
+ *            widens its nodes' x scale by the frame's width / 512 for the
+ *            draw (the VuCB's matrices change at 688, not at 512) and puts
+ *            it back; on the device at 4:3 its picture is byte-identical to
+ *            the unflagged draw's; at 16:9 on the native frame (688 x 512)
+ *            the unflagged draw is the Enhanced 1x 4:3 picture at its GS X
+ *            (columns 88..599, nothing compressed), the full-frame one is
+ *            wider than it, and a full-frame item the game draws at the
+ *            frame's width covers all 688 columns
  *   content table  rd_content_hide.c's verbs on the top of the listed
  *            closing box (st08a_p4), below ("the content table")
  *   strip order  the title logo's strips Packet.c draws in another order of
@@ -719,20 +719,38 @@ static void refClusterA(void)
 
 static void checkStretchRecording(void)
 {
+    /* VuCB 16..27 (the +0x140, +0x200 and +0x80 times the node matrices) of
+       the one draw the last recording holds */
+    float a[12 * 4], b[12 * 4], c[12 * 4], d[12 * 4];
     Found fd;
-    s_stretchModel = NULL;
-    recordPrelit(&s_objA, 1);
-    walkFrame(rd__last_frame(), &fd);
-    CHECK(fd.n == 1 && fd.cmd[0]->b[3] == 0, "stretch: an ordinary model's draw is not flagged");
-    s_stretchModel = "test_prelit";
-    recordPrelit(&s_objA, 1);
-    walkFrame(rd__last_frame(), &fd);
-    CHECK(fd.n == 1 && fd.cmd[0]->b[3] == 1, "stretch: the title model's draw is flagged");
-    CHECK(rd_set_space_override(-1) == -1, "stretch: reg_DispObj ends the space override");
-    s_stretchModel = NULL;
-    recordPrelit(&s_objA, 1);
-    walkFrame(rd__last_frame(), &fd);
-    CHECK(fd.n == 1 && fd.cmd[0]->b[3] == 0, "stretch: the next draw is not flagged");
+    const float *mem;
+    const float scale0 = s_objA.nodes[0].scale[0];
+
+#define RECORD_MATRICES(dst, model, width)                                                         \
+    do {                                                                                           \
+        s_fullFrameModel = (model);                                                                \
+        gsFrame.w = (width);                                                                       \
+        recordPrelit(&s_objA, 1);                                                                  \
+        walkFrame(rd__last_frame(), &fd);                                                          \
+        CHECK(fd.n == 1, "full-frame: one draw (%d)", fd.n);                                       \
+        if (fd.n == 1) {                                                                           \
+            payloadOf(rd__last_frame(), fd.cmd[0], &mem);                                          \
+            memcpy((dst), mem + 64, sizeof(dst));                                                  \
+        }                                                                                          \
+    } while (0)
+    RECORD_MATRICES(a, NULL, 512);
+    RECORD_MATRICES(b, "test_prelit", 512);
+    CHECK(memcmp(a, b, sizeof(a)) == 0, "full-frame: at 4:3 the model's matrices are unchanged");
+    RECORD_MATRICES(c, "test_prelit", 688);
+    CHECK(memcmp(a, c, sizeof(a)) != 0, "full-frame: at 688 the model is widened");
+    CHECK(s_objA.nodes[0].scale[0] == scale0, "full-frame: the node's x scale is put back (%g)",
+          (double)s_objA.nodes[0].scale[0]);
+    RECORD_MATRICES(d, NULL, 688);
+    CHECK(memcmp(a, d, sizeof(a)) == 0, "full-frame: another model at 688 is not widened");
+    RECORD_MATRICES(d, NULL, 512);
+#undef RECORD_MATRICES
+    s_fullFrameModel = NULL;
+    gsFrame.w = 512;
 }
 
 /* the 4:3 picture of the unflagged draw in the 16:9 run's preset
@@ -745,7 +763,7 @@ static int s_have43;
    preset's own ways) */
 static void stretch43Enhanced(void)
 {
-    s_stretchModel = NULL;
+    s_fullFrameModel = NULL;
     recordPrelit(&s_objA, 1);
     s_have43 = readScene(s_stretch43);
     CHECK(s_have43, "stretch 4:3 Enhanced: SCENE readback");
@@ -754,20 +772,20 @@ static void stretch43Enhanced(void)
 /* at 4:3 the flag changes nothing */
 static void stretchSamePixels(void)
 {
-    s_stretchModel = NULL;
+    s_fullFrameModel = NULL;
     recordPrelit(&s_objA, 1);
     const int a = readScene(s_imgA);
-    s_stretchModel = "test_prelit";
+    s_fullFrameModel = "test_prelit";
     recordPrelit(&s_objA, 1);
     const int b = readScene(s_imgB);
-    s_stretchModel = NULL;
+    s_fullFrameModel = NULL;
     CHECK(a && b, "stretch 4:3: SCENE readback");
     int cover = 0;
     for (int i = 0; i < 512 * 512; i++) {
         cover += s_imgA[i * 4] != 40 || s_imgA[i * 4 + 1] != 40 || s_imgA[i * 4 + 2] != 60;
     }
     CHECK(a && b && cover >= 2000 && memcmp(s_imgA, s_imgB, sizeof(s_imgA)) == 0,
-          "stretch 4:3: the flagged draw's picture is the unflagged one's (%d pixels drawn)",
+          "stretch 4:3: the full-frame model's picture is the unflagged one's (%d pixels drawn)",
           cover);
 }
 
@@ -826,7 +844,7 @@ static void recordFullFrame(void)
         v[i].q = 1.0f;
         memcpy(v[i].rgba, white, 4);
     }
-    rd_screen_prims(RD_PRIM_SPRITES, v, 2, RD_SPACE_FULLSCREEN, 1, 0);
+    rd_screen_prims(RD_PRIM_SPRITES, v, 2, RD_SPACE_FULLFRAME, 1, 0);
     dl_Swap();
 }
 
@@ -837,7 +855,7 @@ static void stretchWidePixels(void)
 {
     CHECK(g_rd.gsW == WT && s_sceneW == WT, "stretch 16:9: the frame is %u wide", g_rd.gsW);
     int a0 = 0, a1 = 0, b0 = 0, b1 = 0;
-    s_stretchModel = NULL;
+    s_fullFrameModel = NULL;
     recordPrelit(&s_objA, 1);
     const int a = wideColumns(&a0, &a1);
     memcpy(s_wideA, s_wideImg, sizeof(s_wideA));
@@ -857,13 +875,16 @@ static void stretchWidePixels(void)
           "stretch 16:9: a world draw is the Enhanced 4:3 picture at its GS X, columns %d..%d (%d "
           "drawn beside)",
           WX0, WX0 + 511, outside);
-    s_stretchModel = "test_prelit";
+    s_fullFrameModel = "test_prelit";
+    gsFrame.w = WT; /* GsBase.c's latch: reg_DispObj widens by the frame's width / 512 */
     recordPrelit(&s_objA, 1);
     const int b = wideColumns(&b0, &b1);
-    s_stretchModel = NULL;
-    CHECK(a && b && memcmp(s_wideA, s_wideImg, sizeof(s_wideA)) == 0,
-          "stretch 16:9: the flagged draw is the unflagged one (columns %d..%d, %d..%d)", a0, a1,
-          b0, b1);
+    gsFrame.w = ICO_FRAME_BASE_W;
+    s_fullFrameModel = NULL;
+    CHECK(a && b && b1 - b0 > a1 - a0,
+          "stretch 16:9: the full-frame model is wider than the unflagged draw (columns %d..%d, "
+          "%d..%d)",
+          a0, a1, b0, b1);
     recordFullFrame();
     const int w = wideColumns(&b0, &b1);
     CHECK(w && b0 == 0 && b1 == WT - 1,

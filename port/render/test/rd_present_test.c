@@ -1702,14 +1702,15 @@ static void checkWide169(void)
     /* a WORLD sprite over the 4:3 columns 0..512: rows 280..290 */
     sprite(RD_SPACE_WORLD, 0, 280 * 16, 512 * 16, 290 * 16, green, 0, 0, 0, 0);
     /* a full-screen-tagged sprite over the 4:3 columns: rows 340..350 */
-    sprite(RD_SPACE_FULLSCREEN, 0, 340 * 16, 512 * 16, 350 * 16, green, 0, 0, 0, 0);
-    /* a fill the game draws at the frame's width (GS 1704..2392): rows 300..310 */
+    sprite(RD_SPACE_FULLFRAME, 0, 340 * 16, 512 * 16, 350 * 16, green, 0, 0, 0, 0);
+    /* a fill the game draws at the frame's width (GS 1704..2392) under the
+     * full-frame tag (gif_FullFrameBegin's scope): rows 300..310 */
     {
         const int32_t x0 = (2048 - (int32_t)FW / 2) * 16, x1 = (2048 + (int32_t)FW / 2) * 16;
         const int32_t o = (2048 - 256) * 16;
         RdScreenVtx v[2] = {vtx(x0, o + 300 * 16, 0, red, 0.0f, 0.0f),
                             vtx(x1, o + 310 * 16, 0, red, 0.0f, 0.0f)};
-        rd_screen_prims(RD_PRIM_SPRITES, v, 2, RD_SPACE_WORLD, 1, 0);
+        rd_screen_prims(RD_PRIM_SPRITES, v, 2, RD_SPACE_FULLFRAME, 1, 0);
     }
     /* the letterbox at full strength */
     rd_select_list(11);
@@ -1741,17 +1742,18 @@ static void checkWide169(void)
             ok &= in ? PX(x, 285)[1] == 255 : PX(x, 285)[1] == 0;
         }
         CHECK(ok, "wide169: a world sprite over the 4:3 columns covers texels 88..599 only");
-        /* the full-screen tag changes no transform */
+        /* the full-frame tag changes no transform: a 512-wide sprite under it
+           covers the 4:3 columns, as the untagged world one does */
         ok = 1;
         for (int x = 0; x < (int)FW; x++) {
             ok &= PX(x, 345)[1] == PX(x, 285)[1];
         }
-        CHECK(ok, "wide169: a full-screen-tagged sprite is drawn as the world one");
+        CHECK(ok, "wide169: a full-frame-tagged 512-wide sprite is drawn as the world one");
         ok = 1;
         for (int x = 0; x < (int)FW; x++) {
             ok &= PX(x, 305)[0] == 255 && PX(x, 305)[1] == 0;
         }
-        CHECK(ok, "wide169: a frame-wide fill covers all 688 columns");
+        CHECK(ok, "wide169: a full-frame-tagged frame-wide fill covers all 688 columns");
         /* letterbox: 58 lines top and bottom over the whole width, black */
         ok = 1;
         for (int x = 0; x < (int)FW; x += 1) {
@@ -2010,7 +2012,8 @@ static void checkFullPixelSharp(uint32_t w, uint32_t h)
  * matters), fullHeight doubles the rows, mirror flips the UI sprite.
  * bandTest 0: a blue column 0 and a blue row 0 in the scene.  1: a black
  * band, GS 1..511 across and the middle half of the rows, as the pause
- * menu's bars are drawn. */
+ * menu's bars are drawn (full-frame tagged: the game draws them in
+ * gif_FullFrameBegin's scope).  2: the same band UI-tagged. */
 static uint8_t *clampRun(int full, float scale, int fullHeight, int mirror, int bandTest,
                          uint32_t *w, uint32_t *h)
 {
@@ -2034,7 +2037,8 @@ static uint8_t *clampRun(int full, float scale, int fullHeight, int mirror, int 
     opaque2D();
     rd_texture_off();
     if (bandTest) {
-        sprite(RD_SPACE_UI, 4, 128 * 16, 511 * 16 + 7, 384 * 16, black, 0, 0, 0, 0);
+        sprite(bandTest == 2 ? RD_SPACE_UI : RD_SPACE_FULLFRAME, 4, 128 * 16, 511 * 16 + 7,
+               384 * 16, black, 0, 0, 0, 0);
     } else {
         sprite(RD_SPACE_WORLD, 0, 0, 16, 512 * 16, blue, 0, 0, 0, 0);
         sprite(RD_SPACE_WORLD, 0, 0, 512 * 16, 16, blue, 0, 0, 0, 0);
@@ -2179,10 +2183,12 @@ static void checkFullPixelClamp(void)
 }
 
 /* the layout's full-width bands (the pause and End Game bars, GS pixels 1
- * to 511 of 512) reach the frame's edge with the option on: the strip it
- * shows beside the bar is the bar, not a column of the scene under it.
- * Rows outside the band keep the scene's red at the edge, and with the
- * option off the border stays black as it was. */
+ * to 511 of 512, full-frame tagged) reach the frame's edge with the option
+ * on: the strip it shows beside the bar is the bar, not a column of the
+ * scene under it.  Rows outside the band keep the scene's red at the edge,
+ * and with the option off the border stays black as it was.  The same band
+ * UI-tagged is not extended: the tag is the rule, nothing is detected from
+ * the pixels. */
 static void checkFullPixelBands(void)
 {
     static const struct {
@@ -2219,6 +2225,15 @@ static void checkFullPixelBands(void)
 #undef PX
         }
     }
+    uint32_t w = 0, h = 0;
+    uint8_t *p = clampRun(1, 1.0f, 0, 0, 2, &w, &h);
+    if (!p) {
+        CHECK(0, "full pixel bands UI-tagged: DISPLAY readback (%ux%u)", w, h);
+        return;
+    }
+    const uint8_t *l = &p[((size_t)(h / 2) * w) * 4], *m = &p[((size_t)(h / 2) * w + w / 2) * 4];
+    CHECK(m[0] < 8 && !(l[0] < 8 && l[1] < 8 && l[2] < 8),
+          "full pixel bands: a UI-tagged band is not extended (edge %u %u %u)", l[0], l[1], l[2]);
 }
 
 /* with interpolation off rd_end_frame presents each frame once, and

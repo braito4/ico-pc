@@ -522,7 +522,7 @@ static void countSprites(int *strips, int *texture, uint8_t cols[][4], int maxCo
                 memcpy(cols[*strips], v[1].rgba, 4);
             }
             (*strips)++;
-        } else if (!page && w->cmd[i]->u[1] == 2 && w->cmd[i]->b[1] != RD_SPACE_FULLSCREEN) {
+        } else if (!page && w->cmd[i]->u[1] == 2 && w->cmd[i]->b[1] != RD_SPACE_FULLFRAME) {
             (*texture)++;
         }
     }

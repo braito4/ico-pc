@@ -2244,26 +2244,33 @@ void reg_DispMultiPri(Sub15C *o, int pri)
 /* PC port (package L1): the title's logo is not drawn while a Settings or
    Extras page opened from the title covers it (port/game/title_logo.c) */
 extern int ico_title_logo_skip(const char *model);
-/* PC port: the title's darkening plane is built for the 4:3 screen; on a
-   wide picture it is drawn across the whole width, as the renderer draws a
-   full-screen sprite (port/game/title_logo.c, rd.h RD_SPACE_FULLSCREEN:
-   the mesh draws record it, rd_mesh.c) */
-extern int ico_title_stretch_model(const char *model);
+/* PC port (v0.6.0, W3-UI): the title's darkening plane is a model built to
+   cover the 4:3 screen, so it is a full-frame item the game widens itself:
+   its x scale (every node's, the place the node scale multiplies the model's
+   own x) is the native frame's width over 512 for the draw, so it covers the
+   frame at every aspect, and a 4:3 frame (512) leaves it alone
+   (port/game/title_logo.c names the model, by name alone). */
+extern int ico_title_fullframe_model(const char *model);
 
 void reg_DispObj(Sub15C *o)
 {
 #ifdef ICO_RD
-    int stretch;
-    int space = -1;
+    int widen = 0;
+    float savedX[32];
+    int n;
 #endif
 
     if (ico_title_logo_skip(o->model->name)) {
         return;
     }
 #ifdef ICO_RD
-    stretch = ico_title_stretch_model(o->model->name);
-    if (stretch) {
-        space = rd_set_space_override(RD_SPACE_FULLSCREEN);
+    if (gsFrame.w != ICO_FRAME_BASE_W && o->nodeNum <= 32 &&
+        ico_title_fullframe_model(o->model->name)) {
+        widen = 1;
+        for (n = 0; n < o->nodeNum; n++) {
+            savedX[n] = o->nodes[n].scale[0];
+            o->nodes[n].scale[0] *= (float)gsFrame.w / (float)ICO_FRAME_BASE_W;
+        }
     }
 #endif
     if (o->dispType == 2) {
@@ -2290,8 +2297,10 @@ void reg_DispObj(Sub15C *o)
         }
     }
 #ifdef ICO_RD
-    if (stretch) {
-        rd_set_space_override(space);
+    if (widen) {
+        for (n = 0; n < o->nodeNum; n++) {
+            o->nodes[n].scale[0] = savedX[n];
+        }
     }
 #endif
 }

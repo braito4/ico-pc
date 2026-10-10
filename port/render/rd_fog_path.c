@@ -573,7 +573,7 @@ static bool stBuildFrame(RdFrame *f, uint32_t scene, uint32_t w, uint32_t h)
     c = stPush(f, 0, RDC_SCREEN);
     if (c) {
         c->b[0] = RD_PRIM_SPRITES;
-        c->b[1] = RD_SPACE_FULLSCREEN;
+        c->b[1] = RD_SPACE_FULLFRAME;
         c->u[0] = rd__frame_payload(f, v, (uint32_t)sizeof(v));
         c->u[1] = ST_CELLS * ST_CELLS * 2;
     }

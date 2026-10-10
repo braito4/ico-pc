@@ -141,9 +141,11 @@ typedef enum RdPrim {
  * pre-flipped in mirror mode so they read correctly after the final present
  * flip; the 2D layer's 640 grid lands on the frame's 4:3 columns (2048 -+
  * 256).  WORLD-tagged screen prims came from a CPU projection of world
- * positions.  FULLSCREEN marks the game's full-screen items (W3-UI renames
- * it RD_SPACE_FULLFRAME: the game draws them at the frame's width). */
-typedef enum RdSpace { RD_SPACE_WORLD = 0, RD_SPACE_UI = 1, RD_SPACE_FULLSCREEN = 2 } RdSpace;
+ * positions.  FULLFRAME marks the game's full-frame items (an identity tag,
+ * decided by the game on its layout data: GifPacket.h's gif_FullFrameBegin
+ * scope draws them at the frame's width; the posts' rects): Full pixel
+ * extends the ones that end a pixel short of an edge. */
+typedef enum RdSpace { RD_SPACE_WORLD = 0, RD_SPACE_UI = 1, RD_SPACE_FULLFRAME = 2 } RdSpace;
 
 typedef enum RdStencilMode {
     RD_STENCIL_OFF = 0,
@@ -1061,9 +1063,9 @@ void rd_sheet_rim(const uint8_t *coverage, uint32_t w, uint32_t h, uint32_t scal
 void rd_screen_prims(RdPrim type, const RdScreenVtx *v, uint32_t count, RdSpace space, int uvFixed,
                      RdKey key);
 /* While space >= 0, rd_screen_prims records that space instead
- * of its argument (the game marks its full-screen 2D items RD_SPACE_FULLSCREEN
- * around the gif helpers that draw them: layout_texture.c's primary sprite).
- * -1 ends it.  Returns the previous value. */
+ * of its argument (a test's: no game code calls it since the game tags its
+ * full-frame items with GifPacket.h's gif_FullFrameBegin).  -1 ends it.
+ * Returns the previous value. */
 int rd_set_space_override(int space);
 /* (tests) World-space vertices with a matrix.  No game code calls it and the
  * replay has no model for its command (rd__not_implemented); rd_filter_test

@@ -33,9 +33,44 @@ int gif_HostFrameWidth(void)
     return gifHostFrameW;
 }
 
+/* PC port (v0.6.0, W3-UI): the GIF_SP_FULL scope.  The 2D layer is a centred
+   4:3 box (the 640 grid x ScreenWidth / 640 = 512 pixels about the frame's
+   centre); an item that covers the whole frame (a backdrop, a bar spanning
+   the grid) is drawn between gif_FullFrameBegin and gif_FullFrameEnd, where
+   the 640-grid helpers (gif_Sprite*, gif_Point*, gif_Line*) scale x by
+   gifHostFrameW / 640 instead, so a 640-wide item covers the native frame.
+   y is unchanged.  At 4:3 gifHostFrameW == ScreenWidth: the same numbers.
+   The window build also tags the scope's primitives RD_SPACE_FULLFRAME
+   (an identity tag: Full pixel's band rule reads it).  Scopes nest. */
+static int gifFullDepth;
+
+void gif_FullFrameBegin(void)
+{
+    gifFullDepth++;
+}
+
+void gif_FullFrameEnd(void)
+{
+    if (gifFullDepth > 0) {
+        gifFullDepth--;
+    }
+}
+
+/* the x extent the 640 grid maps to: ScreenWidth (UI) or the frame (FULL) */
+static inline int gifUiW(void)
+{
+    return gifFullDepth > 0 ? gifHostFrameW
+                            : ScreenWidth; /* UI: the 640 grid in the centred 4:3 box */
+}
+
 #ifdef ICO_RD
 
-enum { GIF_SP_AUTO = 0, GIF_SP_UI = 1, GIF_SP_WORLD = 2 }; /* port: GIF_ENTER's spaces */
+enum {
+    GIF_SP_AUTO = 0,
+    GIF_SP_UI = 1,
+    GIF_SP_WORLD = 2,
+    GIF_SP_FULL = 3
+}; /* port: GIF_ENTER's spaces */
 
 /* PC port, windowed build (renderer wave 2, R2a): the GS register decoder at
    the end of this file turns every register write into rd state and
@@ -302,10 +337,11 @@ static inline void makePoint2DOffset(int *v, long long z, unsigned char *col,
 void gif_PointOffset(int *v, long long z, unsigned char *col, int prim)
 {
     GIF_ENTER(GIF_SP_UI);
-    /* PC port: ScreenWidth / 640 is UI, the 640 grid in the centred 4:3 box */
+    /* PC port: UI (the 640 grid in the centred 4:3 box: ScreenWidth / 640), or inside a
+       gif_FullFrameBegin scope FULL (the native frame: gifHostFrameW / 640) */
     int p[4];
 
-    p[0] = v[0] * ScreenWidth / 640;
+    p[0] = v[0] * gifUiW() / 640;
     p[1] = v[1] * ScreenHeight / 224;
     makePoint2DOffset(p, z, col, prim);
 }
@@ -326,13 +362,14 @@ static inline void makeLine2D(int *v0, int *v1, long long z0, long long z1, unsi
 void gif_Line(int *v0, int *v1, long long z0, long long z1, unsigned char *col, int prim)
 {
     GIF_ENTER(GIF_SP_UI);
-    /* PC port: ScreenWidth / 640 is UI, the 640 grid in the centred 4:3 box */
+    /* PC port: UI (the 640 grid in the centred 4:3 box: ScreenWidth / 640), or inside a
+       gif_FullFrameBegin scope FULL (the native frame: gifHostFrameW / 640) */
     int p0[4];
     int p1[4];
 
-    p0[0] = v0[0] * ScreenWidth / 640 * 16;
+    p0[0] = v0[0] * gifUiW() / 640 * 16;
     p0[1] = v0[1] * ScreenHeight / 224 * 16;
-    p1[0] = v1[0] * ScreenWidth / 640 * 16;
+    p1[0] = v1[0] * gifUiW() / 640 * 16;
     p1[1] = v1[1] * ScreenHeight / 224 * 16;
     makeLine2D(p0, p1, z0, z1, col, prim);
 }
@@ -365,10 +402,11 @@ static inline void makeSpriteNoTextureOffset(int x, int y, int w, int h, long lo
 void gif_Sprite(GifRect *r, long long z, GifRect *uv, GifColor *col, int prim)
 {
     GIF_ENTER(GIF_SP_UI);
-    /* PC port: ScreenWidth / 640 is UI, the 640 grid in the centred 4:3 box */
-    int x = r->x * ScreenWidth / 640 * 16;
+    /* PC port: UI (the 640 grid in the centred 4:3 box: ScreenWidth / 640), or inside a
+       gif_FullFrameBegin scope FULL (the native frame: gifHostFrameW / 640) */
+    int x = r->x * gifUiW() / 640 * 16;
     int y = r->y * ScreenHeight / 224 * 16;
-    int w = r->w * ScreenWidth / 640 * 16;
+    int w = r->w * gifUiW() / 640 * 16;
     int h = r->h * ScreenHeight / 224 * 16;
 
     if (uv == 0) {
@@ -387,10 +425,11 @@ void gif_Sprite(GifRect *r, long long z, GifRect *uv, GifColor *col, int prim)
 void gif_SpriteSensitive(GifRect *r, long long z, GifRect *uv, GifColor *col, int prim)
 {
     GIF_ENTER(GIF_SP_UI);
-    /* PC port: ScreenWidth / 640 is UI, the 640 grid in the centred 4:3 box */
-    int x = r->x * ScreenWidth / 640;
+    /* PC port: UI (the 640 grid in the centred 4:3 box: ScreenWidth / 640), or inside a
+       gif_FullFrameBegin scope FULL (the native frame: gifHostFrameW / 640) */
+    int x = r->x * gifUiW() / 640;
     int y = r->y * ScreenHeight / 224;
-    int w = r->w * ScreenWidth / 640;
+    int w = r->w * gifUiW() / 640;
     int h = r->h * ScreenHeight / 224;
 
     if (uv) {
@@ -403,10 +442,11 @@ void gif_SpriteSensitive(GifRect *r, long long z, GifRect *uv, GifColor *col, in
 void gif_SpriteOffset(GifRect *r, long long z, GifRect *uv, GifColor *col, int prim)
 {
     GIF_ENTER(GIF_SP_UI);
-    /* PC port: ScreenWidth / 640 is UI, the 640 grid in the centred 4:3 box */
-    int x = r->x * ScreenWidth / 640 * 16;
+    /* PC port: UI (the 640 grid in the centred 4:3 box: ScreenWidth / 640), or inside a
+       gif_FullFrameBegin scope FULL (the native frame: gifHostFrameW / 640) */
+    int x = r->x * gifUiW() / 640 * 16;
     int y = r->y * ScreenHeight / 224 * 16;
-    int w = r->w * ScreenWidth / 640 * 16;
+    int w = r->w * gifUiW() / 640 * 16;
     int h = r->h * ScreenHeight / 224 * 16;
 
     if (uv == 0) {
@@ -425,10 +465,11 @@ void gif_SpriteOffset(GifRect *r, long long z, GifRect *uv, GifColor *col, int p
 void gif_SpriteSensitiveOffset(GifRect *r, long long z, GifRect *uv, GifColor *col, int prim)
 {
     GIF_ENTER(GIF_SP_UI);
-    /* PC port: ScreenWidth / 640 is UI, the 640 grid in the centred 4:3 box */
-    int x = r->x * ScreenWidth / 640;
+    /* PC port: UI (the 640 grid in the centred 4:3 box: ScreenWidth / 640), or inside a
+       gif_FullFrameBegin scope FULL (the native frame: gifHostFrameW / 640) */
+    int x = r->x * gifUiW() / 640;
     int y = r->y * ScreenHeight / 224;
-    int w = r->w * ScreenWidth / 640;
+    int w = r->w * gifUiW() / 640;
     int h = r->h * ScreenHeight / 224;
 
     if (uv) {
@@ -799,10 +840,11 @@ void gif_MakeSpriteNoTextureOffset(int x, int y, int w, int h, long long z, GifC
 void gif_Point(int *v, long long z, unsigned char *col, int prim)
 {
     GIF_ENTER(GIF_SP_UI);
-    /* PC port: ScreenWidth / 640 is UI, the 640 grid in the centred 4:3 box */
+    /* PC port: UI (the 640 grid in the centred 4:3 box: ScreenWidth / 640), or inside a
+       gif_FullFrameBegin scope FULL (the native frame: gifHostFrameW / 640) */
     int p[2];
 
-    p[0] = v[0] * ScreenWidth / 640;
+    p[0] = v[0] * gifUiW() / 640;
     p[1] = v[1] * ScreenHeight / 224;
     makePoint2D(p, z, col, prim);
 }
@@ -810,13 +852,14 @@ void gif_Point(int *v, long long z, unsigned char *col, int prim)
 void gif_LineOffset(int *v0, int *v1, long long z0, long long z1, unsigned char *col, int prim)
 {
     GIF_ENTER(GIF_SP_UI);
-    /* PC port: ScreenWidth / 640 is UI, the 640 grid in the centred 4:3 box */
+    /* PC port: UI (the 640 grid in the centred 4:3 box: ScreenWidth / 640), or inside a
+       gif_FullFrameBegin scope FULL (the native frame: gifHostFrameW / 640) */
     int p0[4];
     int p1[4];
 
-    p0[0] = v0[0] * ScreenWidth / 640 * 16;
+    p0[0] = v0[0] * gifUiW() / 640 * 16;
     p0[1] = v0[1] * ScreenHeight / 224 * 16;
-    p1[0] = v1[0] * ScreenWidth / 640 * 16;
+    p1[0] = v1[0] * gifUiW() / 640 * 16;
     p1[1] = v1[1] * ScreenHeight / 224 * 16;
     gif_MakeLine2DOffset(p0, p1, z0, z1, col, prim);
 }
@@ -1458,6 +1501,8 @@ static int gsSpace(void)
     switch (gs.space) {
     case GIF_SP_UI:
         return RD_SPACE_UI;
+    case GIF_SP_FULL:
+        return RD_SPACE_FULLFRAME;
     case GIF_SP_WORLD:
         return RD_SPACE_WORLD;
     default:
@@ -1793,7 +1838,7 @@ static int gifEnter(int space)
 {
     if (gs.depth++ == 0) {
         gsRawFlush();
-        gs.space = space;
+        gs.space = space == GIF_SP_UI && gifFullDepth > 0 ? GIF_SP_FULL : space;
     }
     return 0;
 }

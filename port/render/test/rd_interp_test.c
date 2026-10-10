@@ -2349,7 +2349,7 @@ static void testCameraLocked(void)
 
 /* A paused photo tick as the game records it (port/game/photo_view.c):
  * the frame's camera turned deg about the origin, and in list 11 the
- * full-screen passes rd_post.c records as RD_SPACE_FULLSCREEN screen
+ * full-screen passes rd_post.c records as RD_SPACE_FULLFRAME screen
  * prims: the brightness sprite (GsBase.c gsb_controlBrightness), the two
  * letterbox bars, the film noise */
 static void photoTick(double deg)
@@ -2416,15 +2416,15 @@ static void testPhoto(void)
     photoTick(0.0);
     photoTick(20.0);
     const RdFrame *pf = rd__prev_frame(), *cf = rd__last_frame();
-    const int want = countType(cf, 11, RDC_SCREEN, RD_SPACE_FULLSCREEN);
-    CHECK(want == 4 && countType(pf, 11, RDC_SCREEN, RD_SPACE_FULLSCREEN) == 4,
+    const int want = countType(cf, 11, RDC_SCREEN, RD_SPACE_FULLFRAME);
+    CHECK(want == 4 && countType(pf, 11, RDC_SCREEN, RD_SPACE_FULLFRAME) == 4,
           "photo: the tick records brightness, two letterbox bars and the noise (%d)", want);
     const RdInterpStats *st = build(0.5f, 1);
     CHECK(st->snap == RD_SNAP_NONE, "photo: the two ticks blend (snap %u)", st->snap);
     const RdFrame *f = built(0.5f);
-    CHECK(f && countType(f, 11, RDC_SCREEN, RD_SPACE_FULLSCREEN) == want,
+    CHECK(f && countType(f, 11, RDC_SCREEN, RD_SPACE_FULLFRAME) == want,
           "photo: list 11's full-screen prims all kept (%d of %d)",
-          countType(f, 11, RDC_SCREEN, RD_SPACE_FULLSCREEN), want);
+          countType(f, 11, RDC_SCREEN, RD_SPACE_FULLFRAME), want);
     CHECK(f && f->hasCamera, "photo: the blended frame has a camera");
     if (f && f->hasCamera && pf->hasCamera && cf->hasCamera) {
         double e0[3], e1[3], e[3], y0, y1, y;

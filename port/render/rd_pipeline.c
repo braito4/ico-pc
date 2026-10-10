@@ -886,7 +886,7 @@ uint32_t rd__enumerate_reachable_crt(RdPipeKeyInt *out, uint32_t max, uint32_t n
 
 int rd__fog_plan(const RdStateBlock *s, RhiFormat colorFmt, int buffer, RdDrawPass out[2])
 {
-    const int np = rd__plan_screen_draw(s, RD_PRIM_TRIANGLES, RD_SPACE_FULLSCREEN, colorFmt,
+    const int np = rd__plan_screen_draw(s, RD_PRIM_TRIANGLES, RD_SPACE_FULLFRAME, colorFmt,
                                         RHI_FMT_UNKNOWN, out);
     for (int i = 0; i < np; i++) {
         out[i].key.gs.program = RD_PROG_POST;

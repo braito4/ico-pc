@@ -124,7 +124,7 @@ int main(void)
     CHECK(worldDraws(0) == 0, "on: key 0's world draws left out");
     const RdKey d0 = RD_KEY(&kObjD, 0, 0), e0 = RD_KEY(&kObjE, 0, 0);
     screen(RD_SPACE_UI, d0);
-    screen(RD_SPACE_FULLSCREEN, e0);
+    screen(RD_SPACE_FULLFRAME, e0);
     CHECK(count(d0) == 1 && count(e0) == 1, "on: UI and full-screen prims recorded");
     int prev = rd_set_space_override(RD_SPACE_WORLD);
     screen(RD_SPACE_UI, d0);

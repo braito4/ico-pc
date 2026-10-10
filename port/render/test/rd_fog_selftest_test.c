@@ -93,7 +93,7 @@ static void recordFogFrame(uint32_t w, uint32_t h)
             memcpy(p->rgba, rgba, 4);
         }
     }
-    rd_screen_prims(RD_PRIM_SPRITES, v, CELLS * CELLS * 2, RD_SPACE_FULLSCREEN, 0, 0);
+    rd_screen_prims(RD_PRIM_SPRITES, v, CELLS * CELLS * 2, RD_SPACE_FULLFRAME, 0, 0);
     /* ZFog.c fogHostDraw's state and record */
     rd_select_list(4);
     rd_set_target(scene, scene, w, h, RD_TARGET_OFFSET);

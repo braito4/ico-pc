@@ -16,6 +16,12 @@
  *     texture-seam placeholder bound, TEX1 96 (linear/linear), FST UVs;
  *   - the glow sprite's gif_SetAlpha(1, 5, 0) is ALPHA 0x48;
  *   - nothing was written to a register the decoder does not decode;
+ *   - the full-frame decision (v0.6.0): the primary sprite and an item whose
+ *     grid rect spans 0 .. 640 (lt_rect_spans_grid: the pause and End Game
+ *     bars) are drawn inside gif_FullFrameBegin / End, RD_SPACE_FULLFRAME,
+ *     x scaled by the native frame's width / 640 (688 at 16:9: the item
+ *     covers GS 2048 -+ 344); an item that does not span (a menu row) stays
+ *     UI, 512 / 640 of the grid about the centre, whatever the frame's width;
  *   - a row sprite under gif_HostDrawKey carries the key, blends half
  *     way between two frames (rd__interp_frame), and the sprite after the
  *     key ends is unkeyed and the current frame's.
@@ -38,6 +44,7 @@
 #include "DmaPacket.h"
 #include "GifHost.h"
 #include "GifPacket.h"
+#include "layout_texture.h"
 
 static int failures;
 
@@ -143,7 +150,9 @@ static void ltDrawPrimarySprite(void)
     gif_SetZTest(0);
     gif_SetZWrite(0);
     gif_SetAlpha(1, 7, 0);
+    gif_FullFrameBegin(); /* lt_draw_primary_sprite: the backdrop is a full-frame item */
     gif_SpriteSensitive(&r, 0xFFFFFFFF, (void *)0, &col, 1);
+    gif_FullFrameEnd();
     gif_SetZWrite(1);
     gif_SetZTest(1);
     gif_EndPacket();
@@ -153,20 +162,22 @@ static void ltDrawPrimarySprite(void)
    tex 0,0 128x64, display size from the texture, selected with the glow on */
 static GifRect s_box, s_ofs;
 
-static void displayTexture(void)
+static void displayItem(int dispX, int dispW)
 {
     GifRect ofs, box;
     GifColor col = {128, 128, 128, 0x80};
-    const int texU = 0, texV = 0, texW = 128, texH = 64, dispX = 100, dispY = 40;
+    const int texU = 0, texV = 0, texW = 128, texH = 64, dispY = 40;
+    int full;
 
     ofs.x = (texU << 4) + 8;
     ofs.y = (texV << 4) + 8;
     ofs.w = texW << 4;
     ofs.h = texH << 4;
-    box.w = ofs.w;
+    box.w = dispW != 0 ? dispW << 4 : ofs.w;
     box.h = ofs.h >> 1;
     box.x = (dispX - 320) * 16;
     box.y = (dispY - 113) * 16;
+    full = lt_rect_spans_grid(box.x, box.w); /* layout_texture.c: decided on the layout data */
 
     gif_StartPacketPri(11);
     gif_SetZTest(0);
@@ -179,7 +190,13 @@ static void displayTexture(void)
     ofs.h = ofs.h - 16;
     box.w = box.w - 16;
     ofs.w = ofs.w - 16;
+    if (full) {
+        gif_FullFrameBegin();
+    }
     gif_SpriteSensitiveOffset(&box, 0xFFFFFF9B, &ofs, &col, 1);
+    if (full) {
+        gif_FullFrameEnd();
+    }
     /* lt_glow_sprite with s = 0.5 */
     {
         GifRect rr = box;
@@ -190,12 +207,23 @@ static void displayTexture(void)
         rr.w = rr.w + 32;
         rr.h = rr.h + 32;
         gif_SetAlpha(1, 5, 0);
+        if (full) {
+            gif_FullFrameBegin();
+        }
         gif_SpriteSensitiveOffset(&rr, 0xFFFFFF9B, &ofs, &c, 1);
+        if (full) {
+            gif_FullFrameEnd();
+        }
     }
     gif_SetZWrite(1);
     gif_EndPacket();
     s_box = box;
     s_ofs = ofs;
+}
+
+static void displayTexture(void)
+{
+    displayItem(100, 0); /* a menu row: does not span the grid */
 }
 
 /* the head GsBase.c's hook records, then the frame */
@@ -251,7 +279,7 @@ static void checkRecording(const RdFrame *f)
     /* 1: lt_draw_primary_sprite, untextured */
     v = (const RdScreenVtx *)(f->payload + w.scr[0]->u[0]);
     CHECK(w.scr[0]->b[0] == RD_PRIM_SPRITES && w.scr[0]->u[1] == 2, "primary: one sprite");
-    CHECK(w.scr[0]->b[1] == RD_SPACE_UI, "primary: UI space");
+    CHECK(w.scr[0]->b[1] == RD_SPACE_FULLFRAME, "primary: full-frame space");
     {
         /* gif_SpriteSensitive: x * 512 / 640 in 1/16 px, + 0x8000 */
         int x0 = kPrimaryRect.x * 512 / 640 + 0x8000, y0 = kPrimaryRect.y * 512 / 224 + 0x8000;
@@ -321,6 +349,92 @@ static void checkPixels(void)
     CHECK(out[0] == 0 && out[1] == 0 && out[2] == 0, "pixel outside %u,%u,%u", out[0], out[1],
           out[2]);
     free(px);
+}
+
+/* ----------------------------------------- the full-frame decision, 16:9 */
+
+/* the frame at 16:9 (688 GS pixels across; gif_HostSetFrameWidth as
+   GsBase.c's latch calls it): the primary sprite at its real size, a menu
+   row and a bar whose grid rect spans 0 .. 640 */
+static void recordWide(void)
+{
+    static const uint8_t black[4] = {0, 0, 0, 0x80};
+    GifRect r = {-5120, -1808, 10240, 3616};
+    GifColor col = kPrimaryCol;
+
+    dl_SetDLPriority(0);
+    rd_set_target(rd_target(RD_TARGET_SCENE), rd_target(RD_TARGET_SCENE), 512, 512, 1);
+    rd_clear_target(rd_target(RD_TARGET_SCENE), black, 1, 0);
+    texSetTexReg(11);
+    gif_StartPacketPri(11);
+    gif_SetZTest(0);
+    gif_SetZWrite(0);
+    gif_SetAlpha(1, 7, 0);
+    gif_FullFrameBegin();
+    gif_SpriteSensitive(&r, 0xFFFFFFFF, (void *)0, &col, 1);
+    gif_FullFrameEnd();
+    gif_SetZWrite(1);
+    gif_SetZTest(1);
+    gif_EndPacket();
+    displayItem(100, 0); /* the row: UI */
+    displayItem(0, 640); /* the bar: spans */
+    dl_Swap();
+}
+
+static void checkWide(void)
+{
+    const int FW = 688;
+    Walk w;
+    gif_HostSetFrameWidth(FW);
+    CHECK(lt_rect_spans_grid(-320 * 16, 640 * 16) &&
+              !lt_rect_spans_grid((100 - 320) * 16, 128 * 16) &&
+              !lt_rect_spans_grid(-320 * 16 + 4, 640 * 16) &&
+              !lt_rect_spans_grid(-320 * 16, 640 * 16 - 1) &&
+              lt_rect_spans_grid(-330 * 16, 700 * 16),
+          "the bars span the grid, a menu row does not, a rect 1/16 short does not");
+    recordWide();
+    const RdFrame *f = rd__last_frame();
+    memset(&w, 0, sizeof(w));
+    if (!f) {
+        CHECK(0, "a closed wide frame");
+        gif_HostSetFrameWidth(512);
+        return;
+    }
+    RdStateBlock s = f->startState;
+    rd__walk(f, 0, &s, collect, &w);
+    CHECK(w.screens == 5, "wide: %d screen batches, expected 5 (primary, row, glow, bar, glow)",
+          w.screens);
+    if (w.screens == 5) {
+        const RdScreenVtx *v = (const RdScreenVtx *)(f->payload + w.scr[0]->u[0]);
+        const int c0 = 0x8000, half = FW / 2 * 16;
+        CHECK(w.scr[0]->b[1] == RD_SPACE_FULLFRAME, "wide: the primary sprite is full-frame");
+        CHECK(v[0].x == gs16(c0 - half) && v[1].x == gs16(c0 + half),
+              "wide: the primary sprite covers the native width, GS 2048 -+ 344 (%d, %d)", v[0].x,
+              v[1].x);
+        /* the menu row: UI, the 512 / 640 box about the centre at any width */
+        v = (const RdScreenVtx *)(f->payload + w.scr[1]->u[0]);
+        CHECK(w.scr[1]->b[1] == RD_SPACE_UI && w.scr[2]->b[1] == RD_SPACE_UI,
+              "wide: a menu row and its glow stay UI-tagged");
+        {
+            const int x0 = 0x8000 + ((100 - 320) * 16 + 4) * 512 / 640;
+            CHECK(v[0].x == gs16(x0), "wide: the row stays in the centred 4:3 box (%d, want %d)",
+                  v[0].x, gs16(x0));
+        }
+        /* the bar: full-frame, x scaled by the frame's width over 640 */
+        v = (const RdScreenVtx *)(f->payload + w.scr[3]->u[0]);
+        CHECK(w.scr[3]->b[1] == RD_SPACE_FULLFRAME && w.scr[4]->b[1] == RD_SPACE_FULLFRAME,
+              "wide: the spanning bar and its glow are full-frame-tagged");
+        {
+            const int bx = -320 * 16 + 4, bw = 640 * 16 - 16;
+            const int x0 = 0x8000 + bx * FW / 640, x1 = x0 + bw * FW / 640;
+            CHECK(v[0].x == gs16(x0) && v[1].x == gs16(x1),
+                  "wide: the bar is scaled by 688 / 640 (%d, %d, want %d, %d)", v[0].x, v[1].x,
+                  gs16(x0), gs16(x1));
+            CHECK(x0 <= c0 - half + 12 && x1 >= c0 + half - 12 * FW / 640 - 12,
+                  "wide: the bar reaches within its inset of both edges");
+        }
+    }
+    gif_HostSetFrameWidth(512);
 }
 
 /* ------------------------------------------------- keyed layout rows */
@@ -414,6 +528,7 @@ int main(void)
         checkRecording(f);
     }
     checkKeyedRow();
+    checkWide();
     rd_shutdown();
     if (failures) {
         printf("rd_layout_test: %d failures\n", failures);

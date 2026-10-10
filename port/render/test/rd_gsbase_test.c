@@ -1722,7 +1722,7 @@ static int fullScreenSprites(void)
     int n = 0;
     for (uint32_t i = 0; f && i < f->lists[11].count; i++) {
         const RdCmd *c = &f->lists[11].cmds[i];
-        n += c->type == RDC_SCREEN && c->b[1] == RD_SPACE_FULLSCREEN;
+        n += c->type == RDC_SCREEN && c->b[1] == RD_SPACE_FULLFRAME;
     }
     return n;
 }

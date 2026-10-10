@@ -346,7 +346,7 @@ static void testHalfOffset(void)
         RdScreenVtx v[2] = {
             vtx(ox + (10 + 20 * k) * 16, oy + 20 * 16 + 4, 0, c, 8.0f, 8.0f),
             vtx(ox + (20 + 20 * k) * 16, oy + 30 * 16 + 4, 0, c, 8.0f + 160.0f, 8.0f + 160.0f)};
-        rd_screen_prims(RD_PRIM_SPRITES, v, 2, kKind[k] == 2 ? RD_SPACE_FULLSCREEN : RD_SPACE_WORLD,
+        rd_screen_prims(RD_PRIM_SPRITES, v, 2, kKind[k] == 2 ? RD_SPACE_FULLFRAME : RD_SPACE_WORLD,
                         1, 0);
     }
     rd_end_frame(0);

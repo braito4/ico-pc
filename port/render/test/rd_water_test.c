@@ -357,9 +357,9 @@ int ico_title_logo_skip(const char *model)
     return 0;
 }
 
-/* port/game/title_logo.c: reg_DispObj's full-width title models; none
+/* port/game/title_logo.c: reg_DispObj's full-frame title models; none
    here */
-int ico_title_stretch_model(const char *model)
+int ico_title_fullframe_model(const char *model)
 {
     (void)model;
     return 0;

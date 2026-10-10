@@ -106,7 +106,7 @@ static void spriteRaw(int32_t x0, int32_t y0, uint32_t z0, int32_t x1, int32_t y
     v[0].q = v[1].q = 1.0f;
     memcpy(v[0].rgba, rgba, 4);
     memcpy(v[1].rgba, rgba, 4);
-    rd_screen_prims(RD_PRIM_SPRITES, v, 2, RD_SPACE_FULLSCREEN, 1, s_spriteKey);
+    rd_screen_prims(RD_PRIM_SPRITES, v, 2, RD_SPACE_FULLFRAME, 1, s_spriteKey);
 }
 
 static void sprite(int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint32_t z,
@@ -450,7 +450,7 @@ static void postFilmNoise(const RdPostParams *p)
     v[0].q = v[1].q = 1.0f;
     memcpy(v[0].rgba, col, 4);
     memcpy(v[1].rgba, col, 4);
-    rd_screen_prims(RD_PRIM_SPRITES, v, 2, RD_SPACE_FULLSCREEN, 0, 0);
+    rd_screen_prims(RD_PRIM_SPRITES, v, 2, RD_SPACE_FULLFRAME, 0, 0);
 }
 
 static void postComposite(const RdPostParams *p)

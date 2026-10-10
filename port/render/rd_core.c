@@ -2082,7 +2082,7 @@ void rd__deferred_text_op(uint8_t kind, const RdTextOp *op, RdKey key)
 int rd_set_space_override(int space)
 {
     const int prev = g_rd.spaceOverride - 1;
-    g_rd.spaceOverride = space < 0 || space > RD_SPACE_FULLSCREEN ? 0 : space + 1;
+    g_rd.spaceOverride = space < 0 || space > RD_SPACE_FULLFRAME ? 0 : space + 1;
     return prev;
 }
 
