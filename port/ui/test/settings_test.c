@@ -131,7 +131,7 @@ static void testBuild(void)
     CHECK(labelsAre(UI_PAGE_AUDIO, audioOpts, audioStrs, 6), "audio rows");
     CHECK(labelsAre(UI_PAGE_CONTROLS, ctlOpts, ctlStrs, 15), "controls rows");
     CHECK(labelsAre(UI_PAGE_GAMEPLAY, gameOpts, gameStrs, 6), "gameplay rows");
-    /* the pop-ups switch is an item of the list (before Back), not a row of its own */
+    /* the pop-ups switch is an item of the list (first, before the achievements), not a row of its own */
     CHECK(labelsAre(UI_PAGE_ACHIEVEMENTS, listOpts, listStrs, 8), "achievement slots");
     CHECK(labelsAre(UI_PAGE_REMAP, listOpts, listStrs, 8), "remap slots");
 

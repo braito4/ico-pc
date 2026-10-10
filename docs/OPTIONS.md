@@ -193,7 +193,7 @@ The first three are off unless you turn them on, on a phone too.
 - **Analogue stick fix** lets Ico run in any direction you push the stick,
   not only the eight the original game knows.
   [Why this is needed](FAQ.md#ico-walks-instead-of-running).
-- **Doorway fix** lets Ico lead Yorda by the hand through a doorway that
+- **East Reflector door fix** lets Ico lead Yorda by the hand through a doorway that
   the original game sends you both back out of, such as the one at the top
   of the ladder in the East Reflector. For a few seconds after you come
   through a door holding her hand, that door does not take you back.
@@ -217,10 +217,9 @@ The list of achievements and what each one asks. Secret ones show as ???
 until you earn them. You cannot earn achievements while Developer mode is
 on.
 
-**Achievement pop-ups**, near the end of the list just above Back, is on
-until you turn it off. Off stops the pop-up when you earn an achievement.
-You still earn them, and the list shows them. From the top of the list,
-press Up twice to reach it.
+**Achievement pop-ups**, the first row of the list, is on until you turn
+it off. Off stops the pop-up when you earn an achievement. You still earn
+them, and the list shows them.
 
 ## Extras
 

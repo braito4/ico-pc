@@ -1217,9 +1217,10 @@ static void testSaveSlotPointer(void)
     ui_mouse_reset();
 }
 
-/* Achievements > Achievement pop-ups: the list's item before Back, not on
-   Gameplay; Up from the first slot wraps to Back and Up again lands on it,
-   On by default, its value clicks as a step; Right flips the pop-ups live,
+/* Achievements > Achievement pop-ups: the list's first item, not on
+   Gameplay; the page opens on it, Up wraps to Back and Down from Back
+   lands on it again, On by default, its value clicks as a step; Right
+   flips the pop-ups live,
    leaving the page writes [game] achievements only after a change, and Left
    reads On again */
 static void testAchievementPopups(void)
@@ -1239,19 +1240,21 @@ static void testAchievementPopups(void)
     const int c = ui_settings_page_rows(UI_PAGE_ACHIEVEMENTS, labels, NULL, values, 16);
     CHECK(c == UI_LIST_SLOTS && lt_ext_layout(achL)->curItem == labels[0],
           "pop-ups: the page opens on its first slot (%d slots)", c);
+    CHECK(strcmp(lt_ext_row_text(labels[0]), ui_str(UI_STR_OPT_ACH_POPUPS)) == 0,
+          "pop-ups: the first slot is the switch (\"%s\")", lt_ext_row_text(labels[0]));
     press(LT_PAD_UP);
     CHECK(lt_ext_layout(achL)->curItem == labels[UI_LIST_SLOTS - 1] &&
               strcmp(lt_ext_row_text(labels[UI_LIST_SLOTS - 1]), ui_str(UI_STR_BACK)) == 0,
           "pop-ups: Up wraps to Back (\"%s\")", lt_ext_row_text(labels[UI_LIST_SLOTS - 1]));
-    press(LT_PAD_UP);
-    const int s = UI_LIST_SLOTS - 2;
+    press(LT_PAD_DOWN);
+    const int s = 0;
     CHECK(lt_ext_layout(achL)->curItem == labels[s] &&
               strcmp(lt_ext_row_text(labels[s]), ui_str(UI_STR_OPT_ACH_POPUPS)) == 0 &&
               strcmp(lt_ext_row_text(values[s]), "On") == 0,
-          "pop-ups: Up again, the switch before Back (\"%s\" \"%s\")", lt_ext_row_text(labels[s]),
+          "pop-ups: Down from Back, the switch first (\"%s\" \"%s\")", lt_ext_row_text(labels[s]),
           lt_ext_row_text(values[s]));
     CHECK(lt_ext_pointer_role(values[s]) == LT_POINTER_STEP &&
-              lt_ext_pointer_role(values[0]) == LT_POINTER_AUTO,
+              lt_ext_pointer_role(values[1]) == LT_POINTER_AUTO,
           "pop-ups: its value steps on a click, an achievement's does not");
     CHECK(strcmp(ui_settings_value_text(UI_OPT_ACH_POPUPS), "On") == 0, "pop-ups: On by default");
     CHECK(ui_settings_save() == 0, "pop-ups: save without a change");
@@ -1283,8 +1286,6 @@ static void testAchievementPopups(void)
     openPage(mainL, iAch, UI_PAGE_ACHIEVEMENTS);
     CHECK(lt_ext_layout(achL)->curItem == labels[0],
           "pop-ups: the page opens on its first slot again");
-    press(LT_PAD_UP);
-    press(LT_PAD_UP);
     press(LT_PAD_LEFT);
     CHECK(strcmp(lt_ext_row_text(values[s]), "On") == 0 &&
               strcmp(ui_settings_value_text(UI_OPT_ACH_POPUPS), "On") == 0,
@@ -1467,7 +1468,7 @@ static void testResolutionCycle(void)
     CHECK(o.aspect == ICO_ASPECT_48_9, "Left from Auto is 48:9");
 }
 
-/* Gameplay > Doorway fix ([gameplay] door_fix): a row from the title and
+/* Gameplay > East Reflector door fix ([gameplay] door_fix): a row from the title and
    the pause menu, Off by default; a step turns it on and sets the key, the
    saved file has it, its note shows on the cursor, and the page with the
    game finished (every row shown) still fits */
@@ -1482,8 +1483,8 @@ static void testDoorFix(void)
         openPage(mainL, 5, UI_PAGE_GAMEPLAY);
         const int row = ui_settings_row_of(UI_PAGE_GAMEPLAY, UI_OPT_DOOR_FIX);
         CHECK(row >= 0 && !lt_ext_prop(row)->defaultMask && !lt_ext_prop(row)->masked,
-              "title %d: the Doorway fix row", title);
-        CHECK(row >= 0 && strcmp(lt_ext_row_text(row), "Doorway fix") == 0,
+              "title %d: the East Reflector door fix row", title);
+        CHECK(row >= 0 && strcmp(lt_ext_row_text(row), "East Reflector door fix") == 0,
               "title %d: its label \"%s\"", title, row >= 0 ? lt_ext_row_text(row) : "");
         CHECK(ico_opt_door_fix() == 0 &&
                   strcmp(ui_settings_value_text(UI_OPT_DOOR_FIX), "Off") == 0,
@@ -1497,15 +1498,16 @@ static void testDoorFix(void)
     stage_no = 11;
     const int mainL = enterMain(0);
     const int gameL = openPage(mainL, 5, UI_PAGE_GAMEPLAY);
-    checkPageFits(UI_PAGE_GAMEPLAY, "Gameplay (cleared, with Doorway fix)");
+    checkPageFits(UI_PAGE_GAMEPLAY, "Gameplay (cleared, with East Reflector door fix)");
     const int row = ui_settings_row_of(UI_PAGE_GAMEPLAY, UI_OPT_DOOR_FIX);
     lt_ext_layout(gameL)->curItem = row;
     press(0x2000);
     CHECK(ico_opt_door_fix() == 1 && strcmp(ui_settings_value_text(UI_OPT_DOOR_FIX), "On") == 0 &&
               ico_config_get_bool("gameplay.door_fix", 0) == 1,
-          "Right: Doorway fix On and the key set");
+          "Right: East Reflector door fix On and the key set");
     const int note = noteStarting(UI_PAGE_GAMEPLAY, "Holding hands");
-    CHECK(note >= 0 && !lt_ext_prop(note)->masked, "the Doorway fix note on the cursor");
+    CHECK(note >= 0 && !lt_ext_prop(note)->masked,
+          "the East Reflector door fix note on the cursor");
     CHECK(ui_settings_save() == 0, "save");
     path(p, sizeof(p), "settings_test.toml");
     IcoToml *t = ico_toml_load(p);
@@ -1516,7 +1518,7 @@ static void testDoorFix(void)
     }
     press(0x8000);
     CHECK(ico_opt_door_fix() == 0 && ico_config_get_bool("gameplay.door_fix", 1) == 0,
-          "Left: Doorway fix Off again");
+          "Left: East Reflector door fix Off again");
     press(0x10);
     CHECK(settle(mainL, 60), "Gameplay: back");
     ico_opt_set_door_fix(0);
@@ -1554,7 +1556,7 @@ int main(int argc, char **argv)
     testEscapeNewGame();
     /* Display > Resolution and Aspect ratio cycles */
     testResolutionCycle();
-    /* Gameplay > Doorway fix */
+    /* Gameplay > East Reflector door fix */
     testDoorFix();
     if (failures) {
         printf("settings_extra_test: %d failure(s)\n", failures);

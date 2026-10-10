@@ -3410,7 +3410,7 @@ static int parentLayout(const Page *pg)
  * Achievements and the remap targets: what each page's items are; the
  * window, the scrolling and the rows are ui_list.c's. */
 
-/* the items: the achievements, the pop-ups switch, then Back */
+/* the items: the pop-ups switch, the achievements, then Back */
 static int achCount(void *user)
 {
     (void)user;
@@ -3421,7 +3421,7 @@ static void achFill(void *user, int d, UiListSlot *out)
 {
     (void)user;
     const int n = ico_ach_count();
-    if (d == n) {
+    if (d == 0) {
         out->labelStr = UI_STR_OPT_ACH_POPUPS;
         out->colA = onOff(ico_ach_popups_enabled());
         return;
@@ -3430,9 +3430,10 @@ static void achFill(void *user, int d, UiListSlot *out)
         out->labelStr = UI_STR_BACK;
         return;
     }
-    IcoAchState st = ico_ach_state(d);
-    int hidden = ico_ach_hidden(d) && st == ICO_ACH_LOCKED;
-    out->label = hidden ? "???" : ui_str((UiStrId)ico_ach_title_str(d));
+    const int a = d - 1;
+    IcoAchState st = ico_ach_state(a);
+    int hidden = ico_ach_hidden(a) && st == ICO_ACH_LOCKED;
+    out->label = hidden ? "???" : ui_str((UiStrId)ico_ach_title_str(a));
     out->colAStr = st == ICO_ACH_UNLOCKED ? UI_STR_ACH_STATE_UNLOCKED : UI_STR_ACH_LOCKED;
 }
 
@@ -3447,15 +3448,15 @@ static void achDecorate(void *user, int d)
     snprintf(s_text, sizeof(s_text), "%s   %d / %d", ui_str(UI_STR_SECTION_ACHIEVEMENTS), got, n);
     lt_ext_set_text(pg->header, s_text);
     char buf[256];
-    if (d >= 0 && d < n) {
-        int hidden = ico_ach_hidden(d) && ico_ach_state(d) == ICO_ACH_LOCKED;
-        wrapText(hidden ? "???" : ui_str((UiStrId)ico_ach_desc_str(d)), NOTE_SIZE, 580.0f, buf,
+    if (d >= 1 && d <= n) {
+        int hidden = ico_ach_hidden(d - 1) && ico_ach_state(d - 1) == ICO_ACH_LOCKED;
+        wrapText(hidden ? "???" : ui_str((UiStrId)ico_ach_desc_str(d - 1)), NOTE_SIZE, 580.0f, buf,
                  sizeof(buf));
         lt_ext_set_text(pg->list.status, buf);
     } else {
         lt_ext_set_text(pg->list.status, "");
     }
-    const int s = n - pg->list.offset;
+    const int s = 0 - pg->list.offset;
     if (s >= 0 && s < UI_LIST_SLOTS) {
         lt_ext_set_pointer_role(pg->list.colA[s], LT_POINTER_STEP);
     }
@@ -3470,7 +3471,7 @@ static int achInput(void *user, int d, int flags)
     if ((flags & PAD_BACK) || ((flags & LT_PAD_CROSS) && d == n + 1)) {
         return leaveTo(UI_PAGE_ACHIEVEMENTS, parentLayout(pg));
     }
-    if (d == n && (flags & (LT_PAD_LEFT | LT_PAD_RIGHT))) {
+    if (d == 0 && (flags & (LT_PAD_LEFT | LT_PAD_RIGHT))) {
         ui_settings_step(UI_OPT_ACH_POPUPS, (flags & LT_PAD_LEFT) ? -1 : 1);
         CUR_SE();
         return -1;

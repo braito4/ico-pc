@@ -28,7 +28,7 @@ That is a bug in the original game, and it happens on a real PS2 too. When
 Ico leads Yorda through that door, the game sends you both straight back
 out as soon as you arrive.
 
-To go through, open **Options > Gameplay** and turn on **Doorway fix**. For a
+To go through, open **Options > Gameplay** and turn on **East Reflector door fix**. For a
 few seconds after you come through a door holding her hand, that door does
 not take you back. It is off unless you turn it on, because the original
 game does not do this.
