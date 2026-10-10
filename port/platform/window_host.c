@@ -1260,8 +1260,13 @@ static void sweep_pump(void)
     if (s_sweep.seen < SWEEP_SETTLE) {
         return;
     }
-    snprintf(dump, sizeof(dump), "%s%s.rddump", s_sweep.prefix, ico_sweep_aspect_name(s_sweep.idx));
-    snprintf(png, sizeof(png), "%s%s.png", s_sweep.prefix, ico_sweep_aspect_name(s_sweep.idx));
+    if (snprintf(dump, sizeof(dump), "%s%s.rddump", s_sweep.prefix,
+                 ico_sweep_aspect_name(s_sweep.idx)) >= (int)sizeof(dump) ||
+        snprintf(png, sizeof(png), "%s%s.png", s_sweep.prefix,
+                 ico_sweep_aspect_name(s_sweep.idx)) >= (int)sizeof(png)) {
+        sweep_finish("the capture path is too long");
+        return;
+    }
     if (rd_dump_on_demand(dump, png)) {
         s_sweep.captured++;
         fprintf(stderr, "window: aspect sweep: %s at frame %u, GS width %u\n",
