@@ -9,3 +9,4 @@
 - On the Save screen, the mouse can now pick an empty slot to save in, as the gamepad can.
 - At very wide aspect ratios, the sea no longer loses a patch at the edge of the picture.
 - In the waterfall area on a wide screen, the sides of the picture are no longer brighter than the middle.
+- In the opening forest, moving the camera on a wide screen no longer shows a dark shape at the edge of the picture.
