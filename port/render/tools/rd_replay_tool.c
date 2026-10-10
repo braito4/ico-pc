@@ -761,7 +761,8 @@ int main(int argc, char **argv)
                 "[--mesh NAME] [--dump-textures DIR] [--no-aa1] [--stats] [--pass-dump DIR] "
                 "[--interp T PREV [--interp-any] [--no-reproject]]\n"
                 "       [--no-device (with --list, --mesh or --dump-textures; <out.png> unused)]\n"
-                "       [--crt scanlines|consumer|trinitron|pvm|shadow [--crt-strength K]]\n",
+                "       [--crt scanlines|consumer|trinitron|pvm|shadow [--crt-strength K]]\n"
+                "       [--aa off|ssaa2|ssaa4|msaa2|msaa4|msaa8 (with --enhanced)]\n",
                 argv[0]);
         return 1;
     }
@@ -882,6 +883,23 @@ int main(int argc, char **argv)
                 return 1;
             }
             s.crtStrength = k;
+        } else if (strcmp(argv[i], "--aa") == 0 && i + 1 < argc) {
+            /* the anti-aliasing (RdSettings.antiAlias; off under the Original
+               preset, an MSAA count the device lacks drawn as off) */
+            static const char *const aas[RD_AA_COUNT] = {"off",   "ssaa2", "ssaa4",
+                                                         "msaa2", "msaa4", "msaa8"};
+            const char *v = argv[++i];
+            int a = -1;
+            for (int k = 0; k < RD_AA_COUNT; k++) {
+                if (strcmp(v, aas[k]) == 0) {
+                    a = k;
+                }
+            }
+            if (a < 0) {
+                fprintf(stderr, "bad --aa (off, ssaa2, ssaa4, msaa2, msaa4 or msaa8)\n");
+                return 1;
+            }
+            s.antiAlias = (uint8_t)a;
         } else if (strcmp(argv[i], "--list") == 0) {
             list = true;
         } else if (strcmp(argv[i], "--no-device") == 0) {
