@@ -105,16 +105,16 @@ VuVSOut vu_particle_vs(uint vid : SV_VertexID)
     if (!s.shown) {
         return o;
     }
-    // A sprite the PS2 skips for its x/y window is drawn only beside the
-    // 4:3 picture (vu_beside_discard), as the region test's triangles are;
-    // under photo mode's free camera everywhere
+    // A sprite the PS2 skips for its x/y window is drawn only when it lies
+    // wholly beside the 4:3 picture (vu_beside_discard), as the region
+    // test's triangles are (vu_triangle_out); under photo mode's free
+    // camera everywhere
     bool beside = !s.drawn && (vu_draw.z & VU_F_BEHIND_EYE) == 0u;
     if (beside && !vu_has_beside()) {
         return o;
     }
-    // A light-only draw (VU_F_LIGHT_ONLY) leaves such a sprite out beside
-    // the picture too when it reaches into it, as vu_triangle_out does
-    if (beside && (vu_draw.z & VU_F_LIGHT_ONLY) != 0u) {
+    // one that reaches into the picture is dropped everywhere
+    if (beside) {
         float x0 = vu_gs_position(s.c0, false).x;
         float x1 = vu_gs_position(s.c1, false).x;
         float f = g_space[SPACE_WORLD].x;

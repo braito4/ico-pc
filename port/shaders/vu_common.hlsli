@@ -77,11 +77,6 @@ StructuredBuffer<float4> vu_stream : register(t0, space1);
 // GPU-clipped over the whole picture, a vertex behind the eye or not
 // (vu_triangle_out, vu_particle_vs)
 #define VU_F_BEHIND_EYE 256u
-// The draw's blend only adds light to the picture or takes it away (Cs or
-// Cd scaled, plus or minus Cd; rd_replay.c lightOnlyBlend): where it draws
-// nothing the picture under it shows unchanged, so a triangle left out of
-// it never opens a hole (vu_triangle_out, vu_particle_vs)
-#define VU_F_LIGHT_ONLY 512u
 // Issue 25: the index bit of a triangle that overlaps an earlier triangle of
 // its mesh in the same plane (shader_consts.h ICO_VU_INDEX_LATER; static
 // prelit and lit meshes, rd_mesh.c markLaterOverlaps); vu_later_out
@@ -396,12 +391,11 @@ bool vu_in_picture(float x)
 }
 
 // The PS2 does not draw a triangle that fails the region test, nor a
-// particle outside its x/y window. Inside the 4:3 picture the port keeps
-// that rule exactly (scenery the camera sits inside, like the tree trunk
-// over the opening cutscene, stays out of the picture); beside it, where
-// the PS2 showed nothing, it draws such a triangle clipped by the GPU so
-// the edges of a wide screen have no holes (not one of a light-only draw
-// that reaches into the picture: vu_triangle_out).
+// particle outside its x/y window. The port leaves out every such triangle
+// or sprite that reaches into the 4:3 picture, beside it too, and draws one
+// that lies wholly beside the picture clipped by the GPU, so the edges of a
+// wide screen have no holes (vu_triangle_out). The flag keeps the pixels of
+// a drawn one off the picture's texels (rounded outwards there).
 bool vu_beside_discard(VuVSOut i)
 {
     return i.beside != 0u && vu_in_picture(i.pos.x);
@@ -478,19 +472,27 @@ VuVSOut vu_triangle_out(VuVtx a, VuVtx b, VuVtx c, VuVtx me, uint mode)
     if (mode == VU_CLIP_REGION) {
         // On the PS2 any vertex outside the region sets ADC on itself and
         // the next two, and the triangle is not drawn. Inside the 4:3
-        // picture the port keeps that rule exactly: the game's cameras pass
-        // through and beside scenery that relies on it (the opening after
-        // the Sony sign films the castle from inside a cliff, st26a_p1, and
-        // the forest shot after it from inside a tree card, st26a_near;
-        // drawn there, they covered the picture with stretched rock and a
-        // dark trunk). Beside the 4:3 picture of a wide target, where the
-        // PS2 showed nothing, every such triangle is drawn and clipped by
-        // the GPU at 0 <= z <= w, a vertex behind the eye (w <= 0) or not,
-        // and its pixels inside the picture are discarded (VuVSOut.beside,
-        // vu_beside_discard), so the picture itself is the PS2's. Beside it
-        // the dropped triangles left holes: a wall with one vertex past the
-        // window, and at 48:9 a patch of the sea at the far left of the old
-        // bridge whose only triangles there have a vertex behind the eye.
+        // picture the port keeps that rule exactly, and beside it draws only
+        // what the PS2's picture never touched (user decision 2026-10-10,
+        // after issues 29, 57 and 59):
+        // - a failing triangle whose GPU-clipped extent (0 <= z <= w, a
+        //   vertex behind the eye or not) reaches into the 4:3 picture's
+        //   columns is dropped everywhere, as the PS2 drops it. Drawn
+        //   beside the picture only, it was cut at the picture's edge: the
+        //   forest shot after the Sony sign films from inside a tree card
+        //   (st26a_near), a dark polygon beside the picture while the
+        //   camera pans (issue 59); the waterfall's mist billboards
+        //   (st02a wf_smoke1) stopped at both edges, the picture 4 to 11
+        //   levels darker than the sides (issue 57). Inside the picture
+        //   that rule keeps the cameras that pass through scenery out of
+        //   it (the cliff of the opening, st26a_p1; the tree card).
+        // - one wholly beside the picture is drawn, clipped by the GPU, and
+        //   its pixels that round into the picture's texels are discarded
+        //   (VuVSOut.beside, vu_beside_discard): there the PS2 showed
+        //   nothing, and the dropped triangles left holes (a wall with one
+        //   vertex past the window, issue 29; at 48:9 a patch of the sea at
+        //   the far left of the old bridge whose only triangles there have
+        //   a vertex behind the eye).
         // Photo mode's free camera (VU_F_BEHIND_EYE) has no such placing,
         // so there every failing triangle is drawn, clipped, everywhere (a
         // walkway low under the camera left a hole). A triangle with all
@@ -509,22 +511,12 @@ VuVSOut vu_triangle_out(VuVtx a, VuVtx b, VuVtx c, VuVtx me, uint mode)
         // cut rim; and vu_later_out's bias needs all three GS positions, so
         // a later-marked triangle with a corner saturated or below GS Z 0
         // is drawn without it.
-        // A draw that only adds light or takes it away (VU_F_LIGHT_ONLY:
-        // mist, glows, light shafts) leaves no hole where a triangle is
-        // missing, only the light it would have added. Such a triangle
-        // that reaches into the 4:3 picture is missing there, so drawn
-        // beside it its light stopped at the picture's edges: the
-        // waterfall's mist billboards (st02a wf_smoke1, close to the
-        // camera) made the 4:3 picture 4 to 11 levels darker than the
-        // sides with a straight seam at both edges (issue 57). It is left
-        // out beside the picture too; one wholly beside it is still drawn.
         if (a.inside && b.inside && c.inside) {
             o.pos = vu_vtx_position(me);
         } else if ((vu_draw.z & VU_F_BEHIND_EYE) != 0u) {
             o.pos = vu_cut_position(me);
         } else if (vu_has_beside()) {
-            if ((vu_draw.z & VU_F_LIGHT_ONLY) != 0u &&
-                vu_cut_reaches_picture(vu_cut_position(a), vu_cut_position(b),
+            if (vu_cut_reaches_picture(vu_cut_position(a), vu_cut_position(b),
                                        vu_cut_position(c))) {
                 return o;
             }
