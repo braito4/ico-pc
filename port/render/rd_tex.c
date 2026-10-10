@@ -808,6 +808,7 @@ int rdtex_replace(uint32_t id, uint32_t gen, int texa, RdTex rep)
          * may be block-compressed and have no CPU-readable texels, but map
          * to the same material and inherit its conservative decision. */
         replacement->relief = original->relief;
+        replacement->reliefMacro = original->reliefMacro;
     }
     if (e->tex.id != rep.id) {
         releaseReplaced(e); /* a replacement replaced again */

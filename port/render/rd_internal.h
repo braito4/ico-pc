@@ -522,8 +522,11 @@ typedef struct RdTexRec {
     uint8_t replacement;
     uint8_t refused;
     /* 0: flat/transparent/unsuitable; 1..255: contrast-derived strength
-     * for optional texture relief on opaque lit geometry. */
+     * for optional texture relief on opaque lit geometry.  reliefMacro is
+     * the amount of structure that survives at a two-texel scale (masonry,
+     * rock cracks and timber grain rather than single-pixel noise). */
     uint8_t relief;
+    uint8_t reliefMacro;
     uint32_t uvW, uvH;
     struct TexpackImage *pending;
     /* What the draws of a game texture with Enhanced mips do

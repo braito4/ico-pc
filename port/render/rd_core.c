@@ -956,11 +956,16 @@ static void texDirtyAll(RdTexRec *t)
 
 /* A conservative material-detail score from an RGBA8 base level.  Smooth
  * gradients and flat colours stay at zero; detailed opaque pictures gain a
- * strength from their luminance variance and neighbouring-pixel edges.
- * Textures with many fully transparent texels are masks, foliage, effects
- * or UI and are deliberately left alone. */
-static uint8_t textureRelief(const uint8_t *px, uint32_t w, uint32_t h, uint8_t format)
+ * strength from their luminance variance, edges and local curvature.  A
+ * second score records structure that survives a two-texel radius, which
+ * lets the shader preserve masonry joints and broad rock detail without
+ * turning single-pixel noise into deep bumps.  Textures with many fully
+ * transparent texels are masks, foliage, effects or UI and are deliberately
+ * left alone. */
+static uint8_t textureRelief(const uint8_t *px, uint32_t w, uint32_t h, uint8_t format,
+                             uint8_t *macroOut)
 {
+    *macroOut = 0;
     if (!px || format != RD_TEXEL_RGBA8 || w < 16 || h < 16) {
         return 0;
     }
@@ -968,7 +973,8 @@ static uint8_t textureRelief(const uint8_t *px, uint32_t w, uint32_t h, uint8_t 
     while ((uint64_t)((w + step - 1) / step) * ((h + step - 1) / step) > 65536u) {
         step++;
     }
-    uint64_t sum = 0, sum2 = 0, edge = 0, samples = 0, transparent = 0, comparisons = 0;
+    uint64_t sum = 0, sum2 = 0, edge = 0, curvature = 0, macroCurvature = 0;
+    uint64_t samples = 0, transparent = 0, comparisons = 0, curves = 0, macroCurves = 0;
     for (uint32_t y = 0; y < h; y += step) {
         for (uint32_t x = 0; x < w; x += step) {
             const uint8_t *p = px + ((size_t)y * w + x) * 4;
@@ -989,20 +995,65 @@ static uint8_t textureRelief(const uint8_t *px, uint32_t w, uint32_t h, uint8_t 
                 edge += l > d ? l - d : d - l;
                 comparisons++;
             }
+            if (x >= step && x + step < w) {
+                const uint8_t *a = px + ((size_t)y * w + x - step) * 4;
+                const uint8_t *b = px + ((size_t)y * w + x + step) * 4;
+                const uint32_t la = (77u * a[0] + 150u * a[1] + 29u * a[2]) >> 8;
+                const uint32_t lb = (77u * b[0] + 150u * b[1] + 29u * b[2]) >> 8;
+                const int32_t lap = (int32_t)(l * 2) - (int32_t)la - (int32_t)lb;
+                curvature += (uint32_t)(lap < 0 ? -lap : lap);
+                curves++;
+            }
+            if (y >= step && y + step < h) {
+                const uint8_t *a = px + ((size_t)(y - step) * w + x) * 4;
+                const uint8_t *b = px + ((size_t)(y + step) * w + x) * 4;
+                const uint32_t la = (77u * a[0] + 150u * a[1] + 29u * a[2]) >> 8;
+                const uint32_t lb = (77u * b[0] + 150u * b[1] + 29u * b[2]) >> 8;
+                const int32_t lap = (int32_t)(l * 2) - (int32_t)la - (int32_t)lb;
+                curvature += (uint32_t)(lap < 0 ? -lap : lap);
+                curves++;
+            }
+            const uint32_t macroStep = step * 2;
+            if (x >= macroStep && x + macroStep < w) {
+                const uint8_t *a = px + ((size_t)y * w + x - macroStep) * 4;
+                const uint8_t *b = px + ((size_t)y * w + x + macroStep) * 4;
+                const uint32_t la = (77u * a[0] + 150u * a[1] + 29u * a[2]) >> 8;
+                const uint32_t lb = (77u * b[0] + 150u * b[1] + 29u * b[2]) >> 8;
+                const int32_t lap = (int32_t)(l * 2) - (int32_t)la - (int32_t)lb;
+                macroCurvature += (uint32_t)(lap < 0 ? -lap : lap);
+                macroCurves++;
+            }
+            if (y >= macroStep && y + macroStep < h) {
+                const uint8_t *a = px + ((size_t)(y - macroStep) * w + x) * 4;
+                const uint8_t *b = px + ((size_t)(y + macroStep) * w + x) * 4;
+                const uint32_t la = (77u * a[0] + 150u * a[1] + 29u * a[2]) >> 8;
+                const uint32_t lb = (77u * b[0] + 150u * b[1] + 29u * b[2]) >> 8;
+                const int32_t lap = (int32_t)(l * 2) - (int32_t)la - (int32_t)lb;
+                macroCurvature += (uint32_t)(lap < 0 ? -lap : lap);
+                macroCurves++;
+            }
         }
     }
-    if (samples < 64 || transparent * 20 > samples || comparisons == 0) {
+    if (samples < 64 || transparent * 20 > samples || comparisons == 0 || curves == 0) {
         return 0;
     }
     const uint64_t mean = sum / samples;
     const uint64_t variance = sum2 / samples > mean * mean ? sum2 / samples - mean * mean : 0;
     const uint64_t meanEdge = edge / comparisons;
-    if (variance < 64 || meanEdge < 3) {
+    const uint64_t meanCurve = curvature / curves;
+    if (variance < 64 || meanEdge < 3 || meanCurve < 2) {
         return 0;
     }
-    uint64_t score = 32 + (meanEdge - 2) * 4 + variance / 32;
+    uint64_t score = 24 + (meanEdge - 2) * 3 + meanCurve * 4 + variance / 48;
     score = score > 192 ? 192 : score;
-    return score >= 80 ? (uint8_t)score : 0;
+    if (score < 80) {
+        return 0;
+    }
+    if (macroCurves) {
+        uint64_t macro = (macroCurvature / macroCurves) * 10;
+        *macroOut = (uint8_t)(macro > 255 ? 255 : macro);
+    }
+    return (uint8_t)score;
 }
 
 RdTex rd__create_texture_fmt(uint32_t w, uint32_t h, const void *px, uint8_t format, RdTexSrc src,
@@ -1032,7 +1083,7 @@ RdTex rd__create_texture_fmt(uint32_t w, uint32_t h, const void *px, uint8_t for
     } else {
         memset(t->pixels, 0, bytes);
     }
-    t->relief = textureRelief(t->pixels, w, h, format);
+    t->relief = textureRelief(t->pixels, w, h, format, &t->reliefMacro);
     texDirtyAll(t);
     snprintf(t->name, sizeof(t->name), "%s", debugName ? debugName : "texture");
     return (RdTex){id};
@@ -1116,7 +1167,7 @@ void rd_update_texture(RdTex tex, const void *rgba8)
         return;
     }
     memcpy(t->pixels, rgba8, bytes);
-    t->relief = textureRelief(t->pixels, t->w, t->h, t->format);
+    t->relief = textureRelief(t->pixels, t->w, t->h, t->format, &t->reliefMacro);
     texDirtyAll(t);
     g_rd.texFullUpdates++;
 }
@@ -1194,7 +1245,7 @@ void rd_update_texture_rect(RdTex tex, uint32_t x, uint32_t y, uint32_t w, uint3
     if (!changed) {
         return; /* nothing changed: nothing to upload */
     }
-    t->relief = textureRelief(t->pixels, t->w, t->h, t->format);
+    t->relief = textureRelief(t->pixels, t->w, t->h, t->format, &t->reliefMacro);
     g_rd.texRectUpdates++;
     if (!t->dirty) {
         g_rd.texDirtyCount++;

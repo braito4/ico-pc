@@ -3310,18 +3310,19 @@ static void vuDraw(Replay *r, const RdStateBlock *s, const DrawSetup *ds, RhiBin
         const int reliefGeometry =
             prog == RD_PROG_PRELIT || prog == RD_PROG_LIT || prog == RD_PROG_LIT_SPEC;
         const RdTexRec *reliefTex = rd__tex_rec(r->st.tex);
-        if (g_rd.settings.textureRelief && reliefGeometry && ds->textured &&
-            !r->st.ds.abe && r->st.ds.texFn == RD_TEXFN_MODULATE) {
+        if (g_rd.settings.textureRelief && reliefGeometry && ds->textured && !r->st.ds.abe &&
+            r->st.ds.texFn == RD_TEXFN_MODULATE) {
             const RdTexRec *t = reliefTex;
             if (t && t->kind == RD_TEXKIND_IMAGE && t->rhi.id == ds->tex.id && t->relief && t->w &&
                 t->h) {
                 cb.mode[0] |= ICO_DF_TEXTURE_RELIEF;
-                cb.param[0] = 0.75f + 2.25f * (float)t->relief / 255.0f;
+                cb.param[0] = 0.55f + 1.65f * (float)t->relief / 255.0f;
                 cb.param[1] = 1.0f / (float)t->w;
                 cb.param[2] = 1.0f / (float)t->h;
+                cb.param[3] = (float)t->reliefMacro / 255.0f;
                 if (!s_textureReliefLogged) {
-                    rd__log("texture relief active: %s (%ux%u, detail %u)", t->name, t->w, t->h,
-                            t->relief);
+                    rd__log("texture relief active: %s (%ux%u, detail %u, structure %u)", t->name,
+                            t->w, t->h, t->relief, t->reliefMacro);
                     s_textureReliefLogged = true;
                 }
             }

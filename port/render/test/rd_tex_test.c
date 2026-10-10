@@ -21,8 +21,8 @@
  *            separate entry, in-place update, a new size retired and
  *            destroyed two frame ticks later, drop;
  *   relief   flat and substantially transparent RGBA textures are rejected;
- *            opaque detailed textures receive a material-detail score, which
- *            is recomputed after a full update;
+ *            opaque detailed textures receive fine and broad material-detail
+ *            scores, which are recomputed after a full update;
  *   resolve  tex_TransTexture's packet decodes to TEX1/TEST/TEX0 with the
  *            cached texture bound, and no register is left undecoded;
  *   pixels   (Vulkan, lavapipe in the container) one PSMT8 sprite and one
@@ -726,6 +726,7 @@ static void cacheChecks(void)
 static void reliefChecks(void)
 {
     enum { W = 32, H = 32 };
+
     uint8_t px[W * H * 4];
 
     for (int i = 0; i < W * H; i++) {
@@ -736,7 +737,8 @@ static void reliefChecks(void)
     }
     const RdTex t = rd_create_texture(W, H, px, RD_TEXA_80_80, "relief score");
     const RdTexRec *r = rd__tex_rec(t.id);
-    CHECK(r && r->relief == 0, "a flat texture has no relief (%u)", r ? r->relief : 0);
+    CHECK(r && r->relief == 0 && r->reliefMacro == 0, "a flat texture has no relief (%u/%u)",
+          r ? r->relief : 0, r ? r->reliefMacro : 0);
 
     for (int y = 0; y < H; y++) {
         for (int x = 0; x < W; x++) {
@@ -750,13 +752,33 @@ static void reliefChecks(void)
     }
     rd_update_texture(t, px);
     CHECK(r && r->relief > 0, "an opaque detailed texture has relief (%u)", r ? r->relief : 0);
+    CHECK(r && r->reliefMacro == 0, "single-pixel noise has no broad structure (%u)",
+          r ? r->reliefMacro : 0);
+
+    /* Two-pixel mortar joints and eight-pixel blocks model the useful scales
+       in a small brick or stone-wall texture. */
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            const int staggeredX = x + ((y / 8) & 1) * 4;
+            const uint8_t v = (y % 8 < 2 || staggeredX % 8 < 2) ? 36 : 132;
+            uint8_t *p = &px[(y * W + x) * 4];
+            p[0] = v;
+            p[1] = v;
+            p[2] = v;
+            p[3] = 128;
+        }
+    }
+    rd_update_texture(t, px);
+    CHECK(r && r->relief > 0 && r->reliefMacro > 0, "masonry has fine and broad relief (%u/%u)",
+          r ? r->relief : 0, r ? r->reliefMacro : 0);
 
     for (int i = 0; i < W * H; i += 4) {
         px[i * 4 + 3] = 0;
     }
     rd_update_texture(t, px);
-    CHECK(r && r->relief == 0, "a substantially transparent texture has no relief (%u)",
-          r ? r->relief : 0);
+    CHECK(r && r->relief == 0 && r->reliefMacro == 0,
+          "a substantially transparent texture has no relief (%u/%u)", r ? r->relief : 0,
+          r ? r->reliefMacro : 0);
     rd_destroy_texture(t);
 }
 

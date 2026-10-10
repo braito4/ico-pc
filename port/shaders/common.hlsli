@@ -116,7 +116,8 @@ float2 gs_block_uv(float2 uv)
 #define DF_GS_LOD 262144u
 // Suitable opaque lit textures: derive a small normal perturbation from
 // neighbouring texels (vu_common.hlsli).  g_param.x is its analysed strength,
-// g_param.yz one actual source texel in normalised coordinates.
+// g_param.yz one actual source texel in normalised coordinates and g_param.w
+// the amount of useful structure at a two-texel scale.
 #define DF_TEXTURE_RELIEF 524288u
 
 // TEST.DATE. snap is the R8 DATE snapshot (1.0 where the destination alpha

@@ -653,10 +653,10 @@ float vu_relief_height(float3 c)
 
 /* Apparent material depth from the colour texture when no authored height
  * or normal map exists.  CPU analysis enables this only for detailed,
- * substantially opaque textures on rigid lit geometry.  The flat-normal
- * reference is subtracted, so a constant texture keeps exactly its original
- * brightness.  Four neighbouring samples make the result stable in texture
- * space rather than embossing it in screen space. */
+ * substantially opaque textures on rigid lit geometry.  Fine and two-texel
+ * slopes are blended according to the analysed material structure: this
+ * keeps mortar, stone cracks and broad grain while suppressing isolated
+ * pixel noise.  A small cavity term seats dark joints into the surface. */
 uint3 vu_relief_rgb(float2 uv, float q, uint3 rgb)
 {
     if ((g_mode.x & DF_TEXTURE_RELIEF) == 0u || g_param.x <= 0.0) {
@@ -667,12 +667,27 @@ uint3 vu_relief_rgb(float2 uv, float q, uint3 rgb)
     const float hr = vu_relief_height(gs_sample(g_texture, g_sampler, uv + float2(px.x, 0.0), q).rgb);
     const float hu = vu_relief_height(gs_sample(g_texture, g_sampler, uv - float2(0.0, px.y), q).rgb);
     const float hd = vu_relief_height(gs_sample(g_texture, g_sampler, uv + float2(0.0, px.y), q).rgb);
-    const float detail = saturate((abs(hl - hr) + abs(hu - hd)) * 3.0);
-    const float2 slope = float2(hl - hr, hu - hd) * g_param.x;
+    const float2 px2 = px * 2.0;
+    const float h2l =
+        vu_relief_height(gs_sample(g_texture, g_sampler, uv - float2(px2.x, 0.0), q).rgb);
+    const float h2r =
+        vu_relief_height(gs_sample(g_texture, g_sampler, uv + float2(px2.x, 0.0), q).rgb);
+    const float h2u =
+        vu_relief_height(gs_sample(g_texture, g_sampler, uv - float2(0.0, px2.y), q).rgb);
+    const float h2d =
+        vu_relief_height(gs_sample(g_texture, g_sampler, uv + float2(0.0, px2.y), q).rgb);
+    const float macro = saturate(g_param.w);
+    const float2 fineSlope = float2(hl - hr, hu - hd);
+    const float2 broadSlope = float2(h2l - h2r, h2u - h2d) * 0.5;
+    const float2 slope = lerp(fineSlope, fineSlope * 0.65 + broadSlope * 0.35, macro) * g_param.x;
+    const float detail = saturate((length(fineSlope) + length(broadSlope) * macro) * 2.4);
     const float3 n = normalize(float3(slope, 1.0));
-    const float3 light = normalize(float3(-0.45, -0.55, 1.0));
+    const float3 light = normalize(float3(-0.35, -0.45, 1.0));
     const float emboss = dot(n, light) - light.z;
-    const float shade = clamp(1.0 + emboss * (0.55 + detail * 0.35), 0.72, 1.25);
+    const float center = vu_relief_height(float3(rgb) / 255.0);
+    const float cavity = clamp(center - (h2l + h2r + h2u + h2d) * 0.25, -0.18, 0.18);
+    const float shade = clamp(1.0 + emboss * (0.48 + detail * 0.28) + cavity * macro * 0.32,
+                              0.78, 1.20);
     return uint3(min(float3(rgb) * shade + 0.5, 255.0));
 }
 
