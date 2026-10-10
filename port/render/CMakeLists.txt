@@ -655,6 +655,15 @@ if(ICO_RUN_TESTS)
                      -P "${CMAKE_CURRENT_SOURCE_DIR}/test/rd_replay_tool_list.cmake")
     set_tests_properties(rd_replay_tool_list PROPERTIES SKIP_REGULAR_EXPRESSION "SKIP:"
                                                         FIXTURES_REQUIRED rd_dump)
+    # --pass-dump (every target and the present from one run), the unknown
+    # --target and the wider-than-recorded --aspect errors
+    add_test(NAME rd_replay_tool_pass_dump
+             COMMAND "${CMAKE_COMMAND}" -DTOOL=$<TARGET_FILE:rd_replay_tool>
+                     "-DDUMP=${CMAKE_CURRENT_BINARY_DIR}/rd_pixel_frame.rddump"
+                     "-DOUT=${CMAKE_CURRENT_BINARY_DIR}/rd_replay_tool_pass_dump"
+                     -P "${CMAKE_CURRENT_SOURCE_DIR}/test/rd_replay_tool_pass_dump.cmake")
+    set_tests_properties(rd_replay_tool_pass_dump PROPERTIES SKIP_REGULAR_EXPRESSION "SKIP:"
+                                                             FIXTURES_REQUIRED rd_dump TIMEOUT 300)
     # the native frame gates (tools/native_frame_check.py, docs/BUILDING.md "Native frame
     # gates"): Gate A re-renders the dump list ICO_DUMPS names and compares with
     # docs/native_frame_baseline.json; Gate B checks the aspect sweeps ICO_SWEEPS names.

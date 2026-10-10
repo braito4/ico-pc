@@ -1585,6 +1585,9 @@ void rd_begin_frame(void)
     f->startState = g_rd.persistent;
     f->gsW = g_rd.gsW;
     f->gsH = g_rd.gsH;
+    f->aspect = 4.0f / 3.0f;
+    f->wExact = (float)g_rd.gsW;
+    f->cullW = g_rd.gsW;
     g_rd.recIndex = idx;
     g_rd.stats.draws = 0;
     f->cut = g_rd.cutPending; /* rd_camera_cut between frames */
@@ -1700,6 +1703,25 @@ uint32_t rd_frame_number(void)
 {
     const RdFrame *f = rd__last_frame();
     return f && f->closed ? f->number : 0;
+}
+
+bool rd_last_frame_native(uint32_t *number, float *aspect, uint32_t *gsW)
+{
+    const RdFrame *f = rd__last_frame();
+
+    if (!f || !f->closed) {
+        return false;
+    }
+    if (number) {
+        *number = f->number;
+    }
+    if (aspect) {
+        *aspect = f->aspect > 0.0f ? f->aspect : 4.0f / 3.0f;
+    }
+    if (gsW) {
+        *gsW = f->cullW ? f->cullW : f->gsW;
+    }
+    return true;
 }
 
 const RdFrame *rd__last_frame(void)

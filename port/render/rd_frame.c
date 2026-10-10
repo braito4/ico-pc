@@ -56,6 +56,9 @@ void rd_frame_head(const RdFrameHead *head)
         return;
     }
     const int cur = rd_current_list();
+    f->aspect = head->aspect > 0.0f ? head->aspect : 4.0f / 3.0f;
+    f->wExact = head->wExact > 0.0f ? head->wExact : (float)head->gsW;
+    f->cullW = head->gsW;
     recordHead(f, 0, 0, head);
     recordHead(f, 1, 11, head);
     rd_select_list(cur);

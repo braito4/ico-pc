@@ -25,6 +25,9 @@
  *              version 3 dump (no aa1) still loads, with AA1 off; a version
  *              5 and a version 7 dump's temps at the handles FEED_HELD and
  *              DISPLAY_HELD (appended after them) are recreated
+ *   dump v10   the native frame (aspect, wExact, cullW) after gsH round-trips
+ *              and peeks (rd__dump_peek); a version 9 dump loads as the 4:3
+ *              frame; a header the renderer cannot size is refused
  *   aa1 plans  PRIM.AA1 keys: the AA1 shaders, triangles, blending with ABE
  *              0 (DF_AA1_FULL), no Z write on lines; aa1 0 unchanged
  *   aura filter the model viewer's draw filter around the
@@ -432,11 +435,17 @@ static void cutBytes(uint8_t *buf, long *size, size_t o, size_t n)
     *size -= (long)n;
 }
 
+/* The version 10 frame fields' place: after the version word and the three
+ * sizes (8 + 16 bytes) and gsW, gsH; aspect, wExact and cullW, 12 bytes. */
+#define V10_FIELDS_AT (8 + 4 * 4 + 2 * 4)
+
 /* A dump of this version in buf rewritten in place as a version 8 one:
- * the state blocks without tex1Lod and every image without its level word
- * (and GS levels).  The version word is left to the caller. */
+ * without the version 10 frame fields, the state blocks without tex1Lod and
+ * every image without its level word (and GS levels).  The version word is
+ * left to the caller. */
 static void dumpTo8(uint8_t *buf, long *size)
 {
+    cutBytes(buf, size, V10_FIELDS_AT, 12);
     const size_t st0 = 8 + 4 * 4 + 5 * 4 + sizeof(RdCamera);
     const size_t sb = sizeof(RdStateBlock), sb8 = RD_STATE_BLOCK_V8_SIZE;
     const uint32_t sz8 = RD_STATE_BLOCK_V8_SIZE;
@@ -698,6 +707,137 @@ static void testDump(const char *dir)
     }
     testDumpOldTemps(f, path, dir, 5u, RD_TARGET_FEED_HELD);
     testDumpOldTemps(f, path, dir, 7u, RD_TARGET_DISPLAY_HELD); /* issue 28 */
+    remove(path);
+}
+
+/* the whole file at path in a malloc block (NULL when unreadable) */
+static uint8_t *slurp(const char *path, long *size)
+{
+    FILE *fp = fopen(path, "rb");
+    uint8_t *buf = NULL;
+
+    if (fp && fseek(fp, 0, SEEK_END) == 0 && (*size = ftell(fp)) > 0 &&
+        fseek(fp, 0, SEEK_SET) == 0) {
+        buf = malloc((size_t)*size);
+        if (buf && fread(buf, 1, (size_t)*size, fp) != (size_t)*size) {
+            free(buf);
+            buf = NULL;
+        }
+    }
+    if (fp) {
+        fclose(fp);
+    }
+    return buf;
+}
+
+static int spit(const char *path, const uint8_t *buf, long size)
+{
+    FILE *fp = fopen(path, "wb");
+    const int ok = fp && fwrite(buf, 1, (size_t)size, fp) == (size_t)size;
+
+    if (fp) {
+        fclose(fp);
+    }
+    return ok;
+}
+
+/* Dump version 10: the native frame after gsH (aspect, wExact, cullW) round
+ * trips; rd__dump_peek reads it without a load; a version 9 dump (the same
+ * file less the three fields and with the version word 9) loads and peeks as
+ * the 4:3 frame (aspect 4/3, wExact 512, cullW 512) and leaves its content
+ * alone; a header the renderer cannot size (an aspect under 4:3, a visible
+ * width past the native one, a cull width that is not the frame's) is
+ * refused. */
+static void testDumpV10(const char *dir)
+{
+    CHECK(RD_DUMP_VERSION == 10u, "the dump version is 10 (%u)", RD_DUMP_VERSION);
+    RdFrameHead h;
+    memset(&h, 0, sizeof(h));
+    h.gsW = 1376; /* 32:9: 16 * ceil(32 * k), k = 32/9 * 3/4 */
+    h.gsH = 448;
+    h.aspect = 32.0f / 9.0f;
+    h.wExact = 512.0f * (32.0f / 9.0f * 0.75f);
+    rd_begin_frame();
+    rd_frame_head(&h);
+    rd_select_list(7);
+    draw(1);
+    rd_end_frame(0);
+    const RdFrame *f = rd__last_frame();
+    CHECK(f->aspect == h.aspect && f->wExact == h.wExact && f->cullW == 1376u,
+          "rd_frame_head sets the frame's native fields (%g, %g, %u)", (double)f->aspect,
+          (double)f->wExact, f->cullW);
+    char path[1100];
+    snprintf(path, sizeof(path), "%s/rd_state_test_v10.rddump", dir);
+    CHECK(rd__dump_frame(f, path), "v10 dump written");
+    RdDumpInfo info;
+    CHECK(rd__dump_peek(path, &info) && info.version == 10u && info.gsW == 1376u &&
+              info.gsH == 448u && info.aspect == h.aspect && info.wExact == h.wExact &&
+              info.cullW == 1376u,
+          "v10 header peeked");
+    RdFrame g;
+    if (rd__load_frame(path, &g)) {
+        CHECK(g.gsW == 1376u && g.aspect == h.aspect && g.wExact == h.wExact && g.cullW == 1376u &&
+                  g.number == f->number && g.lists[7].count == f->lists[7].count,
+              "v10 dump round trip (%u, %g, %g, %u)", g.gsW, (double)g.aspect, (double)g.wExact,
+              g.cullW);
+        rd__frame_free(&g);
+    } else {
+        CHECK(0, "v10 dump loaded");
+    }
+    long size = 0;
+    uint8_t *buf = slurp(path, &size);
+    CHECK(buf != NULL, "v10 dump read back");
+    if (buf) {
+        /* the same frame as version 9 */
+        const long size10 = size;
+        char path9[1100];
+        snprintf(path9, sizeof(path9), "%s/rd_state_test_v9.rddump", dir);
+        uint8_t *b9 = malloc((size_t)size);
+        memcpy(b9, buf, (size_t)size);
+        cutBytes(b9, &size, V10_FIELDS_AT, 12);
+        const uint32_t v9 = 9;
+        memcpy(b9 + 8, &v9, 4);
+        CHECK(size == size10 - 12 && spit(path9, b9, size), "v9 dump written");
+        CHECK(rd__dump_peek(path9, &info) && info.version == 9u && info.aspect == 4.0f / 3.0f &&
+                  info.wExact == 512.0f && info.cullW == 512u,
+              "v9 header peeked as the 4:3 frame");
+        if (rd__load_frame(path9, &g)) {
+            CHECK(g.aspect == 4.0f / 3.0f && g.wExact == 512.0f && g.cullW == 512u &&
+                      g.number == f->number && g.lists[7].count == f->lists[7].count &&
+                      g.payloadSize == f->payloadSize,
+                  "v9 dump loads with the 4:3 defaults (%g, %g, %u)", (double)g.aspect,
+                  (double)g.wExact, g.cullW);
+            rd__frame_free(&g);
+        } else {
+            CHECK(0, "v9 dump loaded");
+        }
+        remove(path9);
+        free(b9);
+        /* refused: an aspect under 4:3, a cull width other than gsW, a
+           visible width past the native one */
+        const float lowAspect = 1.0f, wide = 2000.0f;
+        const uint32_t badCull = 1136;
+        char pathBad[1100];
+        snprintf(pathBad, sizeof(pathBad), "%s/rd_state_test_bad.rddump", dir);
+        for (int k = 0; k < 3; k++) {
+            uint8_t *bb = malloc((size_t)size10);
+            memcpy(bb, buf, (size_t)size10);
+            memcpy(bb + V10_FIELDS_AT +
+                       (k == 0   ? 0
+                        : k == 1 ? 8
+                                 : 4),
+                   k == 0   ? (const void *)&lowAspect
+                   : k == 1 ? (const void *)&badCull
+                            : (const void *)&wide,
+                   4);
+            CHECK(spit(pathBad, bb, size10), "bad v10 dump %d written", k);
+            CHECK(!rd__dump_peek(pathBad, &info) && !rd__load_frame(pathBad, &g),
+                  "bad v10 header %d refused", k);
+            free(bb);
+        }
+        remove(pathBad);
+        free(buf);
+    }
     remove(path);
 }
 
@@ -1398,6 +1538,7 @@ int main(int argc, char **argv)
     testStubs();
     testPlans();
     testDump(dir);
+    testDumpV10(dir);
     testAa1Plans();
     testEnumeration();
     testWideScissor();

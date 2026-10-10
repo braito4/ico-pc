@@ -27,8 +27,11 @@ ignored; relative paths are relative to the list file).  It is machine-local:
 dumps are never committed.  ICO_DUMPS names the list (or a folder of
 .rddump / .zip files) for the ctests.
 
-The replay tool is slow to start, so a run renders with a few workers; the
-whole run holds the shared replay lock (build-host/tmp/replay.lock, or
+The replay tool is slow to start, so a run renders one process per dump and
+setting with `--pass-dump DIR` (every named target and the present picture
+from one run: a few seconds a dump instead of 18 starts), a few at a time;
+a tool without that switch, or --per-target, renders one process per target.
+The whole run holds the shared replay lock (build-host/tmp/replay.lock, or
 ICO_REPLAY_LOCK) so two runs never compete for the GPU/CPU.
 
 Exit: 0 pass, 1 mismatch or error, 2 usage, 77 skipped (nothing to run).
@@ -170,6 +173,58 @@ def pixel_hash(img):
     return {"w": img.size[0], "h": img.size[1], "sha256": h.hexdigest()}
 
 
+PER_TARGET = False  # --per-target: one process per target even when the tool has --pass-dump
+_PASS_DUMP = {}
+
+
+def has_pass_dump(tool):
+    """True when the tool lists --pass-dump in its usage (and --per-target is off)."""
+    if PER_TARGET or os.environ.get("ICO_NFC_PER_TARGET"):
+        return False
+    if tool not in _PASS_DUMP:
+        try:
+            r = subprocess.run([tool], capture_output=True, text=True, timeout=60)
+            _PASS_DUMP[tool] = "--pass-dump" in (r.stdout + r.stderr)
+        except (OSError, subprocess.SubprocessError):
+            _PASS_DUMP[tool] = False
+    return _PASS_DUMP[tool]
+
+
+def pass_args(setting, outdir):
+    """The arguments of one --pass-dump run: the setting, every target, the present box."""
+    return list(SETTINGS[setting]) + ["--pass-dump", outdir, "--present", PRESENT_BOX[setting]]
+
+
+def render_pass(tool, dump, setting, targets, keep_dir=None):
+    """{target: record} for the targets plus PRESENT, from one rd_replay_tool run.
+    A target the run did not write is an error record, as a run of its own would give."""
+    from PIL import Image
+    res = {}
+    names = list(targets) + [PRESENT]
+    with tempfile.TemporaryDirectory(prefix="nfc") as td:
+        cmd = [tool, dump, "-"] + pass_args(setting, td)
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=1200)
+        except subprocess.TimeoutExpired:
+            return {t: {"error": "timeout"} for t in names}
+        if r.returncode == EXIT_SKIP:
+            return {t: {"error": "skip"} for t in names}
+        msg = (r.stdout + r.stderr).strip().splitlines()
+        for t in names:
+            png = os.path.join(td, t + ".png")
+            if not os.path.exists(png):
+                res[t] = {"error": "no picture: " + ("readback or PNG write failed" if r.returncode in (0, 1) and msg
+                                                     else (msg[-1] if msg else "rc=%d" % r.returncode))}
+                continue
+            img = Image.open(png)
+            img.load()
+            res[t] = pixel_hash(img)
+            if keep_dir:
+                os.makedirs(keep_dir, exist_ok=True)
+                img.convert("RGBA").save(os.path.join(keep_dir, t + ".png"))
+    return res
+
+
 def render_one(tool, dump, setting, target, keep_to=None):
     """Render one target; returns (record, PIL image or None)."""
     from PIL import Image
@@ -197,12 +252,29 @@ def render_one(tool, dump, setting, target, keep_to=None):
 def render_all(tool, dumps, jobs, ref_dir, targets, settings):
     """{dumpname: {setting: {target: record}}} for the dumps that exist."""
     from PIL import Image  # noqa: F401
+    results = {}
+    if has_pass_dump(tool):
+        # one process per dump and setting
+        pwork = [(d, s) for d in dumps for s in settings]
+
+        def pone(w):
+            d, s = w
+            keep = os.path.join(ref_dir, os.path.basename(d), s) if ref_dir else None
+            return w, render_pass(tool, d, s, targets, keep)
+
+        done = 0
+        with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as ex:
+            for w, recs in ex.map(pone, pwork):
+                d, s = w
+                results.setdefault(os.path.basename(d), {})[s] = recs
+                done += 1
+                print("  rendered %d / %d runs" % (done, len(pwork)), flush=True)
+        return results
     work = []
     for d in dumps:
         for s in settings:
             for t in targets + [PRESENT]:
                 work.append((d, s, t))
-    results = {}
 
     def one(w):
         d, s, t = w
@@ -684,6 +756,8 @@ def main():
         p.add_argument("--only", help="only dumps whose file name contains this text")
         p.add_argument("--manifest", default=DEFAULT_MANIFEST)
         p.add_argument("--jobs", type=int, default=int(os.environ.get("ICO_NFC_JOBS", "3")))
+        p.add_argument("--per-target", action="store_true",
+                       help="one rd_replay_tool process per target, even when the tool has --pass-dump")
         p.add_argument("--ref-dir", default=os.environ.get("ICO_NFC_REF_DIR"),
                        help="keep (baseline) or read (gate-a) the baseline pictures here, for the pixel report")
 
@@ -701,6 +775,8 @@ def main():
                                    "\"continuity\": [{group, aspect, edge, reason}]}")
     sub.add_parser("selftest", help="synthetic checks of the gate-b logic")
     args = ap.parse_args()
+    global PER_TARGET
+    PER_TARGET = bool(getattr(args, "per_target", False))
     if args.mode == "baseline":
         rc = cmd_baseline(args)
     elif args.mode == "gate-a":

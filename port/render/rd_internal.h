@@ -264,6 +264,12 @@ typedef struct RdFrame {
     uint32_t keep;   /* rd_end_frame(keep) */
     uint32_t closed;
     uint32_t gsW, gsH;
+    /* the native frame the game built this tick for (rd_frame_head; dump
+     * version 10): the display aspect, the visible width in GS pixels (512 k)
+     * and the width the cull and the draws used (= gsW).  4/3, 512 and 512
+     * for a frame without a head and in the dumps before version 10 */
+    float aspect, wExact;
+    uint32_t cullW;
     uint32_t tempTargets[RD_MAX_TEMP_PER_FRAME]; /* owned, freed when the frame is reused */
     uint32_t tempCount;
     /* rd_frame.c; not dumped */
@@ -1766,11 +1772,27 @@ bool rd__read_texture(RdTex t, void *dst, size_t dstSize, uint32_t *w, uint32_t 
  * RD_TARGET_FEED_HELD, a 17th fixed target; 7 RD_TEXEL_SHEET images, the
  * style in the view word; 8 RD_TARGET_DISPLAY_HELD, an 18th fixed target
  * (issue 28); 9 RdStateBlock.tex1Lod, RDC_FILTER's u[0] and an image's GS
- * levels (RdTexRec.gsLevels) after its texels.  rd__dump_frame writes this
- * version; rd__load_frame reads 3 to it. */
-#define RD_DUMP_VERSION 9u
+ * levels (RdTexRec.gsLevels) after its texels; 10 the native frame after
+ * gsH: f32 aspect, f32 wExact, u32 cullW (RdFrame.aspect, .wExact, .cullW).
+ * rd__dump_frame writes this version; rd__load_frame reads 3 to it, and a
+ * dump before 10 loads as the 4:3 frame (aspect 4/3, wExact 512, cullW 512).
+ * A dump holds the picture as drawn at its width: a replay can crop it to a
+ * narrower aspect, never widen it (rd_replay_tool). */
+#define RD_DUMP_VERSION 10u
 bool rd__dump_frame(const RdFrame *f, const char *path);
 bool rd__load_frame(const char *path, RdFrame *out);
+
+/* A dump's header, read without loading it (rd_replay_tool sizes the
+ * renderer and chooses the replay's aspect from it). */
+typedef struct RdDumpInfo {
+    uint32_t version;
+    uint32_t gsW, gsH;
+    float aspect;   /* 4/3 before version 10 */
+    float wExact;   /* 512 before version 10 */
+    uint32_t cullW; /* 512 before version 10 */
+} RdDumpInfo;
+
+bool rd__dump_peek(const char *path, RdDumpInfo *info);
 
 /* rd_water.c: render-to-texture surfaces (rd.h rd_alias_target,
  * rd_block_target, rd_push_camera).  The per-frame records live in rd_water.c,

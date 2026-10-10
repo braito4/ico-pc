@@ -526,6 +526,10 @@ void rd_set_camera(const RdCamera *cam);
 bool rd_interpolation_active(void);
 bool rd_present(float alpha);
 uint32_t rd_frame_number(void);
+/* The last closed frame's number, display aspect and native GS width (the
+ * frame header, dump version 10); false before the first.  The aspect sweep
+ * (window_host.c) waits on it for a frame at the aspect it asked for. */
+bool rd_last_frame_native(uint32_t *number, float *aspect, uint32_t *gsW);
 void rd_camera_cut(void);
 /* rd_free_camera: the frame being recorded is drawn from the port's own free
  * camera (photo mode, port/game/photo_view.c), not a camera the game's
@@ -1266,8 +1270,10 @@ typedef struct RdFrameHead {
     uint8_t rgba[4];   /* RGBAQ of the clear sprite (gsb_SetBGColor, alpha 0x80) */
     uint32_t z;        /* the clear sprite's Z (sceGsSetDefClear: 0) */
     uint32_t gsW, gsH; /* the scene size (GsBase.c gsFrame.w, ScreenHeight) */
-    uint8_t halfY;     /* XYOFFSET.y + 8 (sceGsSetHalfOffset with half != 0) */
-    uint8_t clear;     /* fbClear: the clear packet is part of the flip */
+    float aspect;      /* gsFrame.aspect, wExact: gsFrame.wExact (dump version 10); 0 = 4:3 */
+    float wExact;
+    uint8_t halfY; /* XYOFFSET.y + 8 (sceGsSetHalfOffset with half != 0) */
+    uint8_t clear; /* fbClear: the clear packet is part of the flip */
     uint8_t _pad[2];
 } RdFrameHead;
 

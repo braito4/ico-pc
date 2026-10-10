@@ -1139,6 +1139,8 @@ static void gsbHostFrameHead(void)
     h.z = 0;
     h.gsW = (unsigned int)gsFrame.w; /* FRAME: the native width */
     h.gsH = (unsigned int)ScreenHeight;
+    h.aspect = gsFrame.aspect; /* the dump's frame header (version 10) */
+    h.wExact = gsFrame.wExact;
     h.halfY = 0; /* gsbHostFlip sets what the flip sends */
     h.clear = fbClear != 0;
     rd_frame_head(&h);
