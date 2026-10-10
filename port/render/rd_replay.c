@@ -1038,11 +1038,6 @@ static void beginPass(Replay *r, RdTargetRec *c, RdTargetRec *d, uint32_t cid, u
  *    msaaSpriteExpand), so clears and backdrops keep full coverage;
  *  - the stencil of SCENE_MS is not the shadow window's: the shadow
  *    commands draw on SCENE's own depth after the epoch closed. */
-static bool msaaOwns(uint32_t texId)
-{
-    return s_ms.active && texId != 0 && (texId == s_ms.sceneColor || texId == s_ms.sceneDepth);
-}
-
 static void msaaFree(void)
 {
     if (s_ms.color.id) {
