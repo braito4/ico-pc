@@ -440,10 +440,12 @@ static void namedTargetDesc(int id, uint32_t gsW, uint32_t gsH, uint32_t *w, uin
      * to the texture, not to the GS size: rd__target_scale_of */
 }
 
-/* The scene-class targets, which take the Enhanced scene
- * resolution and (SCENE, WORK2, AURA_WORK) the wide projection: the
- * scene-sized buffers and DISPLAY.  The other named targets are the fixed
- * work buffers, scaled by rd_work_target_scale. */
+/* The scene-class targets, which take the Enhanced scene resolution: the
+ * frame-sized buffers (SCENE, WORK2, AURA_WORK, the DATE snapshot), DISPLAY
+ * and its held copy.  Their GS width is the native frame's (g_rd.gsW: the
+ * frame head's gsW, GsBase.c gsFrame.w), so a wide picture has more GS
+ * pixels, not wider ones.  The other named targets are the fixed work
+ * buffers, scaled by rd_work_target_scale. */
 static int sceneClass(int id)
 {
     return id == RD_TARGET_SCENE || id == RD_TARGET_DISPLAY || id == RD_TARGET_WORK2 ||
@@ -477,9 +479,15 @@ static uint32_t scaled(uint32_t n, float k)
 
 /* The texture size and scale of a target of GS size t->w x t->h: named is
  * the RdTargetId of a named target, -1 for a temporary one (scene-class when
- * it has the scene's GS size: the shadow count, rd_shadow.c).  At scale 1
- * (Original, and every Enhanced target the options leave alone) tw == w,
- * th == h. */
+ * it has the scene's GS size: the shadow count, rd_shadow.c, and a
+ * render-to-texture block the game sizes as the frame, puddle.c).  At scale
+ * 1 (Original, and every Enhanced target the options leave alone) tw == w,
+ * th == h.  The scale is the resolution's alone: sx == sy, but under the
+ * Window resolution, whose box keeps the PS2's pixel shape
+ * (rd__apply_display).  A block of any other size (a reflection block, the
+ * queen barrier's copy) is drawn at its own GS size, whatever the aspect:
+ * the game sizes it, and its picture is the one its own screen matrix
+ * gives. */
 void rd__target_scale_of(RdTargetRec *t, int named)
 {
     float sx = 1.0f, sy = 1.0f;
@@ -493,24 +501,10 @@ void rd__target_scale_of(RdTargetRec *t, int named)
     } else if (named >= 0 && g_rd.workScale > 1.0f && !shadowLevel(named)) {
         sx = sy = g_rd.workScale;
     }
-    /* Widescreen reflections: a temporary target of another size with its
-     * own depth buffer is a render-to-texture block that a 3D view is drawn
-     * into through a screen matrix centred on it (puddle.c, pool.c; the
-     * decoder's blocks, GifPacket.c gsAliasTarget).  Wider than 4:3 it gets
-     * 1 / f times the texels across and the wide x scale, as SCENE does at
-     * 1x, so the reflection covers what the wide scene shows instead of
-     * ending at the 4:3 frame's edge.  f = 1 (4:3, Original): untouched. */
-    const float f = g_rd.wideX;
-    const int block = named < 0 && !scene && t->withDepth && f > 0.0f && f < 1.0f;
-    if (block) {
-        sx = 1.0f / f;
-    }
     t->sx = sx;
     t->sy = sy;
     t->tw = sx == 1.0f ? t->w : scaled(t->w, sx);
     t->th = sy == 1.0f ? t->h : scaled(t->h, sy);
-    t->wide = (scene && !displayClass(named) && named != RD_TARGET_DATE_SNAPSHOT) || block;
-    t->wideBlock = (uint8_t)block;
 }
 
 float rd_work_target_scale(uint32_t sceneHeight)

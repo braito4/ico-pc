@@ -9,8 +9,8 @@
  *   keep       rd_end_frame(1) walks lists 11 and 12 only
  *   retention  the closed frame and the one before it are kept
  *   stubs      VU, shadow-strip and post draws are recorded with payload
- *   scissor    rd__wide_scissor: a UI scissor narrower than the target
- *              follows the wide x scale, outwards, edges stay
+ *   region     rd__region_scale: exactly 1 at 4:3, 512 / W on a target of a
+ *              W-wide frame's size, 1 on the others
  *   plans      AFAIL splits, blend paths, FIX clamps (rd__plan_screen_draw);
  *              the stair railings' state (TEST 0x5160D, ALPHA
  *              0x44 with ABE, Z write) splits into two passes that differ
@@ -908,39 +908,37 @@ static void testEnumeration(void)
           sheet);
 }
 
-/* A UI scissor narrower than the target follows the wide x
- * scale about the target's centre, rounded outwards (it clips as much as the
- * draw does, no more); a side at the target's edge stays; f 1 changes nothing. */
-static void testWideScissor(void)
+/* The native frame's region scale (rd__region_scale, FrameCB g_frame.x):
+ * exactly 1 at 4:3 on every target (the region path untouched), 512 / W on a
+ * target of a W-wide frame's size and 1 on the others; no scissor or
+ * position is scaled (the old wide scissor is gone with the squeeze). */
+static void testRegionScale(void)
 {
-    int32_t x0 = 100, x1 = 300;
-    rd__wide_scissor(&x0, &x1, 512, 0.75f);
-    CHECK(x0 == 139 && x1 == 289, "wide scissor 100..300 of 512 at 0.75 is %d..%d (139..289)", x0,
-          x1);
-    /* the draw's pixels 100..300 land at 256 + 0.75 (p - 256): all inside */
-    CHECK(256.0f + 0.75f * (100.0f - 256.0f) >= (float)x0 &&
-              256.0f + 0.75f * (301.0f - 256.0f) <= (float)(x1 + 1),
-          "the scissor covers the compressed draw");
-    x0 = 0;
-    x1 = 300;
-    rd__wide_scissor(&x0, &x1, 512, 0.75f);
-    CHECK(x0 == 0 && x1 == 289, "a scissor from the left edge keeps it: %d..%d", x0, x1);
-    x0 = 100;
-    x1 = 511;
-    rd__wide_scissor(&x0, &x1, 512, 0.75f);
-    CHECK(x0 == 139 && x1 == 511, "a scissor to the right edge keeps it: %d..%d", x0, x1);
-    x0 = 0;
-    x1 = 511;
-    rd__wide_scissor(&x0, &x1, 512, 0.75f);
-    CHECK(x0 == 0 && x1 == 511, "the full-width scissor is untouched: %d..%d", x0, x1);
-    x0 = 100;
-    x1 = 300;
-    rd__wide_scissor(&x0, &x1, 512, 1.0f);
-    CHECK(x0 == 100 && x1 == 300, "f 1 leaves the scissor alone: %d..%d", x0, x1);
-    /* a one-pixel scissor stays one pixel or more and inside the target */
-    x0 = x1 = 5;
-    rd__wide_scissor(&x0, &x1, 512, 0.75f);
-    CHECK(x0 >= 0 && x1 >= x0 && x1 < 512, "a one-pixel scissor: %d..%d", x0, x1);
+    const uint32_t keepW = g_rd.gsW, keepH = g_rd.gsH;
+    RdTargetRec t;
+    memset(&t, 0, sizeof(t));
+    g_rd.gsW = 512;
+    g_rd.gsH = 448;
+    t.w = 512;
+    t.h = 448;
+    CHECK(rd__region_scale(&t) == 1.0f, "region scale: a 4:3 frame's SCENE is exactly 1 (%g)",
+          (double)rd__region_scale(&t));
+    g_rd.gsW = 688; /* 16:9 (ico_frame_width_for) */
+    t.w = 688;
+    CHECK(rd__region_scale(&t) == 512.0f / 688.0f,
+          "region scale: a 688-wide frame's target is 512 / 688 (%g)",
+          (double)rd__region_scale(&t));
+    t.w = 256;
+    t.h = 256;
+    CHECK(rd__region_scale(&t) == 1.0f, "region scale: a work buffer is 1 (%g)",
+          (double)rd__region_scale(&t));
+    t.w = 688;
+    t.h = 224;
+    CHECK(rd__region_scale(&t) == 1.0f, "region scale: DISPLAY's half height is 1 (%g)",
+          (double)rd__region_scale(&t));
+    CHECK(rd__region_scale(NULL) == 1.0f, "region scale: no target is 1");
+    g_rd.gsW = keepW;
+    g_rd.gsH = keepH;
 }
 
 /* ------------------------------------------------------- the aura filter
@@ -1420,8 +1418,7 @@ static void onDateCmd(void *user, int list, uint32_t index, const RdCmd *c, cons
     const RdTargetRec *tc = rd__target_rec(s->color);
     const RdScreenVtx *v = (const RdScreenVtx *)(w->f->payload + c->u[0]);
     const int i = w->draws++;
-    w->got[i] =
-        tc && rd__screen_area(tc, s, v, c->u[1], 0, c->b[1] == RD_SPACE_UI, 0, 0, &w->area[i]);
+    w->got[i] = tc && rd__screen_area(tc, s, v, c->u[1], 0, 0, &w->area[i]);
     RhiRect take;
     if (tc && rd__date_retake(w->heldFor, w->heldSerial, &w->held, s->color, w->serial,
                               w->got[i] ? &w->area[i] : NULL, tc->tw, tc->th, &take)) {
@@ -1517,10 +1514,9 @@ static void testDateArea(void)
     s.scissor[2] = DA_W - 1;
     s.scissor[3] = DA_H - 1;
     RhiRect a;
-    CHECK(rd__screen_area(tc, &s, q, 2, 0, 0, 0, 1, &a) && a.x == 97 && a.w == 47,
+    CHECK(rd__screen_area(tc, &s, q, 2, 0, 1, &a) && a.x == 97 && a.w == 47,
           "date area: AA1 pads three pixels: (%d) %u wide, (97) 47 expected", a.x, a.w);
-    CHECK(rd__screen_area(tc, &s, q, 2, 0, 1, 1, 0, &a) && a.x == (int32_t)tc->w - 1 - 142 &&
-              a.w == 45,
+    CHECK(rd__screen_area(tc, &s, q, 2, 1, 0, &a) && a.x == (int32_t)tc->w - 1 - 142 && a.w == 45,
           "date area: mirrored to (%d) %u wide, (%d) 45 expected", a.x, a.w,
           (int32_t)tc->w - 1 - 142);
 }
@@ -1541,7 +1537,7 @@ int main(int argc, char **argv)
     testDumpV10(dir);
     testAa1Plans();
     testEnumeration();
-    testWideScissor();
+    testRegionScale();
     testAuraFilter();
     testPassOps();
     testStencilOps();

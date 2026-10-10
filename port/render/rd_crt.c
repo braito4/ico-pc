@@ -341,9 +341,9 @@ float rd__crt_beam(float c, float d, float beamMin, float beamMax)
 
 void rd__crt_grid(uint32_t *vw, uint32_t *vh)
 {
-    const float wide = g_rd.wideX > 0.0f ? g_rd.wideX : 1.0f;
-    const uint32_t gw = g_rd.gsW ? g_rd.gsW : 512, gh = g_rd.gsH ? g_rd.gsH : 512;
-    const uint32_t w = (uint32_t)((float)gw / wide + 0.5f);
+    /* the native frame's GS width (512 at 4:3), a column a pixel of the
+       PS2's grid at every aspect (W5 narrows it to the exact width) */
+    const uint32_t w = g_rd.gsW ? g_rd.gsW : 512, gh = g_rd.gsH ? g_rd.gsH : 512;
     const uint32_t h = (gh / 2) * (g_rd.fullHeight ? 2u : 1u);
     *vw = w ? w : 1;
     *vh = h ? h : 1;
@@ -548,8 +548,8 @@ bool rd__crt_record(RhiCommandList cl, const RdTargetRec *disp, RhiTexture out, 
     if (!rd__crt_resolve(&g_rd.settings, &p) || !disp || !disp->color.id) {
         return false;
     }
-    /* the source grid: DISPLAY's GS width widened with the aspect, its
-     * lines (the full-height scene's 512) */
+    /* the source grid: DISPLAY's GS width (the native frame's), its lines
+     * (the full-height scene's 512) */
     uint32_t vw, vh;
     rd__crt_grid(&vw, &vh);
     RhiTexture src = disp->color;

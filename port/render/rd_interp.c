@@ -3880,15 +3880,13 @@ static bool prevSphere(const RdFrame *prev, const RdCmd *pc, const uint8_t *p, d
 
 /* whether the sphere is wholly outside cur's picture: beyond one of the
  * planes of S = Pc Vc (world to GS screen) through the picture's edges,
- * GS 2048 (GsBase.c's centre) +- the half width (gsW / 2 widened by the
- * display's aspect: rd_replay.c's wide x scale g_rd.wideX) and +- gsH / 2,
- * or behind the eye (w <= 0) */
+ * GS 2048 (GsBase.c's centre) +- the half width (gsW / 2: the native
+ * frame's) and +- gsH / 2, or behind the eye (w <= 0) */
 static bool outsideCur(const double c[3], double r)
 {
     double sc[16];
     mul4d(s_cam.pc, s_cam.vc, sc);
-    const float wide = g_rd.wideX > 0.0f && g_rd.wideX < 1.0f ? g_rd.wideX : 1.0f;
-    const double hw = 0.5 * (double)(s_out.gsW ? s_out.gsW : 512u) / (double)wide;
+    const double hw = 0.5 * (double)(s_out.gsW ? s_out.gsW : 512u);
     const double hh = 0.5 * (double)(s_out.gsH ? s_out.gsH : 448u);
     double pl[5][4];
     for (int k = 0; k < 4; k++) {

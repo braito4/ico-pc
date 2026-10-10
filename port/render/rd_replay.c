@@ -508,6 +508,7 @@ void rd__set_replay_camera(const RdCamera *cam)
     if (cam) {
         s_replayCam = *cam;
         s_hasReplayCam = 1;
+        g_rd.frameAspect = cam->aspect; /* the frame's exact width (rd__frame_wexact) */
     }
 }
 
@@ -523,7 +524,7 @@ RdUniform rd__frame_group_z(uint32_t targetW, uint32_t targetH, float originX, f
 }
 
 RdUniform rd__frame_group_ex(uint32_t targetW, uint32_t targetH, float originX, float originY,
-                             float zScale, float spaceX, float scaleX, float scaleY)
+                             float zScale, float regionScale, float scaleX, float scaleY)
 {
     IcoFrameCB cb;
     memset(&cb, 0, sizeof(cb));
@@ -539,12 +540,20 @@ RdUniform rd__frame_group_ex(uint32_t targetW, uint32_t targetH, float originX, 
      * pixels), so integer edges are block edges (expand) */
     cb.origin[2] = scaleX > 1.0f ? 0.5f / scaleX : 0.5f;
     cb.origin[3] = scaleY > 1.0f ? 0.5f / scaleY : 0.5f;
-    /* Original: both spaces identity.  Otherwise the wide projection's x
-     * scale about the target's centre (spaceX = (4/3) / aspect) for draws
-     * into a scene-class target other than full-screen ones (bindDraw).
-     * The mirror is not applied here but to the vertices (mirrorDraw). */
-    cb.space[0][0] = cb.space[1][0] = spaceX;
-    cb.space[0][1] = cb.space[1][1] = 1.0f;
+    /* The native frame: no position is transformed (a GS X is drawn where
+     * the game put it, at every aspect; the mirror is applied to the
+     * vertices, mirrorDraw).  frame[0] the region scale (rd__region_scale:
+     * exactly 1 at 4:3 and on every target that is not frame-wide);
+     * frame43 the target's 4:3 columns in texels, (w / 2 -+ 256) sx on a
+     * frame-wide target, 0 .. w sx otherwise, computed as vu_common.hlsli
+     * vu_in_picture rounds them (the content table's HIDE43 split) */
+    cb.frame[0] = regionScale;
+    {
+        const float c = (float)targetW * 0.5f;
+        const float half = regionScale != 1.0f ? (float)(ICO_FRAME_BASE_W / 2) : c;
+        cb.frame43[0] = (c - half) * scaleX;
+        cb.frame43[1] = (c + half) * scaleX;
+    }
     /* the GS Z scale of the bound depth buffer: 2^-32 for the game's PSMZ32
      * so UI Z values above 2^24 keep their order */
     cb.z[0] = zScale;
@@ -684,12 +693,12 @@ typedef struct Replay {
     int passOpen;
     uint32_t passColor, passDepth;
     RdUniform frameBG;
-    uint32_t frameKey[6]; /* colour, gsW, gsH, useOffset, pass serial, full-screen */
-    int stretch;          /* the draw being bound is full-screen (no wide x scale) */
-    int mirror;           /* the draw being bound is a flipped UI draw (scissor too) */
-    int uiPrim;    /* the draw being bound is a UI screen prim (its scissor gets the wide scale) */
+    uint32_t frameKey[5]; /* colour, gsW, gsH, useOffset, pass serial */
+    /* the draw being bound is tagged full-screen (screenStretch; a tag that
+     * changes no transform: W3-UI deletes it) */
+    int stretch;
+    int mirror;    /* the draw being bound is a flipped UI draw (scissor too) */
     int halfAdded; /* sceneKeepsHalf gave the target in force the frame head's half pixel */
-    float blockCs; /* a stretched draw's u at the target's centre (blockCentre) */
     uint32_t passSerial;
     uint32_t writeSerial; /* bumped by every action that may change a target's alpha */
     uint32_t dateFor;     /* target id the DATE snapshot holds, 0 = none */
@@ -1059,8 +1068,6 @@ static void setUvShift(float sx, float sy)
     s_uvShiftY = sy > 1.0f ? (sy - 1.0f) / (2.0f * sy) : 0.0f;
 }
 
-static float wideFor(const RdTargetRec *tc, int stretch);
-
 /* The mirror mode's UI flip.  The presenter flips the whole picture
  * (rd_present.c step 2), so an RD_SPACE_UI prim drawn into SCENE or
  * DISPLAY (the targets the present shows) is flipped here about the
@@ -1131,7 +1138,7 @@ static void mirrorDraw(Replay *r, const RdTargetRec *tc, IcoSpriteVertex *o, uin
 {
     const int32_t ox = 2048 - (int32_t)(r->st.gsW >> 1);
     const int32_t c16 = 32 * ox + 16 * (int32_t)tc->w;
-    const float texels = tc->sx * wideFor(tc, r->stretch);
+    const float texels = tc->sx;
     mirrorVerts(o, n, topo, c16, 16.0f / (texels > 0.0f ? texels : 1.0f));
     r->mirror = 1;
 }
@@ -1526,59 +1533,50 @@ static RhiTexture dateSnapshot(Replay *r, RdTargetRec *tc, uint32_t tcId, const 
     return sn->color;
 }
 
-/* -------------------------------------------------------- scale and wide
+/* ------------------------------------------------------- scale and frame
  * A target's texture is tw x th texels for its w x h GS pixels (sx, sy
  * texels per pixel; 1 in Original).  FrameCB keeps the GS size (g_target),
  * so every vertex lands where it did and the viewport, the scissor and the
  * copies are what scale; g_z.yz carries the scale for the shaders that
  * address a target by texel (fx_sprite_ps, fog_lut_ps).
  *
- * The wide x scale (4/3) / aspect applies, about the target's centre, to
- * draws into the scene-class targets (SCENE, WORK2, AURA_WORK, the shadow
- * count: RdTargetRec.wide), the meshes (vu_ndc) and the screen prims
- * alike, so CPU-projected and UI prims follow the wider projection and the
- * UI stays a centred 4:3 box.  Full-screen draws stretch instead: the
- * RD_SPACE_FULLSCREEN ones (rd_post.c's passes, the fog, layout_texture.c's
- * primary sprite) and any sprite that spans the target's whole width (the
- * clears, Shadow.c's resolve, the game's own full-screen fills). */
+ * The native frame: the scene-class targets are as wide in GS pixels as the
+ * display aspect asks (gsW, GsBase.c gsFrame.w; 512 at 4:3), the origin
+ * 2048 - gsW / 2, and nothing is squeezed or stretched: a world draw, a UI
+ * prim and a full-screen pass are each drawn at the GS X the game gave
+ * (the 2D layer's 640 grid lands on the frame's centre 2048 -+ 256; the
+ * game draws a full-frame item at the frame's width).  The only aspect term
+ * left is the region scale of the PS2's 4:3 window test (rd__region_scale). */
 
 static int32_t floorDiv16(int32_t v)
 {
     return v >= 0 ? v / 16 : -((-v + 15) / 16);
 }
 
-/* The scissor x0..x1 (inclusive GS pixels, inside 0..w-1) of a UI draw on
- * a target w pixels wide under the wide x scale f (the draw's x about w / 2
- * is multiplied by f, rd_frame.c).  A side that reaches the target's edge
- * stays there; the other follows the draw, rounded outwards, so the
- * scissor clips as much as the draw does.  f 1 leaves it alone. */
-void rd__wide_scissor(int32_t *x0, int32_t *x1, int32_t w, float f)
+/* A target of the native frame's GS size (SCENE, WORK2, AURA_WORK, the
+ * shadow count, a render-to-texture block the game sizes as the frame). */
+static int frameSized(const RdTargetRec *tc)
 {
-    if (f == 1.0f || f <= 0.0f) {
-        return;
+    return tc->w == g_rd.gsW && tc->h == g_rd.gsH;
+}
+
+float rd__region_scale(const RdTargetRec *tc)
+{
+    if (!tc || g_rd.gsW == ICO_FRAME_BASE_W || g_rd.gsW == 0 || !frameSized(tc)) {
+        return 1.0f;
     }
-    const float c = (float)w * 0.5f;
-    if (*x0 > 0) {
-        *x0 = (int32_t)floorf(c + f * ((float)*x0 - c));
-    }
-    if (*x1 < w - 1) {
-        *x1 = (int32_t)ceilf(c + f * ((float)(*x1 + 1) - c)) - 1;
-    }
+    return (float)ICO_FRAME_BASE_W / (float)g_rd.gsW;
 }
 
 /* GS pixels x0..x1, y0..y1 (inclusive, after XYOFFSET) of target tc in its
- * texels: the wide x scale f about the target's centre (rd__wide_scissor:
- * outwards, a side at or beyond the target's edge left alone; f 1 nothing),
- * the UI flip when mirror (GS pixel p is target pixel w - 1 - p),
+ * texels: the UI flip when mirror (GS pixel p is target pixel w - 1 - p),
  * clipped to the target, then the texel scale: GS pixels x0..x1 cover texels
- * floor(x0 * sx) .. ceil((x1 + 1) * sx) - 1.  f is at most 1 (the display's
- * aspect is 4:3 or wider), so a range inside the target stays inside and
- * the clip changes nothing for the scissor; a draw's box may start outside
- * (its vertices off the target's edge).  False when nothing is left. */
+ * floor(x0 * sx) .. ceil((x1 + 1) * sx) - 1.  A draw's box may start
+ * outside (its vertices off the target's edge).  False when nothing is
+ * left. */
 static bool gsRectToTexels(const RdTargetRec *tc, int32_t x0, int32_t y0, int32_t x1, int32_t y1,
-                           float f, int mirror, RhiRect *out)
+                           int mirror, RhiRect *out)
 {
-    rd__wide_scissor(&x0, &x1, (int32_t)tc->w, f);
     if (mirror) {
         const int32_t a = (int32_t)tc->w - 1 - x1, b = (int32_t)tc->w - 1 - x0;
         x0 = a;
@@ -1605,11 +1603,9 @@ static bool gsRectToTexels(const RdTargetRec *tc, int32_t x0, int32_t y0, int32_
 }
 
 /* the scissor (SCISSOR_1, inclusive GS pixels) in texels, clipped to the
- * target first.  A UI draw's x scale about the target's centre (the wide
- * factor) applies to a scissor that does not reach the edges; a flipped
- * UI draw clips where its scissor lands after the flip. */
-static bool scissorTexels(const RdTargetRec *tc, const RdStateBlock *st, int stretch, int uiPrim,
-                          int mirror, RhiRect *sc)
+ * target first; a flipped UI draw clips where its scissor lands after the
+ * flip. */
+static bool scissorTexels(const RdTargetRec *tc, const RdStateBlock *st, int mirror, RhiRect *sc)
 {
     int32_t x0 = st->scissor[0] < 0 ? 0 : st->scissor[0];
     int32_t y0 = st->scissor[1] < 0 ? 0 : st->scissor[1];
@@ -1618,13 +1614,13 @@ static bool scissorTexels(const RdTargetRec *tc, const RdStateBlock *st, int str
     if (x1 < x0 || y1 < y0) {
         return false;
     }
-    return gsRectToTexels(tc, x0, y0, x1, y1, uiPrim ? wideFor(tc, stretch) : 1.0f, mirror, sc);
+    return gsRectToTexels(tc, x0, y0, x1, y1, mirror, sc);
 }
 
 /* the scissor of the draw being bound, in texels */
 static bool scissorRect(const Replay *r, const RdTargetRec *tc, RhiRect *sc)
 {
-    return scissorTexels(tc, &r->st, r->stretch, r->uiPrim, r->mirror, sc);
+    return scissorTexels(tc, &r->st, r->mirror, sc);
 }
 
 static bool rectMeet(RhiRect a, RhiRect b, RhiRect *out)
@@ -1652,12 +1648,10 @@ static bool rectHolds(RhiRect outer, RhiRect inner)
  * (snapAxis), points drawn as one-pixel quads, lines reaching the pixels
  * next to them, the mirror's sixteenth of a texel and the half-line offset
  * of a field target; AA1 adds a one-pixel fringe outside every edge
- * (aa1Fringe).  The pad covers all of them, convVtx's clamp to the 12.4
- * range is applied to the box as to the vertices, and the box takes the
- * wide x scale the vertex shader gives the draw (every draw that is not
- * full-screen). */
+ * (aa1Fringe).  The pad covers all of them, and convVtx's clamp to the
+ * 12.4 range is applied to the box as to the vertices. */
 bool rd__screen_area(const RdTargetRec *tc, const RdStateBlock *st, const RdScreenVtx *v,
-                     uint32_t n, int stretch, int uiPrim, int mirror, int aa1, RhiRect *area)
+                     uint32_t n, int mirror, int aa1, RhiRect *area)
 {
     if (!tc || n == 0) {
         return false;
@@ -1677,9 +1671,8 @@ bool rd__screen_area(const RdTargetRec *tc, const RdStateBlock *st, const RdScre
     const int32_t ox = 2048 - (int32_t)(st->gsW >> 1), oy = 2048 - (int32_t)(st->gsH >> 1);
     RhiRect box, sc;
     if (!gsRectToTexels(tc, floorDiv16(lx) - ox - pad, floorDiv16(ly) - oy - pad,
-                        -floorDiv16(-hx) - ox + pad, -floorDiv16(-hy) - oy + pad,
-                        wideFor(tc, stretch), mirror, &box) ||
-        !scissorTexels(tc, st, stretch, uiPrim, mirror, &sc)) {
+                        -floorDiv16(-hx) - ox + pad, -floorDiv16(-hy) - oy + pad, mirror, &box) ||
+        !scissorTexels(tc, st, mirror, &sc)) {
         return false;
     }
     return rectMeet(box, sc, area);
@@ -1706,11 +1699,6 @@ bool rd__date_retake(uint32_t heldFor, uint32_t heldSerial, const RhiRect *held,
     return true;
 }
 
-static float wideFor(const RdTargetRec *tc, int stretch)
-{
-    return tc->wide && !stretch ? g_rd.wideX : 1.0f;
-}
-
 /* A sprite (vertices i and i + 1) the layout draws as a full-width band:
  * the first and last pixel it covers (ceil(x0), ceil(x1) - 1 in the target's
  * pixels) are within one of the target's two edges.  True for such a band. */
@@ -1729,32 +1717,15 @@ static int bandSprite(const Replay *r, const RdTargetRec *tc, const RdScreenVtx 
     return *first <= 1 && *last >= (int32_t)tc->w - 2;
 }
 
-/* Whether a screen-prim command is full-screen: tagged so, or sprites that
- * cover the target's whole width (in GS pixels, after XYOFFSET).  A sprite
- * covers the pixels p with x0 <= p < x1 (the GS's top-left rule on the 1/16
- * grid); "the whole width" allows one pixel short at either edge, as the
- * layout's screen bands are drawn: the pause and End Game menus' black bars
- * (layout_texture.c, gif_SpriteSensitiveOffset) run from 1792.25 to
- * 2303.44, pixels 1..511 of 512. */
-static int screenStretch(const Replay *r, const RdTargetRec *tc, const RdScreenVtx *v, uint32_t n,
-                         uint8_t prim, uint8_t space)
+/* Whether a screen-prim command is tagged full-screen (RD_SPACE_FULLSCREEN:
+ * rd_post.c's passes, the fog, layout_texture.c's primary sprite).  A tag
+ * only: the native frame draws it at its own GS X as every other draw (the
+ * game draws a full-frame item at the frame's width), and Replay.stretch
+ * changes no transform.  W3-UI renames the tag RD_SPACE_FULLFRAME and
+ * deletes this with Replay.stretch. */
+static int screenStretch(uint8_t space)
 {
-    if (g_rd.wideX == 1.0f || !tc->wide) {
-        return 0;
-    }
-    if (space == RD_SPACE_FULLSCREEN) {
-        return 1;
-    }
-    if (prim != RD_PRIM_SPRITES || n < 2) {
-        return 0;
-    }
-    for (uint32_t i = 0; i + 1 < n; i += 2) {
-        int32_t first, last;
-        if (bandSprite(r, tc, v, i, &first, &last)) {
-            return 1;
-        }
-    }
-    return 0;
+    return space == RD_SPACE_FULLSCREEN;
 }
 
 /* Full pixel: the screen bands one pixel short of the target's edge
@@ -1763,14 +1734,15 @@ static int screenStretch(const Replay *r, const RdTargetRec *tc, const RdScreenV
  * moves; its u stays, so the added pixel reads the sprite's own end texel
  * and the texture is never extrapolated.  Returns v, or a copy with the
  * bands moved (the recorded frame is never written).  Off, a
- * full-screen-space prim, a block target or no short band: v itself. */
+ * full-screen-space prim, a target that is not frame-sized or no short
+ * band: v itself.  (W3-UI replaces the band test with the FULLFRAME tag.) */
 static const RdScreenVtx *widenBands(const Replay *r, const RdTargetRec *tc, const RdScreenVtx *v,
                                      uint32_t n, uint8_t prim, uint8_t space)
 {
     static RdScreenVtx *s_wv;
     static uint32_t s_wvCap;
-    if (!g_rd.settings.fullPixel || !tc || !tc->wide || tc->wideBlock ||
-        space == RD_SPACE_FULLSCREEN || prim != RD_PRIM_SPRITES || n < 2) {
+    if (!g_rd.settings.fullPixel || !tc || !frameSized(tc) || space == RD_SPACE_FULLSCREEN ||
+        prim != RD_PRIM_SPRITES || n < 2) {
         return v;
     }
     const RdScreenVtx *src = v;
@@ -1819,27 +1791,11 @@ typedef struct DrawSetup {
     uint32_t tw, th, tfmt;
     int textured;
     int mipmapped;   /* the image texture has generated mips */
-    int wideBlock;   /* the texture is a widened render-to-texture block (RdTargetRec.wideBlock) */
     int replacement; /* texture packs: the image texture is a pack replacement */
     int gsLevels;    /* the image texture's GS levels as uploaded (RdTexRec.gsLevels), 0 none:
                         sampled at the GS's level (DF_GS_LOD) */
     int screenCopy;  /* a screen-space pass, not geometry (screenCopy): no added half pixel */
 } DrawSetup;
-
-/* Widescreen reflections: whether the draw samples a block that
- * rd__target_scale_of widened by the display aspect. */
-static int samplesWideBlock(const Replay *r, const DrawSetup *ds)
-{
-    if (!ds->textured || !r->st.ds.texEnabled) {
-        return 0;
-    }
-    const RdTexRec *t = rd__tex_rec(r->st.tex);
-    if (!t || t->kind == RD_TEXKIND_IMAGE) {
-        return 0;
-    }
-    const RdTargetRec *src = rd__target_rec(t->target);
-    return src && src->wideBlock;
-}
 
 /* Whether a screen prim is a screen-space pass rather than geometry: a
  * sprite whose texture is a render target (the shadow pass's and the
@@ -1873,30 +1829,6 @@ static uint32_t drawOffset(const Replay *r, const DrawSetup *ds)
         return r->st.useOffset & ~(uint32_t)RD_TARGET_HALF_Y;
     }
     return r->st.useOffset;
-}
-
-/* The u (normalised) a stretched draw that samples a widened block has at
- * the target's centre: the vertices furthest left and right, interpolated
- * (exact for the full-width sprite puddle.c's copy draws).  0.5 otherwise,
- * where fillDrawCB does not need it. */
-static void blockCentre(Replay *r, const DrawSetup *ds, const IcoSpriteVertex *o, uint32_t n)
-{
-    r->blockCs = 0.5f;
-    if (!ds->wideBlock || !r->stretch || n == 0 || ds->tw == 0) {
-        return;
-    }
-    uint32_t lo = 0, hi = 0;
-    for (uint32_t i = 1; i < n; i++) {
-        lo = o[i].x < o[lo].x ? i : lo;
-        hi = o[i].x > o[hi].x ? i : hi;
-    }
-    if (o[hi].x > o[lo].x) {
-        /* the centre in 12.4 window coordinates: ox + w / 2, ox as bindDraw */
-        const float xc =
-            16.0f * (float)(2048 - (int32_t)(r->st.gsW >> 1)) + 8.0f * (float)ds->tc->w;
-        const float t = (xc - (float)o[lo].x) / (float)(o[hi].x - o[lo].x);
-        r->blockCs = (o[lo].u + t * (o[hi].u - o[lo].u)) / (float)ds->tw;
-    }
 }
 
 /* Texture packs: a replacement's UVs are normalised by the GS size of the
@@ -1937,10 +1869,8 @@ static int drawGsLevels(const Replay *r, const DrawSetup *ds)
 static bool prepareDraw(Replay *r, DrawSetup *ds, const RhiRect *dateArea)
 {
     memset(ds, 0, sizeof(*ds));
-    r->stretch = 0;    /* doScreen decides for screen prims after this */
-    r->mirror = 0;     /* likewise */
-    r->uiPrim = 0;     /* doScreen and doScreenWrap set it */
-    r->blockCs = 0.5f; /* likewise (blockCentre) */
+    r->stretch = 0; /* doScreen decides for screen prims after this */
+    r->mirror = 0;  /* likewise */
     ds->tc = rd__target_rec(r->st.color);
     if (!ds->tc || !ds->tc->color.id) {
         return false;
@@ -1958,7 +1888,6 @@ static bool prepareDraw(Replay *r, DrawSetup *ds, const RhiRect *dateArea)
     ds->tex = resolveTexture(r, ds->tc, r->st.color, &ds->tw, &ds->th, &ds->tfmt, &ds->textured,
                              &ds->mipmapped);
     replacementUv(r->st.tex, ds);
-    ds->wideBlock = samplesWideBlock(r, ds);
     ds->gsLevels = drawGsLevels(r, ds);
     return true;
 }
@@ -2009,18 +1938,17 @@ static RhiBindGroup bindDrawEx(Replay *r, const DrawSetup *ds, RhiRect *scOut, u
                   RHI_LOAD_LOAD, NULL, RHI_LOAD_LOAD, 0.0f);
     }
     const uint32_t useOffset = drawOffset(r, ds);
-    const uint32_t fk[6] = {r->st.color, r->st.gsW,     r->st.gsH,
-                            useOffset,   r->passSerial, (uint32_t)r->stretch};
+    const uint32_t fk[5] = {r->st.color, r->st.gsW, r->st.gsH, useOffset, r->passSerial};
     if (memcmp(fk, r->frameKey, sizeof(fk)) != 0) {
-        /* XYOFFSET = (2048 - w/2, 2048 - h/2) (+ the preset's field offset
-         * when useOffset; zero in Original) */
+        /* XYOFFSET = (2048 - w/2, 2048 - h/2), w the native frame's width
+         * (+ the preset's field offset when useOffset; zero in Original) */
         float ox = 2048.0f - (float)(r->st.gsW >> 1);
         float oy = 2048.0f - (float)(r->st.gsH >> 1);
         if (useOffset & RD_TARGET_HALF_Y) {
             oy += 0.5f; /* the flip's sceGsSetHalfOffset */
         }
         r->frameBG = rd__frame_group_ex(tc->w, tc->h, ox, oy, rd__target_z_scale(ds->tdId),
-                                        wideFor(tc, r->stretch), tc->sx, tc->sy);
+                                        rd__region_scale(tc), tc->sx, tc->sy);
         memcpy(r->frameKey, fk, sizeof(fk));
     }
     if (scOut) {
@@ -2124,22 +2052,6 @@ static void fillDrawCB(const Replay *r, const RdDrawPass *dp, const DrawSetup *d
     cb->tex[3] = 1.0f / (float)ds->th;
     if (dp->key.fs == RD_FS_FONT_SHEET) {
         sheetParam(rd__tex_rec(r->st.tex), cb->param);
-    }
-    if (ds->wideBlock) {
-        /* Widescreen reflections: the block holds its 4:3 picture
-         * compressed about its centre by f.  The game computed the draw's
-         * u for the 4:3 block, at the 4:3 position of what the pixel
-         * shows; that position is the pixel's for a draw that is itself
-         * compressed (fd = f on a wide target, or any draw on a target
-         * that is not wide), and c + (u - c) / f about the draw's u at the
-         * centre c for one stretched across a wide target (fd = 1).  So
-         * u' = 0.5 + f (u_4:3 - 0.5) = z u + w (sprite_ps, vu_ps). */
-        const float f = g_rd.wideX;
-        const float fd = wideFor(ds->tc, r->stretch);
-        const float ft = ds->tc->wide ? f : 1.0f;
-        const float z = f * fd / ft, c = r->blockCs;
-        cb->scale[2] = z;
-        cb->scale[3] = 0.5f + f * (c - 0.5f) - z * c;
     }
 }
 
@@ -2532,9 +2444,8 @@ static bool dateAreaFor(const Replay *r, const RdCmd *c, const RdScreenVtx *v, u
 {
     const RdTargetRec *tcA = rd__target_rec(r->st.color);
     return r->st.ds.test.date != RD_DATE_OFF && tcA &&
-           rd__screen_area(tcA, &r->st, v, n, screenStretch(r, tcA, v, n, c->b[0], c->b[1]),
-                           c->b[1] == RD_SPACE_UI, mirrorUi(r, c->b[1]),
-                           r->st.aa1 && aa1Prim(c->b[0]), area);
+           rd__screen_area(tcA, &r->st, v, n, mirrorUi(r, c->b[1]), r->st.aa1 && aa1Prim(c->b[0]),
+                           area);
 }
 
 static void doScreen(Replay *r, const RdFrame *f, const RdCmd *c)
@@ -2564,9 +2475,8 @@ static void doScreen(Replay *r, const RdFrame *f, const RdCmd *c)
     ds.screenCopy = screenCopy(r, &ds, c->b[0], c->b[1]);
 
     /* geometry */
-    r->stretch = screenStretch(r, ds.tc, v, n, c->b[0], c->b[1]);
-    r->uiPrim = c->b[1] == RD_SPACE_UI;
-    setUvShift(ds.tc->sx * wideFor(ds.tc, r->stretch), ds.tc->sy);
+    r->stretch = screenStretch(c->b[1]);
+    setUvShift(ds.tc->sx, ds.tc->sy);
     uint8_t topo;
     IcoSpriteVertex *out = vxScratch((uint64_t)n * 6);
     if (!out) {
@@ -2577,7 +2487,6 @@ static void doScreen(Replay *r, const RdFrame *f, const RdCmd *c)
     if (nv == 0) {
         return;
     }
-    blockCentre(r, &ds, out, nv);
     if (mirrorUi(r, c->b[1])) {
         mirrorDraw(r, ds.tc, out, nv, topo); /* the mirror mode's UI flip */
     }
@@ -3003,10 +2912,8 @@ static void doScreenWrap(Replay *r, const RdFrame *f, const RdCmd *c)
     ds.screenCopy = screenCopy(r, &ds, c->b[0], c->b[1]);
     RdTargetRec *tc = ds.tc;
     RdTargetRec *td = ds.tdId ? rd__target_rec(ds.tdId) : NULL;
-    r->stretch = screenStretch(r, tc, (const RdScreenVtx *)(f->payload + c->u[0]), c->u[1], c->b[0],
-                               c->b[1]);
-    r->uiPrim = c->b[1] == RD_SPACE_UI;
-    setUvShift(tc->sx * wideFor(tc, r->stretch), tc->sy);
+    r->stretch = screenStretch(c->b[1]);
+    setUvShift(tc->sx, tc->sy);
     if (tc->format != RHI_FMT_RGBA8_UNORM || (td && (td->tw != tc->tw || td->th != tc->th))) {
         rd__log_once(RD_ONCE_WRAP, "COLCLAMP 0 draw on a non-RGBA8 target or a depth of another "
                                    "size: not drawn");
@@ -3028,7 +2935,6 @@ static void doScreenWrap(Replay *r, const RdFrame *f, const RdCmd *c)
     if (nv == 0) {
         return;
     }
-    blockCentre(r, &ds, out, nv);
     if (mirrorUi(r, c->b[1])) {
         mirrorDraw(r, tc, out, nv, topo); /* the mirror mode's UI flip */
     }
@@ -3118,7 +3024,7 @@ static void doScreenWrap(Replay *r, const RdFrame *f, const RdCmd *c)
     rhi_cmd_set_pipeline(s_cl, pa);
     rd__bind_uniform(s_cl, 0,
                      rd__frame_group_ex(tc->w, tc->h, ox, oy, rd__target_z_scale(ds.tdId),
-                                        wideFor(tc, r->stretch), tc->sx, tc->sy));
+                                        rd__region_scale(tc), tc->sx, tc->sy));
     rd__bind_uniform(s_cl, 1, rd__draw_group(&cb));
     rhi_cmd_set_bind_group(s_cl, 2, rd__tex_group(ds.tex, smp));
     rhi_cmd_set_vertex_buffer(s_cl, 0, g_rd.ring[s_slot], vOff);
@@ -3346,7 +3252,7 @@ static int vuWideParts(const Replay *r, const DrawSetup *ds, const RdMeshRec *m,
                        int *dropWide)
 {
     const RdTargetRec *tc = ds->tc;
-    const float f = wideFor(tc, r->stretch);
+    const float f = rd__region_scale(tc); /* the 4:3 columns' share (W2-VU: frame43) */
     RhiRect sc;
     if (!m || !m->wideHidden || f == 1.0f || !scissorRect(r, tc, &sc)) {
         return 0;
@@ -3398,7 +3304,7 @@ static void doVu(Replay *r, const RdFrame *f, const RdCmd *c)
     /* a model the game draws as a full-screen item (rd_mesh.c pushVu's
      * b[3]) is stretched across a wide target like a full-screen sprite
      * (screenStretch): no wide x scale, the whole width's scissor */
-    r->stretch = c->b[3] && g_rd.wideX != 1.0f && ds.tc->wide;
+    r->stretch = c->b[3] != 0; /* the tag only (W3-UI deletes it with rd_mesh.c's b[3]) */
     const uint64_t ua = rhi_limits()->uniformAlign;
     /* bones: VuBoneCB (VU memory 16..255); a zero block for the others */
     uint64_t bonesOff;
@@ -4047,12 +3953,11 @@ static void doFog(Replay *r, const RdFrame *f, const RdCmd *c)
     ds.th = tz->h;
     ds.textured = 1;
     ds.screenCopy = 1; /* it reads the depth texel under each pixel */
-    r->stretch = 1;    /* the fog sprite covers the screen */
     /* no prepareDraw here: the per-draw flags it resets are reset here, so
-     * the previous draw's mirror (scissorRect) is not inherited */
+     * the previous draw's mirror (scissorRect) is not inherited.  The fog
+     * sprite covers the native frame as drawn: nothing stretched */
+    r->stretch = 0;
     r->mirror = 0;
-    r->uiPrim = 0;
-    r->blockCs = 0.5f;
     if (!bindDraw(r, &ds).id) {
         return;
     }
@@ -4156,7 +4061,7 @@ static bool blurUvAxis(int32_t x0, int32_t x1, int32_t u0, int32_t u1, float ss,
  * target until narrowed).  The destination (dstRead: blend, DATE, AFAIL
  * RGB_ONLY) is read at the fragment's own texel, and fragments are the
  * pixels with x0 <= X < x1 of the sprite's rect (fx_sprite_ps's coverage)
- * inside the scissor bindDraw sets (r->stretch is the draw's already):
+ * inside the scissor bindDraw sets:
  * that box padded by two GS pixels (the half-line offset, rounding), in
  * texels.  Sampling itself (selfSample), the texture is read at the UVs:
  * blurUvAxis on each axis, the whole target under REPEAT.  Both: the box
@@ -4174,8 +4079,7 @@ static void blurSnapArea(const Replay *r, const RdTargetRec *tc, const RdPostRec
         RhiRect box, sc;
         if (x1 > x0 && y1 > y0 &&
             gsRectToTexels(tc, floorDiv16(x0 - ox) - 2, floorDiv16(y0 - oy) - 2,
-                           -floorDiv16(-(x1 - ox)) + 2, -floorDiv16(-(y1 - oy)) + 2, 1.0f, 0,
-                           &box) &&
+                           -floorDiv16(-(x1 - ox)) + 2, -floorDiv16(-(y1 - oy)) + 2, 0, &box) &&
             scissorRect(r, tc, &sc) && !rectMeet(box, sc, &dst)) {
             dst = whole; /* nothing covered: kept as it was */
         }
@@ -4354,12 +4258,11 @@ static void doBlurSpriteDraw(Replay *r, const RdFrame *f, const RdCmd *c)
                         d->test.date != RD_DATE_OFF ||
                         (d->test.ate && d->test.afail == RD_AFAIL_RGB_ONLY);
     const int selfSample = src == tc;
-    r->stretch = 1; /* fx_rect_vs covers the target; no wide x scale */
     /* as doFog: prepareDraw's other per-draw flags, not the previous draw's
-     * (the scissor and blurSnapArea read mirror) */
+     * (the scissor and blurSnapArea read mirror); fx_rect_vs covers the
+     * target in its own GS pixels, nothing stretched */
+    r->stretch = 0;
     r->mirror = 0;
-    r->uiPrim = 0;
-    r->blockCs = 0.5f;
     if (blurSpriteClears(r, tc, &p, textured, dstRead, useDepth)) {
         /* a clear instead of a full-target draw (blurSpriteClears) */
         const uint32_t a = p.rgba[3] | (d->fba ? 0x80u : 0u);

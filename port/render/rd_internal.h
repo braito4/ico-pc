@@ -326,14 +326,6 @@ typedef struct RdTargetRec {
      * scale (rd__target_scale_of) */
     uint32_t tw, th;
     float sx, sy;
-    uint8_t wide; /* scene-class: draws other than full-screen ones take the wide x scale */
-    /* Widescreen reflections: a render-to-texture block with its own depth
-     * buffer (rd_block_target, the decoder's blocks) widened by the display
-     * aspect: tw = w / f texels for f = (4/3) / aspect, wide set, so its 3D
-     * view shows what the wide scene shows; the draws that sample it scale
-     * their x addressing by f (fillDrawCB, DrawCB.g_scale.zw).  0 at 4:3
-     * and in Original */
-    uint8_t wideBlock;
     RhiFormat format;
     RhiTexture color, depth;
     RhiState colorState, depthState;
@@ -352,14 +344,14 @@ typedef struct RdTargetRec {
 } RdTargetRec;
 
 /* The texels a screen-prim command can touch on the bound target tc: the
- * bounding box of its vertices (12.4, after XYOFFSET) padded by two GS
- * pixels (three with PRIM.AA1's edge fringes), through the same wide x
- * scale, mirror and texel scale as the draw, intersected with the scissor
- * bindDraw sets.  stretch, uiPrim and mirror are the draw's (rd_replay.c
- * doScreen).  False when it covers nothing.  The DATE snapshot copies only
- * this area (rd_replay.c dateSnapshot). */
+ * bounding box of its vertices (12.4, after XYOFFSET: the native frame's
+ * origin 2048 - gsW / 2) padded by two GS pixels (three with PRIM.AA1's
+ * edge fringes), through the same mirror and texel scale as the draw,
+ * intersected with the scissor bindDraw sets.  mirror is the draw's
+ * (rd_replay.c doScreen).  False when it covers nothing.  The DATE
+ * snapshot copies only this area (rd_replay.c dateSnapshot). */
 bool rd__screen_area(const RdTargetRec *tc, const RdStateBlock *st, const RdScreenVtx *v,
-                     uint32_t n, int stretch, int uiPrim, int mirror, int aa1, RhiRect *area);
+                     uint32_t n, int mirror, int aa1, RhiRect *area);
 /* Whether the DATE snapshot must be (re)taken for a draw on target tcId at
  * write serial serial that reads area want (texels; NULL = the whole tw x
  * th target), given the snapshot held (for target heldFor at serial
@@ -895,9 +887,6 @@ uint32_t rd__enumerate_reachable_fog(RdPipeKeyInt *out, uint32_t max, uint32_t n
 /* rd_replay.c: frees the fog's LUT texture (rd__gpu_shutdown); the fog samples
  * the depth target itself. */
 void rd__fog_shutdown(void);
-/* rd_replay.c: a scissor x0..x1 under the wide x scale f (a side at the
- * target's edge stays there) */
-void rd__wide_scissor(int32_t *x0, int32_t *x1, int32_t w, float f);
 void rd__shadow_shutdown(void); /* frees the reduced shadow count */
 /* staticBlur.c's sprites (rd_blur.c): the pipeline of an
  * RD_POST_MOTION_BLUR .. RD_POST_EYE_BLUR sprite under state s
@@ -1276,10 +1265,14 @@ typedef struct RdContext {
     bool deferText;
     /* the Enhanced display options as applied (rd_present.c
      * rd__apply_display from settings): the scene-class targets' scale, the
-     * fixed work buffers' scale, the wide x factor (4/3) / aspect for draws
-     * into scene-class targets (1 in Original), the output aspect, and the
-     * texture filter upgrade in force */
-    float sceneSx, sceneSy, workScale, wideX, outAspect;
+     * fixed work buffers' scale, the aspect option (the present box's when
+     * no frame says otherwise: rd__frame_wexact), and the texture filter
+     * upgrade in force */
+    float sceneSx, sceneSy, workScale, outAspect;
+    /* the display aspect of the last replayed frame's camera (RdCamera.aspect,
+     * rd__set_replay_camera; 0 before one): the frame's exact width
+     * (rd__frame_wexact) */
+    float frameAspect;
     /* the scene scale the options asked for (rd__apply_display); sceneSx/Sy
      * are what the targets were made at, lower when createNamedTargets had
      * to fall back (sceneFellBack) */
@@ -1457,7 +1450,14 @@ void rd__present_box(uint32_t outW, uint32_t outH, float aspect, RhiRect *box);
 uint32_t rd__reduction_crop(uint32_t gsH);
 /* The widest aspect the presenter shows is the native frame's,
  * ICO_FRAME_ASPECT_MAX (port/include/ico_frame.h, included above). */
-/* g_rd.settings -> g_rd.sceneSx/Sy, workScale, wideX,
+/* The frame's exact width in GS pixels, the columns the presenter shows
+ * (ico_frame.h IcoFrame.wExact): exactly 512 when the scene is 512 wide (the
+ * Original integer box, no crop); else 384 times the display aspect (the
+ * last replayed frame camera's, else the aspect option), at most gsW.  The
+ * present box has the aspect wExact / 384, and the source rectangle drops
+ * (gsW - wExact) / 2 GS pixels at each side (rd_present.c). */
+float rd__frame_wexact(void);
+/* g_rd.settings -> g_rd.sceneSx/Sy, workScale,
  * outAspect, filterUpgrade, fullHeight (and the swapchain's vsync).  True
  * when a target scale changed (the caller recreates the named targets). */
 bool rd__apply_display(void);
@@ -1702,10 +1702,17 @@ RdUniform rd__frame_group(uint32_t targetW, uint32_t targetH, float originX, flo
  * uses 2^-24 (no depth bound). */
 RdUniform rd__frame_group_z(uint32_t targetW, uint32_t targetH, float originX, float originY,
                             float zScale);
-/* FrameCB with the wide x scale spaceX in both g_space slots
- * and the target's texels per GS pixel in g_z.yz. */
+/* FrameCB with the native frame's region scale (g_frame.x; 1 for none:
+ * rd__region_scale gives a target's) and the target's texels per GS pixel
+ * in g_z.yz; g_frame43 the target's 4:3 columns in its texels. */
 RdUniform rd__frame_group_ex(uint32_t targetW, uint32_t targetH, float originX, float originY,
-                             float zScale, float spaceX, float scaleX, float scaleY);
+                             float zScale, float regionScale, float scaleX, float scaleY);
+/* The region scale of a draw into tc: 512 / W on a target of the native
+ * frame's GS size W x H (g_rd.gsW x gsH: SCENE, WORK2, AURA_WORK, the shadow
+ * count, a block the game sizes as the frame) when W is not 512, the PS2's
+ * 4:3 window test then comparing x' = (x - 2048) 512 / W + 2048; exactly 1
+ * otherwise (every target at 4:3: the region path untouched). */
+float rd__region_scale(const RdTargetRec *tc);
 
 /* ------------------------------------------------- frame head and camera
  * rd_frame.c. */

@@ -243,22 +243,11 @@ void rd__fill_camera_cb(void *cbv, const RdCamera *cam)
         return;
     }
     memcpy(cb->view, cam->view, sizeof(cb->view));
+    /* the game's screen matrix as it is: the native frame keeps the
+     * projection at every aspect (a world point lands on the same GS X, about
+     * 2048), only the window is wider (GsBase.c gsb_SetVSMatrixSub), so
+     * g_proj and g_viewProj are what the meshes and screen prims draw with */
     memcpy(cb->proj, cam->proj, sizeof(cb->proj));
-    /* widescreen: the renderer's projection is proj with its
-     * GS X compressed about the screen centre (2048) by (4/3) / aspect,
-     * X' = f X + (1 - f) 2048 W: the visible screen then shows aspect /
-     * (4/3) times as much horizontally (the cull side is GsBase.c
-     * gsb_SetVSMatrixSub, from the native width).  The mesh and
-     * screen-prim shaders apply the same compression after their
-     * projection (g_space, rd_replay.c), so g_proj
-     * and g_viewProj agree with what is drawn.  Original: f = 1, untouched. */
-    const float f = g_rd.wideX > 0.0f ? g_rd.wideX : 1.0f;
-    if (f != 1.0f) {
-        for (int c = 0; c < 4; c++) {
-            cb->proj[c * 4 + 0] =
-                f * cam->proj[c * 4 + 0] + (1.0f - f) * 2048.0f * cam->proj[c * 4 + 3];
-        }
-    }
     mul44(cb->viewProj, cb->proj, cam->view);
     eyeOf(cam->view, cb->cameraPos);
     cb->cameraPos[3] = cam->cut ? 1.0f : 0.0f;

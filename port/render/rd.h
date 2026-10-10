@@ -136,10 +136,13 @@ typedef enum RdPrim {
     RD_PRIM_SPRITES         /* GS PRIM 6: axis-aligned rectangle per two vertices */
 } RdPrim;
 
-/* 2D space tags.  UI-tagged draws are pre-flipped in mirror mode so they
- * read correctly after the final present flip, and are anchored to the
- * centred 4:3 box in widescreen.  WORLD-tagged screen prims came from a
- * CPU projection of world positions and follow the wide projection. */
+/* 2D space tags; none transforms a position (the native frame: a GS X is
+ * drawn where the game put it, at every aspect).  UI-tagged draws are
+ * pre-flipped in mirror mode so they read correctly after the final present
+ * flip; the 2D layer's 640 grid lands on the frame's 4:3 columns (2048 -+
+ * 256).  WORLD-tagged screen prims came from a CPU projection of world
+ * positions.  FULLSCREEN marks the game's full-screen items (W3-UI renames
+ * it RD_SPACE_FULLFRAME: the game draws them at the frame's width). */
 typedef enum RdSpace { RD_SPACE_WORLD = 0, RD_SPACE_UI = 1, RD_SPACE_FULLSCREEN = 2 } RdSpace;
 
 typedef enum RdStencilMode {
@@ -348,8 +351,9 @@ typedef struct RdSettings {
      * with sceneScale 0 = the presentation box in the window under the
      * Enhanced flag, else the GS size. */
     uint32_t sceneWidth, sceneHeight;
-    /* > 0: the scene's texture is this factor of the GS size instead
-     * (vertically; horizontally times aspect / (4/3)), e.g. 2 */
+    /* > 0: the scene's texture is this factor of the GS size instead, both
+     * ways (the GS size is the native frame's, as wide as the aspect asks),
+     * e.g. 2 */
     float sceneScale;
     /* The CRT filter (rd_crt.c): a present-time pass in either preset that
      * replaces the box blit and never touches SCENE or DISPLAY.  crtMode
@@ -401,9 +405,11 @@ void rd_set_settings(const RdSettings *settings);
 const RdSettings *rd_get_settings(void);
 /* The scene's scale in force (rd_present.c
  * rd__apply_display, from the settings applied at the last rd_begin_frame):
- * the scene-class targets' texels per GS pixel across (with a wide aspect's
- * widening) and down; 1 x 1 before rd_init, at 1x and under the CRT
- * filter.  The menus' text strips are rasterised to it (port/ui/menu_font.c). */
+ * the scene-class targets' texels per GS pixel across and down, the same
+ * at every aspect (the GS frame is as wide as the aspect asks) and both
+ * ways but under the Window resolution; 1 x 1 before rd_init, at 1x and
+ * under the CRT filter.  The menus' text strips are rasterised to it
+ * (port/ui/menu_font.c). */
 void rd_get_scene_scale(float *sx, float *sy);
 
 /* The scene's GS width in GS pixels (rd_reset_scene's gsWidth; 512 before
@@ -1124,7 +1130,11 @@ void rd_shadow_resolve(void);
  *                  with a depth buffer when withDepth), the same target for
  *                  the same (tbp, gsW, gsH) for the rest of the frame, as
  *                  the VRAM block is one block whoever draws into it; {0}
- *                  outside a frame
+ *                  outside a frame.  Any width: the block is drawn at its
+ *                  own GS size at every aspect (one the game sizes as the
+ *                  native frame, gsFrame.w x ScreenHeight, takes the scene's
+ *                  resolution scale like SCENE; rd_core.c
+ *                  rd__target_scale_of)
  * rd_alias_target   from here on, in the current list and the open frame,
  *                  rd_set_target and rd_clear_target of `from` and rd_texture
  *                  of a view of `from` (rd_target_texture) record `to`

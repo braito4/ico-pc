@@ -27,10 +27,12 @@
  *            (title_logo.c ico_title_stretch_model, stubbed): reg_DispObj
  *            records its draw with the stretch byte (b[3] 1, 0 for any
  *            other model) and ends the space override; on the device at
- *            4:3 its picture is byte-identical to the unflagged draw's, at
- *            16:9 it is drawn 4/3 wider than the unflagged (scene) draw
- *            about the centre, and three times as wide it covers both edge
- *            columns of the wide target
+ *            4:3 its picture is byte-identical to the unflagged draw's; at
+ *            16:9 on the native frame (688 x 512) the unflagged draw is the
+ *            4:3 picture at its GS X (columns 88..599, nothing compressed),
+ *            the flagged one the same (the tag transforms nothing), and a
+ *            full-frame item the game draws at the frame's width covers all
+ *            688 columns
  *   strip order  the title logo's strips Packet.c draws in another order of
  *            their entries (pac_HostStrips): the table, the I's through
  *            p2o_MakePacket, and with the disc image given as the argument
@@ -190,6 +192,9 @@ static void checkState(const RdStateBlock *s, int expectAbe, int expectFba)
     CHECK(s->gouraud == 1, "PRIM.IIP 1");
 }
 
+/* the scene's GS width: the native frame's (688 for the 16:9 checks) */
+static uint32_t s_sceneW = 512;
+
 static void recordPrelit(Sub15C *o, int clipRet)
 {
     static const uint8_t grey[4] = {40, 40, 60, 0x80};
@@ -197,7 +202,7 @@ static void recordPrelit(Sub15C *o, int clipRet)
     dl_Clear();
     setCommon();
     dl_SetDLPriority(0);
-    rd_set_target(rd_target(RD_TARGET_SCENE), rd_target(RD_TARGET_SCENE), 512, 512, 1);
+    rd_set_target(rd_target(RD_TARGET_SCENE), rd_target(RD_TARGET_SCENE), s_sceneW, 512, 1);
     rd_clear_target(rd_target(RD_TARGET_SCENE), grey, 1, 0);
     reg_DispObj(o);
     dl_Swap();
@@ -728,12 +733,16 @@ static void checkStretchRecording(void)
     CHECK(fd.n == 1 && fd.cmd[0]->b[3] == 0, "stretch: the next draw is not flagged");
 }
 
+/* the 4:3 picture of the unflagged draw, for the 16:9 checks */
+static uint8_t s_stretch43[512 * 512 * 4];
+
 /* at 4:3 the flag changes nothing */
 static void stretchSamePixels(void)
 {
     s_stretchModel = NULL;
     recordPrelit(&s_objA, 1);
     const int a = readScene(s_imgA);
+    memcpy(s_stretch43, s_imgA, sizeof(s_stretch43));
     s_stretchModel = "test_prelit";
     recordPrelit(&s_objA, 1);
     const int b = readScene(s_imgB);
@@ -748,9 +757,10 @@ static void stretchSamePixels(void)
           cover);
 }
 
-#define WT 683 /* SCENE's texels across at 16:9, 1x */
+#define WT 688 /* SCENE's GS width and texels at 16:9, 1x: the native frame */
+#define WX0 88 /* its 4:3 columns' first, (688 - 512) / 2 */
 
-static uint8_t s_wideImg[WT * 512 * 4];
+static uint8_t s_wideImg[WT * 512 * 4], s_wideA[WT * 512 * 4];
 
 /* the first and last columns of SCENE at 16:9 with a pixel drawn */
 static int wideColumns(int *x0, int *x1)
@@ -774,40 +784,76 @@ static int wideColumns(int *x0, int *x1)
     return *x1 >= *x0;
 }
 
-/* at 16:9 the scene is drawn compressed about the centre by 3/4, the
-   flagged model is not */
+/* a full-frame item as the game draws it: a sprite over the frame's width
+   (GS 2048 -+ WT / 2), tagged full-screen */
+static void recordFullFrame(void)
+{
+    static const uint8_t grey[4] = {40, 40, 60, 0x80}, white[4] = {255, 255, 255, 0x80};
+    dl_Clear();
+    setCommon();
+    dl_SetDLPriority(0);
+    rd_set_target(rd_target(RD_TARGET_SCENE), rd_target(RD_TARGET_SCENE), s_sceneW, 512, 1);
+    rd_clear_target(rd_target(RD_TARGET_SCENE), grey, 1, 0);
+    rd_test_gs(RD_TEST_Z_ALWAYS);
+    rd_z_write(0);
+    rd_blend(RD_BLEND_LERP_AS, 0x80, 0);
+    rd_abe(0);
+    rd_pabe(0);
+    rd_fba(0);
+    rd_gouraud(0);
+    rd_texture_off();
+    RdScreenVtx v[2];
+    memset(v, 0, sizeof(v));
+    v[0].x = (2048 - (int32_t)s_sceneW / 2) * 16;
+    v[0].y = (2048 - 256 + 200) * 16;
+    v[1].x = (2048 + (int32_t)s_sceneW / 2) * 16;
+    v[1].y = (2048 - 256 + 220) * 16;
+    for (int i = 0; i < 2; i++) {
+        v[i].q = 1.0f;
+        memcpy(v[i].rgba, white, 4);
+    }
+    rd_screen_prims(RD_PRIM_SPRITES, v, 2, RD_SPACE_FULLSCREEN, 1, 0);
+    dl_Swap();
+}
+
+/* at 16:9 the scene is the native frame, 688 GS pixels across: the
+   unflagged draw is the 4:3 one at its GS X (nothing compressed), the
+   flagged one the same, and a full-frame item covers the frame's width */
 static void stretchWidePixels(void)
 {
-    CHECK(fabsf(g_rd.wideX - 0.75f) < 1e-6f, "stretch 16:9: the wide factor (%g)",
-          (double)g_rd.wideX);
+    CHECK(g_rd.gsW == WT && s_sceneW == WT, "stretch 16:9: the frame is %u wide", g_rd.gsW);
     int a0 = 0, a1 = 0, b0 = 0, b1 = 0;
     s_stretchModel = NULL;
     recordPrelit(&s_objA, 1);
     const int a = wideColumns(&a0, &a1);
+    memcpy(s_wideA, s_wideImg, sizeof(s_wideA));
+    int same = a, outside = 0;
+    for (int y = 0; a && y < 512; y++) {
+        for (int x = 0; x < WT; x++) {
+            const uint8_t *p = &s_wideA[(y * WT + x) * 4];
+            if (x >= WX0 && x < WX0 + 512) {
+                same &= memcmp(p, &s_stretch43[(y * 512 + x - WX0) * 4], 4) == 0;
+            } else {
+                outside += p[0] != 40 || p[1] != 40 || p[2] != 60;
+            }
+        }
+    }
+    printf("  stretch 16:9: the scene draw's columns %d..%d of %d\n", a0, a1, WT);
+    CHECK(a && same && outside == 0,
+          "stretch 16:9: a world draw is the 4:3 picture at its GS X, columns %d..%d (%d drawn "
+          "beside)",
+          WX0, WX0 + 511, outside);
     s_stretchModel = "test_prelit";
     recordPrelit(&s_objA, 1);
     const int b = wideColumns(&b0, &b1);
-    CHECK(a && b, "stretch 16:9: SCENE readback with pixels drawn");
-    if (a && b) {
-        const double c = WT / 2.0;
-        const double la = c - a0, ra = a1 + 1 - c, lb = c - b0, rb = b1 + 1 - c;
-        printf("  stretch 16:9: scene draw columns %d..%d, stretched %d..%d\n", a0, a1, b0, b1);
-        CHECK(la > 50.0 && ra > 50.0 && fabs(lb - la * 4.0 / 3.0) <= 2.5 &&
-                  fabs(rb - ra * 4.0 / 3.0) <= 2.5,
-              "stretch 16:9: the flagged draw spans 4/3 of the scene draw about the centre "
-              "(left %.1f vs %.1f, right %.1f vs %.1f)",
-              lb, la, rb, ra);
-    }
-    /* three times as wide (past the 4:3 screen's edges): across the whole
-       wide target */
-    const float keep = s_modelA.nodeMtx[0][0];
-    s_modelA.nodeMtx[0][0] = 3.0f;
-    recordPrelit(&s_objA, 1);
-    const int w = wideColumns(&b0, &b1);
-    s_modelA.nodeMtx[0][0] = keep;
     s_stretchModel = NULL;
+    CHECK(a && b && memcmp(s_wideA, s_wideImg, sizeof(s_wideA)) == 0,
+          "stretch 16:9: the flagged draw is the unflagged one (columns %d..%d, %d..%d)", a0, a1,
+          b0, b1);
+    recordFullFrame();
+    const int w = wideColumns(&b0, &b1);
     CHECK(w && b0 == 0 && b1 == WT - 1,
-          "stretch 16:9: the wide plane covers both edge columns (columns %d..%d of %d)", b0, b1,
+          "stretch 16:9: a full-frame item covers both edge columns (columns %d..%d of %d)", b0, b1,
           WT);
 }
 
@@ -914,7 +960,7 @@ static void closingDraw(RdMesh m, float tx)
     static const uint8_t grey[4] = {40, 40, 60, 0x80};
     dl_Clear();
     dl_SetDLPriority(0);
-    rd_set_target(rd_target(RD_TARGET_SCENE), rd_target(RD_TARGET_SCENE), 512, 512, 1);
+    rd_set_target(rd_target(RD_TARGET_SCENE), rd_target(RD_TARGET_SCENE), s_sceneW, 512, 1);
     rd_clear_target(rd_target(RD_TARGET_SCENE), grey, 1, 0);
     rd_test_gs(RD_TEST_Z_GEQUAL);
     rd_z_write(1);
@@ -978,11 +1024,11 @@ static void closingPixels(int wide)
         return;
     }
     /* the 4:3 picture's texels, as vuWideParts rounds them */
-    const float f = wide ? g_rd.wideX : 1.0f, c = (float)tc->w * 0.5f;
+    const float f = wide ? rd__region_scale(tc) : 1.0f, c = (float)tc->w * 0.5f;
     const int bx0 = (int)floorf((c - f * c) * tc->sx), bx1 = (int)ceilf((c + f * c) * tc->sx);
     uint32_t wa = 0, wb = 0;
     if (wide) {
-        CHECK(fabsf(f - 0.75f) < 1e-6f, "closing planes 16:9: the wide factor (%g)", (double)f);
+        CHECK(f == 512.0f / (float)WT, "closing planes 16:9: the region scale (%g)", (double)f);
         closingDraw(black, CLOSING_IN);
         const int okIn = closingRead(s_closingA, &wa);
         const int in = okIn ? closingCount(s_closingA, wa, bx0, bx1) : 0;
@@ -1911,11 +1957,12 @@ int main(int argc, char **argv)
     CHECK(rd__not_implemented_count() == 0, "no stubbed command replayed");
     rd_shutdown();
 
-    /* a full-screen title model at 16:9 */
+    /* a full-screen title model at 16:9, on the native frame (688 wide) */
     st.preset = RD_PRESET_ENHANCED;
     st.aspect = 16.0f / 9.0f;
     st.sceneScale = 1.0f;
-    if (!rd_init(512, 512, &st, NULL)) {
+    s_sceneW = WT;
+    if (!rd_init(WT, 512, &st, NULL)) {
         CHECK(0, "rd_init at 16:9");
     } else {
         gif_HostForgetTextures();
