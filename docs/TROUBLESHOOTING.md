@@ -35,17 +35,15 @@ updating the graphics driver usually fixes it.
 ## Save a picture of a problem
 
 If something looks wrong on screen, press **F12** while it is showing. The
-game saves three files in a `dumps` folder in the folder with your saves
-([where that is](PORTABLE_MODE.md#where-your-saves-are)), all named
+game saves two files in a `dumps` folder in the folder with your saves
+([where that is](PORTABLE_MODE.md#where-your-saves-are)), both named
 `frame-` and the date and time:
 
 - a `.zip` file with a file that lets the developers see exactly how that
   moment was drawn, and a copy of the log (`ico-pc.log`);
-- a `.rddump` file, the same drawing file on its own;
 - a `.png` picture of that moment.
 
-Attach the `.zip` to your report on the issues page. GitHub does not accept
-`.rddump` files, which is why the `.zip` exists. The picture is optional,
+Attach the `.zip` to your report on the issues page. The picture is optional,
 and can be very large when the Resolution is high.
 
 The files contain pictures from your disc, so use them only for a bug

@@ -117,6 +117,9 @@ int ico_frame_dump_zip(const char *zip_path, const char *dump_path, const char *
             }
             if (r < 0) {
                 say(why, why_size, "cannot write", zip_path);
+                remove(zip_path);
+            } else {
+                remove(dump_path);
             }
             mz_free(out);
         }
@@ -124,4 +127,42 @@ int ico_frame_dump_zip(const char *zip_path, const char *dump_path, const char *
     free(dump);
     free(log);
     return r;
+}
+
+void *ico_dump_zip_extract(const char *zip_path, size_t *size, char *name, size_t name_size)
+{
+    mz_zip_archive z;
+    void *data = NULL, *zip = NULL;
+    size_t zip_size = 0;
+
+    zip = read_all(zip_path, &zip_size);
+    if (zip == NULL) {
+        return NULL;
+    }
+    memset(&z, 0, sizeof(z));
+    if (!mz_zip_reader_init_mem(&z, zip, zip_size, 0)) {
+        free(zip);
+        return NULL;
+    }
+    const mz_uint n = mz_zip_reader_get_num_files(&z);
+
+    for (mz_uint i = 0; i < n && data == NULL; i++) {
+        mz_zip_archive_file_stat st;
+
+        if (!mz_zip_reader_file_stat(&z, i, &st) || st.m_is_directory) {
+            continue;
+        }
+        const size_t len = strlen(st.m_filename);
+
+        if (len < 7 || strcmp(st.m_filename + len - 7, ".rddump") != 0) {
+            continue;
+        }
+        data = mz_zip_reader_extract_to_heap(&z, i, size, 0);
+        if (data != NULL && name != NULL && name_size > 0) {
+            snprintf(name, name_size, "%s", base_name(st.m_filename));
+        }
+    }
+    mz_zip_reader_end(&z);
+    free(zip);
+    return data;
 }

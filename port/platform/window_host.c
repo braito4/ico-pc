@@ -1082,12 +1082,13 @@ static int device_lost_quit(void)
     return 1;
 }
 
-/* F12, the frame on the screen as an rd dump and a PNG in
-   <pref>/dumps, for a bug report, and a zip of the dump and a copy of the
-   log (GitHub issues refuse .rddump files but take a .zip; the PNG stays
-   out, it is too big at high scales). The log is logs/ico-pc.log, a file on
-   Android too; with --console there is none and the zip holds the dump
-   alone. */
+/* F12, the frame on the screen for a bug report, in <pref>/dumps: a PNG
+   and a zip of the rd dump and a copy of the log (GitHub issues refuse
+   .rddump files but take a .zip; the PNG stays a loose file, it is too big
+   for a zip at high scales). The dump is written first, zipped, and the
+   loose .rddump deleted by ico_frame_dump_zip once the zip is written; when the zip fails the
+   .rddump is kept. The log is logs/ico-pc.log, a file on Android too; with
+   --console there is none and the zip holds the dump alone. */
 static void frame_dump(void)
 {
     char pref[ICO_PATH_MAX], dir[ICO_PATH_MAX], dump[ICO_PATH_MAX], png[ICO_PATH_MAX],
@@ -1112,23 +1113,22 @@ static void frame_dump(void)
     const int ok = rd_dump_on_demand(dump, png);
     /* the recording up to this moment, for the same report */
     ico_input_record_flush();
-    /* the zip is made after the dump is closed; its failure does not fail
-       the capture. With --console the "path" is not a file, so the zip
-       holds the dump alone. */
-    const char *log = ico_diag_log_path();
+    /* the zip is made after the dump is closed; with --console the log
+       "path" is not a file, so the zip holds the dump alone */
     int zr = -1;
 
     snprintf(why, sizeof(why), "no dump");
     if (ok) {
         ico_host_log_flush();
-        zr = ico_frame_dump_zip(zip, dump, log, why, sizeof(why));
+        zr = ico_frame_dump_zip(zip, dump, ico_diag_log_path(), why, sizeof(why));
     }
     if (zr < 0) {
-        fprintf(stderr, "window: dump: zip not written: %s\n", why);
+        fprintf(stderr, "window: dump: zip not written: %s%s\n", why,
+                ok ? "; the .rddump is kept" : "");
     }
-    fprintf(stderr, "window: F12 at vsync %u, Main tick %u, frame %u: %s %s and %s%s%s\n",
+    fprintf(stderr, "window: F12 at vsync %u, Main tick %u, frame %u: %s %s%s%s\n",
             ico_host_vsync_count(), ico_host_main_ticks(), (unsigned)rd_frame_number(),
-            ok ? "wrote" : "could not write all of", dump, png, zr >= 0 ? " and " : "",
+            ok ? "wrote" : "could not write all of", png, zr >= 0 ? " and " : "",
             zr >= 0 ? zip : "");
 }
 

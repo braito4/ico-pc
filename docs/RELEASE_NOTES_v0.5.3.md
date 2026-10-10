@@ -2,7 +2,7 @@
 
 - The touch controls on phones and tablets are laid out like a PlayStation controller and use the game's own button pictures. The buttons have the same real size on every screen, never cover each other, and keep clear of a foldable's fold.
 - A new row, Options > Gameplay > East Reflector door fix (off by default), lets Ico lead Yorda by the hand through a doorway that the original game sends you both back out of, such as the one at the top of the ladder in the East Reflector.
-- F12 now also saves a zip file, ready to attach to a bug report.
+- F12 now saves a zip file with everything a bug report needs, ready to attach.
 
 ## Fixed
 

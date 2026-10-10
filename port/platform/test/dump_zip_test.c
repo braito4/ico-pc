@@ -8,6 +8,7 @@
  * argv[1]: a folder the test may write in (the build folder).
  */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "dump_zip.h"
 #include "host_fs.h"
@@ -74,9 +75,23 @@ int main(int argc, char **argv)
     CHECK(put(dump, rd, sizeof(rd)) == 0);
     CHECK(put(log, text, sizeof(text) - 1) == 0);
 
-    /* both files, each under its own name, the dump's size and bytes kept */
+    /* both files, each under its own name, the dump's size and bytes kept;
+       the loose dump is gone after a good zip */
     why[0] = '\0';
     CHECK(ico_frame_dump_zip(zip, dump, log, why, sizeof(why)) == 0);
+    CHECK(ico_path_kind(dump, NULL, NULL) == -1);
+
+    /* ico_dump_zip_extract gives the dump back, with its name */
+    {
+        size_t n = 0;
+        char name[64];
+        void *back = ico_dump_zip_extract(zip, &n, name, sizeof(name));
+
+        CHECK(back != NULL && n == sizeof(rd) && memcmp(back, rd, n) == 0);
+        CHECK(strcmp(name, "frame-x-v1.rddump") == 0);
+        free(back);
+        CHECK(ico_dump_zip_extract(log, &n, NULL, 0) == NULL);
+    }
     memset(&z, 0, sizeof(z));
     CHECK(mz_zip_reader_init_file(&z, zip, 0));
     CHECK(mz_zip_reader_get_num_files(&z) == 2);
@@ -85,6 +100,7 @@ int main(int argc, char **argv)
     mz_zip_reader_end(&z);
 
     /* an unreadable log: the dump alone, still a zip */
+    CHECK(put(dump, rd, sizeof(rd)) == 0);
     snprintf(log, sizeof(log), "%s/no-such.log", argv[1]);
     CHECK(ico_frame_dump_zip(zip, dump, log, why, sizeof(why)) == 1);
     memset(&z, 0, sizeof(z));
@@ -93,8 +109,25 @@ int main(int argc, char **argv)
     CHECK(entry_is(&z, "frame-x-v1.rddump", rd, sizeof(rd)));
     mz_zip_reader_end(&z);
 
+    CHECK(ico_path_kind(dump, NULL, NULL) == -1);
+
     /* no log named (--console): the same */
+    CHECK(put(dump, rd, sizeof(rd)) == 0);
     CHECK(ico_frame_dump_zip(zip, dump, NULL, why, sizeof(why)) == 1);
+
+    /* a zip that cannot be written (its folder is missing): refused, the
+       loose dump is kept */
+    CHECK(put(dump, rd, sizeof(rd)) == 0);
+    {
+        char bad[1300];
+
+        snprintf(bad, sizeof(bad), "%s/no-such-folder/x.zip", argv[1]);
+        why[0] = '\0';
+        CHECK(ico_frame_dump_zip(bad, dump, NULL, why, sizeof(why)) == -1);
+        CHECK(why[0] != '\0');
+        CHECK(ico_path_kind(dump, NULL, NULL) == 0);
+    }
+    remove(dump);
 
     /* no dump: refused with a reason, no new file */
     remove(zip);

@@ -5,6 +5,9 @@
  *   rd_replay_tool <dump> <out.png> [--target NAME] [--present WxH]
  *                  [--backend vulkan|d3d12]
  *
+ * <dump> is an .rddump, or the .zip F12 writes: its first .rddump entry is
+ * taken (extracted to a temporary file in the temp folder, deleted at exit).
+ *
  * NAME is a named target (SCENE, DISPLAY (default), SHADOW0..2, WORK0..3,
  * AA0, AA1, FEED128, AURA_WORK, AURA_TAP, WORK2_PAD, FEED_HELD,
  * DISPLAY_HELD).  --present renders the Original presenter into a W x H
@@ -117,6 +120,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "../../include/ico_endian.h"
+#include "dump_zip.h" /* port/platform: the F12 zip */
 #include "rd_internal.h"
 #include "rd_mesh.h"
 #include "font.h" /* port/ui: the overlay test's text */
@@ -488,6 +492,66 @@ static void dumpTextures(const char *dir)
     }
 }
 
+static char s_zipTemp[1100];
+
+static void removeZipTemp(void)
+{
+    if (s_zipTemp[0] != '\0') {
+        remove(s_zipTemp);
+    }
+}
+
+/* a .zip given as the dump: its .rddump goes to a temporary file (the
+   loader takes a path) and *dump names that file; false with a message when
+   it cannot */
+static bool unzipDump(const char **dump)
+{
+    const char *path = *dump;
+    const size_t n = strlen(path);
+
+    if (n < 4 || (strcmp(path + n - 4, ".zip") != 0 && strcmp(path + n - 4, ".ZIP") != 0)) {
+        return true;
+    }
+    size_t size = 0;
+    void *data = ico_dump_zip_extract(path, &size, NULL, 0);
+
+    if (data == NULL) {
+        fprintf(stderr, "%s: no .rddump in this zip\n", path);
+        return false;
+    }
+    const char *dir = getenv("TMPDIR");
+
+    if (dir == NULL) {
+        dir = getenv("TEMP");
+    }
+    if (dir == NULL) {
+        dir = getenv("TMP");
+    }
+    if (dir == NULL) {
+        dir = "/tmp";
+    }
+    snprintf(s_zipTemp, sizeof(s_zipTemp), "%s/rd_replay_%u.rddump", dir,
+             (unsigned)(uintptr_t)data & 0xFFFFFFu);
+    FILE *fp = fopen(s_zipTemp, "wb");
+    const bool ok = fp != NULL && fwrite(data, 1, size, fp) == size;
+
+    if (fp != NULL && fclose(fp) != 0) {
+        s_zipTemp[0] = '\0';
+        free(data);
+        return false;
+    }
+    free(data);
+    if (!ok) {
+        fprintf(stderr, "%s: cannot write the temporary dump\n", s_zipTemp);
+        removeZipTemp();
+        s_zipTemp[0] = '\0';
+        return false;
+    }
+    atexit(removeZipTemp);
+    *dump = s_zipTemp;
+    return true;
+}
+
 static bool peekSize(const char *path, uint32_t *w, uint32_t *h)
 {
     FILE *fp = fopen(path, "rb");
@@ -703,6 +767,9 @@ int main(int argc, char **argv)
         }
     }
     uint32_t gw = 0, gh = 0;
+    if (!unzipDump(&dump)) {
+        return 1;
+    }
     FILE *probe = fopen(dump, "rb");
     if (!probe) {
         /* rd_pixel writes the dump; without a Vulkan device it skipped */

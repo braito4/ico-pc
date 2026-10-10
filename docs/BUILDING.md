@@ -431,18 +431,19 @@ set). On a device, the log is mirrored to logcat: `adb logcat -s ico-pc`.
 ## Frame captures (F12)
 
 F12 in the running game saves the frame on the screen, for a bug report or
-for renderer work. Three files go in `dumps/` under the user folder
+for renderer work. Two files go in `dumps/` under the user folder
 (`<pref>/dumps`; [where that is](PORTABLE_MODE.md#where-your-saves-are)),
 named `frame-<yyyymmdd-hhmmss>-v<N>`, where `<N>` is the count of vertical
 syncs since start:
 
 | file | holds |
 | --- | --- |
-| `.rddump` | the frame as the renderer saw it (`port/render/rd_dump.c`, format version 9, `RD_DUMP_VERSION`) |
-| `.png` | the picture on the screen at that moment (optional for a report; large at a high Resolution) |
-| `.zip` | the `.rddump` and a copy of `logs/ico-pc.log`, for a GitHub issue, which refuses `.rddump` files. With no log file (the program started with `--console`) it holds the dump alone |
+| `.png` | the picture on the screen at that moment (optional for a report; large at a high Resolution, so it stays a loose file) |
+| `.zip` | the `.rddump` (`port/render/rd_dump.c`, format version 9, `RD_DUMP_VERSION`) and a copy of `logs/ico-pc.log`, for a GitHub issue, which refuses `.rddump` files. With no log file (the program started with `--console`) it holds the dump alone |
 
-The `.rddump` holds the frame's draw lists with their state, the textures
+The game writes the `.rddump` first, zips it, and deletes the loose file once
+the zip is written; if the zip cannot be written the `.rddump` stays and the
+log says `dump: zip not written`. The `.rddump` holds the frame's draw lists with their state, the textures
 and meshes the frame used, and the camera. It has no display options: the
 resolution, aspect ratio and filtering of a replay are given on the
 command line. A replacement texture from a texture pack is stored blank
@@ -452,8 +453,9 @@ checked on load; versions 3 to 9 are read.
 
 `rd_replay_tool` (`port/render/tools/rd_replay_tool.c`, built with the
 `ico_render` library; its usage comment lists every switch) renders a dump
-headless to a PNG, or inspects it without a graphics device. The switches
-used most:
+headless to a PNG, or inspects it without a graphics device. It takes the
+F12 `.zip` directly (the first `.rddump` in it) or an extracted `.rddump`.
+The switches used most:
 
 - `--list` prints every command of the replayed lists (list, index, type,
   texture, bounding box); with `--no-device` nothing is rendered and no
@@ -470,8 +472,8 @@ Two examples. List a dump's commands without a graphics device, then render
 the same dump at 48:9 and 4x with the full-height picture:
 
 ```sh
-rd_replay_tool frame-20261010-083039-v7967.rddump out.png --list --no-device
-rd_replay_tool frame-20261010-083039-v7967.rddump out.png --enhanced \
+rd_replay_tool frame-20261010-083039-v7967.zip out.png --list --no-device
+rd_replay_tool frame-20261010-083039-v7967.zip out.png --enhanced \
     --aspect 48:9 --resolution 4x --full-height
 ```
 

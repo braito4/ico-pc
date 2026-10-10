@@ -140,9 +140,11 @@ if(TARGET SDL3::SDL3-shared)
 endif()
 
 # rd_replay_tool: a dump to a PNG, headless.
-add_executable(rd_replay_tool tools/rd_replay_tool.c)
+# (and a F12 .zip: platform/dump_zip.c reads it)
+add_executable(rd_replay_tool tools/rd_replay_tool.c ../platform/dump_zip.c)
 target_compile_options(rd_replay_tool PRIVATE ${ICO_SEMANTIC_OPTIONS} ${ICO_PORT_WARNINGS})
-target_link_libraries(rd_replay_tool PRIVATE ico_render)
+target_include_directories(rd_replay_tool PRIVATE ../platform)
+target_link_libraries(rd_replay_tool PRIVATE ico_render ico_miniz ico_host_fs)
 
 # --- Tests ----------------------------------------------------------------------
 # rd_state_test: lists, state leakage, keep frames, recording of the stubbed
