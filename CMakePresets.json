@@ -139,6 +139,16 @@
                 "ICO_LINK_EXE": "ON",
                 "ICO_DXC": "${sourceDir}/tools/toolchain/deps/dxc-build/bin/dxc"
             }
+        },
+        {
+            "name": "macos-app",
+            "inherits": "macos-moltenvk",
+            "displayName": "ICO macOS app (ARM64)",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "ICO_LINK_EXE": "ON",
+                "ICO_DXC": "${sourceDir}/tools/toolchain/deps/dxc-build/bin/dxc"
+            }
         }
     ],
     "buildPresets": [
@@ -188,6 +198,11 @@
         {
             "name": "ios-app",
             "configurePreset": "ios-app",
+            "targets": ["ico_pc"]
+        },
+        {
+            "name": "macos-app",
+            "configurePreset": "macos-app",
             "targets": ["ico_pc"]
         }
     ],

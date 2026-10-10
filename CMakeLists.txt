@@ -205,6 +205,11 @@ if(ICO_LINK_EXE)
             MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/port/platform/ios/Info.plist.in"
             XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED NO
             XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED NO)
+    elseif(APPLE)
+        add_executable(ico_pc MACOSX_BUNDLE ${_ico_pc_sources})
+        set_target_properties(ico_pc PROPERTIES
+            OUTPUT_NAME ICO
+            MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/port/platform/macos/Info.plist.in")
     else()
         add_executable(ico_pc ${_ico_pc_sources})
     endif()
