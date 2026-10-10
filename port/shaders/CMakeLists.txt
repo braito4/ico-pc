@@ -19,6 +19,8 @@ ico_add_shader(blit_ps blit.hlsl blit_ps fragment)
 ico_add_shader(blit_depth_ps blit.hlsl blit_depth_ps fragment)
 # the shadow count box-reduced to the GS size (rd_replay.c doShadowResolve)
 ico_add_shader(box_reduce_ps blit.hlsl box_reduce_ps fragment)
+# supersampling: DISPLAY box-averaged to the present box (rd_present.c)
+ico_add_shader(aa_reduce_ps blit.hlsl aa_reduce_ps fragment)
 # tests only, rd__camera_probe
 ico_add_shader(camera_probe_ps blit.hlsl camera_probe_ps fragment)
 ico_add_shader(blend_int_vs blend_int.hlsl blend_int_vs vertex)

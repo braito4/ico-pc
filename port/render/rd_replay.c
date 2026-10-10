@@ -105,7 +105,8 @@ static const char *const s_fsNames[RD_FS_COUNT] = {"sprite_ps" /* indexed by RD_
                                                    "sprite_texa_ps",
                                                    "vu_texa_ps",
                                                    "blit_depth_ps",
-                                                   "fog_lut_buffer_ps"};
+                                                   "fog_lut_buffer_ps",
+                                                   "aa_reduce_ps"};
 
 /* ------------------------------------------------------------------ init */
 

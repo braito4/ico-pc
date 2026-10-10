@@ -266,6 +266,18 @@ bool rd__apply_display(void)
         w = gw;
         h = gh;
     }
+    /* supersampling (RdSettings.antiAlias, rd__aa_mode: never under the
+     * Original preset): the scene at 2 or 4 times the Resolution row's
+     * size, before the GPU's limit below (and the halving fallback after
+     * it, createNamedTargets); the presenter box-reduces DISPLAY back
+     * (rd__present_record).  Not under the CRT filter, which shows the
+     * PS2's pixels at 1x */
+    const int aaMode = rd__aa_mode();
+    const float ssaa = rd__crt_on() ? 1.0f : (float)rd__aa_ssaa_factor(aaMode);
+    if (ssaa > 1.0f) {
+        w *= ssaa;
+        h *= ssaa;
+    }
     /* from the GS size up to the GPU's largest render target, both axes scaled
      * together so the shape is kept (16384 where there is no device) */
     float lim = g_rd.hasDevice ? (float)rhi_limits()->maxRenderTargetSize : 16384.0f;
@@ -280,6 +292,17 @@ bool rd__apply_display(void)
     if (h > lim) {
         w *= lim / h;
         h = lim;
+    }
+    /* MSAA on a tile-based GPU: the multisampled scene pair (4 + 8 bytes a
+     * sample) shares the phone's memory, so the scale halves (both axes, not
+     * below the GS size) until the pair fits RD_MSAA_TILER_BUDGET */
+    if (g_rd.hasDevice && rhi_limits()->tiler && rd_aa_samples(aaMode) > 1u) {
+        const double per = 12.0 * (double)rd_aa_samples(aaMode);
+        while ((double)w * (double)h * per > (double)RD_MSAA_TILER_BUDGET && w > gw * 1.5f &&
+               h > gh * 1.5f) {
+            w *= 0.5f;
+            h *= 0.5f;
+        }
     }
     const float sx = w / gw < 1.0f ? 1.0f : w / gw;
     const float sy = h / gh < 1.0f ? 1.0f : h / gh;
@@ -300,9 +323,10 @@ bool rd__apply_display(void)
      * settingsPending) and at init, never per frame */
     if (changed || aspect != g_rd.outAspect || filter != g_rd.filterUpgrade ||
         vs != g_rd.vsyncApplied) {
-        rd__log("display: scene %gx%g%s, work %g, aspect %.3f, filter %u, %s height, vsync %s",
+        rd__log("display: scene %gx%g%s, work %g, aspect %.3f, filter %u, %s height, vsync %s%s",
                 (double)sx, (double)sy, crtLock ? " (CRT: 1x)" : "", (double)work, (double)aspect,
-                (unsigned)filter, full ? "full" : "half", st->vsync ? "on" : "off");
+                (unsigned)filter, full ? "full" : "half", st->vsync ? "on" : "off",
+                aaMode == RD_AA_OFF ? "" : rd__aa_label(aaMode));
     }
     if (changed) {
         g_rd.sceneReqSx = sx;
@@ -312,6 +336,7 @@ bool rd__apply_display(void)
         g_rd.sceneFellBack = false;
     }
     g_rd.workScale = work;
+    g_rd.ssaa = ssaa;
     g_rd.outAspect = aspect;
     g_rd.filterUpgrade = filter;
     g_rd.fullHeight = full;
@@ -442,6 +467,97 @@ void rd__present_blit(RhiCommandList cl, RhiTexture src, uint32_t sw, uint32_t s
                       const RhiRect *box, RdFilter filter, int mirror, float crop)
 {
     blit(cl, src, sw, sh, dst, dstFmt, dw, dh, load, box, filter, mirror, crop, false);
+}
+
+/* ------------------------------------------------------ the supersampling
+ * With anti-aliasing on (rd__aa_mode, never under the Original preset) and
+ * more than one source texel per output pixel both ways (supersampling
+ * makes it 2 or 4 at the window's resolution), step 2's source is first
+ * box-averaged into a texture of the box's own size (aa_reduce_ps: the mean
+ * over each pixel's footprint on a 1/16-texel grid, rounded half up; exact
+ * for the integer ratios), and step 2 then draws that texture into the box
+ * one texel a pixel, nearest, mirrored as before.  The crop (sourceCrop) is
+ * taken in the reduce.  Off, or at 1 texel a pixel or fewer, nothing here
+ * runs and the box blit samples DISPLAY as before. */
+static struct {
+    RhiTexture tex;
+    RhiState state;
+    uint32_t w, h;
+} s_reduce;
+
+/* the footprint of one of B pixels over an extent of S16 sixteenths
+ * (a = S16 / B, b = S16 % B: aa_reduce_ps) */
+static void reduceAxis(uint32_t s16, uint32_t b, uint32_t c16, uint32_t out[4])
+{
+    out[0] = s16 / b;
+    out[1] = s16 % b;
+    out[2] = b;
+    out[3] = c16;
+}
+
+/* the reduce into s_reduce; false (nothing recorded) when it does not apply
+ * or cannot run.  On true *src, *sw, *sh are the reduced texture's */
+static bool reduceRecord(RhiCommandList cl, RhiTexture *src, uint32_t *sw, uint32_t *sh,
+                         const RhiRect *box, float crop)
+{
+    if (rd__aa_mode() == RD_AA_OFF || box->w == 0 || box->h == 0) {
+        return false;
+    }
+    const float ew = (float)*sw - 2.0f * (crop > 0.0f ? crop : 0.0f);
+    if (!(ew > (float)box->w && (float)*sh > (float)box->h)) {
+        return false; /* one texel a pixel or fewer: the box blit as before */
+    }
+    if (!s_reduce.tex.id || s_reduce.w != box->w || s_reduce.h != box->h) {
+        if (s_reduce.tex.id) {
+            rhi_destroy_texture(s_reduce.tex);
+        }
+        s_reduce.tex = rhi_create_texture(&(RhiTextureDesc){box->w, box->h, 1, RHI_FMT_RGBA8_UNORM,
+                                                            RHI_TEX_RENDER_TARGET | RHI_TEX_SAMPLED,
+                                                            "rd present reduce"});
+        s_reduce.state = RHI_STATE_UNDEFINED;
+        s_reduce.w = box->w;
+        s_reduce.h = box->h;
+    }
+    const RdPipeKeyInt k = rd__post_key(RD_VS_BLIT, RD_FS_AA_REDUCE, RHI_FMT_RGBA8_UNORM);
+    const RhiPipeline pipe = rd__get_pipeline(&k);
+    if (!s_reduce.tex.id || !pipe.id) {
+        return false;
+    }
+    IcoDrawCB cb;
+    memset(&cb, 0, sizeof(cb));
+    reduceAxis((uint32_t)(ew * 16.0f + 0.5f), box->w,
+               (uint32_t)((crop > 0.0f ? crop : 0.0f) * 16.0f + 0.5f), cb.col);
+    reduceAxis(*sh * 16u, box->h, 0u, cb.blend);
+    cb.mode[0] = *sw;
+    cb.mode[1] = *sh;
+    cb.uvRect[2] = cb.uvRect[3] = 1.0f;
+    cb.tex[0] = cb.tex[1] = cb.tex[2] = cb.tex[3] = 1.0f;
+    rd__transition(cl, s_reduce.tex, &s_reduce.state, RHI_STATE_RENDER_TARGET);
+    RhiRenderPassDesc p;
+    memset(&p, 0, sizeof(p));
+    p.color[0].texture = s_reduce.tex;
+    p.color[0].load = RHI_LOAD_DONT_CARE;
+    p.colorCount = 1;
+    p.width = box->w;
+    p.height = box->h;
+    rhi_cmd_begin_render_pass(cl, &p);
+    const RhiViewport vp = {0.0f, 0.0f, (float)box->w, (float)box->h, 0.0f, 1.0f};
+    rhi_cmd_set_viewport(cl, &vp);
+    const RhiRect all = {0, 0, box->w, box->h};
+    rhi_cmd_set_scissor(cl, &all);
+    rhi_cmd_set_pipeline(cl, pipe);
+    rd__bind_uniform(cl, 0, rd__frame_group(box->w, box->h, 0.0f, 0.0f));
+    rd__bind_uniform(cl, 1, rd__draw_group(&cb));
+    rhi_cmd_set_bind_group(cl, 2,
+                           rd__tex_group(*src, rd__sampler(RD_FILTER_NEAREST, RD_FILTER_NEAREST,
+                                                           RD_WRAP_CLAMP, RD_WRAP_CLAMP)));
+    rhi_cmd_draw(cl, 3, 0, 1);
+    rhi_cmd_end_render_pass(cl);
+    rd__transition(cl, s_reduce.tex, &s_reduce.state, RHI_STATE_SHADER_READ);
+    *src = s_reduce.tex;
+    *sw = box->w;
+    *sh = box->h;
+    return true;
 }
 
 /* ------------------------------------------------------ the effects depth
@@ -1483,14 +1599,22 @@ void rd__present_record(RhiCommandList cl)
          * effects program is loaded (never under the CRT filter, even when
          * it could not draw) */
         /* the frame's columns past its exact width left out (none at 4:3) */
-        const float crop = sourceCrop(sw);
+        float crop = sourceCrop(sw);
+        RdFilter scaleFilter = pr->scaleFilter;
+        /* anti-aliasing: the source box-averaged to the box first when it
+         * has more than a texel a pixel (the reduce takes the crop; the box
+         * blit is then one texel a pixel, nearest) */
+        if (rd__aa_mode() != RD_AA_OFF && reduceRecord(cl, &src, &sw, &sh, &box, crop)) {
+            crop = 0.0f;
+            scaleFilter = RD_FILTER_NEAREST;
+        }
         const bool depth = depthWanted() && !rd__crt_on() &&
                            depthBlit(cl, src, sw, sh, out, s_outFormat, s_outW, s_outH, &box,
-                                     pr->scaleFilter, mirror, crop);
+                                     scaleFilter, mirror, crop);
         if (!depth) {
             open = !rd__crt_on();
             blit(cl, src, sw, sh, out, s_outFormat, s_outW, s_outH, RHI_LOAD_CLEAR, &box,
-                 pr->scaleFilter, mirror, crop, open);
+                 scaleFilter, mirror, crop, open);
         }
     }
     /* the deferred text, drawn in list order with the regions and colours
@@ -1549,7 +1673,11 @@ void rd__present_shutdown(void)
         rhi_destroy_texture(s_probe.tex); /* rd_display_probe's */
     }
     memset(&s_probe, 0, sizeof(s_probe));
-    depthShutdown();    /* the effects depth */
+    depthShutdown(); /* the effects depth */
+    if (s_reduce.tex.id) {
+        rhi_destroy_texture(s_reduce.tex); /* the supersampling's reduce */
+    }
+    memset(&s_reduce, 0, sizeof(s_reduce));
     rd__crt_shutdown(); /* the CRT filter */
     /* the overlay's prims (the registration stays), the deferred text's list */
     free(s_ov.v);

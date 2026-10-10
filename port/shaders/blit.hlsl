@@ -5,6 +5,7 @@
 //   blit_ps      single colour output; colour = texture function(texel, tint)
 //   blit_depth_ps blit_ps plus SV_Depth from the scene's depth (the present's
 //                effects depth)
+//   aa_reduce_ps the supersampled DISPLAY box-averaged to the present box
 // Texture function flags are DrawCB.g_mode.x: with DF_TEXTURED clear the
 // pass writes the tint colour alone (fade, letterbox).
 #include "common.hlsli"
@@ -93,6 +94,46 @@ float4 box_reduce_ps(BlitVSOut i) : SV_Target0
         }
     }
     return sum / (g_param.x * g_param.y);
+}
+
+// aa_reduce_ps (rd_present.c, supersampling): DISPLAY box-averaged into
+// the present box's own size, exact in integers. Each output pixel p covers
+// the source span [lo, hi) per axis in 1/16 texels:
+//   lo = c + p * a + (p * b) / B,  hi the same at p + 1
+// (a = S / B and b = S % B for the source extent S in 1/16 texels and the
+// box's size B in pixels, so lo = c + floor(p * S / B) without forming p * S;
+// c the crop at the left in 1/16 texels). A texel's weight is its overlap
+// with the span in 1/16 texels, its value the stored byte (t1 read with
+// Load), and the pixel is the weighted sum over the span's area, rounded
+// half up: (sum + area / 2) / area, written as k / 255 (stored exactly).
+//   g_col   x a, y b, z B, w c   (columns)
+//   g_blend x a, y b, z B, w c   (rows)
+//   g_mode.xy  the source's size in texels (reads stop at it)
+// Integer ratios (2x, 4x) are the exact box mean; others the mean over the
+// 1/16-texel grid. The sums fit 32 bits up to 64 source texels a pixel.
+float4 aa_reduce_ps(BlitVSOut i) : SV_Target0
+{
+    uint2 p = uint2(i.pos.xy);
+    uint2 a = uint2(g_col.x, g_blend.x);
+    uint2 b = uint2(g_col.y, g_blend.y);
+    uint2 bb = max(uint2(g_col.z, g_blend.z), uint2(1u, 1u));
+    uint2 c = uint2(g_col.w, g_blend.w);
+    uint2 lo = c + p * a + (p * b) / bb;
+    uint2 hi = c + (p + 1u) * a + ((p + 1u) * b) / bb;
+    uint2 first = lo >> 4;
+    uint2 last = min((hi + 15u) >> 4, g_mode.xy);
+    uint4 sum = uint4(0u, 0u, 0u, 0u);
+    for (uint y = first.y; y < last.y; y++) {
+        uint wy = min(hi.y, (y + 1u) * 16u) - max(lo.y, y * 16u);
+        uint4 row = uint4(0u, 0u, 0u, 0u);
+        for (uint x = first.x; x < last.x; x++) {
+            uint wx = min(hi.x, (x + 1u) * 16u) - max(lo.x, x * 16u);
+            row += uint4(floor(g_texture.Load(int3(int(x), int(y), 0)) * 255.0 + 0.5)) * wx;
+        }
+        sum += row * wy;
+    }
+    uint area = max((hi.x - lo.x) * (hi.y - lo.y), 1u);
+    return float4((sum + area / 2u) / area) * (1.0 / 255.0);
 }
 
 // camera_probe_ps (tests only, rd__camera_probe): FrameCB's

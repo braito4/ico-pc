@@ -792,6 +792,9 @@ typedef enum RdFsId {
     /* fog_lut_buffer_ps: fog_lut_ps reading the depth's bits from an
      * R32_UINT texture (RD_FOG_BUFFER, rd_fog_path.c) */
     RD_FS_FOG_BUFFER,
+    /* aa_reduce_ps: supersampling, DISPLAY box-averaged to the present box
+     * (rd_present.c) */
+    RD_FS_AA_REDUCE,
     RD_FS_COUNT
 } RdFsId;
 
@@ -1000,6 +1003,18 @@ void rd__crt_shoulder(float c[3], float st);
 float rd__crt_beam(float c, float d, float beamMin, float beamMax);
 /* True when the present draws the CRT filter (a mode, strength > 0). */
 bool rd__crt_on(void);
+/* ---------------------------------------------------- anti-aliasing
+ * RdSettings.antiAlias as it is drawn (rd_core.c): RD_AA_OFF under the
+ * Original preset, for an unknown value, and for an MSAA count outside
+ * rd_aa_supported_mask(); else the setting. */
+int rd__aa_mode(void);
+/* 2 or 4 for the supersampling values, else 1 */
+uint32_t rd__aa_ssaa_factor(int mode);
+/* ", anti-aliasing <name>" for the display log line */
+const char *rd__aa_label(int mode);
+/* The multisampled scene pair's budget on a tile-based GPU, in bytes
+ * (rd__apply_display halves the scale until it fits). */
+#define RD_MSAA_TILER_BUDGET (384ull << 20)
 /* The filter's source grid: the PS2 picture's pixels, vw across and vh
  * lines (DISPLAY's, 512 with full_height); the overlay's layer is vw x gsH
  * (the frame's lines).  vw is the native frame's width less rd__crt_crop
@@ -1317,6 +1332,9 @@ typedef struct RdContext {
      * to fall back (sceneFellBack) */
     float sceneReqSx, sceneReqSy;
     bool sceneFellBack;
+    /* the supersampling factor in force (rd__apply_display): 1, 2 or 4,
+     * already in sceneReqSx/Sy; rd_scene_scale_lowered divides it out */
+    float ssaa;
     /* a scene-sized texture made after the named targets (a shadow count, a
      * depth copy, a snapshot, the wrap accumulator) could not be allocated
      * while the scene scale was above 1: rd_begin_frame then halves the

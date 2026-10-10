@@ -1595,6 +1595,150 @@ static void checkScale2(void)
     rd_shutdown();
 }
 
+/* Supersampling (RdSettings.antiAlias): the CPU's model of aa_reduce_ps,
+ * the mean over each box pixel's footprint on a 1/16-texel grid rounded half
+ * up, (sum + area / 2) / area, over src (sw x sh RGBA8) into dst (bw x bh) */
+static void cpuReduce(const uint8_t *src, uint32_t sw, uint32_t sh, uint8_t *dst, uint32_t bw,
+                      uint32_t bh)
+{
+    const uint32_t ax = sw * 16u / bw, bx = sw * 16u % bw;
+    const uint32_t ay = sh * 16u / bh, by = sh * 16u % bh;
+    for (uint32_t py = 0; py < bh; py++) {
+        const uint32_t ly = py * ay + py * by / bh, hy = (py + 1) * ay + (py + 1) * by / bh;
+        for (uint32_t px = 0; px < bw; px++) {
+            const uint32_t lx = px * ax + px * bx / bw, hx = (px + 1) * ax + (px + 1) * bx / bw;
+            uint32_t sum[4] = {0, 0, 0, 0};
+            for (uint32_t y = ly >> 4; y < ((hy + 15) >> 4) && y < sh; y++) {
+                const uint32_t wy =
+                    (hy < (y + 1) * 16 ? hy : (y + 1) * 16) - (ly > y * 16 ? ly : y * 16);
+                uint32_t row[4] = {0, 0, 0, 0};
+                for (uint32_t x = lx >> 4; x < ((hx + 15) >> 4) && x < sw; x++) {
+                    const uint32_t wx =
+                        (hx < (x + 1) * 16 ? hx : (x + 1) * 16) - (lx > x * 16 ? lx : x * 16);
+                    for (int k = 0; k < 4; k++) {
+                        row[k] += src[((size_t)y * sw + x) * 4 + k] * wx;
+                    }
+                }
+                for (int k = 0; k < 4; k++) {
+                    sum[k] += row[k] * wy;
+                }
+            }
+            const uint32_t area = (hx - lx) * (hy - ly);
+            for (int k = 0; k < 4; k++) {
+                dst[((size_t)py * bw + px) * 4 + k] = (uint8_t)((sum[k] + area / 2) / area);
+            }
+        }
+    }
+}
+
+static uint8_t s_ssaaDisp[2048 * 2048 * 4], s_ssaaRef[1280 * 960 * 4], s_ssaaOut[1280 * 960 * 4];
+
+/* the rich frame at Enhanced, full height, 4:3 into outW x outH with the
+ * anti-aliasing aa and scene scale scale: DISPLAY (into s_ssaaDisp when
+ * disp), the present (into s_ssaaOut) and its box */
+static bool ssaaRun(int aa, float scale, uint32_t outW, uint32_t outH, int disp, uint32_t *dw,
+                    uint32_t *dh, RhiRect *box)
+{
+    RdSettings s = originalSettings();
+    s.preset = RD_PRESET_ENHANCED;
+    s.sceneScale = scale;
+    s.fullHeightScene = 1;
+    s.outputWidth = outW;
+    s.outputHeight = outH;
+    s.antiAlias = (uint8_t)aa;
+    if (!rd_init(512, 512, &s, NULL)) {
+        return false;
+    }
+    RdTex t = rd_create_texture(512, 512, s_scene, RD_TEXA_80_80, "scene");
+    recordRichFrame(t, 1);
+    bool ok = true;
+    uint32_t w = 0, h = 0;
+    uint8_t *p = readTarget(RD_TARGET_DISPLAY, &w, &h);
+    ok = p != NULL && (size_t)w * h * 4 <= sizeof(s_ssaaDisp);
+    if (ok && disp) {
+        memcpy(s_ssaaDisp, p, (size_t)w * h * 4);
+    }
+    *dw = w;
+    *dh = h;
+    uint32_t ow = 0, oh = 0, bw = 0, bh = 0;
+    ok = ok && rd__read_present(s_ssaaOut, sizeof(s_ssaaOut), &ow, &oh) && ow == outW &&
+         oh == outH && rd__last_present_box(&bw, &bh, box);
+    rd_destroy_texture(t);
+    rd_shutdown();
+    return ok;
+}
+
+/* SSAA2 (and SSAA4) at 4:3 Enhanced: the scene is the 2x (4x) render (DISPLAY
+ * byte for byte the run at that scale without anti-aliasing), and the
+ * present inside the box is DISPLAY box-reduced on the CPU, byte for byte
+ * (the rounding: half up of the exact mean on the 1/16-texel grid).  And
+ * under the Original preset the setting is off: the PS2 frame unchanged. */
+static void checkSsaa(void)
+{
+    makeNoiseScene();
+
+    static const struct {
+        int aa;
+        float scale;
+        uint32_t outW, outH;
+    } cases[] = {
+        {RD_AA_SSAA2, 2.0f, 640, 480},  /* 1024 texels into 640: 1.6 a pixel */
+        {RD_AA_SSAA2, 2.0f, 512, 384},  /* exactly 2 across */
+        {RD_AA_SSAA4, 4.0f, 1280, 960}, /* 2048 into 1280 */
+    };
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        uint32_t w1 = 0, h1 = 0, w2 = 0, h2 = 0;
+        RhiRect box, box2;
+        /* the scale without anti-aliasing: its DISPLAY */
+        if (!ssaaRun(RD_AA_OFF, cases[i].scale, cases[i].outW, cases[i].outH, 1, &w1, &h1, &box2)) {
+            CHECK(0, "ssaa %zu: the %gx run", i, (double)cases[i].scale);
+            continue;
+        }
+        /* 1x with supersampling */
+        if (!ssaaRun(cases[i].aa, 1.0f, cases[i].outW, cases[i].outH, 0, &w2, &h2, &box)) {
+            CHECK(0, "ssaa %zu: the supersampled run", i);
+            continue;
+        }
+        CHECK(w1 == w2 && h1 == h2 && w2 == 512u * (uint32_t)cases[i].scale,
+              "ssaa %zu: DISPLAY %ux%u, the %gx run's %ux%u", i, w2, h2, (double)cases[i].scale, w1,
+              h1);
+        CHECK(box.w == box2.w && box.h == box2.h && box.w > 0 && box.h > 0,
+              "ssaa %zu: the same box", i);
+        if (w1 != w2 || h1 != h2 || box.w == 0 || box.h == 0 ||
+            box.w * 4u * box.h > sizeof(s_ssaaRef)) {
+            continue;
+        }
+        cpuReduce(s_ssaaDisp, w1, h1, s_ssaaRef, box.w, box.h);
+        int bad = 0, worst = 0;
+        for (uint32_t y = 0; y < box.h; y++) {
+            for (uint32_t x = 0; x < box.w; x++) {
+                const uint8_t *g = &s_ssaaOut[(((size_t)(box.y + (int32_t)y)) * cases[i].outW +
+                                               (size_t)box.x + x) *
+                                              4];
+                const uint8_t *c = &s_ssaaRef[((size_t)y * box.w + x) * 4];
+                for (int k = 0; k < 3; k++) {
+                    const int e = abs((int)g[k] - (int)c[k]);
+                    worst = e > worst ? e : worst;
+                    bad += e != 0;
+                }
+            }
+        }
+        printf("  ssaa %zu: %ux%u -> box %ux%u, %d bytes differ, worst %d\n", i, w1, h1, box.w,
+               box.h, bad, worst);
+        CHECK(bad == 0, "ssaa %zu: the present is DISPLAY box-reduced, byte for byte", i);
+    }
+    /* the Original preset keeps it off */
+    RdSettings s = originalSettings();
+    s.antiAlias = RD_AA_SSAA2;
+    FrameHashes h;
+    if (s_presentOriginal && richFrame(&s, &h)) {
+        CHECK(h.present == s_presentOriginal, "ssaa: under the Original preset nothing changes");
+    }
+    CHECK(rhi_vk_validation_error_count() == 0, "ssaa: %u validation errors",
+          rhi_vk_validation_error_count());
+}
+
 /* The scene cap follows the device's texture limit (4096 under
  * ICO_VK_FAKE_LIMITS=min), and a scale the device cannot allocate falls back
  * by halves.  The settings are applied without recreating the targets for
@@ -3502,6 +3646,7 @@ int main(int argc, char **argv)
     rd_shutdown();
     checkOriginal();
     checkScale2();
+    checkSsaa();
     checkSceneLimit();
     checkWide169();
     checkPresentInfo();

@@ -1458,14 +1458,44 @@ uint32_t rd_aa_supported_mask(void)
     return mask;
 }
 
+int rd__aa_mode(void)
+{
+    const int aa = g_rd.settings.antiAlias;
+
+    if (aa <= RD_AA_OFF || aa >= RD_AA_COUNT || g_rd.settings.preset == RD_PRESET_ORIGINAL) {
+        return RD_AA_OFF;
+    }
+    return (rd_aa_supported_mask() & (1u << aa)) != 0u ? aa : RD_AA_OFF;
+}
+
+uint32_t rd__aa_ssaa_factor(int mode)
+{
+    return mode == RD_AA_SSAA2 ? 2u : (mode == RD_AA_SSAA4 ? 4u : 1u);
+}
+
+const char *rd__aa_label(int mode)
+{
+    static const char *const names[RD_AA_COUNT] = {
+        "",
+        ", anti-aliasing 2x supersampling",
+        ", anti-aliasing 4x supersampling",
+        ", anti-aliasing MSAA 2x",
+        ", anti-aliasing MSAA 4x",
+        ", anti-aliasing MSAA 8x",
+    };
+    return mode > RD_AA_OFF && mode < RD_AA_COUNT ? names[mode] : "";
+}
+
 int rd_scene_scale_lowered(void)
 {
     /* below what was asked, whether the GPU's size limit or the allocation
-       fallback brought it down */
-    if (g_rd.settings.sceneScale <= 0.0f || g_rd.sceneSy + 0.5f >= g_rd.settings.sceneScale) {
+       fallback brought it down; in the Resolution row's terms (the
+       supersampling factor divided out) */
+    const float m = g_rd.ssaa > 1.0f ? g_rd.ssaa : 1.0f;
+    if (g_rd.settings.sceneScale <= 0.0f || g_rd.sceneSy + 0.5f >= g_rd.settings.sceneScale * m) {
         return 0;
     }
-    return g_rd.sceneSy < 1.0f ? 1 : (int)g_rd.sceneSy;
+    return g_rd.sceneSy / m < 1.0f ? 1 : (int)(g_rd.sceneSy / m);
 }
 
 void rd_set_mirror(int on)
