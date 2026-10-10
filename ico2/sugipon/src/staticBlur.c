@@ -93,6 +93,10 @@ extern int ico_photo_left(void);
  * the packet bookkeeping stay. */
 #include "rd.h"
 
+/* GifPacket.h, which this file does not include: the native frame width
+   the GS register decoder reads (512 at 4:3) */
+extern int gif_HostFrameWidth(void);
+
 static RdPostKind sbKind = RD_POST_FLARE; /* the effect the next sprites belong to */
 
 static int sbMotionDrawn; /* MotionBlur drew since the last FullScreenEffectBefore */
@@ -288,10 +292,14 @@ static void sbHostSprite(void *rect, long long z, void *uvRect, void *colour, in
         } else {
             rd_texture_off();
         }
-        p.uv[0] = (float)(uv[0] & 0x3FFF);
-        p.uv[1] = (float)(uv[1] & 0x3FFF);
-        p.uv[2] = (float)((uv[0] + uv[2]) & 0x3FFF);
-        p.uv[3] = (float)((uv[1] + uv[3]) & 0x3FFF);
+        /* PC port: UV's 14 bits at 4:3, 16 on a wide frame, as the GS
+           register decoder reads them (GifPacket.c) */
+        const int m = gif_HostFrameWidth() > 512 ? 0xFFFF : 0x3FFF;
+
+        p.uv[0] = (float)(uv[0] & m);
+        p.uv[1] = (float)(uv[1] & m);
+        p.uv[2] = (float)((uv[0] + uv[2]) & m);
+        p.uv[3] = (float)((uv[1] + uv[3]) & m);
         p.scalar[0] = (float)(1 << ((sbTex0 >> 26) & 0xF));
         p.scalar[1] = (float)(1 << ((sbTex0 >> 30) & 0xF));
         p.lines = tfx;
