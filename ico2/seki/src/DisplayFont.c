@@ -51,6 +51,7 @@ inline int font_GetWidth(void)
 
 inline int font_GetHeight(void)
 {
+    /* PC port: ScreenWidth in this file is UI, the 640 grid's 4:3 box */
     return (12800 / ScreenWidth) / 2;
 }
 
@@ -149,11 +150,11 @@ static void fontCorner(RdScreenVtx *o, long long xyz, int u, int v) /* port */
 static inline float drawOne(float px, float py, int u, int v, int cw, int dp1,
                             int fontw) /* derived name */
 {
-    float fcw = (float)cw, fh = (float)(fontw * 640 / ScreenWidth);
+    float fcw = (float)cw, fh = (float)(fontw * 640 / ScreenWidth); /* UI */
     int gsofs = 0x8000;
     int uv[4] = {u * 16, v * 16, (u + dp1 + 1) * 16, (v + 20) * 16}, iv[4];
     float pos[4] = {px, py, fcw, fh};
-    int ofs[4] = {-ScreenWidth / 2 * 16, -ScreenHeight / 4 * 16, 0, 0};
+    int ofs[4] = {-ScreenWidth / 2 * 16, -ScreenHeight / 4 * 16, 0, 0}; /* UI */
 
     _FTOI4Vector(iv, pos);
 #ifdef ICO_RD
@@ -261,6 +262,7 @@ void font_Print(unsigned int color, unsigned char *str, float x, float y, int al
     fw = (float)measure(str, buf);
     p = buf;
 
+    /* PC port: UI, the 640 grid's 4:3 box */
     switch (align) {
     case 0:
         cy = y;
