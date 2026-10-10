@@ -21,7 +21,7 @@ Some rows are the PS2's own settings, the ones the original Options screen
 had. They only show up when you open Options from the pause menu, and they
 are kept in your save, as on the PS2:
 
-- Brightness (on the Display page; Square puts back the normal value, 7)
+- Brightness (on the Effects page; Square puts back the normal value, 7)
 - Button configuration, Vibration and Hold type (on the Controls page)
 - Film effect and Players (on the Gameplay page, once you have finished
   the game)
@@ -35,7 +35,7 @@ How the picture looks.
   the PS2 picture. **Enhanced** makes the picture as sharp as your
   window, fits it to the window's shape, smooths the textures and shows
   the full-height picture. Once you change one of those four rows yourself,
-  it says **Custom**. The Preset does not touch the Effects page.
+  it says **Custom**. Two of those four rows, Full-height picture and Texture filtering, are on the Effects page.
 - **Resolution** is how sharp the picture is: 1x is the PS2's, up to 16x,
   or the size of your window. Very high values need a lot of graphics
   memory; when your graphics card cannot hold the picture, the game lowers
@@ -52,8 +52,16 @@ How the picture looks.
 - **Aspect ratio** is the picture's shape: 4:3 (the PS2's), 16:10, 16:9,
   21:9, 32:9 or 48:9. **Auto** follows the shape of your window or screen,
   up to 60:9.
-  On a wider picture you see more of the world to the sides. Menus,
-  subtitles and movies stay in a 4:3 box in the middle.
+  The game draws the whole width of the picture natively, so on a wider
+  picture you see more of the world to the sides, and it looks the way the
+  original did. Menus, subtitles and movies stay in a 4:3 box in the middle.
+- **Anti-aliasing** smooths jagged edges. Off draws the picture as it is.
+  **2x supersampling** and **4x supersampling** draw the picture at a larger
+  size and shrink it back, which smooths everything (including the insides of
+  textures) but needs more from your graphics card. **MSAA 2x**, **4x** and
+  **8x** smooth the edges of shapes and are lighter to run; they only appear
+  when your graphics card supports them. This row only works with the
+  Enhanced preset.
 - **Window mode** is **Windowed** (a normal window), **Borderless** (a
   window without a frame that fills the whole screen, so switching to
   another program is quick) or **Fullscreen**. In Steam Deck Game Mode the
@@ -61,15 +69,11 @@ How the picture looks.
   phones.
 - **Vertical sync** stops the picture from tearing. With it off, the
   picture can tear if your screen allows it.
-- **Texture filtering** is how smooth the textures look up close: Original
-  (as on the PS2), Trilinear or Anisotropic.
 - **Texture pack** turns an installed texture pack On or Off. It says
   **None installed** when there is none. [About texture packs](TEXTURE_PACKS.md).
 - **Model pack** turns an installed model pack On or Off. It says **None
   installed** when there is none. This row is only on the title screen's
   Options. [About model packs](MODEL_PACKS.md).
-- **Full-height picture** shows every line of the picture. The PS2 showed
-  half of them, which looks a little softer.
 - **Frame rate** is Original (as on the PS2), Uncapped, or a fixed limit of
   60, 120, 144 or 240 frames a second. On a computer it starts at
   Uncapped. With Vertical sync on, Uncapped follows your
@@ -83,8 +87,14 @@ How the picture looks.
 
 This page is in the Options menu, right under Display.
 
-The CRT filter and the game's own picture effects.
+The picture's finish, the CRT filter and the game's own picture effects.
 
+- **Full-height picture** shows every line of the picture. The PS2 showed
+  half of them, which looks a little softer.
+- **Texture filtering** is how smooth the textures look up close: Original
+  (as on the PS2), Trilinear or Anisotropic.
+- **Brightness** sets how bright the picture is. Square puts back the
+  normal value, 7.
 - **CRT filter** makes the picture look like an old tube television. Off
   turns it off; the other choices are the styles Scanlines, Consumer TV,
   Trinitron, PVM and Shadow mask. **CRT strength** is how strong it is. It
@@ -115,7 +125,7 @@ The last row is not one of the game's effects:
   little taller. Off by default. It works with every Preset and with the CRT
   filter.
 
-The Preset on the Display page does not change these. Changes you make
+The Preset on the Display page sets Texture filtering and Full-height picture on this page too, but it does not change the rest. Changes you make
 here show in photo mode at once.
 
 ## Graphics driver
