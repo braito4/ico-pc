@@ -12,7 +12,11 @@
  *      resolve, and the volume's eight triangles with the signs of the RGBAQ
  *      the packet carries (compared with the packet words Shadow.c wrote),
  *      each vertex tagged with its triangle's place; at a work scale
- *      of 2 the blur levels keep 256, 128 and 64 texels.
+ *      of 2 the blur levels keep 256, 128 and 64 texels.  The same on a
+ *      frame 1376 wide (32:9): the count 1376 x H, the levels the PS2's
+ *      sizes per 512 columns (688 x 256, 344 x 128, 172 x 64: the named
+ *      targets and every FRAME, rect and UV of the chain), the composites'
+ *      UVs over those widths.
  * On a Vulkan device (exit 77 without one, after the recording checks):
  *   a  the resolved count against the wrapped colour sum the GS makes (4 n
  *      mod 256, A = 0x80 where non-zero), exact, for net counts 0..127,
@@ -491,7 +495,7 @@ static void recordFrame(int vol, const int blend[4])
         drawReceiver();
     }
     shadow_Reset();
-    s_count = rd_shadow_count_target(W, H);
+    s_count = rd_shadow_count_target((uint32_t)gsFrame.w, H);
     if (vol == VOL_SYNTH) {
         buildVolumes();
         rd_shadow_tris(s_tri, s_sign, s_nt, 1);
@@ -631,11 +635,18 @@ static void checkRecording(void)
     const RdCmdList *cl = &f->lists[3];
     const uint32_t scene = rd_target(RD_TARGET_SCENE).id;
     const RdTargetRec *ct = rd__target_rec(s_count.id);
-    CHECK(ct && ct->w == W && ct->h == H && !ct->withDepth && !ct->named,
-          "the count target: a %ux%u temporary target without depth", W, H);
+    const int fw = gsFrame.w; /* the native frame's width: W at 4:3 */
+    CHECK(ct && ct->w == (uint32_t)fw && ct->h == H && !ct->withDepth && !ct->named,
+          "the count target: a %ux%u temporary target without depth", fw, H);
+    for (int l = 0; l < 3; l++) {
+        const RdTargetRec *lt = rd__target_rec(rd_target((RdTargetId)(RD_TARGET_SHADOW0 + l)).id);
+        CHECK(lt && lt->w == (uint32_t)(fw >> (l + 1)) && lt->h == (uint32_t)(256 >> l),
+              "W %d: SHADOW%d is %ux%u (want %dx%d)", fw, l, lt ? lt->w : 0, lt ? lt->h : 0,
+              fw >> (l + 1), 256 >> l);
+    }
     uint32_t i = 0;
     /* shadow_Reset */
-    expectTarget(cl, &i, s_count.id, scene, W, H, "reset: FRAME 0x142, ZBUF 0xC0");
+    expectTarget(cl, &i, s_count.id, scene, (uint32_t)fw, H, "reset: FRAME 0x142, ZBUF 0xC0");
     expect1(cl, &i, RDC_ZWRITE, RD_ZWRITE_OFF, "reset: ZBUF ZMSK");
     expectTest(cl, &i, 0x30000, "reset: TEST");
     expect1(cl, &i, RDC_ABE, 0, "reset: PRIM 0x406 ABE");
@@ -682,7 +693,7 @@ static void checkRecording(void)
                pn - inc);
     }
     /* shadow_Draw */
-    expectTarget(cl, &i, s_count.id, scene, W, H, "draw: the count before the resolve");
+    expectTarget(cl, &i, s_count.id, scene, (uint32_t)fw, H, "draw: the count before the resolve");
     nextCmd(cl, &i, RDC_SHADOW_RESOLVE, "draw: the resolve");
     expectTest(cl, &i, 0x30000, "draw: TEST");
     expect1(cl, &i, RDC_ZWRITE, RD_ZWRITE_OFF, "draw: ZBUF ZMSK");
@@ -693,22 +704,22 @@ static void checkRecording(void)
     CHECK(c && c->b[0] == RD_FILTER_LINEAR && c->b[1] == RD_FILTER_LINEAR, "draw: TEX1 linear");
     const uint8_t col[4] = {128, 128, 128, kDepth};
     for (int l = 0; l < 3; l++) {
-        const int s = 256 >> l;
-        const int r[4] = {-(s * 8 + 4), -(s * 8 + 4), s * 16, s * 16};
-        const int uv[4] = {4, 4, 2 * s * 16, 2 * s * 16};
-        expectTarget(cl, &i, rd_target((RdTargetId)(RD_TARGET_SHADOW0 + l)).id, 0, (uint32_t)s,
+        const int s = 256 >> l, sw = fw >> (l + 1); /* level l + 1: sw x s */
+        const int r[4] = {-(sw * 8 + 4), -(s * 8 + 4), sw * 16, s * 16};
+        const int uv[4] = {4, 4, 2 * sw * 16, 2 * s * 16};
+        expectTarget(cl, &i, rd_target((RdTargetId)(RD_TARGET_SHADOW0 + l)).id, 0, (uint32_t)sw,
                      (uint32_t)s, "chain: FRAME");
         expectTexture(cl, &i, l == 0 ? s_count : rd_target((RdTargetId)(RD_TARGET_SHADOW0 + l - 1)),
                       "chain: TEX0");
         expectSprite(f, cl, &i, 0, r, uv, col, "chain: sprite");
     }
-    expectTarget(cl, &i, scene, scene, W, H, "composite: FRAME 0x40");
+    expectTarget(cl, &i, scene, scene, (uint32_t)fw, H, "composite: FRAME 0x40");
     c = nextCmd(cl, &i, RDC_ALPHA, "composite: ALPHA 0x44");
     CHECK(c && c->b[0] == RD_BLEND_LERP_AS && c->b[1] == 0, "composite: ALPHA 0x44");
     expectTest(cl, &i, 0x3400D, "composite: TEST");
     for (int l = 3; l > 0; l--) {
-        const int off[4] = {-(W / 2) * 16, -(H / 2) * 16, W * 16, H * 16};
-        const int uv[4] = {4, 4, (W * 16) >> l, (H * 16) >> l};
+        const int off[4] = {-(fw / 2) * 16, -(H / 2) * 16, fw * 16, H * 16};
+        const int uv[4] = {4, 4, (fw * 16) >> l, (H * 16) >> l};
         const uint8_t col2[4] = {(uint8_t)kShadowCol[0], (uint8_t)kShadowCol[1],
                                  (uint8_t)kShadowCol[2],
                                  (uint8_t)GlobalStageSetting.shadowBlend[l]};
@@ -719,7 +730,7 @@ static void checkRecording(void)
     }
     expect1(cl, &i, RDC_ZWRITE, RD_ZWRITE_ON, "end: ZBUF");
     expectTest(cl, &i, 0x50000, "end: TEST");
-    expectTarget(cl, &i, scene, scene, W, H, "end: FRAME 0x40");
+    expectTarget(cl, &i, scene, scene, (uint32_t)fw, H, "end: FRAME 0x40");
     CHECK(i == cl->count, "list 3 ends after shadow_Draw (%u of %u commands)", i, cl->count);
     CHECK(gif_HostUndecodedTotal() == 0, "%u undecoded register writes", gif_HostUndecodedTotal());
 }
@@ -1037,6 +1048,31 @@ int main(void)
     checkRecording();
     checkLevelScale();
     rd_shutdown();
+    /* the same on a frame 1376 wide (32:9), as GsBase.c's latch leaves it */
+    {
+        const int fw = 1376;
+
+        gsFrame.w = fw;
+        gsFrame.fbw = (fw + 63) / 64;
+        gsFrame.wExact = (float)fw;
+        gsFrame.aspect = 4.0f / 3.0f * (float)fw / 512.0f;
+        gif_HostSetFrameWidth(fw);
+        if (!rd__init_record_only((uint32_t)fw, H)) {
+            printf("FAIL rd__init_record_only at W %d\n", fw);
+            return 1;
+        }
+        gif_HostForgetTextures();
+        gif_HostFrameReset();
+        dl_Clear();
+        recordFrame(VOL_MODEL, kAll);
+        checkRecording();
+        rd_shutdown();
+        gsFrame.w = W;
+        gsFrame.fbw = W / 64;
+        gsFrame.wExact = (float)W;
+        gsFrame.aspect = 4.0f / 3.0f;
+        gif_HostSetFrameWidth(W);
+    }
     if (failures) {
         printf("rd_shadow_test: %d failures\n", failures);
         return 1;
