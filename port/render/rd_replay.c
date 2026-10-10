@@ -4969,6 +4969,7 @@ static bool replayFrame(const RdFrame *f, int keep, bool present)
     t = t1;
     const double bind0 = g_rdPerf.bindMs;
 
+    g_rd.frameWExact = f->wExact; /* the present's exact width (rd__frame_wexact) */
     if (f->hasCamera) {
         rd__set_replay_camera(&f->camera);
     }

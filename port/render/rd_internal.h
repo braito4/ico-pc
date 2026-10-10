@@ -1269,10 +1269,11 @@ typedef struct RdContext {
      * no frame says otherwise: rd__frame_wexact), and the texture filter
      * upgrade in force */
     float sceneSx, sceneSy, workScale, outAspect;
-    /* the display aspect of the last replayed frame's camera (RdCamera.aspect,
-     * rd__set_replay_camera; 0 before one): the frame's exact width
-     * (rd__frame_wexact) */
-    float frameAspect;
+    /* the last replayed frame's exact width (RdFrame.wExact, from its head:
+     * GsBase.c gsFrame.wExact) and its camera's display aspect
+     * (RdCamera.aspect, rd__set_replay_camera); 0 before one: the frame's
+     * exact width the presenter shows (rd__frame_wexact) */
+    float frameWExact, frameAspect;
     /* the scene scale the options asked for (rd__apply_display); sceneSx/Sy
      * are what the targets were made at, lower when createNamedTargets had
      * to fall back (sceneFellBack) */
@@ -1452,8 +1453,9 @@ uint32_t rd__reduction_crop(uint32_t gsH);
  * ICO_FRAME_ASPECT_MAX (port/include/ico_frame.h, included above). */
 /* The frame's exact width in GS pixels, the columns the presenter shows
  * (ico_frame.h IcoFrame.wExact): exactly 512 when the scene is 512 wide (the
- * Original integer box, no crop); else 384 times the display aspect (the
- * last replayed frame camera's, else the aspect option), at most gsW.  The
+ * Original integer box, no crop); else the last replayed frame's own
+ * (RdFrame.wExact), or 384 times the display aspect (its camera's, else
+ * the aspect option) for a frame without one; at most gsW.  The
  * present box has the aspect wExact / 384, and the source rectangle drops
  * (gsW - wExact) / 2 GS pixels at each side (rd_present.c). */
 float rd__frame_wexact(void);

@@ -156,6 +156,10 @@ static float wexactFor(float aspect)
 
 float rd__frame_wexact(void)
 {
+    const uint32_t gw = g_rd.gsW ? g_rd.gsW : ICO_FRAME_BASE_W;
+    if (gw != ICO_FRAME_BASE_W && g_rd.frameWExact >= (float)ICO_FRAME_BASE_W) {
+        return g_rd.frameWExact < (float)gw ? g_rd.frameWExact : (float)gw;
+    }
     return wexactFor(g_rd.frameAspect > 0.0f ? g_rd.frameAspect : g_rd.outAspect);
 }
 

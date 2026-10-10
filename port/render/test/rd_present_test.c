@@ -1131,12 +1131,13 @@ static void checkWide(void)
     CHECK(n.clip[3] == 4.0f / 3.0f && bw.clip[3] == 16.0f / 9.0f,
           "wide: g_clip.w the camera's aspect (%g, %g)", (double)n.clip[3], (double)bw.clip[3]);
     /* the present's exact width: 512 exactly on a 512-wide frame whatever
-     * the aspect (the integer 4:3 box, no crop), 384 times the frame
-     * camera's aspect on a wider one (the box 16:9, (688 - 682.67) / 2
+     * the aspect (the integer 4:3 box, no crop), the replayed frame's own or
+     * else 384 times the frame camera's aspect on a wider one (the box 16:9, (688 - 682.67) / 2
      * columns cropped a side), never past the frame */
     {
         const uint32_t keepW = g_rd.gsW;
-        const float keepA = g_rd.frameAspect;
+        const float keepA = g_rd.frameAspect, keepE = g_rd.frameWExact;
+        g_rd.frameWExact = 0.0f; /* no frame head replayed: the camera's aspect */
         g_rd.gsW = 512;
         g_rd.frameAspect = 16.0f / 9.0f;
         CHECK(rd__frame_wexact() == 512.0f, "wide: a 512 frame shows 512 columns (%g)",
@@ -1147,8 +1148,16 @@ static void checkWide(void)
         g_rd.frameAspect = 48.0f / 9.0f;
         CHECK(rd__frame_wexact() == 688.0f, "wide: never past the frame's width (%g)",
               (double)rd__frame_wexact());
+        /* a replayed frame's own exact width (RdFrame.wExact) wins */
+        g_rd.frameWExact = 683.0f;
+        CHECK(rd__frame_wexact() == 683.0f, "wide: the frame head's exact width (%g)",
+              (double)rd__frame_wexact());
+        g_rd.gsW = 512;
+        CHECK(rd__frame_wexact() == 512.0f, "wide: still 512 on a 512 frame (%g)",
+              (double)rd__frame_wexact());
         g_rd.gsW = keepW;
         g_rd.frameAspect = keepA;
+        g_rd.frameWExact = keepE;
     }
     /* the shaders' copy of the frame constants */
     _Static_assert(ICO_SH_FRAME_BASE_W == ICO_FRAME_BASE_W, "shader_consts.h ICO_SH_FRAME_BASE_W");
