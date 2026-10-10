@@ -48,6 +48,7 @@
 #include "Matrix.h"
 #include "Shadow.h"
 #include "main.h"
+#include "../../include/ico_frame.h"
 
 static int failures;
 
@@ -63,6 +64,8 @@ static int failures;
 
 /* ------------------------------------------------- what the files import */
 int ScreenWidth = 512, ScreenHeight = 512;
+/* GsBase.c's native frame: 4:3 */
+IcoFrame gsFrame = {512, 512, 8, 512.0f, 4.0f / 3.0f};
 
 float center_X = 2048.0f, center_Y = 2048.0f;
 

@@ -42,11 +42,15 @@ static inline void setGsReg(long long addr, long long data) /* derived name */
     *PacketBufferStruct.ptr.d++ = addr;
 }
 
+/* PC port: the frame's extents in this file are FRAME, the native width
+   gsFrame.w (512 at 4:3): the scene copy's UV and TBW take the whole frame
+   into the 512 x 256 block, the refraction STs map the frame's width onto
+   it, and the barrier draws into the frame's FRAME/SCISSOR/XYOFFSET. */
 static void MakeRefractTexture(int frame)
 {
     GifColor col = {128, 128, 128, 128};
     GifRect r = {-4096, -2048, 8192, 4096};
-    GifRect uv = {8, 8, ScreenWidth * 16, ScreenHeight * 16};
+    GifRect uv = {8, 8, gsFrame.w * 16, ScreenHeight * 16};
     int fx;
     int fy;
 
@@ -54,7 +58,7 @@ static void MakeRefractTexture(int frame)
 
     gif_SetGsReg(0x4E, 0x1300000C0LL);
 
-    gif_SetGsReg(0x06, ((long long)(ScreenWidth / 64) << 14) | 0x664000800LL);
+    gif_SetGsReg(0x06, ((long long)gsFrame.fbw << 14) | 0x664000800LL);
 
     setGsReg(0x4C, frame | 0x80000);
     setGsReg(0x40, 0xFF000001FF0000LL);
@@ -157,7 +161,7 @@ static void makeRefractST(float k)
             v.f[3] = 1.0f;
             _RotTransPersCurrentMatrix(&v, &v);
             barrierMesh->st[idx].x =
-                ((v.f[0] - 2048.0f) + (float)(ScreenWidth >> 1)) * (1.0f / (float)ScreenWidth);
+                ((v.f[0] - 2048.0f) + (float)(gsFrame.w >> 1)) * (1.0f / (float)gsFrame.w);
             barrierMesh->st[idx].y =
                 ((v.f[1] - 2048.0f) + (float)(ScreenHeight >> 1)) * (1.0f / (float)ScreenHeight);
         }
@@ -194,9 +198,9 @@ void queen_barrier_disp_proc(GObj *g, float k)
 #endif
     MakeRefractTexture(vram >> 5);
 
-    setGsReg(0x4C, ((long long)((ScreenWidth >> 6) & 0x3F) << 16) | 64);
-    setGsReg(0x40, ((long long)(ScreenWidth - 1) << 16) | ((long long)(ScreenHeight - 1) << 48));
-    setGsReg(0x18, (((long long)(2048 - ScreenWidth / 2) << 4) + screenOffsetX) |
+    setGsReg(0x4C, ((long long)(gsFrame.fbw & 0x3F) << 16) | 64);
+    setGsReg(0x40, ((long long)(gsFrame.w - 1) << 16) | ((long long)(ScreenHeight - 1) << 48));
+    setGsReg(0x18, (((long long)(2048 - gsFrame.w / 2) << 4) + screenOffsetX) |
                        ((((long long)(2048 - ScreenHeight / 2) << 4) + screenOffsetY) << 32));
 
     gif_SetGsReg(0x4E, 0x300000C0);

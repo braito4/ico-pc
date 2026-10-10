@@ -236,10 +236,6 @@ void ico_video_frame(IcoFrame *out, int h);
    and clearing it brings the live width back the same way.  Only the frame
    follows: the presentation (ico_video_aspect) is untouched. */
 void ico_video_frame_force_aspect(float aspect);
-/* The frame's width as a multiple of the 4:3 one, ico_frame_width_for(
-   ico_video_aspect()) / 512, for the game's callers not yet on gsFrame
-   (particleEffect.c).  W3-WINDOWS removes this. */
-float ico_video_wide_x(void);
 /* The effect switches in force (issue 11), 1 or 0: plain functions the
    game's files declare extern (staticBlur.c, GsBase.c, ZFog.c), read at
    most once a frame. */

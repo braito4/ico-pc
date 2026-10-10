@@ -171,9 +171,9 @@ int _getLine(float *o1, float *o2, float *from, float *to)
     float r0[4];
     float r1[4];
     int rev = 0;
-    /* PC port: the x clip at the picture's sides, k times the 4:3
-       half-width on a wide picture (GsBase.c; vsWidth * 0.5 at 4:3, the
-       PS2's), so a line (Ico's light lines) is not cut at the 4:3 edge */
+    /* PC port: the x clip at the native frame's sides, half its width
+       (GsBase.c; 256 at 4:3, the PS2's vsWidth * 0.5), so a line (Ico's
+       light lines) is not cut at the 4:3 edge of a wide frame */
     float hw = gsb_HostLineHalfWidth();
     VECTOR w0 = {from[0], from[1], from[2], 1.0f};
     VECTOR w1 = {to[0], to[1], to[2], 1.0f};

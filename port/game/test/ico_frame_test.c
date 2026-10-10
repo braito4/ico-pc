@@ -12,7 +12,7 @@
  *   x       ico_frame_x: v itself at 512; v * 688 / 512 towards zero at 16:9
  *   tw      ico_frame_tw: ceil(log2 n), 0 for n <= 1
  *   options ico_video_frame: the defaults (4:3) 512, aspect 16:9 688, 48:9
- *           2048; ico_video_wide_x is the width over 512
+ *           2048
  */
 #include <math.h>
 #include <stdio.h>
@@ -137,18 +137,16 @@ static void checkOptions(void)
     ico_video_defaults(&o);
     ico_video_set(&o);
     ico_video_frame(&f, 448);
-    CHECK(f.w == 512 && f.h == 448 && f.aspect == 4.0f / 3.0f && ico_video_wide_x() == 1.0f,
+    CHECK(f.w == 512 && f.h == 448 && f.aspect == 4.0f / 3.0f,
           "options: the defaults are the 4:3 frame (%d, %g)", f.w, (double)f.aspect);
     o.aspect = ICO_ASPECT_16_9;
     ico_video_set(&o);
     ico_video_frame(&f, 448);
-    CHECK(f.w == 688 && ico_video_wide_x() == 688.0f / 512.0f, "options: 16:9 is 688 wide (%d, %g)",
-          f.w, (double)ico_video_wide_x());
+    CHECK(f.w == 688, "options: 16:9 is 688 wide (%d)", f.w);
     o.aspect = ICO_ASPECT_48_9;
     ico_video_set(&o);
     ico_video_frame(&f, 512);
-    CHECK(f.w == 2048 && f.h == 512 && ico_video_wide_x() == 4.0f,
-          "options: 48:9 is 2048 wide (%d x %d)", f.w, f.h);
+    CHECK(f.w == 2048 && f.h == 512, "options: 48:9 is 2048 wide (%d x %d)", f.w, f.h);
     ico_video_defaults(&o);
     ico_video_set(&o);
 }

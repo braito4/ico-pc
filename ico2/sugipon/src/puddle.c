@@ -154,7 +154,7 @@ static void puddleHostCamera(int push)
         memset(&cam, 0, sizeof(cam));
         CopyMatrix(cam.view, matrixptr + 0x80);
         CopyMatrix(cam.proj, matrixptr + 0xC0);
-        cam.aspect = 4.0f / 3.0f;
+        cam.aspect = gsFrame.aspect; /* the frame's display aspect, 4/3 at 4:3 */
         cam.nearZ = 2.0f;
         cam.farZ = 262144.0f;
         rd_push_camera(&cam);
@@ -165,16 +165,21 @@ static void puddleHostCamera(int push)
 
 #endif
 
+/* PC port: every frame draw environment and full-frame rect in this file
+   is FRAME, the native width gsFrame.w (512 at 4:3), and the ripples' ST
+   scale is per pixel of it.  The reflection's own 230 x 230 view and its
+   256 x 256 block are not frame extents (gsb_SetVSMatrix's w and h are
+   SCALE; the renderer sizes the block). */
 void baseSetup(GObj *self)
 {
     gif_StartPacketPri(4);
-    gif_SetDrawEnviroment(0x800, 0, ScreenWidth, ScreenHeight, 1, 0);
+    gif_SetDrawEnviroment(0x800, 0, gsFrame.w, ScreenHeight, 1, 0);
     gif_SetZTest(0);
     gif_SetZWrite(0);
     gif_SetAlpha(1, 5, 128);
 
     {
-        GifRect r = {-ScreenWidth / 2 * 16, -ScreenHeight / 2 * 16, ScreenWidth * 16,
+        GifRect r = {-gsFrame.w / 2 * 16, -ScreenHeight / 2 * 16, gsFrame.w * 16,
                      ScreenHeight * 16};
 
         {
@@ -256,10 +261,10 @@ void drawAreaRestore(void)
     puddleHostCamera(0);
 #endif
 
-    vsWidth = ScreenWidth;
+    vsWidth = ScreenWidth; /* SCALE: gsb_SetVSMatrix's full-screen record */
     vsHeight = ScreenHeight;
     gif_SetGsReg(6, (long long)workVram | 0x20010000 | 0x600000000LL);
-    gif_SetDrawEnviroment(0x800, 0, ScreenWidth, ScreenHeight, 1, 0);
+    gif_SetDrawEnviroment(0x800, 0, gsFrame.w, ScreenHeight, 1, 0);
     gif_SetGsReg(0x14, 0x60);
     gif_SetZWrite(0);
     gif_SetZTest(1);
@@ -271,14 +276,14 @@ void leveldown(int pri)
 {
     gif_StartPacketPri(pri);
     gif_SetGsReg(6, (long long)workVram | 0x20010000 | 0x600000000LL);
-    gif_SetDrawEnviroment(0x800, 0, ScreenWidth, ScreenHeight, 1, 0);
+    gif_SetDrawEnviroment(0x800, 0, gsFrame.w, ScreenHeight, 1, 0);
     gif_SetGsReg(0x14, 0x60);
     gif_SetZWrite(0);
     gif_SetGsReg(0x47, 0x3F001);
     gif_SetAlpha(1, 2, 0x10);
 
     {
-        GifRect r = {-ScreenWidth / 2 * 16, -ScreenHeight / 2 * 16, ScreenWidth * 16,
+        GifRect r = {-gsFrame.w / 2 * 16, -ScreenHeight / 2 * 16, gsFrame.w * 16,
                      ScreenHeight * 16};
 
         gif_SpriteSensitiveOrg(&r, 0, 0, &leveldownColor, 1);
@@ -300,7 +305,7 @@ void copy(int pri)
 {
     gif_StartPacketPri(pri);
     gif_SetGsReg(6, (long long)workVram | 0x20010000 | 0x600000000LL);
-    gif_SetDrawEnviroment(0x800, 0, ScreenWidth, ScreenHeight, 1, 0);
+    gif_SetDrawEnviroment(0x800, 0, gsFrame.w, ScreenHeight, 1, 0);
     gif_SetGsReg(0x14, 0x60);
     gif_SetZWrite(0);
     gif_SetGsReg(0x47, 0x3F001);
@@ -312,7 +317,7 @@ void copy(int pri)
     }
 
     {
-        GifRect r = {-ScreenWidth / 2 * 16, -ScreenHeight / 2 * 16, ScreenWidth * 16,
+        GifRect r = {-gsFrame.w / 2 * 16, -ScreenHeight / 2 * 16, gsFrame.w * 16,
                      ScreenHeight * 16};
         GifRect uv = {texUV(13.25f), texUV(13.25f), texUV(230.375f), texUV(230.375f)};
 
@@ -345,7 +350,7 @@ void drawRipple(float t, void *pos)
     col.r = c;
     col.g = c;
     col.b = c;
-    sx = 0.9f / (float)ScreenWidth;
+    sx = 0.9f / (float)gsFrame.w;
     sy = 0.9f / (float)ScreenHeight;
     _UnitMatrix(MatrixDrive_GetMatrix());
     MatrixDrive_RotMatrixY((short)(int)(age * 10.24f));
@@ -401,7 +406,7 @@ void drawRipples(GObj *self, int pri)
 
     gif_StartPacketPri(pri);
     gif_SetGsReg(6, (long long)workVram | 0x20010000 | 0x600000000LL);
-    gif_SetDrawEnviroment(0x800, 0, ScreenWidth, ScreenHeight, 1, 0);
+    gif_SetDrawEnviroment(0x800, 0, gsFrame.w, ScreenHeight, 1, 0);
     gif_SetGsReg(0x14, 0x60);
     gif_SetGsReg(0x47, 0x3F000);
 

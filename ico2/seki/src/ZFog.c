@@ -148,10 +148,11 @@ void fog_MakeFogClut(void)
     }
 /* FRAME_1, SCISSOR_1 and XYOFFSET_1 for a w by h buffer at base fbp, the
    window centred on the GS's 2048.0 origin and moved by ox, oy sixteenths:
-   src/Shadow.c's setFrame. */
+   src/Shadow.c's setFrame.  PC port: FBW is (w + 63) / 64, which covers a
+   native width that is not a multiple of 64 (688 at 16:9); w >> 6 at 512. */
 #define FOG_SET_FRAME(fbp, w, h, ox, oy) /* derived name */                                        \
     {                                                                                              \
-        FOG_SET_GSREG(0x4C, (fbp) | ((long long)(((w) >> 6) & 0x3F) << 16));                       \
+        FOG_SET_GSREG(0x4C, (fbp) | ((long long)((((w) + 63) >> 6) & 0x3F) << 16));                \
         FOG_SET_GSREG(0x40, ((long long)((w) - 1) << 16) | ((long long)((h) - 1) << 48));          \
         FOG_SET_GSREG(0x18, (((long long)(2048 - (w) / 2) << 4) + (ox)) |                          \
                                 ((((long long)(2048 - (h) / 2) << 4) + (oy)) << 32));              \
@@ -267,8 +268,8 @@ static void fogHostDraw(const int *rc0, const int *rc1, const unsigned char *cl,
     if (dbg) {
         rd_tex_a(RD_TEXA_80_80); /* TEXA 0x8000000080 */
     }
-    /* FOG_SET_FRAME(64, ScreenWidth, ScreenHeight, 0, 0) */
-    rd_set_target(scene, scene, (uint32_t)ScreenWidth, (uint32_t)ScreenHeight, RD_TARGET_OFFSET);
+    /* FOG_SET_FRAME(64, gsFrame.w, ScreenHeight, 0, 0): SCENE at the native width */
+    rd_set_target(scene, scene, (uint32_t)gsFrame.w, (uint32_t)ScreenHeight, RD_TARGET_OFFSET);
     rd_pabe(0);                           /* PABE 0 (register 73, 0x49) */
     rd_blend_func(RD_BLEND_LERP_AS, 128); /* ALPHA_1 0x44, FIX 128 */
     rd_texture(rd_target_texture(scene, RD_VIEW_DEPTH), RD_TEXFN_MODULATE,
@@ -325,8 +326,8 @@ static void fogHostDraw(const int *rc0, const int *rc1, const unsigned char *cl,
         rd_test_gs(0x50000);
     }
     rd_z_write(1); /* ZBUF_1 0xC0, write on */
-    /* FOG_SET_FRAME(64, ScreenWidth, ScreenHeight, screenOffsetX, screenOffsetY) */
-    rd_set_target(scene, scene, (uint32_t)ScreenWidth, (uint32_t)ScreenHeight, RD_TARGET_OFFSET);
+    /* FOG_SET_FRAME(64, gsFrame.w, ScreenHeight, screenOffsetX, screenOffsetY) */
+    rd_set_target(scene, scene, (uint32_t)gsFrame.w, (uint32_t)ScreenHeight, RD_TARGET_OFFSET);
 }
 
 #endif /* ICO_RD */
@@ -337,12 +338,15 @@ static void fogHostDraw(const int *rc0, const int *rc1, const unsigned char *cl,
 /* clang-format off */
 void fog_DrawFog(void)
 {
-    int rc0[4] = {-ScreenWidth / 2 * 16, -ScreenHeight / 2 * 16, ScreenWidth * 16, ScreenHeight * 16};
+    /* PC port: the sprite's rect rc0 and its UV rc1 span the native frame
+       (FRAME: gsFrame.w, 512 at 4:3), as the targets below; the Z copy's
+       transfers keep the PS2's VRAM layout (ADDRESS) */
+    int rc0[4] = {-gsFrame.w / 2 * 16, -ScreenHeight / 2 * 16, gsFrame.w * 16, ScreenHeight * 16};
     int vram;
     int i;
     int j;
     int dbg = 0; /* local debug switch, see the test after the loop below */
-    int rc1[4] = {8, 8, ScreenWidth * 16, ScreenHeight * 16};
+    int rc1[4] = {8, 8, gsFrame.w * 16, ScreenHeight * 16};
     unsigned char cl[4] = {0x80, 0x80, 0x80, GlobalStageSetting.fogStrength};
 
     if (debug_fullscreen_effect == 0) return;
@@ -379,6 +383,8 @@ void fog_DrawFog(void)
 
     FOG_SET_GSREG(63, 1);
 
+    /* ADDRESS: the Z copy's transfers, down to the loop's end, in the PS2's
+       VRAM layout (ScreenWidth wide); the host never reads them */
     FOG_SET_GSREG(0x50, 0x1800 | ((long long)(ScreenWidth / 64) << 16) | ((long long)0x30 << 24) |
                   ((long long)0x2800 << 32) |
                   ((long long)(ScreenWidth / 64) << 48));
@@ -397,8 +403,9 @@ void fog_DrawFog(void)
         }
     }
     if (dbg) { cl[3] = 0x80; FOG_SET_GSREG(0x3B, 0x8000000080LL); }
-    FOG_SET_FRAME(64, ScreenWidth, ScreenHeight, 0, 0);
+    FOG_SET_FRAME(64, gsFrame.w, ScreenHeight, 0, 0);
     FOG_SET_GSREG(73, 0); FOG_SET_GSREG(66, ((long long)128 << 32) | 0x44);
+    /* ADDRESS: TBW of the Z copy, laid out above */
     FOG_SET_GSREG(6, 0x2800 | ((long long)(ScreenWidth / 64) << 14) | ((long long)0x1B << 20) | ((long long)9 << 26) | ((long long)9 << 30) | ((long long)1 << 34) |
                   ((long long)vram << 37) | ((long long)1 << 61));
     FOG_SET_GSREG(78, ((long long)0x13000 << 16) | 0xC0);
@@ -416,7 +423,7 @@ void fog_DrawFog(void)
     }
     FOG_SET_GSREG(78, ((long long)0x3000 << 16) | 0xC0);
 
-    FOG_SET_FRAME(64, ScreenWidth, ScreenHeight, screenOffsetX, screenOffsetY);
+    FOG_SET_FRAME(64, gsFrame.w, ScreenHeight, screenOffsetX, screenOffsetY);
     FOG_END_PACKET();
 #endif
 }

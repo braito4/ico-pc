@@ -34,9 +34,14 @@
  *             positions, marked as projected by the frame camera, colour
  *             (128, 128, 128, life), ABE, ALPHA 0x48;
  *             dots 600 GS pixels left and right of the centre are dropped
- *             at 4:3 (the game's 400 pixel window) and drawn at 32:9
+ *             at 4:3 (the game's 400 pixel window) and drawn on a 32:9
+ *             frame (W = 1376: 832)
  *   cloth     DispClothMesh: a lit, textured grid in list 2 (ALPHA 0x44
  *             with ABE, CLAMP 0)
+ *   frame W   the puddle, the pool and the barrier on a native frame 1376
+ *             wide (32:9): SCENE at the frame's width, the copies across the
+ *             whole frame (UVs past the GS's 14 bits), the grid ST scale and
+ *             the refraction STs per pixel of the frame
  *
  * Pixel checks (Vulkan; exit 77 without a device, after the above):
  *   puddle    the block against a CPU raster of the VU reference's
@@ -360,22 +365,28 @@ int ico_title_stretch_model(const char *model)
     return 0;
 }
 
-/* port/game/video_options.c: how much wider than 4:3 the picture is
-   (waterDot.c's window); 1 unless a case sets it */
-static float s_wideX = 1.0f;
+/* GsBase.c's native frame (gsFrame, latched at the flip): 4:3 unless a
+   case sets another width with setFrameWidth */
+IcoFrame gsFrame = {W, H, W / 64, (float)W, 4.0f / 3.0f};
 
-float ico_video_wide_x(void)
+/* a native frame w wide, as GsBase.c's latch leaves it: gsFrame and the GIF
+   decoder's width (gif_HostSetFrameWidth); 512 is the 4:3 frame */
+static void setFrameWidth(int w)
 {
-    return s_wideX;
+    gsFrame.w = w;
+    gsFrame.fbw = (w + 63) / 64;
+    gsFrame.wExact = (float)w;
+    gsFrame.aspect = 4.0f / 3.0f * (float)w / (float)ICO_FRAME_BASE_W;
+    gif_HostSetFrameWidth(w);
 }
 
 /* GsBase.c gsb_HostDotVisible's window (waterDot.c), with no earlier
-   camera (the pictures are not blended here): the picture's half-width,
-   s_wideX times the 4:3 one, and its half-height, each plus 144 pixels;
+   camera (the pictures are not blended here): the native frame's
+   half-width gsFrame.w / 2 and its half-height, each plus 144 pixels;
    gsb_cull_test checks the real one */
 int gsb_HostDotVisible(const int *ip, const float *pos)
 {
-    const int hx = (int)(((float)(ScreenWidth / 2) * s_wideX + 144.0f) * 16.0f);
+    const int hx = (int)(((float)(gsFrame.w / 2) + 144.0f) * 16.0f);
     const int hy = (int)(((float)(ScreenHeight / 2) + 144.0f) * 16.0f);
 
     (void)pos;
@@ -1808,7 +1819,9 @@ static void checkBarrierST(const Mesh3D *m)
                            m->pos[idx].z + m->nrm[idx].z * f * kBarrierK};
             double o[3];
             projD(cam, p, o);
-            const double s = ((o[0] - 2048.0) + W / 2) / W, t = ((o[1] - 2048.0) + H / 2) / H;
+            const double fw = gsFrame.w; /* the native frame's width: W at 4:3 */
+            const double s = ((o[0] - 2048.0) + (double)(gsFrame.w / 2)) / fw,
+                         t = ((o[1] - 2048.0) + H / 2) / H;
             worst = fmax(worst, fmax(fabs(m->st[idx].x - s), fabs(m->st[idx].y - t)));
         }
     }
@@ -1906,10 +1919,10 @@ static void checkDotsRecording(void)
 
 /* The water dots' window across (DispWaterDot, GsBase.c
  * gsb_HostDotVisible): 400 GS pixels either side of the centre at 4:3 (the
- * 256 pixel half-width plus 144), the half-width times the wide factor plus
- * 144 on a wider picture (827 at 32:9).  Two dots placed through the
+ * 256 pixel half-width plus 144), the native frame's half-width plus 144
+ * on a wider one (832 at 32:9, W = 1376).  Two dots placed through the
  * game's projection 600 pixels left and right of the centre, on the centre
- * row: none drawn at 4:3, both at 32:9 (8/3). */
+ * row: none drawn at W = 512, both at W = 1376. */
 static WaterDotWork *s_edgeDots;
 
 /* the x that +0x100 projects to GS x gx (pixels) at y, z: the projection is
@@ -1926,13 +1939,13 @@ static float dotXFor(float gx, float y, float z)
     return (gx * d - b) / (a - gx * c);
 }
 
-static int edgeDotsDrawn(float wideX)
+static int edgeDotsDrawn(int frameW)
 {
-    s_wideX = wideX;
+    setFrameWidth(frameW);
     beginScene();
     DispWaterDot(s_edgeDots);
     dl_Swap();
-    s_wideX = 1.0f;
+    setFrameWidth(W);
     walkFrame(rd__last_frame());
     int n = 0;
     for (int i = 0; i < s_fd.n; i++) {
@@ -1966,10 +1979,114 @@ static void checkDotsWindow(void)
               "water dot window: dot %d at GS (%g, %g), want x %d inside the rows", i, ip[0] / 16.0,
               ip[1] / 16.0, i ? 2648 : 1448);
     }
-    const int n43 = edgeDotsDrawn(1.0f);
-    const int n329 = edgeDotsDrawn(8.0f / 3.0f);
+    const int n43 = edgeDotsDrawn(W);
+    const int n329 = edgeDotsDrawn(1376);
     CHECK(n43 == 0, "water dots 600 pixels out: none drawn at 4:3 (%d)", n43);
     CHECK(n329 == 2, "water dots 600 pixels out: both drawn at 32:9 (%d)", n329);
+}
+
+/* ======================================================= the native frame
+ * The effects on a frame wider than 4:3 (W = 1376, 32:9; setFrameWidth as
+ * GsBase.c's latch leaves gsFrame and the decoder): every frame extent the
+ * game writes is the frame's (FRAME: gsFrame.w), recorded as the GS
+ * register decoder reads it: the puddle's draw environment (SCENE at 1376
+ * x H) and its copy sprite across the whole frame (x 2048 -+ 688 in 12.4);
+ * the pool's scene copy reading the whole frame (UV to 8 + 1376 x 16 =
+ * 22024, past the GS's 14 bits: the decoder's 16 on a wide frame) and its
+ * grid's ST scale 1 / 1376; the barrier's scene copy likewise, its frame
+ * at 1376 and its refraction STs over the frame's width (the double
+ * reference with W = 1376).  At W = 512 these are the records the cases
+ * above check. */
+static const Cmd *lastOf(int list, int type, int first)
+{
+    const Cmd *r = NULL;
+    for (int i = 0; i < s_fd.n; i++) {
+        if (s_fd.cmd[i].list == list && (int)s_fd.cmd[i].c->type == type) {
+            r = &s_fd.cmd[i];
+            if (first) {
+                break;
+            }
+        }
+    }
+    return r;
+}
+
+static int sceneTargetsAt(int list, int fw, int *count)
+{
+    int ok = 1;
+    *count = 0;
+    for (int i = 0; i < s_fd.n; i++) {
+        const Cmd *k = &s_fd.cmd[i];
+        if (k->list == list && k->c->type == RDC_TARGET &&
+            k->c->u[0] == rd_target(RD_TARGET_SCENE).id) {
+            (*count)++;
+            ok &= k->c->u[2] == ((uint32_t)fw | (uint32_t)H << 16);
+        }
+    }
+    return ok;
+}
+
+static void checkFrameExtentsAtW(void)
+{
+    const int fw = 1376;
+    int n;
+    setFrameWidth(fw);
+
+    recordPuddle();
+    walkFrame(rd__last_frame());
+    CHECK(sceneTargetsAt(4, fw, &n) && n > 0, "W %d: the puddle's SCENE is %d x %d (%d targets)",
+          fw, fw, H, n);
+    const Cmd *spr = lastOf(4, RDC_SCREEN, 0);
+    if (spr) {
+        const RdScreenVtx *v =
+            (const RdScreenVtx *)(const void *)(rd__last_frame()->payload + spr->c->u[0]);
+        CHECK(spr->c->u[1] == 2 && v[0].x == 0x8000 - fw * 8 && v[1].x == 0x8000 + fw * 8,
+              "W %d: the puddle's copy spans the frame (x %d .. %d)", fw, v[0].x, v[1].x);
+    } else {
+        CHECK(0, "W %d: the puddle's copy sprite", fw);
+    }
+    CHECK(gif_HostUndecodedTotal() == 0, "W %d: %u undecoded register writes", fw,
+          gif_HostUndecodedTotal());
+
+    recordLimited();
+    walkFrame(rd__last_frame());
+    spr = lastOf(4, RDC_SCREEN, 1);
+    if (spr) {
+        const RdScreenVtx *v =
+            (const RdScreenVtx *)(const void *)(rd__last_frame()->payload + spr->c->u[0]);
+        CHECK(spr->c->u[1] == 2 && v[0].s == 8.0f && v[1].s == (float)(8 + fw * 16),
+              "W %d: the pool's scene copy reads the frame's width (u %g .. %g)", fw,
+              (double)v[0].s, (double)v[1].s);
+    } else {
+        CHECK(0, "W %d: the pool's scene copy sprite", fw);
+    }
+    const Cmd *grid = lastOf(4, RDC_GRID, 0);
+    CHECK(grid && grid->c->b[5] != 0 && grid->c->f[0] == 1.0f / (float)fw &&
+              grid->c->f[1] == 1.0f / (float)H,
+          "W %d: the pool grid's ST scale is per pixel of the frame (%g)", fw,
+          grid ? (double)grid->c->f[0] : 0.0);
+    CHECK(sceneTargetsAt(4, fw, &n) && n > 0, "W %d: the pool's SCENE is %d x %d (%d targets)", fw,
+          fw, H, n);
+
+    recordBarrier();
+    walkFrame(rd__last_frame());
+    spr = lastOf(10, RDC_SCREEN, 1);
+    if (spr) {
+        const RdScreenVtx *v =
+            (const RdScreenVtx *)(const void *)(rd__last_frame()->payload + spr->c->u[0]);
+        CHECK(spr->c->u[1] == 2 && v[0].s == 8.0f && v[1].s == (float)(8 + fw * 16),
+              "W %d: the barrier's scene copy reads the frame's width (u %g .. %g)", fw,
+              (double)v[0].s, (double)v[1].s);
+    } else {
+        CHECK(0, "W %d: the barrier's scene copy sprite", fw);
+    }
+    CHECK(sceneTargetsAt(10, fw, &n) && n > 0, "W %d: the barrier's SCENE is %d x %d (%d targets)",
+          fw, fw, H, n);
+    checkBarrierST(barrierMesh());
+    CHECK(gif_HostUndecodedTotal() == 0, "W %d: %u undecoded register writes", fw,
+          gif_HostUndecodedTotal());
+
+    setFrameWidth(W);
 }
 
 /* ================================================================ cloth */
@@ -2628,6 +2745,7 @@ static void recordingChecks(void)
     recordDots();
     checkDotsRecording();
     checkDotsWindow();
+    checkFrameExtentsAtW();
     recordCloth();
     checkClothRecording();
     CHECK(s_vsCalls >= 3, "gsb_SetVSMatrix called by the effects (%d)", s_vsCalls);
