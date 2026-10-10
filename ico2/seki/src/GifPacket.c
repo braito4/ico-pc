@@ -16,6 +16,23 @@ typedef struct { /* field names derived */
 /* One 64-bit slot of a DMA/GIF packet: written either as the whole qword
    (DMA tag, GIF tag, A+D data) or as one of its two 32-bit halves. */
 
+/* PC port: the native frame width (ico_frame.h; 512 at 4:3) that
+   isInScreen's window and, in the window build, the decoder's field widths
+   and work-buffer classes read.  GsBase.c's frame latch sets it in every
+   build (the headless one too: isInScreen is game logic); a test that
+   links this file without GsBase.c leaves 512. */
+static int gifHostFrameW = ICO_FRAME_BASE_W;
+
+void gif_HostSetFrameWidth(int w)
+{
+    gifHostFrameW = w > 0 ? w : ICO_FRAME_BASE_W;
+}
+
+int gif_HostFrameWidth(void)
+{
+    return gifHostFrameW;
+}
+
 #ifdef ICO_RD
 
 enum { GIF_SP_AUTO = 0, GIF_SP_UI = 1, GIF_SP_WORLD = 2 }; /* port: GIF_ENTER's spaces */
@@ -32,10 +49,7 @@ enum { GIF_SP_AUTO = 0, GIF_SP_UI = 1, GIF_SP_WORLD = 2 }; /* port: GIF_ENTER's 
 #include <string.h>
 #include "GifHost.h"
 
-/* PC port: the native frame width the decoder reads (rd_reset_scene's,
-   512 at 4:3): the frame latch in GsBase.c hands it to rd, so the decoder
-   needs no symbol of GsBase.c and a decoder-only test links with rd alone. */
-#define gifHostFrameW ((int)rd_scene_gs_width())
+#define GS_REG_XYZ2_HI 0x7E /* host only: the decoder's table below */
 
 static void gsWrite(unsigned long long reg, unsigned long long data);
 static void gsPacketStart(void);
@@ -86,6 +100,29 @@ static inline void setGsReg(long long reg, long long data) /* derived name */
 #define GIF_OX ((int)center_X * 16)                                   /* derived name */
 #define GIF_OY ((int)center_Y * 16)                                   /* derived name */
 #define GIF_XYZOFF(v, z) GIF_XY0(GIF_OX + (v)[0], GIF_OY + (v)[1], z) /* derived name */
+
+/* PC port: the XYZ2 word of a vertex isInScreen passed, x and y in 1/16
+   pixels.  On a frame wider than 4:3 (Enhanced) the native window reaches
+   past XYZ2's 16 bits (from about 11000 1/16 pixels left of 0 at 16:9 to
+   131072 at the widest), so the window build sends such a vertex as the
+   host-only register XYZ2_HI (0x7E: X's high 16 bits in bits 0-15, Y's in
+   16-31, for the next vertex only; the decoder's table below) and then the
+   low 16 bits of each.  At 4:3 isInScreen keeps x and y in 0 .. 0xFFF0, so
+   nothing is emitted and the word is GIF_XY0's, bit for bit.  Without the
+   decoder (the headless build) the word is GIF_XY0's always: nothing reads
+   the packet. */
+static inline long long gifInScreenXyz(int x, int y, long long z)
+{
+#ifdef ICO_RD
+    if ((unsigned int)x > 0xFFFFu || (unsigned int)y > 0xFFFFu) {
+        setGsReg(GS_REG_XYZ2_HI,
+                 (long long)(((unsigned int)x >> 16) | ((unsigned int)y & 0xFFFF0000u)));
+        x &= 0xFFFF;
+        y &= 0xFFFF;
+    }
+#endif
+    return GIF_XY0(x, y, z);
+}
 
 static void gif_StartPacket(void)
 {
@@ -265,6 +302,7 @@ static inline void makePoint2DOffset(int *v, long long z, unsigned char *col,
 void gif_PointOffset(int *v, long long z, unsigned char *col, int prim)
 {
     GIF_ENTER(GIF_SP_UI);
+    /* PC port: ScreenWidth / 640 is UI, the 640 grid in the centred 4:3 box */
     int p[4];
 
     p[0] = v[0] * ScreenWidth / 640;
@@ -272,19 +310,23 @@ void gif_PointOffset(int *v, long long z, unsigned char *col, int prim)
     makePoint2DOffset(p, z, col, prim);
 }
 
-/* a two-point line, which gif_MakeLine2D and gif_Line inline */
+/* a two-point line, which gif_MakeLine2D and gif_Line inline.  PC port:
+   gif_MakeLine2D's ends (poly-flat.c's lines) passed _IsInScreen, so they
+   go through gifInScreenXyz; GIF_XYZ's word whenever x and y + 0x8000 fit
+   16 bits (always at 4:3, and gif_Line's 640-grid points always) */
 static inline void makeLine2D(int *v0, int *v1, long long z0, long long z1, unsigned char *col,
                               int prim) /* derived name */
 {
     setGsReg(0x00, ((long long)prim << 6) | 0xA);
     setGsReg(0x01, GIF_RGBA(col));
-    setGsReg(0x05, GIF_XYZ(v0, z0));
-    setGsReg(0x05, GIF_XYZ(v1, z1));
+    setGsReg(0x05, gifInScreenXyz(v0[0] + 0x8000, v0[1] + 0x8000, z0));
+    setGsReg(0x05, gifInScreenXyz(v1[0] + 0x8000, v1[1] + 0x8000, z1));
 }
 
 void gif_Line(int *v0, int *v1, long long z0, long long z1, unsigned char *col, int prim)
 {
     GIF_ENTER(GIF_SP_UI);
+    /* PC port: ScreenWidth / 640 is UI, the 640 grid in the centred 4:3 box */
     int p0[4];
     int p1[4];
 
@@ -323,6 +365,7 @@ static inline void makeSpriteNoTextureOffset(int x, int y, int w, int h, long lo
 void gif_Sprite(GifRect *r, long long z, GifRect *uv, GifColor *col, int prim)
 {
     GIF_ENTER(GIF_SP_UI);
+    /* PC port: ScreenWidth / 640 is UI, the 640 grid in the centred 4:3 box */
     int x = r->x * ScreenWidth / 640 * 16;
     int y = r->y * ScreenHeight / 224 * 16;
     int w = r->w * ScreenWidth / 640 * 16;
@@ -344,6 +387,7 @@ void gif_Sprite(GifRect *r, long long z, GifRect *uv, GifColor *col, int prim)
 void gif_SpriteSensitive(GifRect *r, long long z, GifRect *uv, GifColor *col, int prim)
 {
     GIF_ENTER(GIF_SP_UI);
+    /* PC port: ScreenWidth / 640 is UI, the 640 grid in the centred 4:3 box */
     int x = r->x * ScreenWidth / 640;
     int y = r->y * ScreenHeight / 224;
     int w = r->w * ScreenWidth / 640;
@@ -359,6 +403,7 @@ void gif_SpriteSensitive(GifRect *r, long long z, GifRect *uv, GifColor *col, in
 void gif_SpriteOffset(GifRect *r, long long z, GifRect *uv, GifColor *col, int prim)
 {
     GIF_ENTER(GIF_SP_UI);
+    /* PC port: ScreenWidth / 640 is UI, the 640 grid in the centred 4:3 box */
     int x = r->x * ScreenWidth / 640 * 16;
     int y = r->y * ScreenHeight / 224 * 16;
     int w = r->w * ScreenWidth / 640 * 16;
@@ -380,6 +425,7 @@ void gif_SpriteOffset(GifRect *r, long long z, GifRect *uv, GifColor *col, int p
 void gif_SpriteSensitiveOffset(GifRect *r, long long z, GifRect *uv, GifColor *col, int prim)
 {
     GIF_ENTER(GIF_SP_UI);
+    /* PC port: ScreenWidth / 640 is UI, the 640 grid in the centred 4:3 box */
     int x = r->x * ScreenWidth / 640;
     int y = r->y * ScreenHeight / 224;
     int w = r->w * ScreenWidth / 640;
@@ -458,17 +504,32 @@ static int stripVisible[2] = {0, 0}; /* derived name */
 static int stripIndex = 0; /* derived name */
 
 /* the on-screen test of a projected vertex, which the strip and polygon
-   functions and _IsInScreen further down this file inline */
+   functions and _IsInScreen further down this file inline.  PC port: the
+   native window test.  On a frame w wide the PS2's x bounds 0 .. 0xFFF0
+   hold for x' = (x - 0x8000) * 512 / w + 0x8000, compared exactly in
+   integers (the x scaled about the centre 2048, as the shaders' region
+   test and particleEffect.c scale it); w == 512 (every 4:3 frame) takes
+   the PS2's own two compares.  y keeps the PS2's bounds.  A vertex passing
+   it outside x 0 .. 0xFFFF is packed by gifInScreenXyz. */
 static inline int isInScreen(volatile int *p) /* derived name */
 {
     if (p[2] < 0)
         return 0;
     if (p[2] > 0x0FFFFFF0)
         return 0;
-    if (p[0] < 0)
-        return 0;
-    if (p[0] > 0xFFF0)
-        return 0;
+    if (gifHostFrameW != ICO_FRAME_BASE_W) {
+        const long long d = ((long long)p[0] - 0x8000) * ICO_FRAME_BASE_W;
+
+        if (d < -0x8000LL * gifHostFrameW)
+            return 0;
+        if (d > (0xFFF0LL - 0x8000) * gifHostFrameW)
+            return 0;
+    } else {
+        if (p[0] < 0)
+            return 0;
+        if (p[0] > 0xFFF0)
+            return 0;
+    }
     if (p[1] < 0)
         return 0;
     return p[1] <= 65520;
@@ -522,7 +583,7 @@ void gif_DrawPolyF4(void *p0, void *p1, void *p2, void *p3, int r, int g, int b,
     for (i = 0; i < 4; i++) {
         int *s = q[i];
 
-        setGsReg(0x05, GIF_XY0(s[0], s[1], (long long)s[2]));
+        setGsReg(0x05, gifInScreenXyz(s[0], s[1], (long long)s[2]));
     }
 }
 
@@ -543,7 +604,8 @@ void gif_DrawStripF(void *v, GifColor col, int n, int prim)
         rotTransPers(q, p);
         t = isInScreen(q);
         setGsReg(t && stripVisible[0] && stripVisible[1] ? 0x05 : 0x0D,
-                 GIF_XY0(q[0], q[1], (long long)q[2]));
+                 t ? gifInScreenXyz(q[0], q[1], (long long)q[2])
+                   : GIF_XY0(q[0], q[1], (long long)q[2]));
         stripVisible[stripIndex++] = t;
         stripIndex &= 1;
     }
@@ -568,7 +630,8 @@ void gif_DrawStripFST(void *v, void *uv, GifColor col, int n, int prim)
         t = isInScreen(q);
         setGsReg(0x02, (long long)s[0] | ((long long)s[1] << 32));
         setGsReg(t && stripVisible[0] && stripVisible[1] ? 0x05 : 0x0D,
-                 GIF_XY0(q[0], q[1], (long long)q[2]));
+                 t ? gifInScreenXyz(q[0], q[1], (long long)q[2])
+                   : GIF_XY0(q[0], q[1], (long long)q[2]));
         stripVisible[stripIndex++] = t;
         stripIndex &= 1;
     }
@@ -592,9 +655,10 @@ void gif_DrawStripG(void *v, void *col, int n, int prim)
         t = isInScreen(q);
         setGsReg(0x01, GIF_RGBA(c) | (0xFE00LL << 46));
         if (t && stripVisible[0] && stripVisible[1]) {
-            setGsReg(0x05, GIF_XY0(q[0], q[1], (long long)q[2]));
+            setGsReg(0x05, gifInScreenXyz(q[0], q[1], (long long)q[2]));
         } else {
-            setGsReg(0x0D, GIF_XY0(q[0], q[1], (long long)q[2]));
+            setGsReg(0x0D, t ? gifInScreenXyz(q[0], q[1], (long long)q[2])
+                             : GIF_XY0(q[0], q[1], (long long)q[2]));
         }
         stripVisible[stripIndex++] = t;
         stripIndex &= 1;
@@ -615,9 +679,10 @@ void gif_Draw2DStripG(int *v, GifColor *col, int n, int prim)
         c = isInScreen(v);
         setGsReg(0x01, GIF_COLOR(col) | (0xFE00LL << 46));
         if (c && stripVisible[0] && stripVisible[1]) {
-            setGsReg(0x05, GIF_XY0(v[0], v[1], (long long)v[2]));
+            setGsReg(0x05, gifInScreenXyz(v[0], v[1], (long long)v[2]));
         } else {
-            setGsReg(0x0D, GIF_XY0(v[0], v[1], (long long)v[2]));
+            setGsReg(0x0D, c ? gifInScreenXyz(v[0], v[1], (long long)v[2])
+                             : GIF_XY0(v[0], v[1], (long long)v[2]));
         }
         stripVisible[stripIndex++] = c;
         stripIndex &= 1;
@@ -639,9 +704,10 @@ void gif_Draw2DUVStripG(int *v, int *uv, unsigned char *col, int n, int prim)
         setGsReg(0x01, GIF_RGBA(col) | (0xFE00LL << 46));
         setGsReg(0x03, GIF_UV(uv[0], uv[1]));
         if (c && stripVisible[0] && stripVisible[1]) {
-            setGsReg(0x05, GIF_XY0(v[0], v[1], (long long)v[2]));
+            setGsReg(0x05, gifInScreenXyz(v[0], v[1], (long long)v[2]));
         } else {
-            setGsReg(0x0D, GIF_XY0(v[0], v[1], (long long)v[2]));
+            setGsReg(0x0D, c ? gifInScreenXyz(v[0], v[1], (long long)v[2])
+                             : GIF_XY0(v[0], v[1], (long long)v[2]));
         }
         stripVisible[stripIndex++] = c;
         stripIndex &= 1;
@@ -733,6 +799,7 @@ void gif_MakeSpriteNoTextureOffset(int x, int y, int w, int h, long long z, GifC
 void gif_Point(int *v, long long z, unsigned char *col, int prim)
 {
     GIF_ENTER(GIF_SP_UI);
+    /* PC port: ScreenWidth / 640 is UI, the 640 grid in the centred 4:3 box */
     int p[2];
 
     p[0] = v[0] * ScreenWidth / 640;
@@ -743,6 +810,7 @@ void gif_Point(int *v, long long z, unsigned char *col, int prim)
 void gif_LineOffset(int *v0, int *v1, long long z0, long long z1, unsigned char *col, int prim)
 {
     GIF_ENTER(GIF_SP_UI);
+    /* PC port: ScreenWidth / 640 is UI, the 640 grid in the centred 4:3 box */
     int p0[4];
     int p1[4];
 
@@ -831,7 +899,8 @@ void gif_SetZWrite(int on)
 void gif_SetHalfOffset(void)
 {
     GIF_ENTER(GIF_SP_AUTO);
-    setGsReg(0x18, (long long)(((0x800 - ScreenWidth / 2) << 4) + screenOffsetX) |
+    /* PC port: FRAME, the native frame's window origin (512 wide at 4:3) */
+    setGsReg(0x18, (long long)(((0x800 - gifHostFrameW / 2) << 4) + screenOffsetX) |
                        ((long long)(((0x800 - ScreenHeight / 2) << 4) + screenOffsetY) << 32));
 }
 
@@ -874,17 +943,17 @@ int _IsInScreen(volatile int *v)
  *                   (hi << 16) | lo.  Without it a vertex is the unsigned
  *                   16 bits, as before.  The game side never emits it at 4:3.
  *
- * Field widths: on a frame wider than 4:3 (gifHostFrameW > 512, the scene
- * width rd holds from the frame latch, so a test links the decoder without
- * GsBase.c) the 64-bit A+D
+ * Field widths: on a frame wider than 4:3 (gifHostFrameW > 512, the width
+ * GsBase.c's frame latch hands over with gif_HostSetFrameWidth; a test that
+ * links this file without GsBase.c sets it itself or leaves 512) the 64-bit A+D
  * data word's, wider than the GS registers' (the reserved bits above each
  * field are free, the fields do not overlap); at 4:3 the GS's own, so a
  * sign-extended or stray high bit reads as it always did.  SCISSOR's
  * four fields are 16 bits at 0/16/32/48 (the GS has 11, so an extent past
  * 2047 is only the port's), UV's two are 16 bits at 0/16 (the GS has 14,
- * 1024 texels; 16 bits is 4096).  A game-side writer that
- * masks to the GS width (MicroCode.c:445 and staticBlur.c:291 mask UV to
- * 0x3FFF) cuts a native-frame value there.
+ * 1024 texels; 16 bits is 4096).  The game-side writers that mask UV
+ * (MicroCode.c's UV unpack, staticBlur.c's sbHostSprite) take the same
+ * width from gif_HostFrameWidth: 0x3FFF at 4:3, 0xFFFF on a wide frame.
  *
  * Anything else is counted per register and logged once
  * (gif_HostUndecodedCount): the image transfers (BITBLTBUF, TRXPOS,
@@ -899,7 +968,6 @@ int _IsInScreen(volatile int *v)
 
 #define GS_BATCH_MAX 1020 /* a multiple of 2 and 3 */
 #define GS_PLACEHOLDERS 64
-#define GS_REG_XYZ2_HI 0x7E /* host only: see the table above */
 
 typedef struct GsShim { /* port */
     /* GS registers as last written, per list (PRIM, TEX0, FRAME, XYOFFSET,

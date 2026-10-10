@@ -31,6 +31,11 @@ typedef struct { /* field names derived */
 } GifRect; /* derived name */
 
 int _IsInScreen(volatile int *v);
+/* PC port: the native frame width (port/include/ico_frame.h, 512 at 4:3)
+   isInScreen's window and the window build's GS register decoder read;
+   GsBase.c's frame latch sets it at each flip, in every build */
+void gif_HostSetFrameWidth(int w);
+int gif_HostFrameWidth(void);
 int gif_CheckOpen(void);
 void gif_Draw2DStripG(int *v, GifColor *col, int n, int prim);
 void gif_DrawPolyF4(void *p0, void *p1, void *p2, void *p3, int r, int g, int b, int a, int prim);

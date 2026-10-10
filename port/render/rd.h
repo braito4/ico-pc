@@ -412,10 +412,6 @@ const RdSettings *rd_get_settings(void);
  * (port/ui/menu_font.c). */
 void rd_get_scene_scale(float *sx, float *sy);
 
-/* The scene's GS width in GS pixels (rd_reset_scene's gsWidth; 512 before
- * rd_init and at 4:3): the native frame width the GIF decoder reads for its
- * field widths and work-buffer classes, so it needs no symbol of GsBase.c. */
-uint32_t rd_scene_gs_width(void);
 /* The scene's vertical scale (a whole number, rounded down) when it is below
  * the scale the settings asked for, because the GPU's size limit held it
  * (rd_present.c rd__apply_display) or its memory could not hold the targets

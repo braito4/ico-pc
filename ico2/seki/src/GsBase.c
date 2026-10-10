@@ -1373,6 +1373,13 @@ void gsb_ResetGSSystem(void)
 static void gsbHostFrameLatch(void)
 {
     ico_video_frame(&gsFrame, ScreenHeight);
+    {
+        /* GifPacket.c (every build): isInScreen's window and the decoder's
+           field widths and work-buffer classes read the frame's width */
+        extern void gif_HostSetFrameWidth(int w);
+
+        gif_HostSetFrameWidth(gsFrame.w);
+    }
 #ifdef ICO_RD
     {
         static int rdW, rdH; /* port */
