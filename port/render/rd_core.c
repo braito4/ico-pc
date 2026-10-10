@@ -559,7 +559,7 @@ bool rd__target_create_gpu(RdTargetRec *t, const char *name)
         return true;
     }
     uint32_t usage = RHI_TEX_RENDER_TARGET | RHI_TEX_SAMPLED | RHI_TEX_COPY_SRC | RHI_TEX_COPY_DST;
-    t->color = rhi_create_texture(&(RhiTextureDesc){t->tw, t->th, 1, t->format, usage, name});
+    t->color = rhi_create_texture(&(RhiTextureDesc){t->tw, t->th, 1, t->format, usage, name, 0});
     t->colorState = RHI_STATE_UNDEFINED;
     if (t->withDepth) {
         /* every use the device allows, whichever way the fog reads it
@@ -568,8 +568,8 @@ bool rd__target_create_gpu(RdTargetRec *t, const char *name)
         const bool sampled = rhi_limits()->depthSampled;
         const uint32_t dsUsage =
             RHI_TEX_DEPTH_STENCIL | RHI_TEX_COPY_SRC | (sampled ? (uint32_t)RHI_TEX_SAMPLED : 0u);
-        t->depth =
-            rhi_create_texture(&(RhiTextureDesc){t->tw, t->th, 1, RHI_FMT_D32F_S8, dsUsage, name});
+        t->depth = rhi_create_texture(
+            &(RhiTextureDesc){t->tw, t->th, 1, RHI_FMT_D32F_S8, dsUsage, name, 0});
         t->depthState = RHI_STATE_UNDEFINED;
         t->depthSampled = sampled;
     }
@@ -590,9 +590,10 @@ RhiTexture rd__sampled_depth(RhiCommandList cl, RdTargetRec *t, RdDepthCopy *cop
         /* the depth-stencil usage: Vulkan's sampled depth layout
          * (DEPTH_STENCIL_READ_ONLY_OPTIMAL) requires it; a copy source for
          * the fog's probe (rd_fog_path.c) */
-        copy->tex = rhi_create_texture(&(RhiTextureDesc){
-            t->tw, t->th, 1, RHI_FMT_D32F_S8,
-            RHI_TEX_SAMPLED | RHI_TEX_DEPTH_STENCIL | RHI_TEX_COPY_DST | RHI_TEX_COPY_SRC, name});
+        copy->tex = rhi_create_texture(&(RhiTextureDesc){t->tw, t->th, 1, RHI_FMT_D32F_S8,
+                                                         RHI_TEX_SAMPLED | RHI_TEX_DEPTH_STENCIL |
+                                                             RHI_TEX_COPY_DST | RHI_TEX_COPY_SRC,
+                                                         name, 0});
         copy->state = RHI_STATE_UNDEFINED;
         copy->w = t->tw;
         copy->h = t->th;

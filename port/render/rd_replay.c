@@ -226,7 +226,7 @@ bool rd__gpu_init(void *sdlWindow)
         ok = ok && g_rd.samplers[i].id;
     }
     g_rd.dummy = rhi_create_texture(&(RhiTextureDesc){
-        1, 1, 1, RHI_FMT_RGBA8_UNORM, RHI_TEX_SAMPLED | RHI_TEX_COPY_DST, "rd dummy"});
+        1, 1, 1, RHI_FMT_RGBA8_UNORM, RHI_TEX_SAMPLED | RHI_TEX_COPY_DST, "rd dummy", 0});
     g_rd.dummyState = RHI_STATE_UNDEFINED;
     return ok && g_rd.dummy.id;
 }
@@ -1256,7 +1256,7 @@ static RdScratch *scratchGet(uint32_t w, uint32_t h, int which)
             s->tex = rhi_create_texture(&(RhiTextureDesc){w, h, 1, RHI_FMT_RGBA8_UINT,
                                                           RHI_TEX_RENDER_TARGET | RHI_TEX_SAMPLED |
                                                               RHI_TEX_COPY_SRC | RHI_TEX_COPY_DST,
-                                                          "rd exact scratch"});
+                                                          "rd exact scratch", 0});
             s->state = RHI_STATE_UNDEFINED;
             s->w = w;
             s->h = h;
@@ -1373,7 +1373,7 @@ static bool takeSnap(Replay *r, RdTargetRec *tc, RhiRect area)
     endPass(r);
     if (!tc->snap.id) {
         tc->snap = rhi_create_texture(&(RhiTextureDesc){
-            tc->tw, tc->th, 1, tc->format, RHI_TEX_SAMPLED | RHI_TEX_COPY_DST, "rd snap"});
+            tc->tw, tc->th, 1, tc->format, RHI_TEX_SAMPLED | RHI_TEX_COPY_DST, "rd snap", 0});
         tc->snapState = RHI_STATE_UNDEFINED;
     }
     if (!tc->snap.id) {
@@ -2947,7 +2947,7 @@ static void doScreenWrap(Replay *r, const RdFrame *f, const RdCmd *c)
         }
         s_wrapAcc = rhi_create_texture(&(RhiTextureDesc){tc->tw, tc->th, 1, RHI_FMT_RGBA16F,
                                                          RHI_TEX_RENDER_TARGET | RHI_TEX_SAMPLED,
-                                                         "rd wrap accumulator"});
+                                                         "rd wrap accumulator", 0});
         s_wrapAccState = RHI_STATE_UNDEFINED;
         s_wrapW = tc->tw;
         s_wrapH = tc->th;
@@ -3711,7 +3711,7 @@ static void shadowReduce(Replay *r, RdTargetRec *tc)
         }
         s_shadowRed = rhi_create_texture(&(RhiTextureDesc){tc->w, tc->h, 1, RHI_FMT_RGBA8_UNORM,
                                                            RHI_TEX_RENDER_TARGET | RHI_TEX_SAMPLED,
-                                                           "rd shadow count reduced"});
+                                                           "rd shadow count reduced", 0});
         s_shadowRedState = RHI_STATE_UNDEFINED;
         s_shadowRedW = tc->w;
         s_shadowRedH = tc->h;
@@ -3902,7 +3902,7 @@ static void doFog(Replay *r, const RdFrame *f, const RdCmd *c)
     endPass(r);
     if (!s_fogLut.id) {
         s_fogLut = rhi_create_texture(&(RhiTextureDesc){
-            256, 1, 1, RHI_FMT_RGBA8_UNORM, RHI_TEX_SAMPLED | RHI_TEX_COPY_DST, "rd fog lut"});
+            256, 1, 1, RHI_FMT_RGBA8_UNORM, RHI_TEX_SAMPLED | RHI_TEX_COPY_DST, "rd fog lut", 0});
         s_fogLutState = RHI_STATE_UNDEFINED;
     }
     if (!s_fogLut.id) {
@@ -4585,9 +4585,9 @@ static int uploadReplacement(RdTexRec *t)
         return 1;
     }
     if (!t->rhi.id) {
-        t->rhi = rhi_create_texture(&(RhiTextureDesc){t->w, t->h, p->levels,
-                                                      rd__texel_rhi_format(t->format),
-                                                      RHI_TEX_SAMPLED | RHI_TEX_COPY_DST, t->name});
+        t->rhi = rhi_create_texture(
+            &(RhiTextureDesc){t->w, t->h, p->levels, rd__texel_rhi_format(t->format),
+                              RHI_TEX_SAMPLED | RHI_TEX_COPY_DST, t->name, 0});
         t->state = RHI_STATE_UNDEFINED;
         t->mipLevels = (uint8_t)p->levels;
         if (!t->rhi.id) {
@@ -4706,7 +4706,7 @@ static void uploadTextures(void)
         if (!t->rhi.id) {
             t->rhi = rhi_create_texture(
                 &(RhiTextureDesc){t->w, t->h, levels, rd__texel_rhi_format(t->format),
-                                  RHI_TEX_SAMPLED | RHI_TEX_COPY_DST, "rd texture"});
+                                  RHI_TEX_SAMPLED | RHI_TEX_COPY_DST, "rd texture", 0});
             t->state = RHI_STATE_UNDEFINED;
             t->mipLevels = levels;
             if (!t->rhi.id) {
@@ -5181,7 +5181,7 @@ bool rd__camera_probe(const RdCamera *cam, const float p[4], float out[3][4])
 
     RhiTexture t = rhi_create_texture(&(RhiTextureDesc){PW, PH, 1, RHI_FMT_RGBA8_UNORM,
                                                         RHI_TEX_RENDER_TARGET | RHI_TEX_COPY_SRC,
-                                                        "rd camera probe"});
+                                                        "rd camera probe", 0});
     RhiState ts = RHI_STATE_UNDEFINED;
     if (!t.id) {
         return false;

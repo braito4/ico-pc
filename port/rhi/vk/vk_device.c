@@ -604,6 +604,49 @@ static bool vkr_pick_device(void)
     return true;
 }
 
+/* The sample counts every multisampled target the renderer makes takes
+ * (RhiLimits.msaaCounts): the framebuffer and sampled-image limits, and the
+ * image format queries of the colour formats (RGBA8 UNORM and UINT) and the
+ * scene's depth-stencil, each as an attachment that is sampled and copied
+ * from (resolves read it as a transfer source) */
+static uint32_t vkr_msaa_counts(void)
+{
+    const VkPhysicalDeviceLimits *l = &g_vkr.props.limits;
+    uint32_t counts =
+        (uint32_t)(l->framebufferColorSampleCounts & l->framebufferDepthSampleCounts &
+                   l->framebufferStencilSampleCounts & l->sampledImageColorSampleCounts &
+                   l->sampledImageIntegerSampleCounts & l->sampledImageDepthSampleCounts);
+
+    const struct {
+        VkFormat f;
+        VkImageUsageFlags u;
+    } q[3] = {
+        {VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                                       VK_IMAGE_USAGE_SAMPLED_BIT |
+                                       VK_IMAGE_USAGE_TRANSFER_SRC_BIT},
+        {VK_FORMAT_R8G8B8A8_UINT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                                      VK_IMAGE_USAGE_TRANSFER_SRC_BIT},
+        {g_vkr.dsFormat, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                             VK_IMAGE_USAGE_TRANSFER_SRC_BIT},
+    };
+
+    for (int i = 0; i < 3; i++) {
+        VkImageFormatProperties ip;
+        if (vkGetPhysicalDeviceImageFormatProperties(g_vkr.phys, q[i].f, VK_IMAGE_TYPE_2D,
+                                                     VK_IMAGE_TILING_OPTIMAL, q[i].u, 0,
+                                                     &ip) != VK_SUCCESS) {
+            return 1u;
+        }
+        counts &= (uint32_t)ip.sampleCounts;
+    }
+    /* the renderer's counts: 2, 4, 8 */
+    counts &= (uint32_t)(VK_SAMPLE_COUNT_1_BIT | VK_SAMPLE_COUNT_2_BIT | VK_SAMPLE_COUNT_4_BIT |
+                         VK_SAMPLE_COUNT_8_BIT);
+    VKR_LOG("multisampling: sample counts 0x%x%s", counts | 1u,
+            (counts & ~1u) != 0u ? "" : " (single sampling only)");
+    return counts | 1u;
+}
+
 static bool vkr_create_device(void)
 {
     bool core13 = g_vkr.props.apiVersion >= VK_API_VERSION_1_3;
@@ -628,6 +671,14 @@ static bool vkr_create_device(void)
     if (!g_vkr.dualSrcBlend) {
         VKR_LOG("no dualSrcBlend%s: blending takes the two-pass fallback",
                 avail.dualSrcBlend == VK_TRUE ? " (ICO_VK_FAKE_NO_DUAL)" : "");
+    }
+    /* multisampling: a fragment shader reading SV_SampleIndex (the per-sample
+     * fog) needs sampleRateShading; ICO_VK_FAKE_NO_MSAA=1 reports single
+     * sampling only (tests) */
+    {
+        const char *noMs = getenv("ICO_VK_FAKE_NO_MSAA");
+        g_vkr.sampleRate = avail.sampleRateShading == VK_TRUE;
+        g_vkr.msaaCounts = noMs && noMs[0] && noMs[0] != '0' ? 1u : vkr_msaa_counts();
     }
     /* texture packs: BC1/2/3/7 come with textureCompressionBC (every
      * desktop GPU, the Deck, lavapipe); the formats' sampled and copy
@@ -659,6 +710,7 @@ static bool vkr_create_device(void)
                 .dualSrcBlend = g_vkr.dualSrcBlend ? VK_TRUE : VK_FALSE,
                 .samplerAnisotropy = g_vkr.anisotropy ? VK_TRUE : VK_FALSE,
                 .textureCompressionBC = g_vkr.bc ? VK_TRUE : VK_FALSE,
+                .sampleRateShading = g_vkr.sampleRate ? VK_TRUE : VK_FALSE,
             },
     };
     float prio = 1.0f;
@@ -787,9 +839,9 @@ static void vkr_fill_limits(void)
     o->maxStorageRange = l->maxStorageBufferRange;
     /* texture packs: the BC formats (vkr_create_device enabled the feature) */
     o->bcTextures = g_vkr.bc;
-    /* multisampling: single-sample only until detected */
-    o->msaaCounts = 1u;
-    o->sampleRateShading = false;
+    /* multisampling (vkr_msaa_counts, at device creation) */
+    o->msaaCounts = g_vkr.msaaCounts | 1u;
+    o->sampleRateShading = g_vkr.sampleRate;
     /* ICO_VK_FAKE_LIMITS=min: the limits the renderer reads at the values
      * every Vulkan device is required to meet (the specification's Required
      * Limits table), where phone GPUs sit while desktop ones and lavapipe are

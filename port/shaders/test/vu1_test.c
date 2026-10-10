@@ -1730,15 +1730,15 @@ static int gpuTests(void)
     uint8_t *map = rhi_map_buffer(ring);
     const uint32_t RTU = RHI_TEX_RENDER_TARGET | RHI_TEX_COPY_SRC;
     RhiTexture probe = rhi_create_texture(
-        &(RhiTextureDesc){ICO_VU_PROBE_FIELDS, MAXV, 1, RHI_FMT_RGBA8_UINT, RTU, "probe"});
+        &(RhiTextureDesc){ICO_VU_PROBE_FIELDS, MAXV, 1, RHI_FMT_RGBA8_UINT, RTU, "probe", 0});
     RhiTexture imgVu =
-        rhi_create_texture(&(RhiTextureDesc){RT, RT, 1, RHI_FMT_RGBA8_UNORM, RTU, "vu"});
+        rhi_create_texture(&(RhiTextureDesc){RT, RT, 1, RHI_FMT_RGBA8_UNORM, RTU, "vu", 0});
     RhiTexture imgRef =
-        rhi_create_texture(&(RhiTextureDesc){RT, RT, 1, RHI_FMT_RGBA8_UNORM, RTU, "ref"});
+        rhi_create_texture(&(RhiTextureDesc){RT, RT, 1, RHI_FMT_RGBA8_UNORM, RTU, "ref", 0});
     RhiTexture imgPort =
-        rhi_create_texture(&(RhiTextureDesc){RT, RT, 1, RHI_FMT_RGBA8_UNORM, RTU, "port"});
+        rhi_create_texture(&(RhiTextureDesc){RT, RT, 1, RHI_FMT_RGBA8_UNORM, RTU, "port", 0});
     RhiTexture dummy = rhi_create_texture(&(RhiTextureDesc){
-        2, 2, 1, RHI_FMT_RGBA8_UNORM, RHI_TEX_SAMPLED | RHI_TEX_COPY_DST, "dummy"});
+        2, 2, 1, RHI_FMT_RGBA8_UNORM, RHI_TEX_SAMPLED | RHI_TEX_COPY_DST, "dummy", 0});
     RhiSampler smp = rhi_create_sampler(&(RhiSamplerDesc){RHI_FILTER_NEAREST, RHI_FILTER_NEAREST,
                                                           RHI_FILTER_NEAREST, RHI_WRAP_CLAMP,
                                                           RHI_WRAP_CLAMP, 1.0f, 0.0f, 0.0f, 0.0f});

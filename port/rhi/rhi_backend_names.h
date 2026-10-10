@@ -70,6 +70,7 @@
 #define rhi_cmd_copy_buffer_to_texture RHI__NAME(cmd_copy_buffer_to_texture)
 #define rhi_cmd_copy_texture      RHI__NAME(cmd_copy_texture)
 #define rhi_cmd_copy_texture_to_buffer RHI__NAME(cmd_copy_texture_to_buffer)
+#define rhi_cmd_resolve_color     RHI__NAME(cmd_resolve_color)
 #define rhi_cmd_begin_label       RHI__NAME(cmd_begin_label)
 #define rhi_cmd_end_label         RHI__NAME(cmd_end_label)
 #define rhi_readback_texture     RHI__NAME(readback_texture)

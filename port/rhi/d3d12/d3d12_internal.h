@@ -40,6 +40,7 @@ typedef struct DxTexture {
     RhiFormat rhiFormat;
     DXGI_FORMAT resFormat; /* typeless, or typed for swapchain buffers */
     uint32_t width, height, mips, usage;
+    uint32_t samples;    /* 1, or the multisampled count (RhiTextureDesc.samples) */
     uint32_t rtv;        /* RTV heap slot + 1; 0 = none */
     uint32_t dsv;        /* DSV heap slot + 1 (writable) */
     uint32_t dsvRO;      /* DSV heap slot + 1 (read-only depth and stencil) */

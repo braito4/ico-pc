@@ -412,7 +412,7 @@ static bool ensure(CrtTex *c, uint32_t w, uint32_t h, RhiFormat fmt, const char 
         rhi_destroy_texture(c->t);
     }
     c->t = rhi_create_texture(
-        &(RhiTextureDesc){w, h, 1, fmt, RHI_TEX_RENDER_TARGET | RHI_TEX_SAMPLED, name});
+        &(RhiTextureDesc){w, h, 1, fmt, RHI_TEX_RENDER_TARGET | RHI_TEX_SAMPLED, name, 0});
     c->state = RHI_STATE_UNDEFINED;
     c->w = w;
     c->h = h;

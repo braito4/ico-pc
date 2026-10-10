@@ -275,9 +275,14 @@ static bool dx_write_resource(const RhiBindSlot *s, const RhiBinding *b,
         /* depth formats are always viewed as depth (plane 0), whatever the
          * aspect: stencil is never sampled (rhi.h) */
         v.Format = t->swapchain ? t->resFormat : fm->view;
-        v.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
         v.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        v.Texture2D.MipLevels = t->mips;
+        if (t->samples > 1u) {
+            /* Texture2DMS in the shader (Load at a sample) */
+            v.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DMS;
+        } else {
+            v.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+            v.Texture2D.MipLevels = t->mips;
+        }
         ID3D12Device_CreateShaderResourceView(g_dx.device, t->res, &v, h);
         return true;
     }
@@ -579,7 +584,7 @@ RhiPipeline rhi_create_pipeline(const RhiPipelineDesc *d)
     pd.InputLayout.NumElements = d->vertexAttrCount;
     pd.PrimitiveTopologyType = dx_topologyMap[d->topology].type;
     pd.NumRenderTargets = d->colorCount;
-    pd.SampleDesc.Count = 1;
+    pd.SampleDesc.Count = d->samples > 1u ? d->samples : 1u;
 
     DxPipeline *p = NULL;
     uint32_t id = d3dp_pool_alloc(&g_dx.pipelines, (void **)&p);

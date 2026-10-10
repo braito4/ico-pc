@@ -243,7 +243,7 @@ bool rd__fog_source(RhiCommandList cl, RdTargetRec *t, RdDepthCopy *copy, RdFogS
                                                        RHI_MEM_DEVICE, "rd fog depth words"});
         s_buf.tex = rhi_create_texture(&(RhiTextureDesc){
             w, h, 1, RHI_FMT_R32_UINT, RHI_TEX_SAMPLED | RHI_TEX_COPY_DST | RHI_TEX_COPY_SRC,
-            "rd fog depth words"});
+            "rd fog depth words", 0});
         s_buf.state = RHI_STATE_UNDEFINED;
         s_buf.w = w;
         s_buf.h = h;
@@ -350,12 +350,13 @@ void rd__fog_probe_record(RhiCommandList cl, const RdTargetRec *tz, uint32_t zid
     if (!s_probe.zTex.id) {
         s_probe.zTex = rhi_create_texture(&(RhiTextureDesc){PROBE_POINTS, 1, 1, RHI_FMT_R32_UINT,
                                                             RHI_TEX_COPY_DST | RHI_TEX_COPY_SRC,
-                                                            "rd fog probe depth"});
+                                                            "rd fog probe depth", 0});
         s_probe.zState = RHI_STATE_UNDEFINED;
     }
     if (!s_probe.cTex.id) {
-        s_probe.cTex = rhi_create_texture(&(RhiTextureDesc){
-            PROBE_POINTS, 1, 1, tc->format, RHI_TEX_COPY_DST | RHI_TEX_COPY_SRC, "rd fog probe"});
+        s_probe.cTex = rhi_create_texture(&(RhiTextureDesc){PROBE_POINTS, 1, 1, tc->format,
+                                                            RHI_TEX_COPY_DST | RHI_TEX_COPY_SRC,
+                                                            "rd fog probe", 0});
         s_probe.cState = RHI_STATE_UNDEFINED;
         s_probe.cFmt = tc->format;
     }
@@ -684,8 +685,9 @@ static bool stRun(const RdFrame *f, RdTargetRec *t, int *maxErr, int *worst)
         return false;
     }
     if (!s_stRead.tex.id) {
-        s_stRead.tex = rhi_create_texture(&(RhiTextureDesc){
-            ST_SAMPLES, 1, 1, t->format, RHI_TEX_COPY_DST | RHI_TEX_COPY_SRC, "rd fog self-test"});
+        s_stRead.tex = rhi_create_texture(&(RhiTextureDesc){ST_SAMPLES, 1, 1, t->format,
+                                                            RHI_TEX_COPY_DST | RHI_TEX_COPY_SRC,
+                                                            "rd fog self-test", 0});
         s_stRead.state = RHI_STATE_UNDEFINED;
         if (!s_stRead.tex.id) {
             return false;

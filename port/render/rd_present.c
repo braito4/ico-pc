@@ -399,7 +399,7 @@ bool rd__present_acquire(void)
         }
         g_rd.presentOut = rhi_create_texture(&(RhiTextureDesc){
             w, h, 1, RHI_FMT_RGBA8_UNORM,
-            RHI_TEX_RENDER_TARGET | RHI_TEX_SAMPLED | RHI_TEX_COPY_SRC, "rd present out"});
+            RHI_TEX_RENDER_TARGET | RHI_TEX_SAMPLED | RHI_TEX_COPY_SRC, "rd present out", 0});
         g_rd.presentOutState = RHI_STATE_UNDEFINED;
         g_rd.presentOutW = w;
         g_rd.presentOutH = h;
@@ -513,7 +513,7 @@ static bool reduceRecord(RhiCommandList cl, RhiTexture *src, uint32_t *sw, uint3
         }
         s_reduce.tex = rhi_create_texture(&(RhiTextureDesc){box->w, box->h, 1, RHI_FMT_RGBA8_UNORM,
                                                             RHI_TEX_RENDER_TARGET | RHI_TEX_SAMPLED,
-                                                            "rd present reduce"});
+                                                            "rd present reduce", 0});
         s_reduce.state = RHI_STATE_UNDEFINED;
         s_reduce.w = box->w;
         s_reduce.h = box->h;
@@ -643,7 +643,7 @@ static bool depthBlit(RhiCommandList cl, RhiTexture src, uint32_t sw, uint32_t s
          * tests' readback) */
         s_depth.out = rhi_create_texture(&(RhiTextureDesc){
             dw, dh, 1, RHI_FMT_D32F, RHI_TEX_DEPTH_STENCIL | RHI_TEX_SAMPLED | RHI_TEX_COPY_SRC,
-            "rd effects depth"});
+            "rd effects depth", 0});
         s_depth.outState = RHI_STATE_UNDEFINED;
         s_depth.outW = dw;
         s_depth.outH = dh;
@@ -1424,7 +1424,7 @@ static void captureRecord(RhiCommandList cl, RhiTexture out, RhiState *outState,
         }
         s_cap.tex = rhi_create_texture(&(RhiTextureDesc){s_outW, s_outH, 1, s_outFormat,
                                                          RHI_TEX_COPY_SRC | RHI_TEX_COPY_DST,
-                                                         "rd photo capture"});
+                                                         "rd photo capture", 0});
         s_cap.state = RHI_STATE_UNDEFINED;
         s_cap.w = s_outW;
         s_cap.h = s_outH;
@@ -1569,7 +1569,7 @@ void rd__present_record(RhiCommandList cl)
             }
             g_rd.presentLines = rhi_create_texture(
                 &(RhiTextureDesc){lw, lh, 1, RHI_FMT_RGBA8_UNORM,
-                                  RHI_TEX_RENDER_TARGET | RHI_TEX_SAMPLED, "rd present lines"});
+                                  RHI_TEX_RENDER_TARGET | RHI_TEX_SAMPLED, "rd present lines", 0});
             g_rd.presentLinesState = RHI_STATE_UNDEFINED;
             g_rd.presentLinesW = lw;
             g_rd.presentLinesH = lh;
@@ -1706,7 +1706,7 @@ bool rd_display_probe(uint8_t rgba[RD_DISPLAY_PROBE_POINTS][4])
     if (!s_probe.tex.id) {
         s_probe.tex = rhi_create_texture(
             &(RhiTextureDesc){RD_DISPLAY_PROBE_POINTS, 1, 1, disp->format,
-                              RHI_TEX_COPY_DST | RHI_TEX_COPY_SRC, "rd display probe"});
+                              RHI_TEX_COPY_DST | RHI_TEX_COPY_SRC, "rd display probe", 0});
         s_probe.state = RHI_STATE_UNDEFINED;
         s_probe.format = disp->format;
         if (!s_probe.tex.id) {

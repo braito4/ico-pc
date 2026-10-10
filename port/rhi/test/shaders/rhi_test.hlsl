@@ -56,3 +56,20 @@ float4 ps_tex(VSOut i) : SV_Target0 {
 uint4 ps_uint(VSOut i) : SV_Target0 {
     return g_uint;
 }
+
+// multisampling: the depth of a multisampled depth-stencil (t1, read with
+// Load at each sample) resolved to the largest sample's (the renderer's
+// GEQUAL depth: the nearest), written as SV_Depth into a single-sampled
+// depth target over the whole viewport (the vertices of a full quad)
+Texture2DMS<float> g_msDepth : register(t1, space2);
+
+float ps_depth_resolve(VSOut i) : SV_Depth {
+    uint w, h, n;
+    g_msDepth.GetDimensions(w, h, n);
+    int2 p = int2(i.pos.xy);
+    float d = 0.0;
+    for (uint s = 0; s < n; s++) {
+        d = max(d, g_msDepth.Load(p, int(s)));
+    }
+    return d;
+}
