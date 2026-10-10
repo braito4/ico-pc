@@ -1809,6 +1809,7 @@ static void checkDecoderAt(int fw)
     tick();
     gsFrame.w = fw;
     gsFrame.fbw = (fw + 63) / 64;
+    gif_HostSetFrameWidth(fw);
     gif_StartPacketPri(DEC_LIST);
     gif_SetDrawEnviroment(0x800, 0, (unsigned int)fw, (unsigned int)fh, 1, 0);
     gif_SetGsReg(0x40,
@@ -1913,6 +1914,7 @@ static void checkDecoderTex(int fw)
     tick();
     gsFrame.w = fw;
     gsFrame.fbw = (fw + 63) / 64;
+    gif_HostSetFrameWidth(fw);
     for (int pass = 0; pass < 2; pass++) {
         const int tw = ico_frame_tw(pass ? fw / 2 : fw / 4);
         gif_StartPacketPri(DEC_LIST);
@@ -1945,6 +1947,7 @@ static void checkDecoder(void)
     }
     gsFrame.w = ICO_FRAME_BASE_W;
     gsFrame.fbw = ICO_FRAME_BASE_W / 64;
+    gif_HostSetFrameWidth(ICO_FRAME_BASE_W);
     tick();
 }
 

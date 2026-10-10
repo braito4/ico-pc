@@ -32,6 +32,15 @@ enum { GIF_SP_AUTO = 0, GIF_SP_UI = 1, GIF_SP_WORLD = 2 }; /* port: GIF_ENTER's 
 #include <string.h>
 #include "GifHost.h"
 
+/* PC port: the native frame width the decoder reads (ico_frame.h); 512 at
+   4:3.  GsBase.c's frame latch sets it; a decoder-only test leaves 512. */
+static int gifHostFrameW = ICO_FRAME_BASE_W;
+
+void gif_HostSetFrameWidth(int w)
+{
+    gifHostFrameW = w > 0 ? w : ICO_FRAME_BASE_W;
+}
+
 static void gsWrite(unsigned long long reg, unsigned long long data);
 static void gsPacketStart(void);
 static void gsPacketEnd(void);
@@ -869,7 +878,9 @@ int _IsInScreen(volatile int *v)
  *                   (hi << 16) | lo.  Without it a vertex is the unsigned
  *                   16 bits, as before.  The game side never emits it at 4:3.
  *
- * Field widths: on a frame wider than 4:3 (gsFrame.w > 512) the 64-bit A+D
+ * Field widths: on a frame wider than 4:3 (gifHostFrameW > 512, the width
+ * GsBase.c's latch hands the decoder with gif_HostSetFrameWidth so a test
+ * can link the decoder without GsBase.c) the 64-bit A+D
  * data word's, wider than the GS registers' (the reserved bits above each
  * field are free, the fields do not overlap); at 4:3 the GS's own, so a
  * sign-extended or stray high bit reads as it always did.  SCISSOR's
@@ -1127,8 +1138,8 @@ static RdTargetId gsTargetOfFbp(unsigned int fbp, unsigned int w, unsigned int h
         return h <= 128 ? RD_TARGET_WORK0 : RD_TARGET_AA0; /* TBP 0x2800 */
     case 0x160:
         /* AA1 is the quarter-frame width (128 at 4:3), WORK1 the half */
-        return w <= (unsigned int)(gsFrame.w / 4) ? RD_TARGET_AA1
-                                                  : RD_TARGET_WORK1; /* TBP 0x2C00 */
+        return w <= (unsigned int)(gifHostFrameW / 4) ? RD_TARGET_AA1
+                                                      : RD_TARGET_WORK1; /* TBP 0x2C00 */
     case 0x180:
         return RD_TARGET_WORK2; /* TBP 0x3000 */
     case 0x1F8:
@@ -1196,7 +1207,7 @@ static void gsSyncEnv(void)
     if (gs.scissorDirty) {
         /* 16-bit fields on a wide frame: the GS's 11 cannot hold a native
            width past 2048; the GS's own 11 at 4:3, byte for byte as before */
-        const unsigned long long m = gsFrame.w > ICO_FRAME_BASE_W ? 0xFFFF : 0x7FF;
+        const unsigned long long m = gifHostFrameW > ICO_FRAME_BASE_W ? 0xFFFF : 0x7FF;
         int x0 = (int)(gs.scissorL[gsList()] & m), x1 = (int)((gs.scissorL[gsList()] >> 16) & m);
         int y0 = (int)((gs.scissorL[gsList()] >> 32) & m),
             y1 = (int)((gs.scissorL[gsList()] >> 48) & m);
@@ -1281,7 +1292,7 @@ static RdTex gsResolveTex0(unsigned long long tex0)
         id = RD_TARGET_SHADOW0;
         break;
     case 0x2C00:
-        id = tw == (unsigned int)ico_frame_tw(gsFrame.w / 4) ? RD_TARGET_AA1 : RD_TARGET_WORK1;
+        id = tw == (unsigned int)ico_frame_tw(gifHostFrameW / 4) ? RD_TARGET_AA1 : RD_TARGET_WORK1;
         break;
     case 0x3000:
         id = RD_TARGET_WORK2;
@@ -1582,7 +1593,7 @@ static void gsWrite(unsigned long long reg, unsigned long long data)
     }
     case 0x03: /* UV: the GS's 14 bits at 4:3, 16 on a wide frame (see the table) */
     {
-        const unsigned long long m = gsFrame.w > ICO_FRAME_BASE_W ? 0xFFFF : 0x3FFF;
+        const unsigned long long m = gifHostFrameW > ICO_FRAME_BASE_W ? 0xFFFF : 0x3FFF;
 
         gs.u = (unsigned int)(data & m);
         gs.v = (unsigned int)((data >> 16) & m);
