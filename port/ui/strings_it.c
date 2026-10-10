@@ -495,4 +495,13 @@ const char *const ui_strings_it[UI_STR_COUNT] = {
     [UI_STR_OPT_DOOR_FIX] = "Porta del riflettore est",
     [UI_STR_OPT_DOOR_FIX_NOTE] =
         "Mano nella mano, Ico e Yorda non tornano più subito fuori da una porta.",
+    [UI_STR_OPT_AA] = "Anti-aliasing",
+    [UI_STR_OPT_AA_NOTE] =
+        "Attenua i bordi seghettati. Il supersampling disegna l’immagine più grande e poi la riduce; il MSAA leviga i bordi delle forme.",
+    [UI_STR_AA_OFF] = "Disattivato",
+    [UI_STR_AA_SSAA2] = "Supersampling 2x",
+    [UI_STR_AA_SSAA4] = "Supersampling 4x",
+    [UI_STR_AA_MSAA2] = "MSAA 2x",
+    [UI_STR_AA_MSAA4] = "MSAA 4x",
+    [UI_STR_AA_MSAA8] = "MSAA 8x",
 };

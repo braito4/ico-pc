@@ -565,6 +565,15 @@ typedef enum UiStrId {
     /* Gameplay > Doorway fix ([gameplay] door_fix) and its explanation */
     UI_STR_OPT_DOOR_FIX,
     UI_STR_OPT_DOOR_FIX_NOTE,
+    /* Display > Anti-aliasing ([video] anti_aliasing), its note and values */
+    UI_STR_OPT_AA,
+    UI_STR_OPT_AA_NOTE,
+    UI_STR_AA_OFF,
+    UI_STR_AA_SSAA2,
+    UI_STR_AA_SSAA4,
+    UI_STR_AA_MSAA2,
+    UI_STR_AA_MSAA4,
+    UI_STR_AA_MSAA8,
     UI_STR_COUNT
 } UiStrId;
 
