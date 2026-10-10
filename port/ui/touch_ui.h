@@ -11,14 +11,16 @@
  *
  * What it draws:
  *   - every button as a plain translucent disc (the face buttons and R1) or
- *     key (the rest), untextured triangles through rd_overlay_prims (rd.h);
+ *     key (the rest), the D-pad as one plus-shaped cross of its four keys;
+ *     untextured triangles through rd_overlay_prims (rd.h);
  *   - on them the game's own button pictures (layout_ext.h LtExtGlyph: the
- *     four face buttons, L1 R1 L2 R2 and the arrows of Left and Right) as
+ *     four face buttons and L1 R1 L2 R2), drawn only while the sheet is
+ *     in its texture slot, as
  *     sprites in output pixels from the game's button sheets, fitted to the
  *     disc or key with the picture's proportions; the port draws no symbol
  *     of its own;
- *   - the words, with ui_draw_text placed in output pixels, on the zones
- *     with no picture (Up, Down, Select, Start), and on any zone whose
+ *   - the words, with ui_draw_text placed in output pixels, on Select and
+ *     Start, and on any zone whose
  *     sheet is not loaded yet (before a stage's textures are set up);
  *   - the left stick: its ring where it rests (or where the finger went
  *     down), the run ring inside it at ICO_TOUCH_RUN_RING of the radius

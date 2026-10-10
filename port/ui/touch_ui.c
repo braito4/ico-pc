@@ -17,12 +17,15 @@
 #include <math.h>
 
 #include "font.h"
+#include "charFileManager.h" /* texFile */
 #include "layout_ext.h"
 #include "rd.h"
 #include "strings.h"
 
 /* seki/src/Texture.c: the rd texture of a texture table entry (0: none) */
 extern unsigned int tex_HostTextureId(int idx);
+extern char *tex_GetTextureName(int idx);
+extern int tex_GetTextureNum(void);
 #endif
 
 static int (*s_source)(struct IcoTouchOverlay *out);
@@ -165,10 +168,6 @@ static int glyphOf(int zone)
         return LT_GLYPH_L2;
     case ICO_TOUCH_B_R2:
         return LT_GLYPH_R2;
-    case ICO_TOUCH_B_LEFT:
-        return LT_GLYPH_LEFT;
-    case ICO_TOUCH_B_RIGHT:
-        return LT_GLYPH_RIGHT;
     default:
         return -1;
     }
@@ -178,14 +177,6 @@ static int glyphOf(int zone)
 static const char *labelOf(int zone)
 {
     switch (zone) {
-    case ICO_TOUCH_B_UP:
-        return ui_str(UI_STR_PHOTO_UP);
-    case ICO_TOUCH_B_DOWN:
-        return ui_str(UI_STR_PHOTO_DOWN);
-    case ICO_TOUCH_B_LEFT:
-        return ui_str(UI_STR_TOUCH_LEFT);
-    case ICO_TOUCH_B_RIGHT:
-        return ui_str(UI_STR_TOUCH_RIGHT);
     case ICO_TOUCH_B_CROSS:
         return ui_str(UI_STR_BTN_CROSS);
     case ICO_TOUCH_B_CIRCLE:
@@ -217,6 +208,58 @@ static const uint8_t kFill[4] = {0x60, 0x60, 0x64, 0x28}, kFillHeld[4] = {0x80, 
                      kRun[4] = {0x80, 0x80, 0x80, 0x38}, kRunLit[4] = {0x80, 0x78, 0x50, 0x70},
                      kKnob[4] = {0x80, 0x80, 0x80, 0x50};
 
+/* The D-pad as one plus-shaped cross: the four keys' rectangles joined
+   through the square between them, filled and outlined in the other
+   buttons' colours, the pressed arm brighter.  The pieces do not overlap,
+   so the translucent fill and edge are even. */
+static void drawDpad(const IcoTouchOverlay *o, float th)
+{
+    const IcoTouchButton *u = &o->layout.button[ICO_TOUCH_B_UP],
+                         *d = &o->layout.button[ICO_TOUCH_B_DOWN],
+                         *l = &o->layout.button[ICO_TOUCH_B_LEFT],
+                         *r = &o->layout.button[ICO_TOUCH_B_RIGHT];
+    const float x0 = l->rect.x, x1 = u->rect.x, x2 = u->rect.x + u->rect.w,
+                x3 = r->rect.x + r->rect.w, y0 = u->rect.y, y1 = l->rect.y,
+                y2 = l->rect.y + l->rect.h, y3 = d->rect.y + d->rect.h;
+    const int hu = (o->info.pressed >> ICO_TOUCH_B_UP) & 1u,
+              hd = (o->info.pressed >> ICO_TOUCH_B_DOWN) & 1u,
+              hl = (o->info.pressed >> ICO_TOUCH_B_LEFT) & 1u,
+              hr = (o->info.pressed >> ICO_TOUCH_B_RIGHT) & 1u;
+    const uint8_t *eu = hu ? kEdgeHeld : kEdge, *ed = hd ? kEdgeHeld : kEdge,
+                  *el = hl ? kEdgeHeld : kEdge, *er = hr ? kEdgeHeld : kEdge;
+
+    if (!(x1 < x2) || !(x0 < x1) || !(x2 < x3) || !(y0 < y1) || !(y1 < y2) || !(y2 < y3) ||
+        2.0f * th >= x2 - x1 || 2.0f * th >= y2 - y1) {
+        return;
+    }
+    rect(x1, y0, x2, y1, hu ? kFillHeld : kFill);
+    rect(x1, y2, x2, y3, hd ? kFillHeld : kFill);
+    rect(x0, y1, x1, y2, hl ? kFillHeld : kFill);
+    rect(x2, y1, x3, y2, hr ? kFillHeld : kFill);
+    rect(x1, y1, x2, y2, kFill);
+    /* up arm */
+    rect(x1, y0, x2, y0 + th, eu);
+    rect(x1, y0 + th, x1 + th, y1, eu);
+    rect(x2 - th, y0 + th, x2, y1, eu);
+    /* left arm */
+    rect(x0, y1, x1, y1 + th, el);
+    rect(x0, y1 + th, x0 + th, y2 - th, el);
+    rect(x0, y2 - th, x1, y2, el);
+    /* right arm */
+    rect(x2, y1, x3, y1 + th, er);
+    rect(x3 - th, y1 + th, x3, y2 - th, er);
+    rect(x2, y2 - th, x3, y2, er);
+    /* down arm */
+    rect(x1, y2, x1 + th, y3 - th, ed);
+    rect(x2 - th, y2, x2, y3 - th, ed);
+    rect(x1, y3 - th, x2, y3, ed);
+    /* the four inner corners, where two arms meet */
+    rect(x1, y1, x1 + th, y1 + th, hu || hl ? kEdgeHeld : kEdge);
+    rect(x2 - th, y1, x2, y1 + th, hu || hr ? kEdgeHeld : kEdge);
+    rect(x1, y2 - th, x1 + th, y2, hd || hl ? kEdgeHeld : kEdge);
+    rect(x2 - th, y2 - th, x2, y2, hd || hr ? kEdgeHeld : kEdge);
+}
+
 static void drawButtons(const IcoTouchOverlay *o, float th)
 {
     const IcoTouchLayout *l = &o->layout;
@@ -227,7 +270,7 @@ static void drawButtons(const IcoTouchOverlay *o, float th)
         const float x0 = b->rect.x, y0 = b->rect.y, x1 = x0 + b->rect.w, y1 = y0 + b->rect.h;
         const float cx = x0 + b->rect.w * 0.5f, cy = y0 + b->rect.h * 0.5f;
 
-        if (b->rect.w <= 0.0f || b->rect.h <= 0.0f) {
+        if (b->rect.w <= 0.0f || b->rect.h <= 0.0f || z <= ICO_TOUCH_B_RIGHT) {
             continue;
         }
         if (b->round) {
@@ -260,6 +303,36 @@ static void drawSticks(const IcoTouchOverlay *o, float th)
     }
 }
 
+/* Whether table slot no holds the sheet the glyph is cut from.  A glyph
+   names its sheet's texture by slot number (lt_ext_glyph_texture), and a
+   slot is reloaded with another texture, or freed, when the game changes
+   between a stage and the menus; until the sheet is back the slot holds
+   something else, and drawing the glyph's rectangle from it would show
+   that texture.  The slot's name is compared with the sheet's file name
+   (the texFile row the glyph's texProperty row points at, without its
+   directory and extension, as layout_texture.c names textures). */
+static int sheetLoaded(int glyph, int no)
+{
+    const int row = lt_ext_glyph_source(glyph, NULL);
+    const char *want, *have, *dot;
+    size_t len;
+
+    if (row < 0 || no < 0 || no >= tex_GetTextureNum()) {
+        return 0;
+    }
+    want = texFile[texProperty[row].texFileNo].path;
+    have = tex_GetTextureName(no);
+    if (want == NULL || have == NULL) {
+        return 0;
+    }
+    if ((dot = strrchr(want, '/')) != NULL) {
+        want = dot + 1;
+    }
+    dot = strrchr(want, '.');
+    len = dot != NULL ? (size_t)(dot - want) : strlen(want);
+    return len > 0 && strncmp(have, want, len) == 0 && have[len] == '\0';
+}
+
 /* the game's button pictures on the discs and keys, each zone that has one
    (glyphOf) and whose sheet is loaded.  The sprites are in 12.4 output
    pixels as the menus' glyphs are (font.c ovEmit), the texel rectangle half
@@ -274,7 +347,7 @@ static uint32_t drawGlyphs(const IcoTouchOverlay *o)
         const int g = glyphOf(z);
         const int no = g >= 0 ? lt_ext_glyph_texture(g) : -1;
 
-        tex[z] = no >= 0 ? tex_HostTextureId(no) : 0u;
+        tex[z] = no >= 0 && sheetLoaded(g, no) ? tex_HostTextureId(no) : 0u;
     }
     for (int first = 0; first < ICO_TOUCH_BUTTONS; first++) {
         RdScreenVtx v[2 * ICO_TOUCH_BUTTONS];
@@ -304,9 +377,6 @@ static uint32_t drawGlyphs(const IcoTouchOverlay *o)
             float bw, bh;
             if (b->round) {
                 bw = bh = b->rect.w * 0.78f;
-            } else if (z <= ICO_TOUCH_B_RIGHT) {
-                bw = b->rect.w * 0.6f;
-                bh = b->rect.h * 0.6f;
             } else {
                 bw = b->rect.w * 0.8f;
                 bh = b->rect.h * 0.7f;
@@ -414,6 +484,7 @@ void ui_touch_draw_overlay(const struct RdOverlayCtx *ctx)
     th = th < 2.0f ? 2.0f : th;
     drawSticks(&o, th);
     drawButtons(&o, th);
+    drawDpad(&o, th);
     flush();
     const uint32_t withGlyph = drawGlyphs(&o);
     drawLabels(ctx, &o, withGlyph);

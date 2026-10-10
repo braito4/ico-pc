@@ -562,10 +562,6 @@ typedef enum UiStrId {
     UI_STR_VAL_RANGE_NORMAL,
     UI_STR_VAL_RANGE_FULL,
     UI_STR_VAL_INSTANT,
-    /* the touch overlay's words for the D-pad's Left and Right keys, shown
-       while the game's arrow pictures are not loaded */
-    UI_STR_TOUCH_LEFT,
-    UI_STR_TOUCH_RIGHT,
     /* Gameplay > Doorway fix ([gameplay] door_fix) and its explanation */
     UI_STR_OPT_DOOR_FIX,
     UI_STR_OPT_DOOR_FIX_NOTE,

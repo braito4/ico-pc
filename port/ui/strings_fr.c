@@ -494,8 +494,6 @@ const char *const ui_strings_fr[UI_STR_COUNT] = {
     [UI_STR_VAL_RANGE_NORMAL] = "Normale",
     [UI_STR_VAL_RANGE_FULL] = "Totale",
     [UI_STR_VAL_INSTANT] = "Instantané",
-    [UI_STR_TOUCH_LEFT] = "Gauche",
-    [UI_STR_TOUCH_RIGHT] = "Droite",
     [UI_STR_OPT_DOOR_FIX] = "Porte du réflecteur est",
     [UI_STR_OPT_DOOR_FIX_NOTE] =
         "Main dans la main, Ico et Yorda ne ressortent plus aussitôt d’une porte.",
