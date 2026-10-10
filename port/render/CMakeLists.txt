@@ -164,6 +164,17 @@ target_include_directories(rd_pixel_test PRIVATE "${CMAKE_SOURCE_DIR}/port/shade
 target_compile_options(rd_pixel_test PRIVATE ${ICO_SEMANTIC_OPTIONS} ${ICO_PORT_WARNINGS})
 target_link_libraries(rd_pixel_test PRIVATE ico_render ico_sheet_ref)
 
+# rd_native_test: one synthetic game frame (VU triangles, UI and full-frame
+# sprites, the DISPLAY reduction) at native widths 512..2560: the centre
+# columns equal the 512 render's and no step at the old band edges (Gate B).
+# The wide cases run with ICO_NATIVE_GATE=1 (the gate once W2 has landed);
+# without it only W = 512 is checked and the test exits 77.
+add_executable(rd_native_test test/rd_native_test.c)
+target_include_directories(rd_native_test PRIVATE "${CMAKE_SOURCE_DIR}/port/shaders"
+                           "${CMAKE_SOURCE_DIR}/port/rhi")
+target_compile_options(rd_native_test PRIVATE ${ICO_SEMANTIC_OPTIONS} ${ICO_PORT_WARNINGS})
+target_link_libraries(rd_native_test PRIVATE ico_render)
+
 # rd_layout_test: the seki layer's host path (GifPacket.c, DisplayList.c,
 # DmaPacket.c compiled with ICO_HOST and ICO_RD, as the window build has
 # them) fed layout_texture.c's call sequence for a synthetic layout; the
@@ -588,11 +599,14 @@ ico_copy_sdl3_dll(texpack_test texpack_e2e_test rd_replay_tool rd_state_test rd_
                   rd_layout_test rd_tex_test rd_gsbase_test rd_mesh_test modelpack_test
                   rd_shadow_test rd_fog_test rd_fog_selftest_test rd_blur_test rd_water_test rd_raw_test rd_debug_test
                   rd_present_test rd_filter_test rd_interp_test rd_mirror_test rd_mip_test
-                  rd_perf_test rd_boot_present_test rd_crt_test texpack_load_test gsb_cull_test)
+                  rd_perf_test rd_boot_present_test rd_crt_test texpack_load_test gsb_cull_test
+                  rd_native_test)
 
 if(ICO_RUN_TESTS)
     add_test(NAME rd_state COMMAND rd_state_test "${CMAKE_CURRENT_BINARY_DIR}")
     add_test(NAME rd_pixel COMMAND rd_pixel_test "${CMAKE_CURRENT_BINARY_DIR}")
+    add_test(NAME rd_native COMMAND rd_native_test)
+    set_tests_properties(rd_native PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 1500)
     add_test(NAME rd_layout COMMAND rd_layout_test)
     set_tests_properties(rd_layout PROPERTIES SKIP_RETURN_CODE 77)
     add_test(NAME rd_mip COMMAND rd_mip_test)
@@ -695,7 +709,7 @@ if(ICO_RUN_TESTS)
     if(_env)
         set_tests_properties(rd_water PROPERTIES ENVIRONMENT "${_env}")
         set_tests_properties(rd_pixel rd_replay_tool rd_layout rd_tex rd_gsbase rd_mesh modelpack
-                             rd_shadow rd_fog rd_blur rd_raw rd_debug rd_present rd_crt rd_interp rd_mirror rd_perf PROPERTIES ENVIRONMENT
+                             rd_shadow rd_fog rd_blur rd_raw rd_debug rd_present rd_crt rd_interp rd_mirror rd_perf rd_native PROPERTIES ENVIRONMENT
                                                                            "${_env}")
     endif()
     # the same tests and expectations in the two-pass blend
