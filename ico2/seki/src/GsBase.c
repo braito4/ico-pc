@@ -55,6 +55,22 @@ float center_X;
 
 float center_Y;
 
+/* PC port: ScreenWidth stays the PS2's 0x200 at every aspect.  Each use
+   is one of four kinds, marked where it is read:
+     SCALE    the projection's scale: the zoom and mip level (ScreenWidth /
+              640), the pixel aspect term vsParam[2], vsParam[1] = w /
+              ScreenWidth and gsb_SetVSMatrix's full-screen test; also
+              Primitive.c's 2D fan.  The projection does not change with
+              the aspect, so these stay 512.
+     UI       the 2D layer's 640 grid (GifPacket.c, DisplayFont.c,
+              motionViewer.c): the centred 4:3 box.
+     ADDRESS  a GS buffer address or size in blocks (FBP, TBP): VRAM keeps
+              the PS2's layout.
+     FRAME    an extent of the picture: becomes gsFrame.w (the native
+              width, port/include/ico_frame.h), equal to ScreenWidth at
+              4:3.  Those still reading ScreenWidth are marked FRAME: W3.
+   gsb_SetVSMatrixSub's window half-width (v[0]) and the frame head read
+   gsFrame.w already. */
 int ScreenWidth;
 
 int ScreenHeight;
@@ -70,6 +86,11 @@ int screenOffsetY; /* derived name */
 int vsWidth; /* derived name */
 
 int vsHeight; /* derived name */
+
+/* PC port: the native frame (GsBase.h), latched at each flip by
+   gsbHostFrameLatch; the 4:3 NTSC frame until gsb_Init's first latch */
+IcoFrame gsFrame = {ICO_FRAME_BASE_W, 0x1C0, ICO_FRAME_BASE_W / 64, (float)ICO_FRAME_BASE_W,
+                    4.0f / 3.0f};
 
 /* The stage lock state, the word gsb_Init clears (nothing reads it), the GS
    system flag, the zoom easing (target, current, speed) and the last
@@ -106,19 +127,22 @@ static void gsbHostCommon(void);
 
 #endif
 
-/* PC port (renderer wave 7, R7a): the widescreen cull hook, in every port
-   build (the headless one too, so a headless run proves the widened cull
-   leaves the game's logic alone); defined after gsb_SetVSMatrix */
-static void gsbHostWidenCull(float *projHalf);
+/* PC port: the in-between cull's margin, in every port build (the headless
+   one too, so a headless run proves the wider cull leaves the game's logic
+   alone); defined after gsb_SetVSMatrix */
+static void gsbHostCullMargin(float *projHalf);
+/* PC port: gsFrame from the display options, at gsb_Init and each flip;
+   defined after gsb_UpdateGSSystem */
+static void gsbHostFrameLatch(void);
 /* PC port: the cull against the cameras of the blended pictures, defined
    with gsb_ClipBox: the camera gsb_MakeCommonMatrix built, the camera at
    each flip, and forgetting it at a stage's start */
 static void gsbHostCullBuilt(void);
 static void gsbHostCullFlip(void);
 static void gsbHostCullForget(void);
-/* port/game/video_options.c: the presentation's aspect / (4/3), 1 in the
-   Original preset */
-extern float ico_video_wide_x(void);
+/* port/game/video_options.c: the native frame for the aspect in force and
+   a frame height (4:3, 512 wide, in the Original preset) */
+extern void ico_video_frame(IcoFrame *out, int h);
 /* port/game/video_options.c: 1 when pictures are blended between ticks (a
    framerate other than Original) */
 extern int ico_video_interpolate(void);
@@ -139,7 +163,7 @@ void gsb_SetFrame(sceGsDBuff *db, int a1, int a2, int psm, short zbp)
     sceGsDispEnv *disp1 = &db->disp[1];
     long long zb = ((long long)zbp << 32) | 0xC0;
     short h = (short)(unsigned short)ScreenHeight / 2;
-    short w = ScreenWidth;
+    short w = ScreenWidth; /* FRAME: W3 */
 
     *(int *)&disp1->dispfb &= ~0x1FF;
     *(int *)&db->disp[0].dispfb &= ~0x1FF;
@@ -175,7 +199,7 @@ void gsb_Init(void *db)
         break;
     }
     sceGsResetGraph(0, systemStatus[1] == 1, omode, 1);
-    sceGsSetDefDBuff(db, 0, ScreenWidth, ScreenHeight, 2, 0x30, fbClear);
+    sceGsSetDefDBuff(db, 0, ScreenWidth, ScreenHeight, 2, 0x30, fbClear); /* FRAME: W3 */
     gsb_SetFrame(db, 0, 0, 0x30, 2);
     sceGsSyncV(0);
     buffer_ID = 0;
@@ -184,24 +208,17 @@ void gsb_Init(void *db)
     while (sceGsSyncPath(1, 0) != 0) {
         debug_StdPrintfDummy("wait gs init\n");
     }
-    gsb_SetVSMatrix(ScreenWidth, ScreenHeight, 512.0f);
+    /* PC port (R2a, R2c): the 50/60 Hz switch changes the frame size: the
+       native frame is latched for it (rd's scene-sized targets follow) */
+    gsbHostFrameLatch();
+    gsb_SetVSMatrix(ScreenWidth, ScreenHeight, 512.0f); /* SCALE: the full screen */
     zoomTarget = 1.0f;
     zoomSpeed = 1000.0f;
     zoomCurrent = 1.0f;
 #ifdef ICO_RD
-    /* PC port (R2a, R2c): the 50/60 Hz switch changes the frame size; rd's
-       scene-sized targets follow.  sceGsSetDefDBuff wrote both draw
-       environments' XYOFFSET without the half offset. */
-    {
-        static int rdW, rdH; /* port */
-
-        if (rdW != ScreenWidth || rdH != ScreenHeight) {
-            rdW = ScreenWidth;
-            rdH = ScreenHeight;
-            rd_reset_scene((unsigned int)ScreenWidth, (unsigned int)ScreenHeight);
-        }
-        gsbHostResetHalf();
-    }
+    /* PC port: sceGsSetDefDBuff wrote both draw environments' XYOFFSET
+       without the half offset */
+    gsbHostResetHalf();
 #endif
 }
 
@@ -280,6 +297,7 @@ static int reductionBlue; /* derived name */
  * current target asks for. */
 void gsb_Reduction(void)
 {
+    /* PC port: every ScreenWidth in this packet is FRAME: W3 */
     long long pk[44] = {
         0x1000000000008015LL,
         0xE,
@@ -422,6 +440,7 @@ typedef struct { /* field names derived */
 /* Draw the whole screen back over itself as one sprite in the kept colour. */
 static void gsb_KeepFrameBuffer(void)
 {
+    /* PC port: the rects' ScreenWidth and the TBW below are FRAME: W3 */
     GsbRect r0 = {-(ScreenWidth >> 1) * 16 - 12, -(ScreenHeight >> 1) * 16 - 12,
                   ScreenWidth * 16 + 32, ScreenHeight * 16 + 32};
     GsbRect r1 = {8, 8, ScreenWidth * 16, ScreenHeight / 2 * 16};
@@ -463,6 +482,7 @@ extern void gif_SetDrawEnviroment(unsigned long long fbp, unsigned long long psm
  * are `&&` chains. */
 static void gsb_fade(void)
 {
+    /* PC port: FRAME: W3 (the rect and the draw environment below) */
     GsbRect r = {-(ScreenWidth >> 1) * 16, -(ScreenHeight >> 1) * 16, ScreenWidth * 16,
                  ScreenHeight * 16};
 
@@ -569,6 +589,7 @@ extern void gif_EndPacketPath1(void);
  * its first corner written before fx and fy are formed. */
 static void gsb_scissorOnDemo(void)
 {
+    /* PC port: FRAME: W3 (the bars and the draw environment below) */
     GsbRect r[2] = {
         {-(ScreenWidth >> 1) * 16, -(ScreenHeight >> 1) * 16 - 4, ScreenWidth * 16, 58 * 16},
         {-(ScreenWidth >> 1) * 16, ((ScreenHeight >> 1) - 58) * 16 + 4, ScreenWidth * 16, 58 * 16}};
@@ -678,6 +699,7 @@ static void gsb_controlBrightness(void)
             gif_SetGsReg(0x47, 0x30000);
             gif_SetGsReg(0x4E, 0x1300000C0LL);
             gif_SetAlpha(1, 7, 0);
+            /* PC port: FRAME: W3 */
             gif_MakeSpriteNoTexture((0x800 - ScreenWidth / 2) << 4, (0x800 - ScreenHeight / 2) << 4,
                                     ScreenWidth << 4, ScreenHeight << 4, 0xFFFFFFFE, col, 1);
             gif_EndPacketPath1();
@@ -787,7 +809,7 @@ static void gsb_antiAlias(void)
     }
     gif_SetZWrite(1);
     gif_SetZTest(1);
-    gif_SetDrawEnviroment(0x800, 0, ScreenWidth, ScreenHeight, 1, 0);
+    gif_SetDrawEnviroment(0x800, 0, ScreenWidth, ScreenHeight, 1, 0); /* FRAME: W3 */
     gif_EndPacket();
 }
 
@@ -1115,7 +1137,7 @@ static void gsbHostFrameHead(void)
     memset(&h, 0, sizeof(h));
     gsb_GetBGColor(h.rgba);
     h.z = 0;
-    h.gsW = (unsigned int)ScreenWidth;
+    h.gsW = (unsigned int)gsFrame.w; /* FRAME: the native width */
     h.gsH = (unsigned int)ScreenHeight;
     h.halfY = 0; /* gsbHostFlip sets what the flip sends */
     h.clear = fbClear != 0;
@@ -1278,6 +1300,8 @@ void gsb_UpdateGSSystem(int keep)
         gsbHostReduction();
     }
 #endif
+    /* PC port: the next tick's native frame, before the next frame opens */
+    gsbHostFrameLatch();
     if (keep == 0) {
         dl_Swap();
     } else {
@@ -1327,11 +1351,37 @@ void gsb_ResetGSSystem(void)
     gsbHostSetHalfOffset();
 #endif
     tex_ResetVram();
+    /* PC port: the next tick's native frame, before the next frame opens */
+    gsbHostFrameLatch();
     dl_Swap();
 #ifdef ICO_RD
     gsbHostFrameHead();
 #endif
     gsb_SetGsDefault();
+}
+
+/* PC port: the native frame for the display options in force (aspect "auto"
+   follows the window), latched at gsb_Init and at each flip, before the
+   frame that follows opens, so a tick's matrices, cull and frame extents
+   and the frame rd records all have one width.  A new width or height
+   remakes rd's scene-sized targets as the 50/60 Hz switch does
+   (rd_reset_scene, before rd_begin_frame takes the size), so the frame that
+   just closed is presented into the new targets once.  At 4:3 the frame is
+   512 x ScreenHeight, the size rd was always given. */
+static void gsbHostFrameLatch(void)
+{
+    ico_video_frame(&gsFrame, ScreenHeight);
+#ifdef ICO_RD
+    {
+        static int rdW, rdH; /* port */
+
+        if (rdW != gsFrame.w || rdH != gsFrame.h) {
+            rdW = gsFrame.w;
+            rdH = gsFrame.h;
+            rd_reset_scene((unsigned int)gsFrame.w, (unsigned int)gsFrame.h);
+        }
+    }
+#endif
 }
 
 /* PC port: the zoom vs[0] is 0 before the first stage sets the view scale
@@ -1352,7 +1402,10 @@ static const float vsScreenSize[] = {1500.0f, 1500.0f, 0.0f, 0.0f}; /* derived n
 static void gsb_SetVSMatrixSub(float *screen, float *proj, float *projHalf, float *viewport,
                                float *vs)
 {
-    sceVu0FVECTOR v = {ScreenWidth / 2, ScreenHeight / 2, 0.0f, 0.0f};
+    /* PC port: the window's half-width is the native frame's (FRAME; 256 at
+       4:3): it widens projHalf and the 500 unit pair's projection, the
+       cull; the screen matrix, proj and the viewport do not read it */
+    sceVu0FVECTOR v = {gsFrame.w / 2, ScreenHeight / 2, 0.0f, 0.0f};
     float m0[16];
     float m1[16];
     float sx;
@@ -1461,7 +1514,8 @@ void gsb_SetVSMatrix(int w, int h, float d)
     } else {
         currentFocusDistance = d;
     }
-    /* PC port (photo mode): the full-screen camera's distance */
+    /* PC port (photo mode): the full-screen camera's distance (SCALE: the
+       full screen is w == ScreenWidth at every aspect) */
     if (w == ScreenWidth && h == ScreenHeight) {
         gsbViewD = d;
     }
@@ -1473,6 +1527,7 @@ void gsb_SetVSMatrix(int w, int h, float d)
     if (staffRollStartFlag != 0) {
         center_X = center_X - staffRollCenterOffsetX;
     }
+    /* PC port: ScreenWidth here and down to vsParam[2] is SCALE */
     zoom = (float)GlobalStageSetting.viewScale * zoomCurrent * d * (float)debug_zoom_per *
            (float)ScreenWidth / 640.0f / 100.0f / 100.0f;
     vsParam[0] = zoom;
@@ -1492,24 +1547,26 @@ void gsb_SetVSMatrix(int w, int h, float d)
         (float)ScreenHeight * 4.0f / ((float)ScreenWidth * 3.0f) * (float)h / (float)ScreenHeight;
     gsb_SetVSMatrixSub((float *)(matrixptr + 0xC0), (float *)(matrixptr + 0x1C0),
                        (float *)(matrixptr + 0x240), (float *)(matrixptr + 0x340), vsParam);
-    gsbHostWidenCull((float *)(matrixptr + 0x240));
-    gsbHostWidenCull((float *)(matrixptr + 0x680));
+    gsbHostCullMargin((float *)(matrixptr + 0x240));
+    gsbHostCullMargin((float *)(matrixptr + 0x680));
 }
 
-/* PC port: the widescreen and in-between cull.  Two projections cull:
+/* PC port: the native and in-between cull.  Two projections cull:
    projHalf (matrixptr+0x240), the projection of the visible screen that
    +0x280 (gsb_MakeCommonMatrix) and RegistPacket.c's per-object +0x300 are
    built from, and the 500 unit pair's +0x680, which RegistPacket.c's
    reg_setMMatrixPacket uses in place of +0x240 for the parts that follow
    the camera (node flag 2).  gsb_ClipBox culls against the current matrix
-   made from them.  Both are widened here, never a matrix that places
-   anything on screen.
-     - The width: a wide output divides the x scale by how much wider than
-       4:3 it is, (aspect) / (4/3), from the display options
-       (port/game/video_options.c: 1 in the Original preset, 4/3 at 16:9,
-       1.2 at 16:10), so objects at the sides are not culled.
-     - The margin: when pictures are blended between ticks (a framerate
-       other than Original) the x and y scales are divided by a further
+   made from them.  Never a matrix that places anything on screen.
+     - The width: gsb_SetVSMatrixSub builds both from the window's
+       half-width gsFrame.w / 2, the native frame's (port/include/
+       ico_frame.h: 512 at 4:3, 688 at 16:9, 2560 at the widest), so the
+       cull's frustum is the native picture's and objects at the sides of
+       a wide picture are not culled.  The screen matrix +0xC0 and so
+       +0x100 do not change with the width: a world point lands on the
+       same GS X at every aspect, the wider window holds more of them.
+     - The margin (here): when pictures are blended between ticks (a
+       framerate other than Original) the x and y scales are divided by
        1 + GSB_CULL_MARGIN.  A blended picture only draws what both ticks
        drew (rd_interp.c), so a part culled at the newer tick vanished one
        tick early at the screen's edges while the camera turned; with the
@@ -1520,37 +1577,23 @@ void gsb_SetVSMatrix(int w, int h, float d)
        margin alone covers a small turn only: gsb_ClipBox also culls
        against the earlier cameras of the blended pictures (the block
        before it), each frustum with this margin.
-   The renderer's own projection widens in rd (rd__fill_camera_cb, the
-   replay's g_space); the gameplay matrices +0x80 and +0xC0
-   (IsPointIsInScreen and the screen tests) never change.  puddle.c and
-   pool.c call gsb_SetVSMatrix for their reflection views too, so the
-   reflections' cull widens by the same factors: it only ever adds objects
-   to a reflection, whose +0xC0 stays 4:3 as well; the renderer widens the
-   render-to-texture block and its draws (rd_core.c rd__target_scale_of), so
-   those objects show at the sides of a wide frame.  A part the widened
-   frustum holds whole but that crosses the screen's edge is drawn by the
-   VU program for parts inside (code 34) instead of the one with the
+   The gameplay matrices +0x80 and +0xC0 (IsPointIsInScreen and the screen
+   tests) never change.  puddle.c and pool.c call gsb_SetVSMatrix for their
+   reflection views too, so the reflections' cull is as wide and carries
+   the same margin: it only ever adds objects to a reflection.  A part the
+   frustum holds whole but that crosses the 4:3 screen's edge is drawn by
+   the VU program for parts inside (code 34) instead of the one with the
    per-triangle region test (code 32); its vertices are well inside the
-   GS's 0..4094 window, which is all that test drops.  At width 1 with the
-   Original framerate (the Original preset's picture) the matrices are
-   left exactly as computed. */
+   GS's 0..4094 window, which is all that test drops.  With the Original
+   framerate the matrices are left exactly as computed (at 4:3 the
+   PS2's). */
 #define GSB_CULL_MARGIN 0.12f
 
-static float gsbHostWideX(void)
+static void gsbHostCullMargin(float *projHalf)
 {
-    return ico_video_wide_x();
-}
-
-static void gsbHostWidenCull(float *projHalf)
-{
-    float k = gsbHostWideX();
-    float m = ico_video_interpolate() ? GSB_CULL_MARGIN : 0.0f;
-
-    if (k != 1.0f || m != 0.0f) {
-        projHalf[0] = projHalf[0] / (k * (1.0f + m));
-    }
-    if (m != 0.0f) {
-        projHalf[5] = projHalf[5] / (1.0f + m);
+    if (ico_video_interpolate()) {
+        projHalf[0] = projHalf[0] / (1.0f + GSB_CULL_MARGIN);
+        projHalf[5] = projHalf[5] / (1.0f + GSB_CULL_MARGIN);
     }
 }
 
@@ -1562,12 +1605,12 @@ static void gsbHostWidenCull(float *projHalf)
      +0x80   the view (camera-root.c MakeCameraMatrix / SetCameraMatrix)
      +0xC0   the screen matrix (gsb_SetVSMatrixSub's screen)
      +0x1C0  the projection on the 1500 unit screen (its proj)
-     +0x240  the projection of the visible screen (its projHalf, widened
-             by gsbHostWidenCull)
+     +0x240  the projection of the visible screen (its projHalf, the
+             native width, with gsbHostCullMargin's margin)
      +0x340  the viewport (its viewport)
      +0x640  the 500 unit pair's screen matrix (gsb_SetVSMatrixSub)
-     +0x680  the 500 unit pair's projection (gsb_SetVSMatrixSub, widened
-             by gsbHostWidenCull)
+     +0x680  the 500 unit pair's projection (gsb_SetVSMatrixSub, as
+             +0x240)
      +0x100  +0xC0 x +0x80 (gsb_MakeCommonMatrix)
      +0x200  +0x1C0 x +0x80 (gsb_MakeCommonMatrix)
      +0x280  +0x240 x +0x80 (gsb_MakeCommonMatrix)
@@ -1663,9 +1706,9 @@ static void gsbHostCommon(void)
     rd_set_vu_common(&b);
     memset(&cam, 0, sizeof(cam));
     _CopyMatrix(cam.view, matrixptr + 0x80);
-    _CopyMatrix(cam.proj43, matrixptr + 0xC0);
+    _CopyMatrix(cam.proj, matrixptr + 0xC0);
     cam.zoom = vsParam[0];
-    cam.aspect43 = 4.0f / 3.0f;
+    cam.aspect = gsFrame.aspect; /* 4/3 at 4:3 */
     cam.nearZ = vsParam[7];
     cam.farZ = vsParam[8];
     rd_set_camera(&cam);
@@ -1990,9 +2033,17 @@ static int gsbHostClipBoxViews(const float *p, int views)
    picture's sides and its top and bottom.  At width 1 the sides are 400
    pixels out, the PS2's window; the PS2's top and bottom were 200 pixels,
    inside the picture (dots near the top and bottom edges were not drawn).
-   The widest picture (ICO_WIDE_X_MAX 5) keeps the window inside the 16
+   The widest picture (ICO_FRAME_K_MAX 5) keeps the window inside the 16
    bits the dot's x is packed in: 32768 + (1280 + 144) x 16 = 55552. */
 #define GSB_DOT_MARGIN 144.0f
+
+/* PC port: the native frame's width as a multiple of the 4:3 one, k =
+   gsFrame.w / 512 (exactly 1 at 4:3), for the three windows below that
+   still scale the 4:3 one by k.  FRAME: W3 (native-width windows). */
+static float gsbHostFrameK(void)
+{
+    return (float)gsFrame.w / (float)ICO_FRAME_BASE_W;
+}
 
 /* 1 when the world point pos is in front of the cull matrix c and inside
    its x and y planes */
@@ -2009,8 +2060,8 @@ static int gsbHostPointIn(const double *c, const float *pos)
 
 int gsb_HostDotVisible(const int *ip, const float *pos)
 {
-    const float k = gsbHostWideX();
-    const int hx = (int)(((float)(ScreenWidth / 2) * k + GSB_DOT_MARGIN) * 16.0f);
+    const float k = gsbHostFrameK();
+    const int hx = (int)(((float)(ScreenWidth / 2) * k + GSB_DOT_MARGIN) * 16.0f); /* FRAME: W3 */
     const int hy = (int)(((float)(ScreenHeight / 2) + GSB_DOT_MARGIN) * 16.0f);
     int views;
     int v;
@@ -2038,7 +2089,7 @@ int gsb_HostDotVisible(const int *ip, const float *pos)
    view reaches 2048 +- 1280, inside the GS's 0..4095. */
 float gsb_HostLineHalfWidth(void)
 {
-    return (float)vsWidth * 0.5f * gsbHostWideX();
+    return (float)vsWidth * 0.5f * gsbHostFrameK(); /* FRAME: W3 */
 }
 
 /* PC port: Shadow.c's edge clip, +-ScreenWidth about the centre on the
@@ -2046,7 +2097,7 @@ float gsb_HostLineHalfWidth(void)
    end stays inside the 16-bit GS window (2048 +- 2047) */
 float gsb_HostShadowClipX(void)
 {
-    float x = (float)ScreenWidth * gsbHostWideX();
+    float x = (float)ScreenWidth * gsbHostFrameK(); /* FRAME: W3 */
 
     return x > 2047.0f ? 2047.0f : x;
 }

@@ -2,8 +2,8 @@
  * port/game/video_options.h
  *
  * The display options (the [video] keys): one place that holds them, so
- * the window (port/platform/window_host.c), the game's widescreen hook
- * (ico2/seki/src/GsBase.c gsbHostWideX, under ICO_HOST) and the Settings
+ * the window (port/platform/window_host.c), the game's native frame
+ * (ico2/seki/src/GsBase.c gsFrame, from ico_video_frame) and the Settings
  * menu (port/ui/settings.c) read and write the same values.
  *
  *   [video] preset          "original"  "original" | "enhanced" | "custom"
@@ -81,6 +81,8 @@
 #ifndef ICO_PORT_GAME_VIDEO_OPTIONS_H
 #define ICO_PORT_GAME_VIDEO_OPTIONS_H
 
+#include "../include/ico_frame.h"
+
 /* ico_video_preset: the preset the four rows add up to */
 enum { ICO_VIDEO_ORIGINAL = 0, ICO_VIDEO_ENHANCED = 1, ICO_VIDEO_CUSTOM = 2 };
 
@@ -95,14 +97,10 @@ enum {
     ICO_ASPECT_COUNT = 7
 };
 
-/* The widest the picture is made, as a multiple of the 4:3 width.  The
-   water's dot window (waterDot.c) is widened by this factor and packs its
-   x coordinate in 16 bits, which holds up to a factor of 5 (aspect 20:3);
-   48:9 is a factor of 4.  rd_present.c mirrors the aspect as RD_ASPECT_MAX
-   (the renderer is built without this module); rd_present_test checks the
-   two agree. */
-#define ICO_WIDE_X_MAX 5.0f
-#define ICO_ASPECT_MAX (4.0f / 3.0f * ICO_WIDE_X_MAX)
+/* The widest aspect the picture is made at: the native frame's
+   (port/include/ico_frame.h ICO_FRAME_K_MAX, 5 times the 4:3 width, aspect
+   20:3); 48:9 is 4 times. */
+#define ICO_ASPECT_MAX ICO_FRAME_ASPECT_MAX
 
 /* The window's mode.  FULLSCREEN is SDL's desktop fullscreen;
    BORDERLESS a frameless window over its display. */
@@ -226,8 +224,13 @@ void ico_video_set_window(int w, int h);
 /* The presentation aspect (width / height) in force: the aspect option,
    whatever the preset, "auto" being the window's clamped to [4:3, ICO_ASPECT_MAX]. */
 float ico_video_aspect(void);
-/* How much wider than 4:3 the presentation is: ico_video_aspect() / (4/3),
-   at least 1 (GsBase.c gsbHostWideX). */
+/* The native frame (port/include/ico_frame.h) for the aspect in force and
+   a frame height h: 512 wide at 4:3 exactly.  GsBase.c latches it at each
+   flip (gsFrame, with ScreenHeight). */
+void ico_video_frame(IcoFrame *out, int h);
+/* The frame's width as a multiple of the 4:3 one, ico_frame_width_for(
+   ico_video_aspect()) / 512, for the game's callers not yet on gsFrame
+   (particleEffect.c).  W3-WINDOWS removes this. */
 float ico_video_wide_x(void);
 /* The effect switches in force (issue 11), 1 or 0: plain functions the
    game's files declare extern (staticBlur.c, GsBase.c, ZFog.c), read at
@@ -249,7 +252,7 @@ int ico_video_dump_models(void);
 int ico_video_framerate(void);
 /* 1 when the presenter blends pictures between the simulation's ticks (a
    framerate other than "original", as the window decides it), else 0.  The
-   game's cull (GsBase.c gsbHostWidenCull) keeps a margin past the screen's
+   game's cull (GsBase.c gsbHostCullMargin) keeps a margin past the screen's
    edges then, so a part that is just off screen at a tick is still recorded
    for the blended pictures that show it. */
 int ico_video_interpolate(void);

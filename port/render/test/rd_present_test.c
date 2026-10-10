@@ -7,11 +7,14 @@
  * Without a device:
  *   options   [video] keys from a config.toml, the defaults, the parsers,
  *             "auto", run-time set, save
- *   wide      gsb_SetVSMatrix / gsb_MakeCommonMatrix with aspect 16:9:
- *             +0x80, +0xC0 and +0x100 byte-identical to 4:3 (so
- *             IsPointIsInScreen and the screen tests are unchanged), +0x240
- *             x scale divided by 4/3 and +0x280 following it; the renderer's
- *             g_proj / g_viewProj x row compressed about 2048
+ *   wide      gsb_SetVSMatrix / gsb_MakeCommonMatrix with aspect 16:9 (the
+ *             native frame 688 wide): +0x80, +0xC0 and +0x100 byte-identical
+ *             to 4:3 (so IsPointIsInScreen and the screen tests are
+ *             unchanged), +0x240 x scale the native one (688 / 512 narrower)
+ *             and +0x280 following it, the frame's camera the 4:3 one but
+ *             for its aspect; the renderer's g_proj / g_viewProj x row
+ *             compressed about 2048, g_clip.w the camera's aspect;
+ *             shader_consts.h's frame constants are ico_frame.h's
  *   scales    rd__apply_display: the Original rows 1, the options under the
  *             Original flag, its zero-size fallback; 2x, WxH, the window's
  *             box, the 4K cap, the work buffers' scale, full height
@@ -722,6 +725,14 @@ static int near(float a, float b)
     return fabsf(a - b) <= 1e-5f * (fabsf(b) > 1.0f ? fabsf(b) : 1.0f);
 }
 
+/* the native frame's width for the options in force (ico_video_frame) */
+static int frameW(void)
+{
+    IcoFrame f;
+    ico_video_frame(&f, 448);
+    return f.w;
+}
+
 static void checkOptions(const char *dir)
 {
     char toml[1024], ini[1024];
@@ -739,7 +750,7 @@ static void checkOptions(const char *dir)
               o.resH == 0 && o.resScale == 1 && o.windowMode == ICO_WINDOW_WINDOWED &&
               o.vsync == 1 && o.filter == ICO_FILTER_ORIGINAL && o.fullHeight == 0,
           "options: defaults (the Original rows)");
-    CHECK(ico_video_wide_x() == 1.0f && ico_video_aspect() == 4.0f / 3.0f, "options: default 4:3");
+    CHECK(frameW() == 512 && ico_video_aspect() == 4.0f / 3.0f, "options: default 4:3");
 
     /* every key: "enhanced" takes the rows as written; 1920x1440 is none of
        the two presets' */
@@ -753,7 +764,7 @@ static void checkOptions(const char *dir)
               o.aspect == ICO_ASPECT_16_9 && o.windowMode == ICO_WINDOW_FULLSCREEN &&
               o.vsync == 0 && o.filter == ICO_FILTER_ANISOTROPIC && o.fullHeight == 1,
           "options: every key read, Custom");
-    CHECK(near(ico_video_wide_x(), 4.0f / 3.0f), "options: 16:9 widens by 4/3");
+    CHECK(frameW() == 688, "options: 16:9 is 688 wide");
 
     /* window_mode, and the older fullscreen bool when it is absent */
     writeFile(toml, "version = 1\n[video]\nwindow_mode = \"borderless\"\n");
@@ -806,13 +817,13 @@ static void checkOptions(const char *dir)
               o.resH == 0 && o.aspect == ICO_ASPECT_4_3 && o.filter == ICO_FILTER_ORIGINAL &&
               o.fullHeight == 0 && o.windowMode == ICO_WINDOW_FULLSCREEN && o.vsync == 0,
           "options: the Original shortcut is 1x, 4:3, original, half, the rest kept");
-    CHECK(ico_video_wide_x() == 1.0f, "options: Original is 4:3");
+    CHECK(frameW() == 512, "options: Original is 4:3");
     /* the aspect applies whatever the preset */
     p.aspect = ICO_ASPECT_16_9;
     ico_video_set(&p);
     ico_video_get(&o);
-    CHECK(near(ico_video_wide_x(), 4.0f / 3.0f) && ico_video_preset(&o) == ICO_VIDEO_CUSTOM,
-          "options: 16:9 alone widens by 4/3 and reads Custom");
+    CHECK(frameW() == 688 && ico_video_preset(&o) == ICO_VIDEO_CUSTOM,
+          "options: 16:9 alone is 688 wide and reads Custom");
     /* the Enhanced shortcut */
     ico_video_set_preset(&p, ICO_VIDEO_ENHANCED);
     ico_video_set(&p);
@@ -832,35 +843,32 @@ static void checkOptions(const char *dir)
           "options: the preset names");
     p.aspect = ICO_ASPECT_16_10;
     ico_video_set(&p);
-    CHECK(near(ico_video_wide_x(), 1.2f), "options: 16:10 widens by 1.2");
+    CHECK(frameW() == 624, "options: 16:10 is 624 wide");
     p.aspect = ICO_ASPECT_21_9;
     ico_video_set(&p);
-    CHECK(near(ico_video_aspect(), 64.0f / 27.0f) && near(ico_video_wide_x(), 16.0f / 9.0f),
-          "options: 21:9 widens by 16/9");
+    CHECK(near(ico_video_aspect(), 64.0f / 27.0f) && frameW() == 912, "options: 21:9 is 912 wide");
     p.aspect = ICO_ASPECT_32_9;
     ico_video_set(&p);
-    CHECK(near(ico_video_aspect(), 32.0f / 9.0f) && near(ico_video_wide_x(), 8.0f / 3.0f),
-          "options: 32:9 widens by 8/3");
+    CHECK(near(ico_video_aspect(), 32.0f / 9.0f) && frameW() == 1376, "options: 32:9 is 1376 wide");
     p.aspect = ICO_ASPECT_48_9;
     ico_video_set(&p);
-    CHECK(near(ico_video_aspect(), 48.0f / 9.0f) && near(ico_video_wide_x(), 4.0f),
-          "options: 48:9 widens by 4");
+    CHECK(near(ico_video_aspect(), 48.0f / 9.0f) && frameW() == 2048, "options: 48:9 is 2048 wide");
     p.aspect = ICO_ASPECT_AUTO;
     ico_video_set(&p);
     ico_video_set_window(0, 0);
-    CHECK(ico_video_wide_x() == 1.0f, "options: auto without a window is 4:3");
+    CHECK(frameW() == 512, "options: auto without a window is 4:3");
     ico_video_set_window(1920, 1080);
     CHECK(near(ico_video_aspect(), 16.0f / 9.0f), "options: auto in 1920x1080");
     ico_video_set_window(3440, 1440);
     CHECK(near(ico_video_aspect(), 3440.0f / 1440.0f), "options: auto passes 3440x1440 through");
     ico_video_set_window(5760, 1080);
     CHECK(near(ico_video_aspect(), 48.0f / 9.0f), "options: auto passes 5760x1080 (48:9) through");
-    CHECK(near(ico_video_wide_x(), 4.0f), "options: auto at 48:9 widens by 4");
+    CHECK(frameW() == 2048, "options: auto at 48:9 is 2048 wide");
     ico_video_set_window(9600, 1080);
-    CHECK(ico_video_aspect() == ICO_ASPECT_MAX && near(ico_video_wide_x(), ICO_WIDE_X_MAX),
+    CHECK(ico_video_aspect() == ICO_ASPECT_MAX && frameW() == ICO_FRAME_W_MAX,
           "options: auto clamps at the maximum (20:3), 9600x1080");
-    /* the renderer's mirror of the maximum (rd_internal.h) */
-    CHECK(RD_ASPECT_MAX == ICO_ASPECT_MAX, "options: RD_ASPECT_MAX equals ICO_ASPECT_MAX");
+    /* the options' maximum is the native frame's */
+    CHECK(ICO_FRAME_ASPECT_MAX == ICO_ASPECT_MAX, "options: ICO_ASPECT_MAX is the frame's");
     ico_video_set_window(1280, 1024);
     CHECK(ico_video_aspect() == 4.0f / 3.0f, "options: auto clamps at 4:3");
     ico_video_set_window(2400, 1080);
@@ -877,7 +885,7 @@ static void checkOptions(const char *dir)
     ico_video_reload();
     ico_video_get(&o);
     CHECK(ico_video_preset(&o) == ICO_VIDEO_ORIGINAL && o.resScale == 1 &&
-              o.aspect == ICO_ASPECT_4_3 && ico_video_wide_x() == 1.0f,
+              o.aspect == ICO_ASPECT_4_3 && frameW() == 512,
           "options: an old \"original\" with rows is Original");
     writeFile(toml, "version = 1\n[video]\nresolution = \"2x\"\ntexture_filter = \"trilinear\"\n");
     ico_config_reset(toml, ini);
@@ -906,7 +914,7 @@ static void checkOptions(const char *dir)
     ico_video_get(&o);
     CHECK(ico_video_preset(&o) == ICO_VIDEO_CUSTOM && o.resScale == 0 && o.resW == 0 &&
               o.aspect == ICO_ASPECT_4_3 && o.filter == ICO_FILTER_ORIGINAL && o.fullHeight == 0 &&
-              ico_video_wide_x() == 1.0f,
+              frameW() == 512,
           "options: an old \"enhanced\" alone is Custom (window, 4:3, original, half)");
     writeFile(toml, "version = 1\n[video]\npreset = \"enhanced\"\nresolution = \"window\"\n"
                     "aspect = \"auto\"\ntexture_filter = \"anisotropic\"\nfull_height = true\n");
@@ -922,7 +930,7 @@ static void checkOptions(const char *dir)
     ico_video_get(&o);
     CHECK(ico_video_preset(&o) == ICO_VIDEO_CUSTOM && o.resScale == 3 &&
               o.aspect == ICO_ASPECT_16_10 && o.filter == ICO_FILTER_TRILINEAR &&
-              o.fullHeight == 1 && near(ico_video_wide_x(), 1.2f),
+              o.fullHeight == 1 && frameW() == 624,
           "options: \"custom\" takes the rows as written");
 
     /* parsers */
@@ -1052,17 +1060,20 @@ static void checkWide(void)
     Mats a, b;
     memset(&a, 0, sizeof(a));
     memset(&b, 0, sizeof(b));
+    ico_video_frame(&gsFrame, ScreenHeight); /* what the flip latches */
     cameraMats(&a);
     o.aspect = ICO_ASPECT_16_9;
     ico_video_set(&o);
+    ico_video_frame(&gsFrame, ScreenHeight);
+    CHECK(gsFrame.w == 688, "wide: the native frame 688 wide (%d)", gsFrame.w);
     cameraMats(&b);
     rd_discard_frame();
-    const float k = 4.0f / 3.0f;
+    const float k = 688.0f / 512.0f;
     CHECK(memcmp(a.m80, b.m80, 64) == 0, "wide: +0x80 (the view) byte-identical");
     CHECK(memcmp(a.mC0, b.mC0, 64) == 0, "wide: +0xC0 (the 4:3 screen matrix) byte-identical");
     CHECK(memcmp(a.m100, b.m100, 64) == 0, "wide: +0x100 (screen x view) byte-identical");
     CHECK(near(b.m240[0], a.m240[0] / k) && memcmp(&a.m240[1], &b.m240[1], 60) == 0,
-          "wide: +0x240 x scale divided by 4/3, the rest identical (%g -> %g)", a.m240[0],
+          "wide: +0x240 x scale 688 / 512 narrower, the rest identical (%g -> %g)", a.m240[0],
           b.m240[0]);
     int scaled = 0, bad = 0;
     for (int i = 0; i < 16; i++) {
@@ -1079,10 +1090,15 @@ static void checkWide(void)
           "wide: +0x280 is +0x240 x +0x80 with the narrower x (%d "
           "scaled, %d other)",
           scaled, bad);
-    CHECK(memcmp(&a.cam, &b.cam, sizeof(a.cam)) == 0,
-          "wide: the frame camera (proj43 = +0xC0) unchanged");
+    RdCamera bAs43 = b.cam;
+    bAs43.aspect = 4.0f / 3.0f;
+    CHECK(memcmp(&a.cam, &bAs43, sizeof(a.cam)) == 0 && a.cam.aspect == 4.0f / 3.0f &&
+              b.cam.aspect == 16.0f / 9.0f,
+          "wide: the frame camera (proj = +0xC0) unchanged but for the aspect (%g, %g)",
+          (double)a.cam.aspect, (double)b.cam.aspect);
     ico_video_defaults(&o);
     ico_video_set(&o);
+    ico_video_frame(&gsFrame, ScreenHeight);
 
     /* the renderer's projection: x row compressed about 2048 */
     IcoFrameCB n, w;
@@ -1101,7 +1117,7 @@ static void checkWide(void)
         }
     }
     CHECK(ok, "wide: g_proj's x row = 0.75 x + 0.25 * 2048 w, other rows unchanged");
-    CHECK(memcmp(n.proj, a.cam.proj43, 64) == 0, "wide: g_proj = proj43 at 4:3");
+    CHECK(memcmp(n.proj, a.cam.proj, 64) == 0, "wide: g_proj = proj at 4:3");
     /* a point: GS X moves towards 2048 by the factor, Y stays */
     const float p[4] = {100.0f, -50.0f, 800.0f, 1.0f};
     float hn[4] = {0}, hw[4] = {0};
@@ -1115,7 +1131,14 @@ static void checkWide(void)
     CHECK(fabsf((xw - 2048.0f) - 0.75f * (xn - 2048.0f)) < 1e-2f &&
               fabsf(hw[1] / hw[3] - hn[1] / hn[3]) < 1e-3f,
           "wide: a point's GS X %.3f -> %.3f about 2048, Y kept", xn, xw);
-    CHECK(near(w.clip[3], 16.0f / 9.0f), "wide: g_clip.w the aspect");
+    IcoFrameCB bw;
+    rd__fill_camera_cb(&bw, &b.cam);
+    CHECK(n.clip[3] == 4.0f / 3.0f && bw.clip[3] == 16.0f / 9.0f,
+          "wide: g_clip.w the camera's aspect (%g, %g)", (double)n.clip[3], (double)bw.clip[3]);
+    /* the shaders' copy of the frame constants */
+    _Static_assert(ICO_SH_FRAME_BASE_W == ICO_FRAME_BASE_W, "shader_consts.h ICO_SH_FRAME_BASE_W");
+    _Static_assert(ICO_SH_FRAME_K_MAX == ICO_FRAME_K_MAX, "shader_consts.h ICO_SH_FRAME_K_MAX");
+    _Static_assert(ICO_SH_FRAME_W_MAX == ICO_FRAME_W_MAX, "shader_consts.h ICO_SH_FRAME_W_MAX");
 }
 
 /* -------------------------------------------------------------- scales */
@@ -1204,7 +1227,7 @@ static void checkScales(void)
           "scales: 48:9 in 5760x1080 renders 5760x1080");
     s.aspect = 10.0f;
     applyWith(&s);
-    CHECK(g_rd.outAspect == RD_ASPECT_MAX, "scales: the aspect is held to the maximum");
+    CHECK(g_rd.outAspect == ICO_FRAME_ASPECT_MAX, "scales: the aspect is held to the maximum");
     s.sceneWidth = s.sceneHeight = 0;
     s.outputWidth = 320;
     s.outputHeight = 240;

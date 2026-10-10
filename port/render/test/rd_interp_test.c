@@ -1980,7 +1980,7 @@ static void s6Frame(RdMesh mesh, double deg, int bPart)
     memset(&cam, 0, sizeof(cam));
     for (int k = 0; k < 16; k++) {
         cam.view[k] = (float)v[k];
-        cam.proj43[k] = (float)p[k];
+        cam.proj[k] = (float)p[k];
     }
     cam.zoom = 500.0f;
     rd_set_camera(&cam);
@@ -2238,7 +2238,7 @@ static void lockFrame(RdMesh mesh, int k)
     memset(&cam, 0, sizeof(cam));
     for (int i = 0; i < 16; i++) {
         cam.view[i] = (float)v[i];
-        cam.proj43[i] = (float)q[i];
+        cam.proj[i] = (float)q[i];
     }
     cam.zoom = (float)LOCK_ZOOM;
     rd_set_camera(&cam);
@@ -2364,7 +2364,7 @@ static void photoTick(double deg)
     memset(&cam, 0, sizeof(cam));
     for (int k = 0; k < 16; k++) {
         cam.view[k] = (float)v[k];
-        cam.proj43[k] = (float)p[k];
+        cam.proj[k] = (float)p[k];
     }
     cam.zoom = 500.0f;
     rd_set_camera(&cam);
@@ -2905,7 +2905,7 @@ static void shineFrame(RdMesh mesh, double deg)
     memset(&cam, 0, sizeof(cam));
     for (int k = 0; k < 16; k++) {
         cam.view[k] = (float)v[k];
-        cam.proj43[k] = (float)p[k];
+        cam.proj[k] = (float)p[k];
     }
     cam.zoom = 500.0f;
     rd_set_camera(&cam);
@@ -4041,7 +4041,7 @@ static const PoolDumpGrid kPoolDump[2][2] = {
 
 /* The formula against the game's own STs at the tick's camera.  Not to the
  * ulp: the game's floats round each projected position by up to about
- * 1e-3 GS pixels (the dumps' matrices are not proj43 x view to the ulp
+ * 1e-3 GS pixels (the dumps' matrices are not proj x view to the ulp
  * either), and the reflection scales the difference of two of them by 1000
  * x 0.8 / 512.  Over every vertex of the 17 pool dumps (v21878..v22043,
  * v22359..v22378) the formula in double is within 8.6e-6 of the refracting
@@ -4144,7 +4144,7 @@ static void poolFrame(int k, int still)
     memset(&cam, 0, sizeof(cam));
     for (int i = 0; i < 16; i++) {
         cam.view[i] = (float)v[i];
-        cam.proj43[i] = (float)q[i];
+        cam.proj[i] = (float)q[i];
     }
     cam.zoom = (float)LOCK_ZOOM;
     rd_set_camera(&cam);
@@ -4316,7 +4316,7 @@ static void testPoolStCamera(void)
  * that write no Z and test GEQUAL against it, each a disc at local height
  * 6750 placed 1997.5, 1995, 1992.5 and 1990 units down, so 2.5 to 10 units
  * nearer the eye than umi: 29 to 37 GS Z units at the three points below,
- * 13000 to 16500 units from the eye.  The frame's camera (view and proj43
+ * 13000 to 16500 units from the eye.  The frame's camera (view and proj
  * as dumped); the tick before turned 8 degrees about the world's y axis and
  * 60 units further back along the view.  Both are static world meshes
  * through the frame's camera: at alpha 0.25, 0.5 and 0.75 the blended
@@ -4417,10 +4417,10 @@ static void seaFrame(RdMesh mesh, int k, int farAlone)
     memset(&cam, 0, sizeof(cam));
     for (int i = 0; i < 16; i++) {
         cam.view[i] = (float)v[i];
-        cam.proj43[i] = kSeaProj[i];
+        cam.proj[i] = kSeaProj[i];
     }
     cam.zoom = kSeaProj[0];
-    cam.aspect43 = 4.0f / 3.0f;
+    cam.aspect = 4.0f / 3.0f;
     rd_set_camera(&cam);
     s6Translate(w, 0.0, 0.0, 0.0);
     seaDraw(mesh, p, v, w, 2, RD_KEY(&kObjSea, 0, 32));
@@ -4578,7 +4578,7 @@ static void aloneFrame(RdMesh mesh, double deg, const double *b, int bOther)
     memset(&cam, 0, sizeof(cam));
     for (int k = 0; k < 16; k++) {
         cam.view[k] = (float)v[k];
-        cam.proj43[k] = (float)p[k];
+        cam.proj[k] = (float)p[k];
     }
     cam.zoom = 500.0f;
     rd_set_camera(&cam);
@@ -4961,7 +4961,7 @@ static void rpFrame(RdMesh mesh, int k, int still)
     memset(&cam, 0, sizeof(cam));
     for (int i = 0; i < 16; i++) {
         cam.view[i] = (float)v[i];
-        cam.proj43[i] = (float)q[i];
+        cam.proj[i] = (float)q[i];
     }
     cam.zoom = (float)LOCK_ZOOM;
     rd_set_camera(&cam);
@@ -5245,7 +5245,7 @@ static void s7Frame(int k)
     memset(&cam, 0, sizeof(cam));
     for (int i = 0; i < 16; i++) {
         cam.view[i] = (float)v[i];
-        cam.proj43[i] = (float)q[i];
+        cam.proj[i] = (float)q[i];
     }
     cam.zoom = (float)LOCK_ZOOM;
     rd_set_camera(&cam);

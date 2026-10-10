@@ -75,8 +75,8 @@ static void poolHostCamera(int push)
 
         memset(&cam, 0, sizeof(cam));
         CopyMatrix(cam.view, (char *)(matrixptr + 0x80));
-        CopyMatrix(cam.proj43, (char *)(matrixptr + 0xC0));
-        cam.aspect43 = 4.0f / 3.0f;
+        CopyMatrix(cam.proj, (char *)(matrixptr + 0xC0));
+        cam.aspect = 4.0f / 3.0f;
         cam.nearZ = 2.0f;
         cam.farZ = 262144.0f;
         rd_push_camera(&cam);

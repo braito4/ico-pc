@@ -32,15 +32,19 @@
  *            zoom k the projection is gsb_SetVSMatrix at d k bit for bit and
  *            ico_photo_camera's within 1e-5, ico_photo_fov_now within
  *            1e-3 degrees; leaving puts everything back with a camera cut;
- *            after a puddle pass enter rebuilds +0x240; 16:9 widens the photo
- *            camera's +0x240; a stage change or the game running again drops
- *            the save
- *   cull     gsbHostWidenCull: with the Original framerate at 4:3 +0x240 and
- *            the 500 unit pair's +0x680 are as gsb_SetVSMatrixSub made them;
- *            with pictures blended between ticks both scales are divided by
- *            1.12 (and x by 4/3 more at 16:9); at 16:9 with the Original
- *            framerate x alone by 4/3, y untouched; the matrices that place
- *            anything never change
+ *            after a puddle pass enter rebuilds +0x240; at 16:9 (the native
+ *            frame 688 wide, latched at a flip) the photo camera's +0x240 is
+ *            the native one, the frame's camera carries the aspect 16:9, and
+ *            leave puts the 16:9 matrices back; a stage change or the game
+ *            running again drops the save
+ *   cull     the native width (gsb_SetVSMatrixSub's window half-width
+ *            gsFrame.w / 2) and gsbHostCullMargin: with the Original
+ *            framerate at 4:3 +0x240 and the 500 unit pair's +0x680 are as
+ *            gsb_SetVSMatrixSub made them; with pictures blended between
+ *            ticks both scales are divided by 1.12; at 16:9 (W = 688) x is
+ *            the native one, 688 / 512 narrower (and by 1.12 more when
+ *            blended), y untouched; the frame's camera carries the aspect;
+ *            the matrices that place anything never change
  * On a Vulkan device (exit 77 without one, after the recording checks):
  *   camera   rd__camera_probe (FrameCB through camera_probe_ps) against the
  *            C products and sceVu0RotTransPers through matrixptr+0x100
@@ -635,8 +639,8 @@ static void checkVu(void)
     CHECK(f && f->hasCamera, "vu: the frame has a camera");
     if (f) {
         CHECK(memcmp(f->camera.view, s_view, 64) == 0, "vu: camera view = +0x80");
-        CHECK(memcmp(f->camera.proj43, matrixptr + 0xC0, 64) == 0, "vu: camera proj43 = +0xC0");
-        CHECK(f->camera.aspect43 == 4.0f / 3.0f && f->camera.nearZ == 2.0f &&
+        CHECK(memcmp(f->camera.proj, matrixptr + 0xC0, 64) == 0, "vu: camera proj = +0xC0");
+        CHECK(f->camera.aspect == 4.0f / 3.0f && f->camera.nearZ == 2.0f &&
                   f->camera.farZ == 262144.0f,
               "vu: camera aspect and planes");
     }
@@ -858,17 +862,17 @@ static void checkPhotoView(void)
     RdCamera game0;
     memset(&game0, 0, sizeof(game0));
     memcpy(game0.view, g.m[0], 64);
-    memcpy(game0.proj43, g.m[1], 64);
+    memcpy(game0.proj, g.m[1], 64);
     RdCamera ov;
     CHECK(ico_photo_camera(&ov, &game0), "photo: ico_photo_camera");
     int bad = -1;
     for (int i = 0; i < 16; i++) {
-        if (!relNear(ov.proj43[i], z.cam.proj43[i], 1e-5f)) {
+        if (!relNear(ov.proj[i], z.cam.proj[i], 1e-5f)) {
             bad = i;
         }
     }
-    CHECK(bad < 0, "photo: proj43[%d] %.6f, ico_photo_camera's %.6f", bad,
-          (double)(bad < 0 ? 0.0f : z.cam.proj43[bad]), (double)(bad < 0 ? 0.0f : ov.proj43[bad]));
+    CHECK(bad < 0, "photo: proj[%d] %.6f, ico_photo_camera's %.6f", bad,
+          (double)(bad < 0 ? 0.0f : z.cam.proj[bad]), (double)(bad < 0 ? 0.0f : ov.proj[bad]));
     CHECK(memcmp(z.m[0], ov.view, 64) == 0, "photo: +0x80 is ico_photo_camera's view");
     gsb_SetVSMatrix(ScreenWidth, ScreenHeight, PHOTO_D * k);
     Snap r;
@@ -911,20 +915,27 @@ static void checkPhotoView(void)
           slotDiff(&x, &pud));
     gameCamAt(PHOTO_D);
 
-    /* 16:9: the photo camera's cull widens as the game's does */
+    /* 16:9: the photo camera's cull is the native frame's, as the game's */
     o.aspect = ICO_ASPECT_16_9;
     ico_video_set(&o);
+    tick(); /* the flip latches the native frame */
+    CHECK(gsFrame.w == 688, "16:9: the native frame 688 wide (%d)", gsFrame.w);
+    const float kw = (float)gsFrame.w / 512.0f;
     gameCamAt(PHOTO_D);
     Snap wide;
     snap(&wide);
-    CHECK(relNear(wide.m[3][0] * (4.0f / 3.0f), g.m[3][0], 1e-6f),
-          "16:9: +0x240's x scale divided by 4/3 (%g -> %g)", (double)g.m[3][0],
+    CHECK(relNear(wide.m[3][0] * kw, g.m[3][0], 1e-6f),
+          "16:9: +0x240's x scale the native one, 688 / 512 narrower (%g -> %g)", (double)g.m[3][0],
           (double)wide.m[3][0]);
+    CHECK(wide.hasCam && wide.cam.aspect == 16.0f / 9.0f, "16:9: the frame's camera aspect %g",
+          (double)wide.cam.aspect);
     ico_photo_enter();
     ico_photo_view_tick();
     snap(&p);
     CHECK(slotDiff(&p, &wide) == -1, "16:9: enter leaves matrixptr+0x%X as it was",
           slotDiff(&p, &wide));
+    CHECK(camSame(&p, &wide), "16:9: enter, the frame's camera is the game's (aspect %g)",
+          (double)p.cam.aspect);
     pp = photoPad(ICO_PHOTO_R2);
     photoTicks(&pp, 10);
     snap(&p);
@@ -932,23 +943,27 @@ static void checkPhotoView(void)
     gsb_SetVSMatrix(ScreenWidth, ScreenHeight, PHOTO_D * st.zoom);
     Snap n;
     snap(&n);
-    CHECK(memcmp(n.m[3], p.m[3], 64) == 0, "16:9: the photo camera's +0x240 is the widened one");
+    CHECK(memcmp(n.m[3], p.m[3], 64) == 0, "16:9: the photo camera's +0x240 is the native one");
     ico_video_defaults(&o);
     ico_video_set(&o);
+    tick(); /* back to the 4:3 frame */
     gsb_SetVSMatrix(ScreenWidth, ScreenHeight, PHOTO_D * st.zoom);
     snap(&n);
-    CHECK(relNear(p.m[3][0] * (4.0f / 3.0f), n.m[3][0], 1e-6f) &&
-              memcmp(&p.m[3][1], &n.m[3][1], 60) == 0,
-          "16:9: +0x240's x scale at zoom %.3f divided by 4/3 (%g -> %g), the rest 4:3's",
+    CHECK(relNear(p.m[3][0] * kw, n.m[3][0], 1e-6f) && memcmp(&p.m[3][1], &n.m[3][1], 60) == 0,
+          "16:9: +0x240's x scale at zoom %.3f 688 / 512 narrower (%g -> %g), the rest 4:3's",
           (double)st.zoom, (double)n.m[3][0], (double)p.m[3][0]);
     o.aspect = ICO_ASPECT_16_9;
     ico_video_set(&o);
+    tick();
     ico_photo_exit();
     ico_photo_view_tick();
     snap(&x);
     CHECK(slotDiff(&x, &wide) == -1, "16:9: leave puts matrixptr+0x%X back", slotDiff(&x, &wide));
+    CHECK(camSame(&x, &wide), "16:9: leave, the frame's camera the game's again (aspect %g)",
+          (double)x.cam.aspect);
     ico_video_defaults(&o);
     ico_video_set(&o);
+    tick();
     gameCamAt(PHOTO_D);
 
     /* a stage change (or the game running again) drops the save: the
@@ -981,7 +996,8 @@ static void checkPhotoView(void)
     gameCamAt(PHOTO_D);
 }
 
-/* The cull's width and margin (GsBase.c gsbHostWidenCull) on the two
+/* The cull's native width and margin (GsBase.c gsb_SetVSMatrixSub's
+   window half-width gsFrame.w / 2, gsbHostCullMargin) on the two
    projections that cull: +0x240 (slot 3) and the 500 unit pair's +0x680
    (slot 6).  The 4:3 Original-framerate camera is the reference: the
    matrices exactly as gsb_SetVSMatrixSub computes them. */
@@ -997,8 +1013,8 @@ static void checkCullScales(const char *what, const Snap *s, const Snap *raw, fl
             rest &= j == 0 || j == 5 || a[j] == r[j];
         }
         CHECK(sx && sy && rest,
-              "cull %s: matrixptr+0x%X x scale %g (4:3 Original %g, divided by %g), y %g (%g, "
-              "divided by %g), the rest as computed",
+              "cull %s: matrixptr+0x%X x scale %g (4:3 Original %g, over %g), y %g (%g, "
+              "over %g), the rest as computed",
               what, s_slot[cull[i]], (double)a[0], (double)r[0], (double)kx, (double)a[5],
               (double)r[5], (double)ky);
     }
@@ -1015,7 +1031,8 @@ static void checkCull(void)
     IcoVideoOptions o;
     Snap raw, s;
     const float m = 1.0f + 0.12f;
-    const float k = 4.0f / 3.0f;
+    /* 16:9's native frame: 16 ceil(32 x 4/3) = 688 */
+    const float k = 688.0f / 512.0f;
 
     gsb_SetZoom(1.0f, 1000.0f); /* no easing between the cameras below */
     ico_video_defaults(&o);
@@ -1045,24 +1062,37 @@ static void checkCull(void)
 
     o.aspect = ICO_ASPECT_16_9;
     ico_video_set(&o);
+    tick(); /* the flip latches the native frame */
+    CHECK(gsFrame.w == 688 && gsFrame.aspect == 16.0f / 9.0f,
+          "cull 16:9: the native frame %d wide, aspect %g", gsFrame.w, (double)gsFrame.aspect);
     gameCamAt(PHOTO_D);
     snap(&s);
     checkCullScales("16:9 uncapped", &s, &raw, k * m, m);
+    /* +0x240 as gsb_SetVSMatrixSub builds it at the native half-width 344 */
+    CHECK(relNear(s.m[3][0] * m, raw.m[2][0] * 1500.0f / 344.0f, 1e-5f),
+          "cull 16:9 uncapped: +0x240 from the half-width 344 (%g)", (double)s.m[3][0]);
+    CHECK(s.hasCam && s.cam.aspect == 16.0f / 9.0f && memcmp(s.cam.proj, raw.m[1], 64) == 0,
+          "cull 16:9: the frame's camera, aspect %g, proj the 4:3 +0xC0", (double)s.cam.aspect);
 
     o.framerate = 60;
     ico_video_set(&o);
+    tick();
     gameCamAt(PHOTO_D);
     snap(&s);
     checkCullScales("16:9 at 60", &s, &raw, k * m, m);
 
     o.framerate = ICO_FRAMERATE_ORIGINAL;
     ico_video_set(&o);
+    tick();
     gameCamAt(PHOTO_D);
     snap(&s);
     checkCullScales("16:9 Original", &s, &raw, k, 1.0f);
 
     o.aspect = ICO_ASPECT_4_3;
     ico_video_set(&o);
+    tick();
+    CHECK(gsFrame.w == 512 && gsFrame.aspect == 4.0f / 3.0f, "cull 4:3: the frame 512 wide (%d)",
+          gsFrame.w);
     gameCamAt(PHOTO_D);
     snap(&s);
     CHECK(slotDiff(&s, &raw) == -1, "cull 4:3 Original again: matrixptr+0x%X differs",
@@ -1070,6 +1100,7 @@ static void checkCull(void)
 
     ico_video_defaults(&o);
     ico_video_set(&o);
+    tick();
     gameCamAt(PHOTO_D);
 }
 
@@ -1212,7 +1243,7 @@ static void checkCamera(void)
         }
         float v[4], sv[4], cl[4];
         apply(v, f->camera.view, pts[n]);
-        apply(cl, f->camera.proj43, v);
+        apply(cl, f->camera.proj, v);
         apply(sv, (const float *)(matrixptr + 0x100), pts[n]);
         for (int i = 0; i < 4; i++) {
             const float tol = 1e-5f * (1.0f + fabsf(sv[i]));

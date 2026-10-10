@@ -755,7 +755,7 @@ typedef struct CamBlend {
     double vp[16], vc[16]; /* the two ticks' views */
     double ep[16], ec[16]; /* Vp^-1 Vt, Vc^-1 Vt */
     double vt[16], it[16]; /* the blended view and its inverse */
-    double pc[16];         /* cur's projection (RdCamera.proj43) */
+    double pc[16];         /* cur's projection (RdCamera.proj) */
     double lc[16];         /* Pt Pc^-1: cur's projection to the blended one */
     int zoom;              /* the projections differ (the zoom eases) */
     double pp[16];         /* prev's projection */
@@ -799,9 +799,9 @@ static void camSetup(const RdFrame *prev, const RdFrame *cur, float t)
      * blends it with the rest of its block, a draw that is cur's takes
      * Pt = lerp(Pp, Pc) through Pt Pc^-1 */
     double pp[16], pt[16], ipc[16];
-    loadF16(prev->camera.proj43, pp);
-    loadF16(cur->camera.proj43, s_cam.pc);
-    if (memcmp(prev->camera.proj43, cur->camera.proj43, sizeof(prev->camera.proj43)) != 0 &&
+    loadF16(prev->camera.proj, pp);
+    loadF16(cur->camera.proj, s_cam.pc);
+    if (memcmp(prev->camera.proj, cur->camera.proj, sizeof(prev->camera.proj)) != 0 &&
         invert4d(s_cam.pc, ipc)) {
         for (int i = 0; i < 16; i++) {
             pt[i] = (1.0 - t) * pp[i] + t * s_cam.pc[i];
@@ -1015,7 +1015,7 @@ static bool camRebase(float (*m)[4], const double *e, int mats, const double *l,
  * through its tick's camera (lightning.c set_vertex, lineManager.c,
  * Shadow.c's volumes, GifPacket.c's rotTransPers strips, RegistPacket.c's
  * lines): GS X / 16, Y / 16 and Z / 16 are x / w, y / w and z / w of the
- * world point through S = proj43 view (RdCamera; GsBase.c's +0x100), which
+ * world point through S = proj view (RdCamera; GsBase.c's +0x100), which
  * inverts.  While the camera moves, each vertex is taken back into the
  * world through its tick's S^-1 and projected with the blended camera St =
  * Pt Vt, the camera every VU draw is re-based on (camSetup, camRebase), in
@@ -4467,7 +4467,7 @@ int rd__interp_snap(const RdFrame *prev, const RdFrame *cur)
 static void lerpCamera(RdCamera *o, const RdCamera *p, const RdCamera *c, float t)
 {
     lerpFloats(o->view, p->view, c->view, 16, t);
-    lerpFloats(o->proj43, p->proj43, c->proj43, 16, t);
+    lerpFloats(o->proj, p->proj, c->proj, 16, t);
     lerpFloats(&o->zoom, &p->zoom, &c->zoom, 1, t);
     lerpFloats(&o->nearZ, &p->nearZ, &c->nearZ, 1, t);
     lerpFloats(&o->farZ, &p->farZ, &c->farZ, 1, t);

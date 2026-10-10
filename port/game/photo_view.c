@@ -34,8 +34,8 @@ static void enter(void)
     gsb_PushView();
     memset(&v.game0, 0, sizeof(v.game0));
     memcpy(v.game0.view, matrixptr + 0x80, sizeof(v.game0.view));
-    memcpy(v.game0.proj43, matrixptr + 0xC0, sizeof(v.game0.proj43));
-    v.game0.aspect43 = 4.0f / 3.0f;
+    memcpy(v.game0.proj, matrixptr + 0xC0, sizeof(v.game0.proj));
+    v.game0.aspect = gsFrame.aspect; /* the frame's display aspect, as gsbHostCommon */
     v.d = gsb_ViewFocus();
     v.stage = stage_no;
     v.saved = 1;

@@ -277,6 +277,15 @@ enum {
                               * mode's free camera, RdCamera.freeCamera) */
 };
 
+/* The native frame's constants (port/include/ico_frame.h ICO_FRAME_BASE_W,
+ * ICO_FRAME_K_MAX, ICO_FRAME_W_MAX), for the shaders' side: the 4:3 width
+ * the projection and the 2D layer are sized by, the widest frame as a
+ * multiple of it, and its width in GS pixels.  rd_present_test
+ * static-asserts they equal the header's. */
+#define ICO_SH_FRAME_BASE_W 512
+#define ICO_SH_FRAME_K_MAX 5
+#define ICO_SH_FRAME_W_MAX 2560
+
 /* The region test's centre on a wide screen (vu_common.hlsli VU_REGION_CX,
  * vu_region_pos): the test compares x squeezed by the frame's world x scale
  * about GS X 2048, the middle of the scene's GS window. */

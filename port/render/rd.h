@@ -285,9 +285,10 @@ typedef struct RdPostParams {
 
 typedef struct RdCamera {
     float view[16];
-    float proj43[16];     /* the game's 4:3 projection (gsb_SetVSMatrix) */
-    float zoom, aspect43; /* inputs that let the renderer rebuild a wider projection with the same
-                     vertical FOV */
+    float proj[16];     /* the game's screen matrix +0xC0 (gsb_SetVSMatrix): the native
+                         * projection, the same at every aspect */
+    float zoom, aspect; /* vsParam[0]; the display aspect the frame was built for (GsBase.c
+                         * gsFrame.aspect; 4/3 in version 9 and older dumps) */
     float nearZ, farZ;
     uint8_t cut; /* 1 on a camera cut this tick; disables interpolation for the frame */
     /* 1: the port's own free camera drew this tick (photo mode, rd_free_camera):
@@ -485,10 +486,10 @@ bool rd_output_followed(uint32_t *w, uint32_t *h);
  * interpolation and the WORLD-space 2D conversion).
  * Called from gsb_MakeCommonMatrix, the point where the view
  * (matrixptr+0x80) and the screen matrix (+0xC0) are both final; view is
- * +0x80, proj43 the GS screen matrix +0xC0 (view space to GS window
- * coordinates and GS Z after the divide by w), zoom vsParam[0], aspect43
- * 4/3, nearZ/farZ vsParam[7]/[8].  Replay puts them in FrameCB: g_view,
- * g_proj = proj43, g_viewProj = proj43 x view, g_cameraPos = the eye from
+ * +0x80, proj the GS screen matrix +0xC0 (view space to GS window
+ * coordinates and GS Z after the divide by w), zoom vsParam[0], aspect
+ * the frame's display aspect, nearZ/farZ vsParam[7]/[8].  Replay puts them
+ * in FrameCB: g_view, g_proj = proj, g_viewProj = proj x view, g_cameraPos = the eye from
  * the view's inverse (w = cut), g_clip = near, far, zoom, aspect. */
 void rd_set_camera(const RdCamera *cam);
 
@@ -1259,7 +1260,7 @@ float rd_work_target_scale(uint32_t sceneHeight);
 typedef struct RdFrameHead {
     uint8_t rgba[4];   /* RGBAQ of the clear sprite (gsb_SetBGColor, alpha 0x80) */
     uint32_t z;        /* the clear sprite's Z (sceGsSetDefClear: 0) */
-    uint32_t gsW, gsH; /* the scene size (ScreenWidth, ScreenHeight) */
+    uint32_t gsW, gsH; /* the scene size (GsBase.c gsFrame.w, ScreenHeight) */
     uint8_t halfY;     /* XYOFFSET.y + 8 (sceGsSetHalfOffset with half != 0) */
     uint8_t clear;     /* fbClear: the clear packet is part of the flip */
     uint8_t _pad[2];

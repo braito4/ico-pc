@@ -644,11 +644,15 @@ float ico_video_aspect(void)
     }
 }
 
+void ico_video_frame(IcoFrame *out, int h)
+{
+    ico_frame_make(out, ico_video_aspect(), h);
+}
+
+/* W3-WINDOWS removes this */
 float ico_video_wide_x(void)
 {
-    float k = ico_video_aspect() / ASPECT_4_3;
-
-    return k > 1.0f + 1e-5f ? k : 1.0f;
+    return (float)ico_frame_width_for(ico_video_aspect()) / (float)ICO_FRAME_BASE_W;
 }
 
 /* issue 11: the effect switches, read once a frame at most by the game */

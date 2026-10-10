@@ -45,6 +45,7 @@
 #include "rd.h"
 #include "rhi.h"
 #include "rd_camera_blend.h"
+#include "../include/ico_frame.h"
 
 #ifdef __cplusplus
 
@@ -1448,12 +1449,8 @@ void rd__present_box(uint32_t outW, uint32_t outH, float aspect, RhiRect *box);
  * Shared with the presenter's deferred text, which keeps off that border
  * unless full pixel is on (the reduction then draws the whole frame). */
 uint32_t rd__reduction_crop(uint32_t gsH);
-/* The widest aspect the presenter shows: ICO_ASPECT_MAX in
- * port/game/video_options.h (4/3 times ICO_WIDE_X_MAX, the factor the
- * water's dot window can be widened by).  Mirrored here because the
- * renderer is built without the game's options module; rd_present_test
- * checks the two are equal. */
-#define RD_ASPECT_MAX (4.0f / 3.0f * 5.0f)
+/* The widest aspect the presenter shows is the native frame's,
+ * ICO_FRAME_ASPECT_MAX (port/include/ico_frame.h, included above). */
 /* g_rd.settings -> g_rd.sceneSx/Sy, workScale, wideX,
  * outAspect, filterUpgrade, fullHeight (and the swapchain's vsync).  True
  * when a target scale changed (the caller recreates the named targets). */

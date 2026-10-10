@@ -11,8 +11,10 @@
  * flip (gsb_UpdateGSSystem).  The NTSC frame (512 x 448), whose cull has
  * the least room above and below the picture.
  *
- *   moving   at k = 1, 2.67 (32:9) and 5 (the widest: aspect "auto" in a
- *            window wider than 60:9, clamped to ICO_ASPECT_MAX), pairs of
+ *   moving   at the native widths W = 512 (4:3), 1376 (32:9) and 2560 (the
+ *            widest: aspect "auto" in a window wider than 60:9, clamped to
+ *            ICO_ASPECT_MAX), the frame latched at the flip (GsBase.c
+ *            gsFrame) and the cull's projections built from W / 2, pairs of
  *            cameras a tick apart, the eye moved up to 300 units in any
  *            direction and the view turned up to 30 degrees (yaw and
  *            pitch), as far as the presenter blends (rd_camera_blend.h
@@ -49,17 +51,17 @@
  *            the camera moves.
  *   locked   a part locked to the camera (gsb_HostCullCameraLocked, node
  *            flag 2): one camera.
- *   dots     the water dots' window (gsb_HostDotVisible) at k = 1, 2.67,
- *            5: (256 k + 144) pixels across and (224 + 144) up and down
+ *   dots     the water dots' window (gsb_HostDotVisible) at W = 512, 1376,
+ *            2560: (W / 2 + 144) pixels across and (224 + 144) up and down
  *            about the centre, 400 across at 4:3 (the PS2's), its edges
  *            in, one 1/16 pixel past them out, the widest inside 16 bits;
  *            a dot only the tick before's camera saw, its GS position
  *            outside the window but inside 16 bits, kept while the
  *            camera moves, and not past 16 bits.
- *   lines    lineManager.c's x clip (gsb_HostLineHalfWidth): 256 k pixels,
+ *   lines    lineManager.c's x clip (gsb_HostLineHalfWidth): W / 2 pixels,
  *            exactly 256 at 4:3.
- *   shadows  Shadow.c's edge clip (gsb_HostShadowClipX): 512 k pixels, at
- *            most 2047 (2560 at k = 5 would leave the 16-bit window).
+ *   shadows  Shadow.c's edge clip (gsb_HostShadowClipX): W pixels, at most
+ *            2047 (2560 at the widest would leave the 16-bit window).
  */
 #include <math.h>
 #include <stdio.h>
@@ -577,10 +579,11 @@ static void readProjections(void)
     }
 }
 
-/* the picture's half-width and half-height in GS pixels */
+/* the picture's half-width and half-height in GS pixels: the native
+   frame's (gsFrame.w / 2) */
 static double halfW(void)
 {
-    return (double)(ScreenWidth / 2) * (double)ico_video_wide_x();
+    return (double)(gsFrame.w / 2);
 }
 
 static double halfH(void)
@@ -700,7 +703,8 @@ static int refClip(const Box *b)
 }
 
 /* the display options: framerate (ICO_FRAMERATE_*) and the picture's width
-   through aspect "auto" and a window of winW x winH */
+   through aspect "auto" and a window of winW x winH; a flip latches the
+   native frame for them (gsFrame), as the game's next tick sees it */
 static void setOptions(int framerate, int winW, int winH)
 {
     IcoVideoOptions o;
@@ -709,6 +713,7 @@ static void setOptions(int framerate, int winW, int winH)
     o.aspect = ICO_ASPECT_AUTO;
     ico_video_set(&o);
     ico_video_set_window(winW, winH);
+    tick();
 }
 
 /* a random camera, its pitch within 20 degrees of level */
@@ -760,10 +765,11 @@ static double stepOf(const Cam *a, const Cam *b)
 #define BOXES 120
 #define OUTSIDE 40
 
-static void checkMoving(const char *what, int winW, int winH)
+static void checkMoving(const char *what, int winW, int winH, int wantW)
 {
     setOptions(ICO_FRAMERATE_UNCAPPED, winW, winH);
-    const float k = ico_video_wide_x();
+    const int fw = gsFrame.w;
+    CHECK(fw == wantW, "moving %s: the native width %d, want %d", what, fw, wantW);
     int tested = 0, missed = 0, between = 0, sweepNeeded = 0, outside = 0, outsideKept = 0;
     int minusBad = 0, threeViews = 0;
     double worst = 0.0;
@@ -867,10 +873,10 @@ static void checkMoving(const char *what, int winW, int winH)
             outsideKept += clipBox(&bx) != 0;
         }
     }
-    printf("gsb_cull_test: %s (k %.3f): %d boxes the in-between pictures show, %d of them "
+    printf("gsb_cull_test: %s (W %d): %d boxes the in-between pictures show, %d of them "
            "only those, %d outside the three cameras' frustums (kept by the eye's sweep); "
            "culled %d, the worst %.4f of the half-width inside\n",
-           what, (double)k, tested, between, sweepNeeded, missed, worst);
+           what, fw, tested, between, sweepNeeded, missed, worst);
     CHECK(missed == 0, "moving %s: %d boxes an in-between picture shows culled (worst %.4f)", what,
           missed, worst);
     CHECK(tested > PAIRS * BOXES / 2 && between > 0,
@@ -1108,7 +1114,7 @@ static void checkLocked(void)
 /* the dot window's half-width and half-height, 1/16 pixels */
 static int dotHalfX(void)
 {
-    return (int)(((float)(ScreenWidth / 2) * ico_video_wide_x() + 144.0f) * 16.0f);
+    return (gsFrame.w / 2 + 144) * 16;
 }
 
 static int dotHalfY(void)
@@ -1227,9 +1233,9 @@ int main(void)
     CHECK(ScreenWidth == 512 && ScreenHeight == 448, "the NTSC frame (%d x %d)", ScreenWidth,
           ScreenHeight);
 
-    checkMoving("4:3", 640, 480);
-    checkMoving("32:9", 3200, 900);
-    checkMoving("the widest", 8000, 900);
+    checkMoving("4:3", 640, 480, 512);
+    checkMoving("32:9", 3200, 900, 1376);
+    checkMoving("the widest", 8000, 900, 2560);
     checkCorner();
     checkCut();
     checkStill();
@@ -1238,14 +1244,14 @@ int main(void)
     checkLocked();
 
     checkDotWindow("4:3", 640, 480, 6400);
-    checkDotWindow("32:9", 3200, 900, -1);
+    checkDotWindow("32:9", 3200, 900, (688 + 144) * 16);
     checkDotWindow("the widest", 8000, 900, 22784);
     checkDotEarlier();
     checkLines("4:3", 640, 480, 256.0f);
-    checkLines("32:9", 3200, 900, 256.0f * 32.0f / 9.0f * 0.75f);
+    checkLines("32:9", 3200, 900, 688.0f);
     checkLines("the widest", 8000, 900, 1280.0f);
     checkShadows("4:3", 640, 480, 512.0f);
-    checkShadows("32:9", 3200, 900, 512.0f * 32.0f / 9.0f * 0.75f);
+    checkShadows("32:9", 3200, 900, 1376.0f);
     checkShadows("48:9", 4800, 900, 2047.0f);
     checkShadows("the widest", 8000, 900, 2047.0f);
 

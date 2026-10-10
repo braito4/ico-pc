@@ -8,6 +8,9 @@
 #ifndef GSBASE_H
 #define GSBASE_H
 
+/* PC port: the native frame's type (IcoFrame) */
+#include "../../../port/include/ico_frame.h"
+
 /* GsBase.c's globals */
 extern int currentFocusDistance;
 extern int fbKeep;
@@ -22,6 +25,10 @@ extern int screenOffsetX;
 extern int screenOffsetY;
 extern int vsWidth;
 extern int vsHeight;
+/* PC port: the native frame this tick's matrices and frame extents are
+   built for (port/include/ico_frame.h), latched at each flip from the
+   display options (GsBase.c gsbHostFrameLatch); 512 x ScreenHeight at 4:3 */
+extern IcoFrame gsFrame;
 /* GsBase.c's `inline` functions, in the order of their definitions'
  * out-of-line copies at the end of the object (first-declaration order). */
 void gsb_SetBGColor(void *db, int r, int g, int b);

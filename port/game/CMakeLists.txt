@@ -63,6 +63,19 @@ if(ICO_RUN_TESTS)
     add_test(NAME photo COMMAND photo_test "${CMAKE_CURRENT_BINARY_DIR}")
 endif()
 
+# The native frame (port/include/ico_frame.h): the width for an aspect, the
+# frame, the x scaling and TW, and ico_video_frame from the options. CPU only.
+add_executable(ico_frame_test test/ico_frame_test.c ../platform/host_config.c)
+target_include_directories(ico_frame_test PRIVATE "${CMAKE_SOURCE_DIR}/port/platform")
+target_compile_options(ico_frame_test PRIVATE ${ICO_SEMANTIC_OPTIONS} ${ICO_PORT_WARNINGS})
+target_link_libraries(ico_frame_test PRIVATE ico_options)
+if(NOT WIN32)
+    target_link_libraries(ico_frame_test PRIVATE m)
+endif()
+if(ICO_RUN_TESTS)
+    add_test(NAME ico_frame COMMAND ico_frame_test)
+endif()
+
 # The characters' colours: the rule table over
 # synthetic CLUTs (Original is the identity, the coverage, b_mantle's masks,
 # the alpha, the formats, the anchors and the weights), the [characters]

@@ -726,9 +726,9 @@ static void setCommon(void)
     rd_set_vu_common(&b);
     memset(&s_frameCam, 0, sizeof(s_frameCam));
     memcpy(s_frameCam.view, matrixptr + 0x80, 64);
-    memcpy(s_frameCam.proj43, matrixptr + 0xC0, 64);
+    memcpy(s_frameCam.proj, matrixptr + 0xC0, 64);
     s_frameCam.zoom = kZoom;
-    s_frameCam.aspect43 = 4.0f / 3.0f;
+    s_frameCam.aspect = 4.0f / 3.0f;
     s_frameCam.nearZ = 2.0f;
     s_frameCam.farZ = 262144.0f;
     rd_set_camera(&s_frameCam);
@@ -1575,7 +1575,7 @@ static void checkPuddleRecording(void)
     const RdCamera *cf = rd__camera_at(f, 4, vu[0]->index);
     float scr[16];
     screenMatrix(scr, 0xE6, 0xE6);
-    CHECK(cs && memcmp(cs->proj43, scr, 64) == 0 && memcmp(cs->view, matrixptr + 0x80, 64) == 0,
+    CHECK(cs && memcmp(cs->proj, scr, 64) == 0 && memcmp(cs->view, matrixptr + 0x80, 64) == 0,
           "puddle: the reflection draw's camera scope holds the 230 x 230 screen matrix");
     CHECK(cf && memcmp(cf, &s_frameCam, sizeof(*cf)) == 0,
           "puddle: the surface draw sees the frame camera");
@@ -1712,7 +1712,7 @@ static void checkPoolRecording(void)
     const RdCamera *cs = rd__camera_at(f, 4, vu[1]->index);
     float scr[16];
     screenMatrix(scr, 0xCC, 0xCC);
-    CHECK(cs && memcmp(cs->proj43, scr, 64) == 0,
+    CHECK(cs && memcmp(cs->proj, scr, 64) == 0,
           "pool: the reflection draw's camera scope holds the 204 x 204 screen matrix");
     CHECK(rd__camera_at(f, 4, vu[0]->index) == &f->camera &&
               rd__camera_at(f, 4, vu[2]->index) == &f->camera,

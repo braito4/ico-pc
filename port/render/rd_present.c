@@ -26,7 +26,7 @@
  *                 (rd_replay.c mirrorUi) so they read normally
  * The box takes the aspect option (g_rd.outAspect, 4:3 for a zeroed
  * RdSettings); the projection side is rd_frame.c rd__fill_camera_cb, the
- * replay's wide x scale and GsBase.c gsbHostWideX.  With the full-height
+ * replay's wide x scale and GsBase.c's native frame (gsFrame).  With the full-height
  * option DISPLAY's texture has the scene's height (rd__target_scale_of) and
  * step 1 is skipped.
  * The scene resolution needs nothing here: DISPLAY's texture is whatever
@@ -139,7 +139,7 @@ static float clampAspect(float a)
     if (!(a > RD_ASPECT_43 + 1e-4f)) {
         return RD_ASPECT_43;
     }
-    return a > RD_ASPECT_MAX ? RD_ASPECT_MAX : a;
+    return a > ICO_FRAME_ASPECT_MAX ? ICO_FRAME_ASPECT_MAX : a;
 }
 
 bool rd__apply_display(void)
