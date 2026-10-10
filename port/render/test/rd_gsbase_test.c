@@ -52,6 +52,8 @@
  *   depth    depth-tested UI Z above 2^24 on SCENE (PSMZ32 scale)
  *   half     a frame with the half offset samples between rows
  *   clear    SCENE cleared to the flip's BG colour
+ *   decoder  GifPacket.c at the native widths: FRAME / XYOFFSET / SCISSOR past 2047, full-frame
+ *            UV sprites past 1024 texels, XYZ2_HI, the scaled work-buffer classes
  *   posts    keep, fade, brightness, anti-alias (each level alone within
  *            1 LSB, both 2), film noise and letterbox against CPU
  *            references of the GS within 1 LSB
@@ -1780,6 +1782,172 @@ static void checkCinematicBars(void)
     }
 }
 
+/* ------------------------------------------------ the GS register decoder
+   (GifPacket.c) at the native frame widths.  One packet per width writes a
+   draw environment (SCENE), a narrower SCISSOR, a full-frame UV sprite, a
+   vertex with XYZ2_HI, and the work buffers at the widths W4 gives them
+   (W/2 x 128, W/4 x 128, W/2 x 256), a sprite after each so rd sees every
+   environment.  gsFrame.w is set by hand as the flip would latch it.  At
+   512 the expectations are literals (what the decoder gave before the
+   native frame), so the 4:3 output is byte-identical. */
+#define DEC_LIST 5
+
+static void decSprite(int x0, int y0, int x1, int y1)
+{
+    gif_SetGsReg(0x00, 6);
+    gif_SetGsReg(0x05,
+                 (unsigned long long)(x0 & 0xFFFF) | ((unsigned long long)(y0 & 0xFFFF) << 16));
+    gif_SetGsReg(0x05,
+                 (unsigned long long)(x1 & 0xFFFF) | ((unsigned long long)(y1 & 0xFFFF) << 16));
+}
+
+static void checkDecoderAt(int fw)
+{
+    const int fh = 448;
+    const int hw = fw / 2, qw = fw / 4;
+
+    tick();
+    gsFrame.w = fw;
+    gsFrame.fbw = (fw + 63) / 64;
+    gif_StartPacketPri(DEC_LIST);
+    gif_SetDrawEnviroment(0x800, 0, (unsigned int)fw, (unsigned int)fh, 1, 0);
+    gif_SetGsReg(0x40,
+                 ((unsigned long long)(fw - 100) << 16) | ((unsigned long long)(fh - 1) << 48));
+    /* the full-frame UV sprite: UV (8, 8) to (8 + fw * 16, 8 + fh * 16) */
+    gif_SetGsReg(0x00, 6 | 0x100); /* sprite, FST */
+    gif_SetGsReg(0x03, 8ull | (8ull << 16));
+    gif_SetGsReg(0x05, (unsigned long long)((2048 - hw) * 16) |
+                           ((unsigned long long)((2048 - fh / 2) * 16) << 16));
+    gif_SetGsReg(0x03,
+                 (unsigned long long)(8 + fw * 16) | ((unsigned long long)(8 + fh * 16) << 16));
+    gif_SetGsReg(0x05, (unsigned long long)((2048 + hw) * 16) |
+                           ((unsigned long long)((2048 + fh / 2) * 16) << 16));
+    /* a vertex past 0xFFFF: XYZ2_HI 0xFFFF / 0x0001 on x 0x1234, y 2 */
+    gif_SetGsReg(0x00, 6);
+    gif_SetGsReg(0x7E, 0xFFFFull | (1ull << 16));
+    gif_SetGsReg(0x05, 0x1234ull | (2ull << 16));
+    gif_SetGsReg(0x05, 0x1244ull | (0x12ull << 16));
+    gif_SetDrawEnviroment(0x2800, 0, (unsigned int)hw, 128, 0, 0); /* WORK0 */
+    decSprite(0, 0, 16, 16);
+    gif_SetDrawEnviroment(0x2C00, 0, (unsigned int)qw, 128, 0, 0); /* AA1 */
+    decSprite(0, 0, 16, 16);
+    gif_SetDrawEnviroment(0x2C00, 0, (unsigned int)hw, 256, 0, 0); /* WORK1 */
+    decSprite(0, 0, 16, 16);
+    gif_EndPacket();
+    tick();
+
+    const RdFrame *f = rd__last_frame();
+    if (!f) {
+        CHECK(0, "decoder %d: a frame", fw);
+        return;
+    }
+    const RdCmdList *l = &f->lists[DEC_LIST];
+    uint32_t tgt[8][2], nt = 0, nsc = 0;
+    int32_t sc[4][4];
+    RdScreenVtx vtx[16];
+    uint32_t nv = 0;
+
+    for (uint32_t i = 0; i < l->count; i++) {
+        const RdCmd *c = &l->cmds[i];
+        if (c->type == RDC_TARGET && nt < 8) {
+            tgt[nt][0] = c->u[0];
+            tgt[nt][1] = c->u[2];
+            nt++;
+        } else if (c->type == RDC_SCISSOR && nsc < 4) {
+            for (int k = 0; k < 4; k++) {
+                sc[nsc][k] = (int32_t)c->u[k];
+            }
+            nsc++;
+        } else if (c->type == RDC_SCREEN && c->b[0] == RD_PRIM_SPRITES) {
+            const RdScreenVtx *v = (const RdScreenVtx *)(f->payload + c->u[0]);
+            for (uint32_t k = 0; k < c->u[1] && nv < 16; k++) {
+                vtx[nv++] = v[k];
+            }
+        }
+    }
+    CHECK(nt == 4, "decoder %d: %u targets recorded, expected 4", fw, nt);
+    CHECK(nv == 10, "decoder %d: %u sprite vertices recorded, expected 10", fw, nv);
+    if (nt != 4 || nv != 10) {
+        return;
+    }
+    /* FRAME / XYOFFSET to the native width */
+    CHECK(tgt[0][0] == rd_target(RD_TARGET_SCENE).id && tgt[0][1] == (uint32_t)(fw | (fh << 16)),
+          "decoder %d: SCENE target size %08x", fw, tgt[0][1]);
+    /* SCISSOR past the GS's 11 bits */
+    CHECK(nsc == 1 && sc[0][0] == 0 && sc[0][1] == 0 && sc[0][2] == fw - 100 && sc[0][3] == fh - 1,
+          "decoder %d: scissor %u records, x1 %d (expected %d)", fw, nsc, nsc ? sc[0][2] : -1,
+          fw - 100);
+    /* the full-frame UV sprite keeps its extents */
+    CHECK(vtx[0].s == 8.0f && vtx[0].t == 8.0f, "decoder %d: UV origin %g %g", fw, (double)vtx[0].s,
+          (double)vtx[0].t);
+    CHECK(vtx[1].s == (float)(8 + fw * 16) && vtx[1].t == (float)(8 + fh * 16),
+          "decoder %d: UV extent %g %g (expected %d %d)", fw, (double)vtx[1].s, (double)vtx[1].t,
+          8 + fw * 16, 8 + fh * 16);
+    CHECK(vtx[0].x == (2048 - hw) * 16 && vtx[1].x == (2048 + hw) * 16,
+          "decoder %d: sprite x %d..%d", fw, vtx[0].x, vtx[1].x);
+    /* XYZ2_HI: signed 32-bit (hi << 16) | lo; the next vertex is the plain 16 bits */
+    CHECK(vtx[2].x == (int32_t)0xFFFF1234u && vtx[2].y == 0x10002 && vtx[3].x == 0x1244 &&
+              vtx[3].y == 0x12,
+          "decoder %d: XYZ2_HI vertex %d %d, then %d %d", fw, vtx[2].x, vtx[2].y, vtx[3].x,
+          vtx[3].y);
+    /* the work buffers the frame scales: W/2 x 128 WORK0, W/4 x 128 AA1, W/2 x 256 WORK1 */
+    CHECK(tgt[1][0] == rd_target(RD_TARGET_WORK0).id && tgt[1][1] == (uint32_t)(hw | (128 << 16)),
+          "decoder %d: %dx128 is WORK0 (target %u size %08x)", fw, hw, tgt[1][0], tgt[1][1]);
+    CHECK(tgt[2][0] == rd_target(RD_TARGET_AA1).id && tgt[2][1] == (uint32_t)(qw | (128 << 16)),
+          "decoder %d: %dx128 on TBP 0x2C00 is AA1 (target %u)", fw, qw, tgt[2][0]);
+    CHECK(tgt[3][0] == rd_target(RD_TARGET_WORK1).id && tgt[3][1] == (uint32_t)(hw | (256 << 16)),
+          "decoder %d: %dx256 on TBP 0x2C00 is WORK1 (target %u)", fw, hw, tgt[3][0]);
+    if (fw == 512) {
+        /* the 4:3 literals, as the decoder gave them before the native frame */
+        CHECK(tgt[0][1] == 0x01C00200u && sc[0][2] == 412 && vtx[1].s == 8200.0f &&
+                  vtx[1].t == 7176.0f && vtx[0].x == 28672 && vtx[1].x == 36864 &&
+                  tgt[1][1] == 0x00800100u && tgt[2][1] == 0x00800080u && tgt[3][1] == 0x01000100u,
+              "decoder 512: the 4:3 decode differs from the recorded expectation");
+    }
+}
+
+/* TEX0 on TBP 0x2C00 reads AA1 at the quarter-frame width's TW and WORK1 at
+   the half-frame's */
+static void checkDecoderTex(int fw)
+{
+    tick();
+    gsFrame.w = fw;
+    gsFrame.fbw = (fw + 63) / 64;
+    for (int pass = 0; pass < 2; pass++) {
+        const int tw = ico_frame_tw(pass ? fw / 2 : fw / 4);
+        gif_StartPacketPri(DEC_LIST);
+        gif_SetGsReg(0x06, 0x2C00ull | (1ull << 14) | ((unsigned long long)tw << 26) |
+                               (7ull << 30) | (1ull << 34));
+        gif_SetGsReg(0x00, 6 | 0x10 | 0x100); /* sprite, TME, FST */
+        gif_SetGsReg(0x03, 0);
+        gif_SetGsReg(0x05, 0x8000ull | (0x8000ull << 16));
+        gif_SetGsReg(0x03, 16ull | (16ull << 16));
+        gif_SetGsReg(0x05, 0x8100ull | (0x8100ull << 16));
+        gif_EndPacket();
+        tick();
+        const RdFrame *f = rd__last_frame();
+        const RdCmd *t = f ? firstOf(f, DEC_LIST, RDC_TEXTURE) : NULL;
+        const RdTexRec *r = t ? rd__tex_rec(t->u[0]) : NULL;
+        const RdTargetId want = pass ? RD_TARGET_WORK1 : RD_TARGET_AA1;
+
+        CHECK(r && r->kind == RD_TEXKIND_TARGET && r->target == rd_target(want).id,
+              "decoder %d: TEX0 0x2C00 TW %d reads %s", fw, tw, pass ? "WORK1" : "AA1");
+    }
+}
+
+static void checkDecoder(void)
+{
+    static const int widths[] = {512, 688, 1376, 2048, 2560};
+
+    for (unsigned int i = 0; i < sizeof(widths) / sizeof(widths[0]); i++) {
+        checkDecoderAt(widths[i]);
+        checkDecoderTex(widths[i]);
+    }
+    gsFrame.w = ICO_FRAME_BASE_W;
+    gsFrame.fbw = ICO_FRAME_BASE_W / 64;
+    tick();
+}
+
 static void boot(void)
 {
     matrixptr = s_spr;
@@ -1805,6 +1973,7 @@ static void recordingChecks(void)
     checkZScale();
     checkPhotoView();
     checkCull();
+    checkDecoder();
 }
 
 int main(void)

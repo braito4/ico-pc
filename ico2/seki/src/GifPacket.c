@@ -862,6 +862,22 @@ int _IsInScreen(volatile int *v)
  *                   and rd_scissor, emitted before the next primitive or at
  *                   the end of the packet; FRAME.FBMSK to rd_color_mask
  *   TEXFLUSH        nothing to do
+ *   0x7E XYZ2_HI    host only, never on the PS2 (its A+D addresses stop at
+ *                   0x62): the high 16 bits of X (bits 0-15) and Y (bits
+ *                   16-31) of the next vertex, for a native-frame vertex
+ *                   outside 0..0xFFFF; the vertex is then the signed 32-bit
+ *                   (hi << 16) | lo.  Without it a vertex is the unsigned
+ *                   16 bits, as before.  The game side never emits it at 4:3.
+ *
+ * Field widths: on a frame wider than 4:3 (gsFrame.w > 512) the 64-bit A+D
+ * data word's, wider than the GS registers' (the reserved bits above each
+ * field are free, the fields do not overlap); at 4:3 the GS's own, so a
+ * sign-extended or stray high bit reads as it always did.  SCISSOR's
+ * four fields are 16 bits at 0/16/32/48 (the GS has 11, so an extent past
+ * 2047 is only the port's), UV's two are 16 bits at 0/16 (the GS has 14,
+ * 1024 texels; 16 bits is 4096).  A game-side writer that
+ * masks to the GS width (MicroCode.c:445 and staticBlur.c:291 mask UV to
+ * 0x3FFF) cuts a native-frame value there.
  *
  * Anything else is counted per register and logged once
  * (gif_HostUndecodedCount): the image transfers (BITBLTBUF, TRXPOS,
@@ -876,6 +892,7 @@ int _IsInScreen(volatile int *v)
 
 #define GS_BATCH_MAX 1020 /* a multiple of 2 and 3 */
 #define GS_PLACEHOLDERS 64
+#define GS_REG_XYZ2_HI 0x7E /* host only: see the table above */
 
 typedef struct GsShim { /* port */
     /* GS registers as last written, per list (PRIM, TEX0, FRAME, XYOFFSET,
@@ -889,6 +906,8 @@ typedef struct GsShim { /* port */
     unsigned char rgba[4];
     float q, s, t;
     unsigned int u, v;
+    unsigned int xyzHi; /* XYZ2_HI's two halves for the next vertex */
+    int haveXyzHi;
     unsigned char haveFrameL[RD_LIST_COUNT], haveXyoffsetL[RD_LIST_COUNT],
         haveScissorL[RD_LIST_COUNT], haveTex0L[RD_LIST_COUNT];
     unsigned long long tex0Last; /* the last TEX0 of any list: a list that never
@@ -1107,7 +1126,9 @@ static RdTargetId gsTargetOfFbp(unsigned int fbp, unsigned int w, unsigned int h
     case 0x140:
         return h <= 128 ? RD_TARGET_WORK0 : RD_TARGET_AA0; /* TBP 0x2800 */
     case 0x160:
-        return w <= 128 ? RD_TARGET_AA1 : RD_TARGET_WORK1; /* TBP 0x2C00 */
+        /* AA1 is the quarter-frame width (128 at 4:3), WORK1 the half */
+        return w <= (unsigned int)(gsFrame.w / 4) ? RD_TARGET_AA1
+                                                  : RD_TARGET_WORK1; /* TBP 0x2C00 */
     case 0x180:
         return RD_TARGET_WORK2; /* TBP 0x3000 */
     case 0x1F8:
@@ -1142,10 +1163,11 @@ static void gsSyncEnv(void)
             int xw = (0x800 - (ox >> 4)) * 2;
             int xh = (0x800 - (oy >> 4)) * 2;
 
-            if (xw > 0 && xw <= 2048) {
+            /* 4096 is the GS window; the native frame's 2560 is inside it */
+            if (xw > 0 && xw <= 4096) {
                 w = (unsigned int)xw;
             }
-            if (xh > 0 && xh <= 2048) {
+            if (xh > 0 && xh <= 4096) {
                 h = (unsigned int)xh;
             }
         }
@@ -1172,10 +1194,12 @@ static void gsSyncEnv(void)
         justSet = 1;
     }
     if (gs.scissorDirty) {
-        int x0 = (int)(gs.scissorL[gsList()] & 0x7FF),
-            x1 = (int)((gs.scissorL[gsList()] >> 16) & 0x7FF);
-        int y0 = (int)((gs.scissorL[gsList()] >> 32) & 0x7FF),
-            y1 = (int)((gs.scissorL[gsList()] >> 48) & 0x7FF);
+        /* 16-bit fields on a wide frame: the GS's 11 cannot hold a native
+           width past 2048; the GS's own 11 at 4:3, byte for byte as before */
+        const unsigned long long m = gsFrame.w > ICO_FRAME_BASE_W ? 0xFFFF : 0x7FF;
+        int x0 = (int)(gs.scissorL[gsList()] & m), x1 = (int)((gs.scissorL[gsList()] >> 16) & m);
+        int y0 = (int)((gs.scissorL[gsList()] >> 32) & m),
+            y1 = (int)((gs.scissorL[gsList()] >> 48) & m);
 
         if (!justSet || !(x0 == 0 && y0 == 0 && x1 == (int)gs.curW - 1 && y1 == (int)gs.curH - 1)) {
             rd_scissor(x0, y0, x1, y1);
@@ -1257,7 +1281,7 @@ static RdTex gsResolveTex0(unsigned long long tex0)
         id = RD_TARGET_SHADOW0;
         break;
     case 0x2C00:
-        id = tw == 7 ? RD_TARGET_AA1 : RD_TARGET_WORK1;
+        id = tw == (unsigned int)ico_frame_tw(gsFrame.w / 4) ? RD_TARGET_AA1 : RD_TARGET_WORK1;
         break;
     case 0x3000:
         id = RD_TARGET_WORK2;
@@ -1406,6 +1430,11 @@ static void gsVertex(unsigned long long data, int fog, int kick)
     }
     v.x = (int32_t)(data & 0xFFFF);
     v.y = (int32_t)((data >> 16) & 0xFFFF);
+    if (gs.haveXyzHi) {
+        v.x = (int32_t)(((gs.xyzHi & 0xFFFFu) << 16) | (unsigned int)v.x);
+        v.y = (int32_t)((gs.xyzHi & 0xFFFF0000u) | (unsigned int)v.y);
+        gs.haveXyzHi = 0;
+    }
     v.z = fog ? (uint32_t)((data >> 32) & 0xFFFFFF) : (uint32_t)(data >> 32);
     if (gs.primL[gsList()] & 0x100) { /* FST: UV in 12.4 texels */
         v.s = (float)gs.u;
@@ -1551,9 +1580,17 @@ static void gsWrite(unsigned long long reg, unsigned long long data)
         memcpy(&gs.t, &tb, 4);
         return;
     }
-    case 0x03: /* UV */
-        gs.u = (unsigned int)(data & 0x3FFF);
-        gs.v = (unsigned int)((data >> 16) & 0x3FFF);
+    case 0x03: /* UV: the GS's 14 bits at 4:3, 16 on a wide frame (see the table) */
+    {
+        const unsigned long long m = gsFrame.w > ICO_FRAME_BASE_W ? 0xFFFF : 0x3FFF;
+
+        gs.u = (unsigned int)(data & m);
+        gs.v = (unsigned int)((data >> 16) & m);
+        return;
+    }
+    case GS_REG_XYZ2_HI:
+        gs.xyzHi = (unsigned int)data;
+        gs.haveXyzHi = 1;
         return;
     case 0x04: /* XYZF2 */
         gsVertex(data, 1, 1);
@@ -1698,6 +1735,7 @@ static void gsPacketStart(void)
 {
     gs.emValid = 0;
     gs.qn = 0;
+    gs.haveXyzHi = 0;
     gs.rawFrom = PacketBufferStruct.ptr.c;
 }
 
