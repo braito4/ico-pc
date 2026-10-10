@@ -1394,6 +1394,11 @@ const RdSettings *rd_get_settings(void)
     return &g_rd.settings;
 }
 
+uint32_t rd_scene_gs_width(void)
+{
+    return g_rd.gsW ? g_rd.gsW : 512u;
+}
+
 void rd_get_scene_scale(float *sx, float *sy)
 {
     if (sx) {

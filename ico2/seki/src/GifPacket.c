@@ -32,14 +32,10 @@ enum { GIF_SP_AUTO = 0, GIF_SP_UI = 1, GIF_SP_WORLD = 2 }; /* port: GIF_ENTER's 
 #include <string.h>
 #include "GifHost.h"
 
-/* PC port: the native frame width the decoder reads (ico_frame.h); 512 at
-   4:3.  GsBase.c's frame latch sets it; a decoder-only test leaves 512. */
-static int gifHostFrameW = ICO_FRAME_BASE_W;
-
-void gif_HostSetFrameWidth(int w)
-{
-    gifHostFrameW = w > 0 ? w : ICO_FRAME_BASE_W;
-}
+/* PC port: the native frame width the decoder reads (rd_reset_scene's,
+   512 at 4:3): the frame latch in GsBase.c hands it to rd, so the decoder
+   needs no symbol of GsBase.c and a decoder-only test links with rd alone. */
+#define gifHostFrameW ((int)rd_scene_gs_width())
 
 static void gsWrite(unsigned long long reg, unsigned long long data);
 static void gsPacketStart(void);
@@ -878,9 +874,9 @@ int _IsInScreen(volatile int *v)
  *                   (hi << 16) | lo.  Without it a vertex is the unsigned
  *                   16 bits, as before.  The game side never emits it at 4:3.
  *
- * Field widths: on a frame wider than 4:3 (gifHostFrameW > 512, the width
- * GsBase.c's latch hands the decoder with gif_HostSetFrameWidth so a test
- * can link the decoder without GsBase.c) the 64-bit A+D
+ * Field widths: on a frame wider than 4:3 (gifHostFrameW > 512, the scene
+ * width rd holds from the frame latch, so a test links the decoder without
+ * GsBase.c) the 64-bit A+D
  * data word's, wider than the GS registers' (the reserved bits above each
  * field are free, the fields do not overlap); at 4:3 the GS's own, so a
  * sign-extended or stray high bit reads as it always did.  SCISSOR's
