@@ -59,7 +59,8 @@
  *            outside the window but inside 16 bits, kept while the
  *            camera moves, and not past 16 bits.
  *   lines    lineManager.c's x clip (gsb_HostLineHalfWidth): W / 2 pixels,
- *            exactly 256 at 4:3.
+ *            exactly 256 at 4:3, and the same after a reflection's
+ *            gsb_SetVSMatrix(230, 230) (the frame's width, not vsWidth).
  *   shadows  Shadow.c's edge clip (gsb_HostShadowClipX): W pixels, at most
  *            2047 (2560 at the widest would leave the 16-bit window).
  */
@@ -1197,8 +1198,13 @@ static void checkLines(const char *what, int winW, int winH, float want)
     setOptions(ICO_FRAMERATE_UNCAPPED, winW, winH);
     gsb_SetVSMatrix(ScreenWidth, ScreenHeight, 512.0f);
     const float hw = gsb_HostLineHalfWidth();
-    CHECK(fabsf(hw - want) <= 1e-3f * want && 2048.0f + hw <= 4095.0f,
-          "lines %s: half-width %g, want %g", what, (double)hw, (double)want);
+    CHECK(hw == want && 2048.0f + hw <= 4095.0f, "lines %s: half-width %g, want %g", what,
+          (double)hw, (double)want);
+    gsb_SetVSMatrix(0xE6, 0xE6, 512.0f); /* puddle.c's reflection view */
+    const float hr = gsb_HostLineHalfWidth();
+    CHECK(hr == want, "lines %s: half-width %g under a 230 x 230 view, want %g", what, (double)hr,
+          (double)want);
+    gsb_SetVSMatrix(ScreenWidth, ScreenHeight, 512.0f);
 }
 
 static void checkShadows(const char *what, int winW, int winH, float want)

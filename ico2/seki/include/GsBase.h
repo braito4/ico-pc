@@ -17,7 +17,7 @@ extern int fbKeep;
 extern int fbClear;
 extern float center_X;
 extern float center_Y;
-extern int ScreenWidth;
+extern int ScreenWidth; /* SCALE / UI / ADDRESS only: GsBase.c's rule */
 extern int ScreenHeight;
 extern int currentScreenWidth;
 extern int currentScreenHeight;
@@ -63,8 +63,8 @@ float gsb_ViewFocus(void);
    pictures.  RegistPacket.c says whether the part it culls next is locked
    to the camera (node flag 2: culled against this tick's camera only);
    gsb_HostCullViewsUsed is how many cameras the last gsb_ClipBox tested
-   (1, 2 or 3; the tests read it).  The windows that scale with the
-   picture's width: the water dots' (waterDot.c; ip the dot's GS position
+   (1, 2 or 3; the tests read it).  The windows sized by the native
+   frame's width (gsFrame.w): the water dots' (waterDot.c; ip the dot's GS position
    in 1/16 pixels, pos its world position), the lines' x clip
    (lineManager.c) and the shadow volumes' edge clip (Shadow.c). */
 void gsb_HostCullCameraLocked(int on);

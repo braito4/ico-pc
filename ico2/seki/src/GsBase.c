@@ -66,11 +66,12 @@ float center_Y;
               motionViewer.c): the centred 4:3 box.
      ADDRESS  a GS buffer address or size in blocks (FBP, TBP): VRAM keeps
               the PS2's layout.
-     FRAME    an extent of the picture: becomes gsFrame.w (the native
-              width, port/include/ico_frame.h), equal to ScreenWidth at
-              4:3.  Those still reading ScreenWidth are marked FRAME: W3.
-   gsb_SetVSMatrixSub's window half-width (v[0]) and the frame head read
-   gsFrame.w already. */
+     FRAME    an extent of the picture: reads gsFrame.w (the native
+              width, port/include/ico_frame.h; ico_frame_x for a 4:3
+              length), equal to ScreenWidth at 4:3, so every such
+              expression is the same integer there.  No FRAME use reads
+              ScreenWidth any more, but staticBlur.c's (W4's).
+   Every other ScreenWidth in ico2 carries one of the first three tags. */
 int ScreenWidth;
 
 int ScreenHeight;
@@ -163,7 +164,7 @@ void gsb_SetFrame(sceGsDBuff *db, int a1, int a2, int psm, short zbp)
     sceGsDispEnv *disp1 = &db->disp[1];
     long long zb = ((long long)zbp << 32) | 0xC0;
     short h = (short)(unsigned short)ScreenHeight / 2;
-    short w = ScreenWidth; /* FRAME: W3 */
+    short w = gsFrame.w; /* FRAME: the native width (512 at 4:3) */
 
     *(int *)&disp1->dispfb &= ~0x1FF;
     *(int *)&db->disp[0].dispfb &= ~0x1FF;
@@ -189,17 +190,19 @@ void gsb_Init(void *db)
     gsInitState = 0;
     switch (systemStatus[0]) {
     case 0:
-        ScreenWidth = 0x200;
+        ScreenWidth = 0x200; /* SCALE, UI, ADDRESS: the PS2's width */
         ScreenHeight = 0x1C0;
         break;
     case 1:
-        ScreenWidth = 0x200;
+        ScreenWidth = 0x200; /* SCALE, UI, ADDRESS: the PS2's width */
         ScreenHeight = 0x200;
         omode = 3;
         break;
     }
     sceGsResetGraph(0, systemStatus[1] == 1, omode, 1);
-    sceGsSetDefDBuff(db, 0, ScreenWidth, ScreenHeight, 2, 0x30, fbClear); /* FRAME: W3 */
+    /* FRAME: the native width; the latch below sets this boot's (the stub
+       records nothing, port/null/gfx_null.c) */
+    sceGsSetDefDBuff(db, 0, gsFrame.w, ScreenHeight, 2, 0x30, fbClear);
     gsb_SetFrame(db, 0, 0, 0x30, 2);
     sceGsSyncV(0);
     buffer_ID = 0;
@@ -297,7 +300,12 @@ static int reductionBlue; /* derived name */
  * current target asks for. */
 void gsb_Reduction(void)
 {
-    /* PC port: every ScreenWidth in this packet is FRAME: W3 */
+    /* PC port: the frame's extents in this packet are FRAME: the native
+       width fw and its FBW (gsFrame.fbw, (fw + 63) / 64); 512 and 8 at 4:3,
+       the same words as ever.  The scissor keeps its 2 .. fw - 3 columns, the
+       UV its 8 .. fw * 16 + 8 (inside the 16 bits the decoder reads on a wide
+       frame) */
+    const int fw = gsFrame.w;
     long long pk[44] = {
         0x1000000000008015LL,
         0xE,
@@ -305,11 +313,11 @@ void gsb_Reduction(void)
         0x4A,
         0x8000000048LL,
         0x42,
-        (long long)((ScreenWidth >> 6) & 0x3F) << 16,
+        (long long)(gsFrame.fbw & 0x3F) << 16,
         0x4C,
-        ((long long)(0x800 - ScreenWidth / 2) << 4) | ((long long)(0x800 - ScreenHeight / 4) << 36),
+        ((long long)(0x800 - fw / 2) << 4) | ((long long)(0x800 - ScreenHeight / 4) << 36),
         0x18,
-        ((long long)(ScreenWidth - 1) << 16) | ((long long)(ScreenHeight / 2 - 1) << 48),
+        ((long long)(fw - 1) << 16) | ((long long)(ScreenHeight / 2 - 1) << 48),
         0x40,
         0x30000,
         0x47,
@@ -319,18 +327,17 @@ void gsb_Reduction(void)
         0,
         0,
         1,
-        (long long)(-ScreenWidth / 2 * 16 + 0x8000 - 4) |
+        (long long)(-fw / 2 * 16 + 0x8000 - 4) |
             ((long long)(-ScreenHeight / 4 * 16 + 0x8000 - 4) << 16) | (-1LL << 32),
         5,
-        (long long)(-ScreenWidth / 2 * 16 + 0x8000 + ScreenWidth * 16 - 4) |
+        (long long)(-fw / 2 * 16 + 0x8000 + fw * 16 - 4) |
             ((long long)(-ScreenHeight / 4 * 16 + 0x8000 + ScreenHeight / 2 * 16 - 4) << 16) |
             (-1LL << 32),
         5,
-        ((long long)(ScreenWidth - 3) << 16) | 2 |
-            ((long long)(systemStatus[0] == 0 ? 2 : 8) << 32) |
+        ((long long)(fw - 3) << 16) | 2 | ((long long)(systemStatus[0] == 0 ? 2 : 8) << 32) |
             ((long long)(ScreenHeight / 2 - 1 - (systemStatus[0] == 0 ? 2 : 8)) << 48),
         0x40,
-        ((long long)(ScreenWidth / 64) << 14) | 0x664000800LL,
+        ((long long)gsFrame.fbw << 14) | 0x664000800LL,
         6,
         0x60,
         0x14,
@@ -341,16 +348,16 @@ void gsb_Reduction(void)
         1,
         0x80008,
         3,
-        (long long)(-ScreenWidth / 2 * 16 + 0x8000 - 4) |
+        (long long)(-fw / 2 * 16 + 0x8000 - 4) |
             ((long long)(-ScreenHeight / 4 * 16 + 0x8000 - 4) << 16) | (-1LL << 32),
         5,
-        (long long)(ScreenWidth * 16 + 8) | ((long long)(ScreenHeight * 16 + 8) << 16),
+        (long long)(fw * 16 + 8) | ((long long)(ScreenHeight * 16 + 8) << 16),
         3,
-        (long long)(-ScreenWidth / 2 * 16 + 0x8000 + ScreenWidth * 16 - 4) |
+        (long long)(-fw / 2 * 16 + 0x8000 + fw * 16 - 4) |
             ((long long)(-ScreenHeight / 4 * 16 + 0x8000 + ScreenHeight / 2 * 16 - 4) << 16) |
             (-1LL << 32),
         5,
-        ((long long)ScreenWidth << 16) | ((long long)ScreenHeight << 48),
+        ((long long)fw << 16) | ((long long)ScreenHeight << 48),
         0x40,
     };
 
@@ -440,10 +447,10 @@ typedef struct { /* field names derived */
 /* Draw the whole screen back over itself as one sprite in the kept colour. */
 static void gsb_KeepFrameBuffer(void)
 {
-    /* PC port: the rects' ScreenWidth and the TBW below are FRAME: W3 */
-    GsbRect r0 = {-(ScreenWidth >> 1) * 16 - 12, -(ScreenHeight >> 1) * 16 - 12,
-                  ScreenWidth * 16 + 32, ScreenHeight * 16 + 32};
-    GsbRect r1 = {8, 8, ScreenWidth * 16, ScreenHeight / 2 * 16};
+    /* PC port: the rects and the TBW below are FRAME (the native width) */
+    GsbRect r0 = {-(gsFrame.w >> 1) * 16 - 12, -(ScreenHeight >> 1) * 16 - 12, gsFrame.w * 16 + 32,
+                  ScreenHeight * 16 + 32};
+    GsbRect r1 = {8, 8, gsFrame.w * 16, ScreenHeight / 2 * 16};
 
 #ifdef ICO_RD
     /* PC port (R2c): the same register writes and sprite as
@@ -458,7 +465,7 @@ static void gsb_KeepFrameBuffer(void)
     gif_SetGsReg(0x4E, 0x1300000C0LL);
     gif_SetGsReg(0x4A, 0);
     gif_SetGsReg(0x3B, 0x8000000080LL);
-    gif_SetGsReg(6, ((long long)(ScreenWidth / 64) << 14) | (0xC482LL << 19));
+    gif_SetGsReg(6, ((long long)gsFrame.fbw << 14) | (0xC482LL << 19));
     spriteUV(&r0.x, &r1.x, keepFrameColor, 0x116);
     gif_EndPacket();
 #endif
@@ -482,8 +489,8 @@ extern void gif_SetDrawEnviroment(unsigned long long fbp, unsigned long long psm
  * are `&&` chains. */
 static void gsb_fade(void)
 {
-    /* PC port: FRAME: W3 (the rect and the draw environment below) */
-    GsbRect r = {-(ScreenWidth >> 1) * 16, -(ScreenHeight >> 1) * 16, ScreenWidth * 16,
+    /* PC port: FRAME (the rect and the draw environment below) */
+    GsbRect r = {-(gsFrame.w >> 1) * 16, -(ScreenHeight >> 1) * 16, gsFrame.w * 16,
                  ScreenHeight * 16};
 
     switch (fadeStatus) {
@@ -542,7 +549,7 @@ static void gsb_fade(void)
     }
 #else
     gif_StartPacketPri(0xB);
-    gif_SetDrawEnviroment(0x800, 0, ScreenWidth, ScreenHeight, 1, 0);
+    gif_SetDrawEnviroment(0x800, 0, gsFrame.w, ScreenHeight, 1, 0);
     gif_SetGsReg(0x47, 0x30000);
     gif_SetGsReg(0x4E, 0x1300000C0LL);
     setGsReg(0x49, 0);
@@ -589,10 +596,10 @@ extern void gif_EndPacketPath1(void);
  * its first corner written before fx and fy are formed. */
 static void gsb_scissorOnDemo(void)
 {
-    /* PC port: FRAME: W3 (the bars and the draw environment below) */
+    /* PC port: FRAME (the bars and the draw environment below) */
     GsbRect r[2] = {
-        {-(ScreenWidth >> 1) * 16, -(ScreenHeight >> 1) * 16 - 4, ScreenWidth * 16, 58 * 16},
-        {-(ScreenWidth >> 1) * 16, ((ScreenHeight >> 1) - 58) * 16 + 4, ScreenWidth * 16, 58 * 16}};
+        {-(gsFrame.w >> 1) * 16, -(ScreenHeight >> 1) * 16 - 4, gsFrame.w * 16, 58 * 16},
+        {-(gsFrame.w >> 1) * 16, ((ScreenHeight >> 1) - 58) * 16 + 4, gsFrame.w * 16, 58 * 16}};
     unsigned char col[4];
     int i;
 
@@ -639,7 +646,7 @@ static void gsb_scissorOnDemo(void)
             gif_StartPacketPriPath1(dl_GetPri());
             memset(col, 0, 4);
             col[3] = 0x80;
-            gif_SetDrawEnviroment(0x800, 0, ScreenWidth, ScreenHeight, 1, 0);
+            gif_SetDrawEnviroment(0x800, 0, gsFrame.w, ScreenHeight, 1, 0);
             gif_SetGsReg(0x47, 0x30000);
             gif_SetGsReg(0x4E, 0x300000C0);
             gif_SetGsReg(0x49, 0);
@@ -699,9 +706,9 @@ static void gsb_controlBrightness(void)
             gif_SetGsReg(0x47, 0x30000);
             gif_SetGsReg(0x4E, 0x1300000C0LL);
             gif_SetAlpha(1, 7, 0);
-            /* PC port: FRAME: W3 */
-            gif_MakeSpriteNoTexture((0x800 - ScreenWidth / 2) << 4, (0x800 - ScreenHeight / 2) << 4,
-                                    ScreenWidth << 4, ScreenHeight << 4, 0xFFFFFFFE, col, 1);
+            /* PC port: FRAME (the native width) */
+            gif_MakeSpriteNoTexture((0x800 - gsFrame.w / 2) << 4, (0x800 - ScreenHeight / 2) << 4,
+                                    gsFrame.w << 4, ScreenHeight << 4, 0xFFFFFFFE, col, 1);
             gif_EndPacketPath1();
         }
 #endif
@@ -729,16 +736,25 @@ extern void gif_SpriteSensitiveOrg(GsbRect *r, long long z, GsbRect *uv, GsbColo
  * when the second level is on, a 128 square one, and each level the stage
  * record (or the current sub target's row) turns on is blended back over the
  * 512 square buffer through the sensitive sprite.  Every TEX0 write is one
- * expression in field order, as Texture.c spells it. */
+ * expression in field order, as Texture.c spells it.
+ *
+ * PC port: FRAME.  The frame is gsFrame.w wide, so the two copies are
+ * ico_frame_x(256) and ico_frame_x(128) across (256 and 128 tall) and every
+ * x extent below is the 4:3 one through ico_frame_x, with the FBWs/TBWs
+ * (n + 63) / 64 of those widths: ico_frame_x returns its argument at 4:3, so
+ * every rect, size and register word is the PS2's there.  The window build
+ * returns before the packet (rd_post records the same passes). */
 static void gsb_antiAlias(void)
 {
     GsbColor col = {128, 128, 128, 128};
-    GsbRect s0 = {4, 4, 8192, 8192};
-    GsbRect s1 = {4, 4, 4096, 4096};
-    GsbRect s2 = {4, 4, 2048, 2048};
-    GsbRect d0 = {-4100, -4100, 8192, 8192};
-    GsbRect d1 = {-2052, -2052, 4096, 4096};
-    GsbRect d2 = {-1028, -1028, 2048, 2048};
+    GsbRect s0 = {4, 4, ico_frame_x(&gsFrame, 8192), 8192};
+    GsbRect s1 = {4, 4, ico_frame_x(&gsFrame, 4096), 4096};
+    GsbRect s2 = {4, 4, ico_frame_x(&gsFrame, 2048), 2048};
+    GsbRect d0 = {-ico_frame_x(&gsFrame, 4096) - 4, -4100, ico_frame_x(&gsFrame, 8192), 8192};
+    GsbRect d1 = {-ico_frame_x(&gsFrame, 2048) - 4, -2052, ico_frame_x(&gsFrame, 4096), 4096};
+    GsbRect d2 = {-ico_frame_x(&gsFrame, 1024) - 4, -1028, ico_frame_x(&gsFrame, 2048), 2048};
+    const int w0 = ico_frame_x(&gsFrame, 256); /* the first copy's width */
+    const int w1 = ico_frame_x(&gsFrame, 128); /* the second's */
     int lv[2];
 
     /* PC port (issue 11): Options > Effects > Screen softening off */
@@ -783,33 +799,37 @@ static void gsb_antiAlias(void)
     gif_StartPacketPri(10);
     gif_SetZTest(0);
     gif_SetZWrite(0);
-    gif_SetDrawEnviroment(0x2800, 0, 256, 256, 0, 0);
-    gif_SetGsReg(6, 0x800 | ((long long)8 << 14) | ((long long)tex_GetTWTH(512) << 26) |
+    gif_SetDrawEnviroment(0x2800, 0, w0, 256, 0, 0);
+    gif_SetGsReg(6, 0x800 | ((long long)gsFrame.fbw << 14) |
+                        ((long long)tex_GetTWTH(gsFrame.w) << 26) |
                         ((long long)tex_GetTWTH(512) << 30) | ((long long)1 << 34));
     gif_SetAlpha(0, 2, 128);
     gif_SpriteSensitiveOrg(&d1, 0, &s0, &col, 0);
     if (lv[1] != 0) {
-        gif_SetGsReg(6, 0x2800 | ((long long)4 << 14) | ((long long)tex_GetTWTH(256) << 26) |
+        gif_SetGsReg(6, 0x2800 | ((long long)((w0 + 63) / 64) << 14) |
+                            ((long long)tex_GetTWTH(w0) << 26) |
                             ((long long)tex_GetTWTH(256) << 30) | ((long long)1 << 34));
-        gif_SetDrawEnviroment(0x2C00, 0, 128, 128, 0, 0);
+        gif_SetDrawEnviroment(0x2C00, 0, w1, 128, 0, 0);
         gif_SpriteSensitiveOrg(&d2, 0, &s1, &col, 0);
     }
-    gif_SetDrawEnviroment(0x800, 0, 512, 512, 1, 0);
+    gif_SetDrawEnviroment(0x800, 0, gsFrame.w, 512, 1, 0);
     if (lv[1] != 0) {
         gif_SetAlpha(1, 2, lv[1]);
-        gif_SetGsReg(6, 0x2C00 | ((long long)2 << 14) | ((long long)tex_GetTWTH(128) << 26) |
+        gif_SetGsReg(6, 0x2C00 | ((long long)((w1 + 63) / 64) << 14) |
+                            ((long long)tex_GetTWTH(w1) << 26) |
                             ((long long)tex_GetTWTH(128) << 30) | ((long long)1 << 34));
         gif_SpriteSensitiveOrg(&d0, 0, &s2, &col, 1);
     }
     if (lv[0] != 0) {
         gif_SetAlpha(1, 2, lv[0]);
-        gif_SetGsReg(6, 0x2800 | ((long long)4 << 14) | ((long long)tex_GetTWTH(256) << 26) |
+        gif_SetGsReg(6, 0x2800 | ((long long)((w0 + 63) / 64) << 14) |
+                            ((long long)tex_GetTWTH(w0) << 26) |
                             ((long long)tex_GetTWTH(256) << 30) | ((long long)1 << 34));
         gif_SpriteSensitiveOrg(&d0, 0, &s1, &col, 1);
     }
     gif_SetZWrite(1);
     gif_SetZTest(1);
-    gif_SetDrawEnviroment(0x800, 0, ScreenWidth, ScreenHeight, 1, 0); /* FRAME: W3 */
+    gif_SetDrawEnviroment(0x800, 0, gsFrame.w, ScreenHeight, 1, 0); /* FRAME */
     gif_EndPacket();
 }
 
@@ -2039,20 +2059,13 @@ static int gsbHostClipBoxViews(const float *p, int views)
 
 /* PC port: the water dots' window (waterDot.c DispWaterDot), in the GS's
    1/16 pixels about the centre 32768: GSB_DOT_MARGIN pixels past the
-   picture's sides and its top and bottom.  At width 1 the sides are 400
-   pixels out, the PS2's window; the PS2's top and bottom were 200 pixels,
-   inside the picture (dots near the top and bottom edges were not drawn).
-   The widest picture (ICO_FRAME_K_MAX 5) keeps the window inside the 16
-   bits the dot's x is packed in: 32768 + (1280 + 144) x 16 = 55552. */
+   picture's sides and its top and bottom.  The sides are the native frame's
+   half-width gsFrame.w / 2 out plus the margin (FRAME): 400 pixels at 4:3,
+   the PS2's window; the PS2's top and bottom were 200 pixels, inside the
+   picture (dots near the top and bottom edges were not drawn).  The widest
+   frame (ICO_FRAME_W_MAX 2560) keeps the window inside the 16 bits the
+   dot's x is packed in: 32768 + (1280 + 144) x 16 = 55552. */
 #define GSB_DOT_MARGIN 144.0f
-
-/* PC port: the native frame's width as a multiple of the 4:3 one, k =
-   gsFrame.w / 512 (exactly 1 at 4:3), for the three windows below that
-   still scale the 4:3 one by k.  FRAME: W3 (native-width windows). */
-static float gsbHostFrameK(void)
-{
-    return (float)gsFrame.w / (float)ICO_FRAME_BASE_W;
-}
 
 /* 1 when the world point pos is in front of the cull matrix c and inside
    its x and y planes */
@@ -2069,8 +2082,7 @@ static int gsbHostPointIn(const double *c, const float *pos)
 
 int gsb_HostDotVisible(const int *ip, const float *pos)
 {
-    const float k = gsbHostFrameK();
-    const int hx = (int)(((float)(ScreenWidth / 2) * k + GSB_DOT_MARGIN) * 16.0f); /* FRAME: W3 */
+    const int hx = (int)(((float)(gsFrame.w / 2) + GSB_DOT_MARGIN) * 16.0f); /* FRAME */
     const int hy = (int)(((float)(ScreenHeight / 2) + GSB_DOT_MARGIN) * 16.0f);
     int views;
     int v;
@@ -2093,20 +2105,26 @@ int gsb_HostDotVisible(const int *ip, const float *pos)
     return 0;
 }
 
-/* PC port: lineManager.c _getLine's x clip, k times the 4:3 half-width
-   (exactly the PS2's vsWidth * 0.5 at width 1).  At width 5 a 512 wide
-   view reaches 2048 +- 1280, inside the GS's 0..4095. */
+/* PC port: lineManager.c _getLine's x clip, the native frame's half-width
+   gsFrame.w / 2 (FRAME).  The PS2 read vsWidth * 0.5, which is ScreenWidth
+   / 2 = 256 whenever a line is clipped (the reflections' 230 and 204 wide
+   views, puddle.c and pool.c, set vsWidth and put ScreenWidth back within
+   one display function, with no line drawn between), so at 4:3 this is
+   256.0f as it was.  The widest frame reaches 2048 +- 1280, inside the
+   GS's 0..4095. */
 float gsb_HostLineHalfWidth(void)
 {
-    return (float)vsWidth * 0.5f * gsbHostFrameK(); /* FRAME: W3 */
+    return (float)gsFrame.w * 0.5f;
 }
 
-/* PC port: Shadow.c's edge clip, +-ScreenWidth about the centre on the
-   PS2, k times that on a wide picture, at most 2047 pixels so a clipped
-   end stays inside the 16-bit GS window (2048 +- 2047) */
+/* PC port: Shadow.c's edge clip: +-ScreenWidth (512) about the centre on
+   the PS2, +-gsFrame.w on the native frame (FRAME; 512 at 4:3), at most
+   2047 pixels so a clipped end stays inside the 16-bit GS window (2048 +-
+   2047): from 48:9 (2048) up the edge clip is 2047, past the picture's
+   side (1024 .. 1280 pixels out), so no shadow in the picture is cut */
 float gsb_HostShadowClipX(void)
 {
-    float x = (float)ScreenWidth * gsbHostFrameK(); /* FRAME: W3 */
+    float x = (float)gsFrame.w; /* FRAME */
 
     return x > 2047.0f ? 2047.0f : x;
 }
