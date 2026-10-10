@@ -509,6 +509,19 @@ typedef struct RhiLimits {
      * D3D12).  The fog then reads a copy of the scene depth first, before
      * the depth itself (rd_fog_path.c). */
     bool tiler;
+    /* Multisampling.  msaaCounts: the sample counts every
+     * multisampled target the renderer makes takes (colour RGBA8_UNORM and
+     * RGBA8_UINT, depth-stencil D32F_S8 as created, all sampled), a bit
+     * per count with the count's value (1 | 2 | 4 | 8: bit 2 = 2 samples;
+     * Vulkan's VkSampleCountFlags), 1 at least.  Vulkan:
+     * framebufferColorSampleCounts & framebufferDepthSampleCounts &
+     * sampledImageColorSampleCounts & sampledImageDepthSampleCounts &
+     * framebufferStencilSampleCounts.  D3D12: CheckFeatureSupport
+     * MULTISAMPLE_QUALITY_LEVELS > 0 for each format.
+     * sampleRateShading: a fragment shader reading SV_SampleIndex runs per
+     * sample (Vulkan sampleRateShading; D3D12 always). */
+    uint32_t msaaCounts;
+    bool sampleRateShading;
 } RhiLimits;
 
 typedef struct RhiDeviceDesc {

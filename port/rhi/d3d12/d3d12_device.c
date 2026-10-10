@@ -400,6 +400,9 @@ static void dx_fill_limits(void)
     /* texture packs: BC1/2/3/7 are required of every D3D12 device
      * (feature level 11_0) */
     o->bcTextures = true;
+    /* multisampling: single-sample only until detected */
+    o->msaaCounts = 1u;
+    o->sampleRateShading = false;
 }
 
 /* ------------------------------------------------------------- lifecycle */

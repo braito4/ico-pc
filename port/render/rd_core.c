@@ -1417,6 +1417,47 @@ void rd_get_scene_scale(float *sx, float *sy)
     }
 }
 
+uint32_t rd_aa_samples(int antiAlias)
+{
+    switch (antiAlias) {
+    case RD_AA_MSAA2:
+        return 2u;
+    case RD_AA_MSAA4:
+        return 4u;
+    case RD_AA_MSAA8:
+        return 8u;
+    default:
+        return 1u;
+    }
+}
+
+uint32_t rd_aa_supported_mask(void)
+{
+    uint32_t mask = (1u << RD_AA_OFF) | (1u << RD_AA_SSAA2) | (1u << RD_AA_SSAA4);
+
+    if (!g_rd.hasDevice) {
+        return mask;
+    }
+    {
+        const RhiLimits *l = rhi_limits();
+
+        /* the fog reads the multisampled depth (per sample) or its shader
+           resolve: both sample the depth, which the buffer path cannot */
+        if (!l->depthSampled || g_rd.fogPath == RD_FOG_BUFFER) {
+            return mask;
+        }
+        for (int aa = RD_AA_MSAA2; aa <= RD_AA_MSAA8; aa++) {
+            const uint32_t n = rd_aa_samples(aa);
+
+            /* a tile-based GPU: 4 samples at most (memory) */
+            if ((l->msaaCounts & n) != 0u && !(l->tiler && n > 4u)) {
+                mask |= 1u << aa;
+            }
+        }
+    }
+    return mask;
+}
+
 int rd_scene_scale_lowered(void)
 {
     /* below what was asked, whether the GPU's size limit or the allocation

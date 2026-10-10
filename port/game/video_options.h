@@ -26,6 +26,11 @@
  *                                       cut or enlarged; any preset, not part of them
  *   [video] framerate       "uncapped"  "original" | "uncapped" | N (30..1000)
  *                                       (60 on Android)
+ *   [video] anti_aliasing   "off"       "off" | "ssaa2" | "ssaa4" | "msaa2" | "msaa4" |
+ *                                       "msaa8": supersampling (the scene at 2x/4x the
+ *                                       resolution, reduced) or multisampling; not under
+ *                                       the Original preset (always off there); an MSAA
+ *                                       count the GPU lacks draws as off
  *   [video] crt             false       the CRT filter (any preset)
  *   [video] crt_mode        "consumer"  "scanlines" | "consumer" | "trinitron" | "pvm" |
  *                                       "shadow"
@@ -113,6 +118,18 @@ enum {
 
 enum { ICO_FILTER_ORIGINAL = 0, ICO_FILTER_TRILINEAR = 1, ICO_FILTER_ANISOTROPIC = 2 };
 
+/* IcoVideoOptions.antiAlias: the same numbers as the renderer's
+   RdAntiAlias (port/render/rd.h), which the window copies across */
+enum {
+    ICO_AA_OFF = 0,
+    ICO_AA_SSAA2 = 1,
+    ICO_AA_SSAA4 = 2,
+    ICO_AA_MSAA2 = 3,
+    ICO_AA_MSAA4 = 4,
+    ICO_AA_MSAA8 = 5,
+    ICO_AA_COUNT = 6
+};
+
 typedef struct IcoVideoOptions {
     int resW, resH; /* resolution "WxH"; 0 x 0 with resScale 0: "window" */
     int resScale;   /* resolution "Nx": N (1..16); ICO_RES_AUTO: "auto"; 0 otherwise */
@@ -122,6 +139,7 @@ typedef struct IcoVideoOptions {
     int filter;     /* ICO_FILTER_* */
     int fullHeight; /* skip the reduction's vertical halving */
     int fullPixel;  /* the reduction draws the whole frame, with no black border */
+    int antiAlias;  /* ICO_AA_*, as written (ico_video_anti_alias: the one in force) */
     int framerate;  /* ICO_FRAMERATE_ORIGINAL, _UNCAPPED, or presents a second */
     /* the CRT filter: applied whatever the preset */
     int crt;           /* the filter on */
@@ -247,6 +265,15 @@ int ico_video_effect_fog(void);
 int ico_video_effect_cinematic_bars(void);
 /* [video] effects_depth, 1 or 0 */
 int ico_video_effects_depth(void);
+/* The anti-aliasing in force, ICO_AA_*: the anti_aliasing option, except
+   ICO_AA_OFF whenever the preset is Original (ico_video_preset) */
+int ico_video_anti_alias(void);
+/* Run-time change of the anti_aliasing option alone (as ico_video_set: the
+   window applies it at its next pump); out of range is ICO_AA_OFF */
+void ico_video_set_anti_alias(int aa);
+/* "off", "ssaa2", "ssaa4", "msaa2", "msaa4", "msaa8" (any case) */
+int ico_video_parse_anti_alias(const char *s, int *aa);
+const char *ico_video_anti_alias_name(int aa);
 /* The model pack switches in force, 1 or 0: [video] model_pack and
    dump_models (the dump also needs Developer mode, which the caller checks). */
 int ico_video_model_pack(void);
@@ -292,7 +319,8 @@ const char *ico_video_filter_name(int filter);
    ICO_VIDEO_CUSTOM. */
 int ico_video_preset(const IcoVideoOptions *o);
 /* The shortcut: writes the four rows of ORIGINAL or ENHANCED into o, the
-   other options untouched.  CUSTOM (or anything else) changes nothing. */
+   other options untouched (except ORIGINAL also sets antiAlias off).
+   CUSTOM (or anything else) changes nothing. */
 void ico_video_set_preset(IcoVideoOptions *o, int preset);
 /* "original", "enhanced" or "custom" */
 const char *ico_video_preset_name(int preset);

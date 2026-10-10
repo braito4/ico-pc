@@ -787,6 +787,9 @@ static void vkr_fill_limits(void)
     o->maxStorageRange = l->maxStorageBufferRange;
     /* texture packs: the BC formats (vkr_create_device enabled the feature) */
     o->bcTextures = g_vkr.bc;
+    /* multisampling: single-sample only until detected */
+    o->msaaCounts = 1u;
+    o->sampleRateShading = false;
     /* ICO_VK_FAKE_LIMITS=min: the limits the renderer reads at the values
      * every Vulkan device is required to meet (the specification's Required
      * Limits table), where phone GPUs sit while desktop ones and lavapipe are

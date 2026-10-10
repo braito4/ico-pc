@@ -347,7 +347,15 @@ typedef struct RdSettings {
      * Both 0 in a zeroed RdSettings. */
     uint8_t modelPack;
     uint8_t dumpModels;
-    uint8_t _pad[2];
+    /* The anti-aliasing (RdAntiAlias, [video] anti_aliasing): supersampling
+     * multiplies the scene scale and the presenter box-reduces DISPLAY;
+     * MSAA draws SCENE's first part of each frame multisampled and resolves
+     * it (rd_replay.c, the MSAA epoch).  RD_AA_OFF (0, a zeroed
+     * RdSettings) changes nothing anywhere; the host passes OFF under the
+     * Original preset, and an MSAA value outside rd_aa_supported_mask()
+     * draws as OFF. */
+    uint8_t antiAlias;
+    uint8_t _pad[1];
     /* The internal scene resolution, in texels: the scene's
      * texture is sceneWidth x sceneHeight (GS coordinates unchanged); 0 x 0
      * with sceneScale 0 = the presentation box in the window under the
@@ -383,6 +391,27 @@ typedef enum RdCrtMode {
 /* Sets s's CRT fields: the mode, the strength (clamped to 0..1) and every
  * override to "the mode's own" (-1). */
 void rd_crt_settings(RdSettings *s, RdCrtMode mode, float strength);
+
+/* RdSettings.antiAlias */
+typedef enum RdAntiAlias {
+    RD_AA_OFF = 0,
+    RD_AA_SSAA2 = 1, /* the scene at 2x the Resolution row's scale, box-reduced */
+    RD_AA_SSAA4 = 2, /* 4x */
+    RD_AA_MSAA2 = 3, /* SCENE multisampled, 2 samples */
+    RD_AA_MSAA4 = 4,
+    RD_AA_MSAA8 = 5,
+    RD_AA_COUNT
+} RdAntiAlias;
+
+/* The RdAntiAlias values this device can draw, a bit (1u << value) each:
+ * RD_AA_OFF and the supersampling values always; RD_AA_MSAAn when the RHI
+ * reports n samples for every SCENE format (RhiLimits.msaaCounts) and the
+ * fog reads the scene depth as a texture (not the buffer path,
+ * rd_fog_path.c); MSAA8 never on a tile-based GPU.  Before rd_init (no
+ * device): OFF and the supersampling values only. */
+uint32_t rd_aa_supported_mask(void);
+/* The sample count of an RdAntiAlias value: 2, 4 or 8 for MSAA, else 1 */
+uint32_t rd_aa_samples(int antiAlias);
 
 /* RdSettings.filterUpgrade */
 typedef enum RdFilterUpgrade {
