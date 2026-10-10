@@ -1575,7 +1575,10 @@ void rd_begin_frame(void)
     f->gsW = g_rd.gsW;
     f->gsH = g_rd.gsH;
     f->aspect = 4.0f / 3.0f;
-    f->wExact = (float)g_rd.gsW;
+    /* 0 until a frame head gives it (rd_frame.c): the presenter then takes
+     * the camera's or the option's aspect (rd__frame_wexact), and a dump
+     * writes gsW (rd_dump.c) */
+    f->wExact = 0.0f;
     f->cullW = g_rd.gsW;
     g_rd.recIndex = idx;
     g_rd.stats.draws = 0;

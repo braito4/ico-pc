@@ -29,7 +29,7 @@
  *            other model) and ends the space override; on the device at
  *            4:3 its picture is byte-identical to the unflagged draw's; at
  *            16:9 on the native frame (688 x 512) the unflagged draw is the
- *            4:3 picture at its GS X (columns 88..599, nothing compressed),
+ *            Enhanced 1x 4:3 picture at its GS X (columns 88..599, nothing compressed),
  *            the flagged one the same (the tag transforms nothing), and a
  *            full-frame item the game draws at the frame's width covers all
  *            688 columns
@@ -733,8 +733,21 @@ static void checkStretchRecording(void)
     CHECK(fd.n == 1 && fd.cmd[0]->b[3] == 0, "stretch: the next draw is not flagged");
 }
 
-/* the 4:3 picture of the unflagged draw, for the 16:9 checks */
+/* the 4:3 picture of the unflagged draw in the 16:9 run's preset
+   (Enhanced 1x), for the 16:9 checks (stretch43Enhanced) */
 static uint8_t s_stretch43[512 * 512 * 4];
+static int s_have43;
+
+/* the unflagged draw at 4:3 under Enhanced 1x: the 16:9 run differs from it
+   in the frame's width alone (the Original run's picture may differ in the
+   preset's own ways) */
+static void stretch43Enhanced(void)
+{
+    s_stretchModel = NULL;
+    recordPrelit(&s_objA, 1);
+    s_have43 = readScene(s_stretch43);
+    CHECK(s_have43, "stretch 4:3 Enhanced: SCENE readback");
+}
 
 /* at 4:3 the flag changes nothing */
 static void stretchSamePixels(void)
@@ -742,7 +755,6 @@ static void stretchSamePixels(void)
     s_stretchModel = NULL;
     recordPrelit(&s_objA, 1);
     const int a = readScene(s_imgA);
-    memcpy(s_stretch43, s_imgA, sizeof(s_stretch43));
     s_stretchModel = "test_prelit";
     recordPrelit(&s_objA, 1);
     const int b = readScene(s_imgB);
@@ -827,7 +839,7 @@ static void stretchWidePixels(void)
     recordPrelit(&s_objA, 1);
     const int a = wideColumns(&a0, &a1);
     memcpy(s_wideA, s_wideImg, sizeof(s_wideA));
-    int same = a, outside = 0;
+    int same = a && s_have43, outside = 0;
     for (int y = 0; a && y < 512; y++) {
         for (int x = 0; x < WT; x++) {
             const uint8_t *p = &s_wideA[(y * WT + x) * 4];
@@ -840,8 +852,8 @@ static void stretchWidePixels(void)
     }
     printf("  stretch 16:9: the scene draw's columns %d..%d of %d\n", a0, a1, WT);
     CHECK(a && same && outside == 0,
-          "stretch 16:9: a world draw is the 4:3 picture at its GS X, columns %d..%d (%d drawn "
-          "beside)",
+          "stretch 16:9: a world draw is the Enhanced 4:3 picture at its GS X, columns %d..%d (%d "
+          "drawn beside)",
           WX0, WX0 + 511, outside);
     s_stretchModel = "test_prelit";
     recordPrelit(&s_objA, 1);
@@ -1956,6 +1968,22 @@ int main(int argc, char **argv)
           rhi_vk_validation_error_count());
     CHECK(rd__not_implemented_count() == 0, "no stubbed command replayed");
     rd_shutdown();
+
+    /* the reference for the 16:9 run: the same preset at 4:3 */
+    st.preset = RD_PRESET_ENHANCED;
+    st.aspect = 4.0f / 3.0f;
+    st.sceneScale = 1.0f;
+    s_sceneW = 512;
+    if (!rd_init(512, 512, &st, NULL)) {
+        CHECK(0, "rd_init at 4:3 Enhanced");
+    } else {
+        gif_HostForgetTextures();
+        gif_HostFrameReset();
+        setup();
+        buildScene();
+        stretch43Enhanced();
+        rd_shutdown();
+    }
 
     /* a full-screen title model at 16:9, on the native frame (688 wide) */
     st.preset = RD_PRESET_ENHANCED;

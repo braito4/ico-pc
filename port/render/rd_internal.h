@@ -266,8 +266,9 @@ typedef struct RdFrame {
     uint32_t gsW, gsH;
     /* the native frame the game built this tick for (rd_frame_head; dump
      * version 10): the display aspect, the visible width in GS pixels (512 k)
-     * and the width the cull and the draws used (= gsW).  4/3, 512 and 512
-     * for a frame without a head and in the dumps before version 10 */
+     * and the width the cull and the draws used (= gsW).  For a frame
+     * without a head 4/3, 0 (unknown: the presenter derives it, a dump
+     * writes gsW) and gsW; 4/3, 512 and 512 in the dumps before version 10 */
     float aspect, wExact;
     uint32_t cullW;
     uint32_t tempTargets[RD_MAX_TEMP_PER_FRAME]; /* owned, freed when the frame is reused */
