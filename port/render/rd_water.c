@@ -78,7 +78,9 @@ RdTarget rd_gs_named_block(uint32_t tbp, uint32_t gsW, uint32_t gsH)
         return (RdTarget){0};
     }
     /* GifPacket.c gsTargetOfFbp, by FBP; its TEX0 table (gsResolveTex0)
-     * agrees for the sizes these files use (TH 8 or 9 at 0x2800) */
+     * agrees for the sizes these files use (TH 8 or 9 at 0x2800).  The
+     * classes are the frame's: a block up to a quarter of the frame's
+     * width at 0x2C00 is AA1 (128 at 4:3), wider is WORK1 */
     switch (tbp >> 5) {
     case 0x000:
         id = RD_TARGET_DISPLAY;
@@ -93,7 +95,7 @@ RdTarget rd_gs_named_block(uint32_t tbp, uint32_t gsW, uint32_t gsH)
         id = RD_TARGET_SHADOW0;
         break;
     case 0x160:
-        id = gsW <= 128 ? RD_TARGET_AA1 : RD_TARGET_WORK1;
+        id = gsW <= (g_rd.gsW ? g_rd.gsW : 512u) / 4u ? RD_TARGET_AA1 : RD_TARGET_WORK1;
         break;
     case 0x180:
         id = RD_TARGET_WORK2;

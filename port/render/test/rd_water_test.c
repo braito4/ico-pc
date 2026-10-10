@@ -1995,8 +1995,13 @@ static void checkDotsWindow(void)
  * 22024, past the GS's 14 bits: the decoder's 16 on a wide frame) and its
  * grid's ST scale 1 / 1376; the barrier's scene copy likewise, its frame
  * at 1376 and its refraction STs over the frame's width (the double
- * reference with W = 1376).  At W = 512 these are the records the cases
- * above check. */
+ * reference with W = 1376).  The blocks are sized with the frame (W4): the
+ * puddle's and the pool's W / 2 = 688 x 256 (the PS2's 256 per 512
+ * columns), the barrier's W x 256 = 1376 x 256, each with every TEX0 of its
+ * list sampling it; the puddle's copy UV spans 230.375 x 1376 / 512 texels
+ * about the block's centre (the PS2's 7/16 texel off it kept), the pool's
+ * scene copy fills the block across.  At W = 512 these are the records the
+ * cases above check. */
 static const Cmd *lastOf(int list, int type, int first)
 {
     const Cmd *r = NULL;
@@ -2045,6 +2050,16 @@ static void checkFrameExtentsAtW(void)
     } else {
         CHECK(0, "W %d: the puddle's copy sprite", fw);
     }
+    checkBlock("W puddle", 4, (uint32_t)fw / 2, 256, 1);
+    if (spr) {
+        const RdScreenVtx *v =
+            (const RdScreenVtx *)(const void *)(rd__last_frame()->payload + spr->c->u[0]);
+        const int uw = 3686 * fw / 512, u0 = 2048 * fw / 512 + 7 - uw / 2;
+        CHECK(v[0].s == (float)u0 && v[1].s == (float)(u0 + uw) && v[0].t == 212.0f &&
+                  v[1].t == 3898.0f,
+              "W %d: the puddle's copy UV x %g .. %g about the block's centre (want %d .. %d)", fw,
+              (double)v[0].s, (double)v[1].s, u0, u0 + uw);
+    }
     CHECK(gif_HostUndecodedTotal() == 0, "W %d: %u undecoded register writes", fw,
           gif_HostUndecodedTotal());
 
@@ -2067,6 +2082,15 @@ static void checkFrameExtentsAtW(void)
           grid ? (double)grid->c->f[0] : 0.0);
     CHECK(sceneTargetsAt(4, fw, &n) && n > 0, "W %d: the pool's SCENE is %d x %d (%d targets)", fw,
           fw, H, n);
+    checkBlock("W pool", 4, (uint32_t)fw / 2, 256, 1);
+    spr = lastOf(4, RDC_SCREEN, 1);
+    if (spr) {
+        const RdScreenVtx *v =
+            (const RdScreenVtx *)(const void *)(rd__last_frame()->payload + spr->c->u[0]);
+        CHECK(v[0].x == 0x8000 - fw / 2 * 8 && v[1].x == 0x8000 + fw / 2 * 8,
+              "W %d: the pool's scene copy fills the %d-wide block (x %d .. %d)", fw, fw / 2,
+              v[0].x, v[1].x);
+    }
 
     recordBarrier();
     walkFrame(rd__last_frame());
@@ -2082,6 +2106,7 @@ static void checkFrameExtentsAtW(void)
     }
     CHECK(sceneTargetsAt(10, fw, &n) && n > 0, "W %d: the barrier's SCENE is %d x %d (%d targets)",
           fw, fw, H, n);
+    checkBlock("W barrier", 10, (uint32_t)fw, 256, 0);
     checkBarrierST(barrierMesh());
     CHECK(gif_HostUndecodedTotal() == 0, "W %d: %u undecoded register writes", fw,
           gif_HostUndecodedTotal());

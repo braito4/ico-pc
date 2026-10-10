@@ -118,19 +118,23 @@ PuddleWork *InitPuddleGeo(GObj *self, SObjSimpleSetting *setting)
    work block drawAreaSetup allocates right after tex_ResetVramPri(4) is TBP
    0x2800, which the GS register decoder takes for the named AA0 target (no
    depth buffer); on the GS the reflection draws there with work1Vram as its
-   Z buffer.  The host binds a per-frame 256 x 256 target with its own depth
-   in AA0's place in list 4 from the allocation to the last packet that
-   samples it (copy), and records the reflection camera gsb_SetVSMatrix
-   leaves in the scratchpad for the reflection draws.  The register writes
-   are unchanged. */
+   Z buffer.  The host binds a per-frame 256 x 256 target (puddleBlockW() x
+   256 on a wide frame) with its own depth in AA0's place in list 4 from the
+   allocation to the last packet that samples it (copy), and records the
+   reflection camera gsb_SetVSMatrix leaves in the scratchpad for the
+   reflection draws.  The register writes are unchanged. */
 static RdTarget puddleHostAlias; /* the named target the block is bound over */
+
+static int puddleBlockW(void);
 
 static void puddleHostBlockBegin(int tbp)
 {
+    const unsigned int bw = (unsigned int)puddleBlockW();
+
     gif_HostFlush();
-    puddleHostAlias = rd_gs_named_block((unsigned int)tbp, 0x100, 0x100);
+    puddleHostAlias = rd_gs_named_block((unsigned int)tbp, bw, 0x100);
     if (puddleHostAlias.id != 0) {
-        rd_alias_target(puddleHostAlias, rd_block_target((unsigned int)tbp, 0x100, 0x100, 1));
+        rd_alias_target(puddleHostAlias, rd_block_target((unsigned int)tbp, bw, 0x100, 1));
     }
 }
 
@@ -167,9 +171,20 @@ static void puddleHostCamera(int push)
 
 /* PC port: every frame draw environment and full-frame rect in this file
    is FRAME, the native width gsFrame.w (512 at 4:3), and the ripples' ST
-   scale is per pixel of it.  The reflection's own 230 x 230 view and its
-   256 x 256 block are not frame extents (gsb_SetVSMatrix's w and h are
-   SCALE; the renderer sizes the block). */
+   scale is per pixel of it.  The reflection's own 230 x 230 view is SCALE
+   (gsb_SetVSMatrix's w and h: the reflection is the frame's view at 230 /
+   512 of its size, about the block's centre, at every aspect); its block is
+   the frame's half across (puddleBlockW: 256 at 4:3, W / 2 on a frame W
+   wide, 256 high), so the reflection of the whole native picture lands in
+   it (230 / 512 of W about the centre) and copy maps that part of the block
+   back over the frame: its UV x about the block's centre at the frame's
+   width, so a reflection is not stretched on a wide frame.  The block's
+   VRAM address is the PS2's (ADDRESS). */
+static int puddleBlockW(void) /* port name */
+{
+    return ico_frame_x(&gsFrame, 0x100);
+}
+
 void baseSetup(GObj *self)
 {
     gif_StartPacketPri(4);
@@ -233,12 +248,14 @@ void drawAreaSetup(void)
     gif_EndPacket();
 
     gif_StartPacketPri(4);
-    gif_SetDrawEnviroment(workVram, 0, 0x100, 0x100, 0, 0);
+    gif_SetDrawEnviroment(workVram, 0, puddleBlockW(), 0x100, 0, 0);
     gif_SetZTest(0);
     gif_SetGsReg(0x4E, 0x30000000 | (work1Vram / 32));
     gif_SetAlpha(0, 4, 0);
 
     r = drawAreaRect;
+    r.x = -ico_frame_x(&gsFrame, -drawAreaRect.x); /* the block across */
+    r.w = ico_frame_x(&gsFrame, drawAreaRect.w);
     gif_SpriteSensitiveOrg(&r, 0, 0, &setupColor, 0);
 
     gif_SetZTest(1);
@@ -263,7 +280,7 @@ void drawAreaRestore(void)
 
     vsWidth = ScreenWidth; /* SCALE: gsb_SetVSMatrix's full-screen record */
     vsHeight = ScreenHeight;
-    gif_SetGsReg(6, (long long)workVram | 0x20010000 | 0x600000000LL);
+    gif_SetGsReg(6, (long long)workVram | ico_frame_tex0_w(&gsFrame, 0x100) | 0x600000000LL);
     gif_SetDrawEnviroment(0x800, 0, gsFrame.w, ScreenHeight, 1, 0);
     gif_SetGsReg(0x14, 0x60);
     gif_SetZWrite(0);
@@ -275,7 +292,7 @@ void drawAreaRestore(void)
 void leveldown(int pri)
 {
     gif_StartPacketPri(pri);
-    gif_SetGsReg(6, (long long)workVram | 0x20010000 | 0x600000000LL);
+    gif_SetGsReg(6, (long long)workVram | ico_frame_tex0_w(&gsFrame, 0x100) | 0x600000000LL);
     gif_SetDrawEnviroment(0x800, 0, gsFrame.w, ScreenHeight, 1, 0);
     gif_SetGsReg(0x14, 0x60);
     gif_SetZWrite(0);
@@ -304,7 +321,7 @@ static inline int texUV(float texel) /* derived name */
 void copy(int pri)
 {
     gif_StartPacketPri(pri);
-    gif_SetGsReg(6, (long long)workVram | 0x20010000 | 0x600000000LL);
+    gif_SetGsReg(6, (long long)workVram | ico_frame_tex0_w(&gsFrame, 0x100) | 0x600000000LL);
     gif_SetDrawEnviroment(0x800, 0, gsFrame.w, ScreenHeight, 1, 0);
     gif_SetGsReg(0x14, 0x60);
     gif_SetZWrite(0);
@@ -319,7 +336,13 @@ void copy(int pri)
     {
         GifRect r = {-gsFrame.w / 2 * 16, -ScreenHeight / 2 * 16, gsFrame.w * 16,
                      ScreenHeight * 16};
-        GifRect uv = {texUV(13.25f), texUV(13.25f), texUV(230.375f), texUV(230.375f)};
+        /* PC port: x about the block's centre (2048 sixteenths at 4:3):
+           the extent at the frame's width, the PS2's 7/16 texel off the
+           centre a delta; 212 .. 3898 at 4:3 */
+        const int uc = texUV(13.25f) + texUV(230.375f) / 2 - 2048;
+        const int uw = ico_frame_x(&gsFrame, texUV(230.375f));
+        GifRect uv = {ico_frame_x(&gsFrame, 2048) + uc - uw / 2, texUV(13.25f), uw,
+                      texUV(230.375f)};
 
         gif_SpriteSensitiveOrg(&r, 0, &uv, &copyColor, 1);
     }
@@ -405,7 +428,7 @@ void drawRipples(GObj *self, int pri)
     int i;
 
     gif_StartPacketPri(pri);
-    gif_SetGsReg(6, (long long)workVram | 0x20010000 | 0x600000000LL);
+    gif_SetGsReg(6, (long long)workVram | ico_frame_tex0_w(&gsFrame, 0x100) | 0x600000000LL);
     gif_SetDrawEnviroment(0x800, 0, gsFrame.w, ScreenHeight, 1, 0);
     gif_SetGsReg(0x14, 0x60);
     gif_SetGsReg(0x47, 0x3F000);

@@ -43,18 +43,23 @@ static void copyToWork(int pri);
    target (no depth buffer); on the GS the scene copy, the refracting
    surface's texture, the reflection pass (with work1Vram as its Z buffer)
    and the reflecting surface's texture all use that one block.  The host
-   binds a per-frame 256 x 256 target with its own depth in AA0's place in
+   binds a per-frame 256 x 256 target (poolBlockW() x 256 on a wide frame)
+   with its own depth in AA0's place in
    the list from the allocation to the last draw that samples it, and
    records the reflection camera of dispPool's gsb_SetVSMatrix(0xCC, ...)
    for the reflection draws.  The register writes are unchanged. */
 static RdTarget poolHostAlias; /* the named target the block is bound over */
 
+static int poolBlockW(void);
+
 static void poolHostBlockBegin(int tbp)
 {
+    const unsigned int bw = (unsigned int)poolBlockW();
+
     gif_HostFlush();
-    poolHostAlias = rd_gs_named_block((unsigned int)tbp, 0x100, 0x100);
+    poolHostAlias = rd_gs_named_block((unsigned int)tbp, bw, 0x100);
     if (poolHostAlias.id != 0) {
-        rd_alias_target(poolHostAlias, rd_block_target((unsigned int)tbp, 0x100, 0x100, 1));
+        rd_alias_target(poolHostAlias, rd_block_target((unsigned int)tbp, bw, 0x100, 1));
     }
 }
 
@@ -119,9 +124,31 @@ static int work1Vram = 0; /* derived name */
 
 /* PC port: every frame extent in this file is FRAME, the native width
    gsFrame.w (512 at 4:3): the frame's draw environments, the scene copy's
-   UV and TBW (the whole frame into the 256 x 256 block) and the grids' ST
-   scales per pixel of it.  The reflection's 204 x 204 view is SCALE
-   (gsb_SetVSMatrix's w and h). */
+   UV, TBW and TW (the whole frame into the block) and the grids' ST scales
+   per pixel of it.  The reflection's 204 x 204 view is SCALE
+   (gsb_SetVSMatrix's w and h: the frame's view at 204 / 512 of its size
+   about the block's centre, at every aspect).  The block is the frame's
+   half across (poolBlockW: 256 at 4:3, W / 2 on a frame W wide, 256 high),
+   so the scene copy keeps the PS2's two screen pixels per block texel and
+   the reflection of the whole native picture lands in it; the grids' STs
+   span the frame over 0 .. 1, which the renderer reads over the block's
+   own width (a render target is sampled whole: no power of two).  The
+   block's VRAM address is the PS2's (ADDRESS). */
+static int poolBlockW(void) /* port name */
+{
+    return ico_frame_x(&gsFrame, 0x100);
+}
+
+/* workRect across the block */
+static GifRect poolWorkRect(void) /* port name */
+{
+    GifRect r = workRect;
+
+    r.x = -ico_frame_x(&gsFrame, -workRect.x);
+    r.w = ico_frame_x(&gsFrame, workRect.w);
+    return r;
+}
+
 static void copyToWork(int pri)
 {
     GifRect rect;
@@ -131,14 +158,14 @@ static void copyToWork(int pri)
 #ifdef ICO_RD
     poolHostBlockBegin(workVram);
 #endif
-    gif_SetGsReg(6, ((long long)gsFrame.fbw << 14) | 0x664000800LL);
-    gif_SetDrawEnviroment(workVram, 0, 0x100, 0x100, 0, 0);
+    gif_SetGsReg(6, ico_frame_tex0_w(&gsFrame, 512) | 0x640000800LL);
+    gif_SetDrawEnviroment(workVram, 0, poolBlockW(), 0x100, 0, 0);
     gif_SetZTest(0);
     gif_SetZWrite(0);
     gif_SetAlpha(0, 4, 0);
     gif_SetGsReg(0x47, 0x30000);
     gif_SetGsReg(0x14, 0x60);
-    rect = workRect;
+    rect = poolWorkRect();
     /* the frame, through the work rectangle, at full colour */
     {
         GifRect uv = {8, 8, gsFrame.w * 16, ScreenHeight * 16};
@@ -162,11 +189,11 @@ static void flushWork(int pri)
 #ifdef ICO_RD
     poolHostBlockBegin(workVram);
 #endif
-    gif_SetDrawEnviroment(workVram, 0, 0x100, 0x100, 0, 0);
+    gif_SetDrawEnviroment(workVram, 0, poolBlockW(), 0x100, 0, 0);
     gif_SetZTest(0);
     gif_SetGsReg(0x4E, 0x30000000 | (work1Vram / 32));
     gif_SetAlpha(0, 4, 0);
-    rect = workRect;
+    rect = poolWorkRect();
     col = (GifColor){255, 255, 255, 128};
     gif_SpriteSensitiveOrg(&rect, 0, 0, &col, 0);
     gif_SetZTest(1);
@@ -679,7 +706,7 @@ static void dispPool(GObj *self)
 
     gif_StartPacketPri(4);
     copyToWork(4);
-    gif_SetGsReg(6, workVram | 0x20010000 | 0x600000000LL);
+    gif_SetGsReg(6, workVram | ico_frame_tex0_w(&gsFrame, 0x100) | 0x600000000LL);
 
     gif_SetDrawEnviroment(0x800, 0, gsFrame.w, ScreenHeight, 1, 0);
 
@@ -767,7 +794,7 @@ static void dispPool(GObj *self)
     vsWidth = ScreenWidth; /* SCALE: gsb_SetVSMatrix's full-screen record */
     vsHeight = ScreenHeight;
 
-    gif_SetGsReg(6, workVram | 0x20010000 | 0x600000000LL);
+    gif_SetGsReg(6, workVram | ico_frame_tex0_w(&gsFrame, 0x100) | 0x600000000LL);
 
     gif_SetDrawEnviroment(0x800, 0, gsFrame.w, ScreenHeight, 1, 0);
 
@@ -1001,7 +1028,7 @@ void DispLimitedPoolReflactionMesh(PoolMesh *refl)
 {
     gif_StartPacketPri(4);
     copyToWork(4);
-    gif_SetGsReg(6, workVram | 0x20010000 | 0x600000000LL);
+    gif_SetGsReg(6, workVram | ico_frame_tex0_w(&gsFrame, 0x100) | 0x600000000LL);
     gif_SetDrawEnviroment(0x800, 0, gsFrame.w, ScreenHeight, 1, 0);
     gif_SetGsReg(0x14, 0x60);
     gif_SetZWrite(0);
