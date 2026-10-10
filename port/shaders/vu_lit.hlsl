@@ -76,7 +76,7 @@ VuVtx vu_lit_vertex(uint v, uint mode, uint variant, bool full)
     }
     float q = vu_divide(o);
     if (!scissor) {
-        o.inside = vu_inside(vu_region_pos(o.p), VU_LO0, VU_HI4094);
+        o.inside = vu_inside(o.p, VU_LO0, VU_HI4094);
     }
     if (full) {
         if (variant == VU_REFLECT) {
@@ -113,7 +113,7 @@ VuVSOut vu_lit_main(uint vid, uint variant)
     VuVtx b = vu_lit_vertex(kick - 1u, mode, variant, false);
     VuVtx c = vu_lit_vertex(kick, mode, variant, false);
     VuVtx me = vu_lit_vertex(kick - 2u + corner, mode, variant, true);
-    VuVSOut o = vu_triangle_out(a, b, c, me, mode);
+    VuVSOut o = vu_triangle_out_marked(a, b, c, me, mode, (vid & VU_INDEX_HIDE43) != 0u);
     if ((vid & VU_INDEX_LATER) != 0u) {
         o = vu_later_out(o, a, b, c);
     }

@@ -42,13 +42,15 @@ cbuffer FrameCB : register(b0, space0)
                         // (XYOFFSET / 16), zw added to the result (GS pixel-centre
                         // convention; 0 puts GS integer coordinates on pixel edges)
     // The native frame (port/include/ico_frame.h). g_frameRegs[0] (g_frame):
-    // x the region scale, 512 / W on a target as wide as the native frame W
-    // (the PS2's 4:3 window test compares x' = (x - 2048) * scale + 2048),
+    // x the region scale, 512 / W on a target as wide as the native frame W,
     // exactly 1 on every other target and at 4:3; yzw reserved.
     // g_frameRegs[1] (g_frame43): xy the 4:3 columns of the bound target in
     // its texels, (w / 2 -+ 256) * sx on a frame-wide target, 0 .. w * sx on
-    // the others; zw reserved. Nothing transforms a position: a GS X is
-    // drawn where the game put it, at every aspect.
+    // the others (rd_replay.c's HIDE43 split scissors the same columns);
+    // zw reserved. Nothing transforms a position: a GS X is drawn where the
+    // game put it, at every aspect, and the VU programs' region test reads
+    // the position as computed (vu_common.hlsli vu_triangle_out), so no
+    // shader reads either register.
     float4 g_frameRegs[2];
     float4 g_z;         // x scale (1 / 2^24), yz the bound target's texels per GS
                         // pixel (1 in Original), w 1: the VU programs output
@@ -128,17 +130,6 @@ bool gs_date_discard(uint flags, float snap)
 
 #define g_frame g_frameRegs[0]
 #define g_frame43 g_frameRegs[1]
-
-// W2-VU compatibility until the native window rule lands in
-// vu_common.hlsli and vu_particle.hlsl: their g_space[SPACE_WORLD].x reads
-// are g_frame.x, the region scale (512 / W on a frame-wide target, the old
-// world x factor's value there; exactly 1 elsewhere). The W2-VU package
-// replaces every g_space[SPACE_WORLD].x with g_frame.x and deletes these
-// two aliases. (The space tags RD_SPACE_* stay on the C side: sprite_ui_vs
-// and sprite_world_vs keep their entries, but no space transforms a
-// position.)
-#define SPACE_WORLD 0
-#define g_space g_frameRegs
 
 // ------------------------------------------------------------ vector forms
 

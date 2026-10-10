@@ -28,17 +28,11 @@ typedef struct IcoFrameCB {
      * exactly 1 on every other target and at 4:3 (rd_replay.c
      * rd__frame_group_ex); frame43[0..1] the bound target's 4:3 columns in
      * its texels, (w / 2 -+ 256) sx on a frame-wide target, 0 .. w sx on
-     * the others.  The rest reserved (0).  No position is transformed.
-     * space[0][0] aliases frame[0] for the VU tests until the W2-VU
-     * package moves them to frame (vu1_test.c). */
-    union {
-        struct {
-            float frame[4];
-            float frame43[4];
-        };
-
-        float space[2][4];
-    };
+     * the others.  The rest reserved (0).  No position is transformed,
+     * and no shader reads them (the VU region test reads the position as
+     * computed, vu_common.hlsli). */
+    float frame[4];
+    float frame43[4];
 
     /* x = 1 / 2^24 (PSMZ24 scale); yz the bound target's texels per GS
      * pixel (1 in Original); w = 1: the VU programs output unquantised X, Y
@@ -212,8 +206,6 @@ _Static_assert(offsetof(IcoFrameCB, frame) == 256, "frame");
 
 _Static_assert(offsetof(IcoFrameCB, frame43) == 272, "frame43");
 
-_Static_assert(offsetof(IcoFrameCB, space) == 256, "space (frame's alias)");
-
 _Static_assert(offsetof(IcoFrameCB, z) == 288, "z");
 
 _Static_assert(offsetof(IcoFrameCB, misc) == 304, "misc");
@@ -279,9 +271,9 @@ typedef struct IcoVuBoneCB {
 
 /* IcoVuCB.draw[2] (VU_* in vu_common.hlsli). */
 enum {
-    ICO_VU_CLIP_REGION = 0,  /* region test: a failing triangle is dropped when it
-                              * reaches into the 4:3 picture, GPU-clipped when it lies
-                              * wholly beside it */
+    ICO_VU_CLIP_REGION = 0,  /* region test: a failing triangle is dropped in the
+                              * Original preset (FrameCB misc[1] 0), GPU-clipped at the
+                              * native frustum in Enhanced and under ICO_VU_BEHIND_EYE */
     ICO_VU_CLIP_NONE = 1,    /* normal_c code 34: no test, X/Y wrap to 16 bits */
     ICO_VU_CLIP_SCISSOR = 2, /* code 36: clip-space flags, trivial reject, GPU clipping */
     ICO_VU_CLIP_MASK = 3,
@@ -292,8 +284,8 @@ enum {
                                * (the parts of a frame-wide target beside the 4:3
                                * columns, rd_replay.c doVu) */
     ICO_VU_BEHIND_EYE = 256   /* region test and particle window: a failing triangle or
-                               * sprite is GPU-clipped everywhere, not dropped (photo
-                               * mode's free camera, RdCamera.freeCamera) */
+                               * sprite is GPU-clipped, not dropped, in either preset
+                               * (photo mode's free camera, RdCamera.freeCamera) */
 };
 
 /* The native frame's constants (port/include/ico_frame.h ICO_FRAME_BASE_W,
@@ -304,11 +296,6 @@ enum {
 #define ICO_SH_FRAME_BASE_W 512
 #define ICO_SH_FRAME_K_MAX 5
 #define ICO_SH_FRAME_W_MAX 2560
-
-/* The region test's centre on a wide screen (vu_common.hlsli VU_REGION_CX,
- * vu_region_pos): the test compares x squeezed by the frame's world x scale
- * about GS X 2048, the middle of the scene's GS window. */
-#define ICO_VU_REGION_CX 2048.0f
 
 /* The index value of an indexed VU draw: kick * 4 + corner (corner 0..2 =
  * vertex kick - 2 + corner); vertexOffset must be 0. */

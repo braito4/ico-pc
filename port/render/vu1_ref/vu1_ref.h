@@ -136,12 +136,38 @@ void vu1ref_mesh_set_light(Vu1Ref *r, const float qw[8][4]);
 /* particle code 16, SET_PARTICLE_MATRIX (particle.vsm:43): vf01..vf08. */
 void vu1ref_particle_set_matrix(Vu1Ref *r, const float qw[8][4]);
 
-/* The wide factor of the frame's world space (g_space[SPACE_WORLD].x, the
- * renderer's wideX: (4/3) / aspect on a wide scene target, 1 otherwise),
- * shared by every Vu1Ref. The region test of normal_c, normal_l and mesh
- * compares x squeezed by it about GS X 2048, as vu_common.hlsli's
- * vu_region_pos does; 1 (the default) tests the position as it is. */
-void vu1ref_set_wide_x(float f);
+/* ------------------------------------------------------- the port's rule
+ * What the renderer draws of what the programs above output
+ * (port/shaders/vu_common.hlsli vu_triangle_out_marked, vu_region_drops,
+ * vu_content_hidden; vu_particle.hlsl vu_particle_vs).  The region test
+ * itself is the program's own on the position as computed, at every
+ * aspect (VuGsVertex.inside). */
+enum {
+    VU1REF_ORIGINAL = 0, /* the Original preset (FrameCB misc[1] 0): the PS2's picture */
+    VU1REF_ENHANCED = 1
+};
+
+enum {
+    VU1REF_DRAW_NONE = 0,   /* not drawn */
+    VU1REF_DRAW_EXACT = 1,  /* drawn at its GS positions, as the GS draws it */
+    VU1REF_DRAW_CLIPPED = 2 /* drawn, clipped by the GPU at the native frustum */
+};
+
+/* A strip triangle whose vertices' region tests are insideA..C: all inside,
+ * drawn exactly; one outside, dropped in the Original preset (the PS2
+ * drops it) and for a triangle of the content table's HIDE43 verb,
+ * clipped in Enhanced at any aspect, and clipped in either preset under
+ * photo mode's free camera (freeCamera, ICO_VU_BEHIND_EYE).  hide: the
+ * triangle carries ICO_VU_INDEX_HIDE (never drawn); hide43:
+ * ICO_VU_INDEX_HIDE43, which a draw with ICO_VU_DROP_HIDDEN (dropHidden,
+ * the parts beside the 4:3 columns) leaves out. */
+int vu1ref_region_draw(int preset, int freeCamera, int insideA, int insideB, int insideC, int hide,
+                       int hide43, int dropHidden);
+/* A particle: shown (alpha non-zero, w inside the window) and drawn (the
+ * VU's test, both corners inside its x/y window too).  Not drawn by the VU:
+ * dropped in the Original preset, the whole sprite (the GPU clips it) in
+ * Enhanced and under the free camera. */
+int vu1ref_particle_draw(int preset, int freeCamera, int drawn, int shown);
 
 /* ------------------------------------------------------------- draws
  * in = the batch at TOP: in[0] is the GIF tag (NLOOP in the low 15 bits of

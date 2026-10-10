@@ -545,8 +545,8 @@ RdUniform rd__frame_group_ex(uint32_t targetW, uint32_t targetH, float originX, 
      * vertices, mirrorDraw).  frame[0] the region scale (rd__region_scale:
      * exactly 1 at 4:3 and on every target that is not frame-wide);
      * frame43 the target's 4:3 columns in texels, (w / 2 -+ 256) sx on a
-     * frame-wide target, 0 .. w sx otherwise, computed as vu_common.hlsli
-     * vu_in_picture rounds them (the content table's HIDE43 split) */
+     * frame-wide target, 0 .. w sx otherwise, the columns doVu's HIDE43
+     * split scissors (hide43Parts; no shader reads either) */
     cb.frame[0] = regionScale;
     {
         const float c = (float)targetW * 0.5f;

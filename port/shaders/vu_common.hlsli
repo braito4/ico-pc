@@ -75,8 +75,8 @@ StructuredBuffer<float4> vu_stream : register(t0, space1);
 #define VU_F_DROP_HIDDEN 128u
 // Photo mode's free camera (RdCamera.freeCamera): every triangle failing the
 // region test, and every particle outside its x/y window, is drawn
-// GPU-clipped over the whole picture, a vertex behind the eye or not
-// (vu_triangle_out, vu_particle_vs)
+// GPU-clipped over the whole picture, a vertex behind the eye or not, in
+// either preset (vu_region_drops, vu_particle_vs)
 #define VU_F_BEHIND_EYE 256u
 // Issue 25: the index bit of a triangle that overlaps an earlier triangle of
 // its mesh in the same plane (shader_consts.h ICO_VU_INDEX_LATER; static
@@ -85,8 +85,8 @@ StructuredBuffer<float4> vu_stream : register(t0, space1);
 // The content table (port/render/rd_content_hide.c, rd_mesh.c
 // markContentHidden): the index bits of a triangle of an artist trick made
 // for the 4:3 picture. HIDE: drawn nowhere. HIDE43: drawn only inside the
-// 4:3 columns. Static prelit and lit meshes only; shader_consts.h
-// ICO_VU_INDEX_HIDE, _HIDE43
+// 4:3 columns, and there as the PS2 draws it (vu_region_drops). Static
+// prelit and lit meshes only; shader_consts.h ICO_VU_INDEX_HIDE, _HIDE43
 #define VU_INDEX_HIDE 0x20000000u
 #define VU_INDEX_HIDE43 0x10000000u
 #define VU_INDEX_MASK 0x0FFFFFFFu
@@ -98,6 +98,26 @@ bool vu_content_hidden(uint vid)
 {
     return (vid & VU_INDEX_HIDE) != 0u ||
            ((vid & VU_INDEX_HIDE43) != 0u && (vu_draw.z & VU_F_DROP_HIDDEN) != 0u);
+}
+
+// The Original preset (FrameCB g_misc.y 0, rd.h RD_PRESET_ORIGINAL): the
+// renderer reproduces the PS2's picture, which the game only allows at
+// 4:3 (video_options.c ico_video_preset).
+bool vu_original()
+{
+    return g_misc.y == 0.0;
+}
+
+// Whether a triangle that fails the region test is dropped, as the PS2
+// drops it: in the Original preset, and for a triangle of the content
+// table's HIDE43 verb (marked: the 4:3 picture's artist trick keeps the
+// PS2's rule wherever it is drawn); never under photo mode's free camera
+// (VU_F_BEHIND_EYE). Everywhere else the GPU clips it at the native
+// frustum (vu_triangle_out). The particles' x/y window follows the same
+// rule (vu_particle_vs).
+bool vu_region_drops(bool marked)
+{
+    return (vu_draw.z & VU_F_BEHIND_EYE) == 0u && (vu_original() || marked);
 }
 
 #define VU_PROBE_FIELDS 16u
@@ -180,35 +200,6 @@ bool vu_inside(float4 p, float4 lo, float4 hi)
 static const float4 VU_LO0 = float4(0.0, 0.0, 0.0, 0.0);
 static const float4 VU_HI4094 = float4(4094.0, 4094.0, 0.0, 16777214.0);
 
-// The centre the wide projection squeezes x about: the scene's XYOFFSET is
-// 2048 - w/2, so 2048 is the middle of the picture (ICO_VU_REGION_CX).
-static const float VU_REGION_CX = 2048.0;
-
-// The position the region test compares (vu_inside with VU_LO0 and
-// VU_HI4094: normal_c code 32, normal_l 32, 34 and 38, the grid program).
-// On a wide screen a scene draw is squeezed in x by g_space[SPACE_WORLD].x
-// about the centre, so the picture reaches far past the 4:3 frame and a
-// triangle near its sides can have a vertex beyond GS X 4094: the whole
-// triangle was dropped although most of it was on screen (water near the
-// edges popped in and out). The test takes x where the squeezed picture
-// puts it instead, so the GS window keeps the same share of the picture as
-// at 4:3. Only the test uses it; the drawn position is p unchanged (no
-// 16-bit wrap in this mode, vu_triangle_out). A scale of exactly 1 (4:3,
-// the Original preset, stretched draws, targets that are not wide) returns
-// p untouched: (x - 2048) * 1 + 2048 is not exact for every float x (a tiny
-// positive x rounds to 0 and would fail 0 < x). precise: the CPU reference
-// (vu1_ref_internal.h vu_region_x) rounds the subtract, the multiply and
-// the add one at a time.
-float4 vu_region_pos(float4 p)
-{
-    float f = g_space[SPACE_WORLD].x;
-    if (f != 1.0) {
-        precise float x = (p.x - VU_REGION_CX) * f + VU_REGION_CX;
-        p.x = x;
-    }
-    return p;
-}
-
 // -------------------------------------------------------------- the stream
 
 // The first qword of vertex v and of its batch.
@@ -271,10 +262,6 @@ struct VuVSOut
     float4 pos : SV_Position;
     VK_LOC(0) noperspective float4 col : COLOR0;   // RGBA 0..255, the GS interpolates in screen space
     VK_LOC(1) noperspective float3 stq : TEXCOORD0; // S, T, Q linear in screen space, divided per pixel
-    // 1: a triangle or sprite the PS2 drops that the port draws only beside
-    // the 4:3 picture (vu_beside_discard); 0: drawn everywhere. The same at
-    // every corner of a triangle, so flat.
-    VK_LOC(2) nointerpolation uint beside : TEXCOORD1;
 };
 
 // GS pixels (XYOFFSET-relative window coordinates / 16) to clip space;
@@ -367,97 +354,14 @@ VuVSOut vu_out_init()
     o.pos = VU_CULLED;
     o.col = float4(0.0, 0.0, 0.0, 0.0);
     o.stq = float3(0.0, 0.0, 1.0);
-    o.beside = 0u;
     return o;
-}
-
-// Whether the draw's target has room beside the 4:3 picture: a wide scene
-// draw (x scale below 1). At 4:3, in the Original preset, for a stretched
-// draw or a target that is not wide, the 4:3 picture is the whole target.
-bool vu_has_beside()
-{
-    return g_space[SPACE_WORLD].x < 1.0;
-}
-
-// Whether framebuffer x (SV_Position.x, in the target's texels) lies in the
-// 4:3 picture: the target's GS pixels 0..w before the wide x scale f, which
-// land on texels (w/2)(1 - f) sx .. (w/2)(1 + f) sx, rounded outwards so a
-// texel the 4:3 picture touches is in it. The same texels as rd_replay.c
-// vuWideParts, computed in the same order.
-bool vu_in_picture(float x)
-{
-    float f = g_space[SPACE_WORLD].x;
-    float sx = g_z.y > 0.0 ? g_z.y : 1.0;
-    float c = g_target.x * 0.5;
-    precise float fc = f * c;
-    precise float l = (c - fc) * sx;
-    precise float r = (c + fc) * sx;
-    float t = floor(x);
-    return t >= floor(l) && t < ceil(r);
-}
-
-// The PS2 does not draw a triangle that fails the region test, nor a
-// particle outside its x/y window. The port leaves out every such triangle
-// or sprite that reaches into the 4:3 picture, beside it too, and draws one
-// that lies wholly beside the picture clipped by the GPU, so the edges of a
-// wide screen have no holes (vu_triangle_out). The flag keeps the pixels of
-// a drawn one off the picture's texels (rounded outwards there).
-bool vu_beside_discard(VuVSOut i)
-{
-    return i.beside != 0u && vu_in_picture(i.pos.x);
-}
-
-// Corners p[0..n) of a convex polygon in clip space cut to
-// dot(plane, v) >= 0 (Sutherland-Hodgman). A triangle cut by two planes has
-// at most five corners.
-void vu_clip_corners(inout float4 p[5], inout uint n, float4 plane)
-{
-    float4 q[5] = p;
-    uint m = 0u;
-    for (uint i = 0u; i < n; i++) {
-        float4 a = p[i];
-        float4 b = p[i + 1u < n ? i + 1u : 0u];
-        float da = dot(plane, a);
-        float db = dot(plane, b);
-        if (da >= 0.0 && m < 5u) {
-            q[m] = a;
-            m++;
-        }
-        if ((da >= 0.0) != (db >= 0.0) && m < 5u) {
-            q[m] = lerp(a, b, da / (da - db));
-            m++;
-        }
-    }
-    p = q;
-    n = m;
-}
-
-// Whether what the GPU draws of the triangle with clip-space corners a, b
-// and c (vu_cut_position) reaches the columns of the 4:3 picture: the
-// triangle cut to 0 <= z <= w as the GPU clips it, its x extent met with
-// the picture's, -f .. f in clip space (the columns vu_in_picture takes).
-bool vu_cut_reaches_picture(float4 a, float4 b, float4 c)
-{
-    float4 p[5] = {a, b, c, c, c};
-    uint n = 3u;
-    vu_clip_corners(p, n, float4(0.0, 0.0, 1.0, 0.0));
-    vu_clip_corners(p, n, float4(0.0, 0.0, -1.0, 1.0));
-    float lo = 1e30;
-    float hi = -1e30;
-    for (uint i = 0u; i < n; i++) {
-        // a corner left at w = 0 (z = 0 there too) lies at infinity on its x's side
-        float x = p[i].w > 0.0 ? p[i].x / p[i].w : (p[i].x >= 0.0 ? 1e30 : -1e30);
-        lo = min(lo, x);
-        hi = max(hi, x);
-    }
-    float f = g_space[SPACE_WORLD].x;
-    return n >= 3u && lo < f && hi > -f;
 }
 
 // The triangle k-2, k-1, k: what the GS draws of it. me is the corner this invocation outputs.
 // mode: VU_CLIP_*; the programs without a scissor or no-test variant pass
-// VU_CLIP_REGION whatever vu_draw.z says.
-VuVSOut vu_triangle_out(VuVtx a, VuVtx b, VuVtx c, VuVtx me, uint mode)
+// VU_CLIP_REGION whatever vu_draw.z says. marked: the triangle carries
+// VU_INDEX_HIDE43 (vu_region_drops; vu_triangle_out passes false).
+VuVSOut vu_triangle_out_marked(VuVtx a, VuVtx b, VuVtx c, VuVtx me, uint mode, bool marked)
 {
     VuVSOut o = vu_out_init();
     o.col = float4(me.rgba);
@@ -477,38 +381,30 @@ VuVSOut vu_triangle_out(VuVtx a, VuVtx b, VuVtx c, VuVtx me, uint mode)
     }
     if (mode == VU_CLIP_REGION) {
         // On the PS2 any vertex outside the region sets ADC on itself and
-        // the next two, and the triangle is not drawn. Inside the 4:3
-        // picture the port keeps that rule exactly, and beside it draws only
-        // what the PS2's picture never touched (user decision 2026-10-10,
-        // after issues 29, 57 and 59):
-        // - a failing triangle whose GPU-clipped extent (0 <= z <= w, a
-        //   vertex behind the eye or not) reaches into the 4:3 picture's
-        //   columns is dropped everywhere, as the PS2 drops it. Drawn
-        //   beside the picture only, it was cut at the picture's edge: the
-        //   forest shot after the Sony sign films from inside a tree card
-        //   (st26a_near), a dark polygon beside the picture while the
-        //   camera pans (issue 59); the waterfall's mist billboards
-        //   (st02a wf_smoke1) stopped at both edges, the picture 4 to 11
-        //   levels darker than the sides (issue 57). Inside the picture
-        //   that rule keeps the cameras that pass through scenery out of
-        //   it (the cliff of the opening, st26a_p1; the tree card).
-        // - one wholly beside the picture is drawn, clipped by the GPU, and
-        //   its pixels that round into the picture's texels are discarded
-        //   (VuVSOut.beside, vu_beside_discard): there the PS2 showed
-        //   nothing, and the dropped triangles left holes (a wall with one
-        //   vertex past the window, issue 29; at 48:9 a patch of the sea at
-        //   the far left of the old bridge whose only triangles there have
-        //   a vertex behind the eye).
-        // Photo mode's free camera (VU_F_BEHIND_EYE) has no such placing,
-        // so there every failing triangle is drawn, clipped, everywhere (a
-        // walkway low under the camera left a hole). A triangle with all
-        // three vertices inside is drawn exactly as before (vu_vtx_position,
-        // on the ftoi4 grid); a drawn one with a vertex outside takes code
-        // 36's corner rule (vu_cut_position: the GS position where the
-        // vertex has one, the homogeneous form of h where it is behind the
-        // eye, saturated or below GS Z 0; every program computes h before
-        // the test). The region test itself still runs (VuVtx.inside, the
-        // tests' probe field), as the PS2's.
+        // the next two, and the triangle is not drawn. The test runs as
+        // the program's own, on the position as computed, at every aspect
+        // (VuVtx.inside, the tests' probe field). The port (user decision
+        // 2026-10-10, v0.6.0: the native frustum is the truth at every
+        // aspect):
+        // - all three vertices inside: drawn exactly (vu_vtx_position, on
+        //   the ftoi4 grid);
+        // - a failing triangle in the Original preset is dropped, as the
+        //   PS2 drops it: the Original picture is the PS2's (it is 4:3);
+        // - a failing triangle everywhere else (Enhanced at any aspect,
+        //   photo mode's free camera VU_F_BEHIND_EYE in either preset) is
+        //   drawn, clipped by the GPU at the native frustum, with code 36's
+        //   corner rule (vu_cut_position: the GS position where the vertex
+        //   has one, the homogeneous form of h where it is behind the eye,
+        //   saturated or below GS Z 0; every program computes h before the
+        //   test): what the 4:3 window cut off stays in the picture (a wall
+        //   with one vertex past the window, issue 29; the sea at the old
+        //   bridge whose only triangles there have a vertex behind the eye;
+        //   a walkway low under the free camera).
+        // The artist tricks that only work with the PS2's drops (closing
+        // planes, a camera that passes through scenery) are content data,
+        // the table of rd_content_hide.c: a HIDE triangle never reaches
+        // here (vu_content_hidden), a HIDE43 one (marked) keeps the PS2's
+        // drop in the 4:3 columns it is drawn in (vu_region_drops).
         // Two differences from a code-36 draw of the same triangle remain:
         // code 36's clipped triangles go through their own earlier pass
         // with ABE forced on (rd_replay.c draws them as the VU's fans,
@@ -519,15 +415,8 @@ VuVSOut vu_triangle_out(VuVtx a, VuVtx b, VuVtx c, VuVtx me, uint mode)
         // is drawn without it.
         if (a.inside && b.inside && c.inside) {
             o.pos = vu_vtx_position(me);
-        } else if ((vu_draw.z & VU_F_BEHIND_EYE) != 0u) {
+        } else if (!vu_region_drops(marked)) {
             o.pos = vu_cut_position(me);
-        } else if (vu_has_beside()) {
-            if (vu_cut_reaches_picture(vu_cut_position(a), vu_cut_position(b),
-                                       vu_cut_position(c))) {
-                return o;
-            }
-            o.pos = vu_cut_position(me);
-            o.beside = 1u;
         }
         return o;
     }
@@ -552,6 +441,11 @@ VuVSOut vu_triangle_out(VuVtx a, VuVtx b, VuVtx c, VuVtx me, uint mode)
         o.pos = vu_vtx_position(me);
     }
     return o;
+}
+
+VuVSOut vu_triangle_out(VuVtx a, VuVtx b, VuVtx c, VuVtx me, uint mode)
+{
+    return vu_triangle_out_marked(a, b, c, me, mode, false);
 }
 
 // Issue 25: a triangle marked VU_INDEX_LATER and the earlier one it
@@ -658,9 +552,6 @@ Texture2D<float> g_dateSnap : register(t2, space2);
 // DATE, dual-source output.
 DualOut vu_pixel(VuVSOut i)
 {
-    if (vu_beside_discard(i)) {
-        discard;
-    }
     if ((g_mode.x & DF_DATE) != 0u) {
         if (gs_date_discard(g_mode.x, g_dateSnap.Load(int3(int2(i.pos.xy), 0)))) {
             discard;
@@ -684,9 +575,6 @@ DualOut vu_pixel(VuVSOut i)
 // planner gives it (the texture formats and TEXA modes of sprite_texa_ps).
 DualOut vu_pixel_texa(VuVSOut i)
 {
-    if (vu_beside_discard(i)) {
-        discard;
-    }
     if ((g_mode.x & DF_DATE) != 0u) {
         if (gs_date_discard(g_mode.x, g_dateSnap.Load(int3(int2(i.pos.xy), 0)))) {
             discard;

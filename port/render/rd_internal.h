@@ -1741,9 +1741,10 @@ RdUniform rd__frame_group_ex(uint32_t targetW, uint32_t targetH, float originX, 
                              float zScale, float regionScale, float scaleX, float scaleY);
 /* The region scale of a draw into tc: 512 / W on a target of the native
  * frame's GS size W x H (g_rd.gsW x gsH: SCENE, WORK2, AURA_WORK, the shadow
- * count, a block the game sizes as the frame) when W is not 512, the PS2's
- * 4:3 window test then comparing x' = (x - 2048) 512 / W + 2048; exactly 1
- * otherwise (every target at 4:3: the region path untouched). */
+ * count, a block the game sizes as the frame) when W is not 512, the share
+ * of the 4:3 columns (doVu's HIDE43 split, hide43Parts, tests it; FrameCB
+ * g_frame.x carries it, which no shader reads: the VU region test compares
+ * the position as computed); exactly 1 otherwise (every target at 4:3). */
 float rd__region_scale(const RdTargetRec *tc);
 
 /* ------------------------------------------------- frame head and camera

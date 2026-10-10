@@ -342,7 +342,7 @@ int main(int argc, char **argv)
     fcb.target[1] = H;
     fcb.target[2] = 1.0f / W;
     fcb.target[3] = 1.0f / H;
-    fcb.space[0][0] = fcb.space[0][1] = fcb.space[1][0] = fcb.space[1][1] = 1.0f;
+    fcb.frame[0] = 1.0f; /* the region scale: a target that is not frame-wide */
     fcb.z[0] = 1.0f / 16777216.0f;
 
     enum {
