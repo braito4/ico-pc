@@ -50,24 +50,28 @@ static void testGrid(void)
     gridAt(&w43, 0.0f, 0.0f, 0.0f, 2.0f);
     gridAt(&w43, 960.0f, 720.0f, 640.0f, 450.0f);
     gridAt(&w43, 480.0f, 360.0f, UI_GRID_CX, UI_GRID_CY);
-    /* 1920 x 1080, the picture pillarboxed: the box the whole output or the
-       4:3 part, the same place either way */
-    const UiMouseView wide = {0.0f, 0.0f, 1920.0f, 1080.0f};
+    /* the view is the 2D layer's 4:3 box on the output (rd_ui_box_of of the
+       presentation box, tested in rd_present_test): the pillar of a 16:9
+       picture in 1920 x 1080, and of a 48:9 one in 3840 x 720 */
     const UiMouseView pillar = {240.0f, 0.0f, 1440.0f, 1080.0f};
-    gridAt(&wide, 240.0f, 0.0f, 0.0f, 2.0f);
-    gridAt(&wide, 1680.0f, 1080.0f, 640.0f, 450.0f);
+    const UiMouseView pillar48 = {1440.0f, 0.0f, 960.0f, 720.0f};
     gridAt(&pillar, 240.0f, 0.0f, 0.0f, 2.0f);
     gridAt(&pillar, 1680.0f, 1080.0f, 640.0f, 450.0f);
+    gridAt(&pillar, 960.0f, 540.0f, UI_GRID_CX, UI_GRID_CY);
+    gridAt(&pillar48, 1440.0f, 0.0f, 0.0f, 2.0f);
+    gridAt(&pillar48, 2400.0f, 720.0f, 640.0f, 450.0f);
+    gridAt(&pillar48, 1920.0f, 360.0f, UI_GRID_CX, UI_GRID_CY);
     /* the bars are outside the grid */
     float gx = 0.0f, gy = 0.0f;
-    ui_mouse_to_grid(&wide, 100.0f, 540.0f, &gx, &gy);
+    ui_mouse_to_grid(&pillar, 100.0f, 540.0f, &gx, &gy);
     CHECK(gx < 0.0f, "the left bar is left of the grid (%g)", (double)gx);
+    ui_mouse_to_grid(&pillar48, 3800.0f, 360.0f, &gx, &gy);
+    CHECK(gx > 640.0f, "48:9: the right of the box is right of the grid (%g)", (double)gx);
     /* the inverse of font.h's overlay map: x' = left + gx * W / 640, y' =
        box.y + (gy - 2) * box.h / 448 */
-    const UiMouseView off = {100.0f, 50.0f, 1600.0f, 900.0f};
-    const float W = 900.0f * 4.0f / 3.0f, left = 100.0f + (1600.0f - W) * 0.5f;
-    gridAt(&off, left + 123.0f * W / 640.0f, 50.0f + (300.0f - 2.0f) * 900.0f / 448.0f, 123.0f,
-           300.0f);
+    const UiMouseView off = {300.0f, 50.0f, 1200.0f, 900.0f};
+    gridAt(&off, 300.0f + 123.0f * 1200.0f / 640.0f, 50.0f + (300.0f - 2.0f) * 900.0f / 448.0f,
+           123.0f, 300.0f);
     const UiMouseView none = {0.0f, 0.0f, 0.0f, 0.0f};
     CHECK(!ui_mouse_to_grid(&none, 1.0f, 1.0f, &gx, &gy), "an empty view maps nothing");
 }

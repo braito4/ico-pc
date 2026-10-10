@@ -152,14 +152,15 @@ static RhiBindGroup uniformGroup(RhiBindGroupLayout layout, uint32_t bindSlot, R
     return rhi_create_bind_group(&(RhiBindGroupDesc){layout, &b, 1});
 }
 
-/* The movie's box: the presenter's 4:3 box (rd_present.c rd__present_box).
- * Whatever the aspect option, the 4:3 movie is pillarboxed
- * in the output (in a 16:9 Enhanced presentation the scene fills the window
- * and the movie keeps 4:3); the full-height and resolution options do not
- * apply (the picture goes straight to the output). */
+/* The movie's box: the 2D layer's 4:3 box inside the presenter's box
+ * (rd_present.c rd__ui_box, rd.h rd_ui_box).  Whatever the aspect option,
+ * the 4:3 movie is pillarboxed in the picture's box (in a 16:9 Enhanced
+ * presentation the scene fills the window and the movie keeps 4:3); the
+ * full-height and resolution options do not apply (the picture goes straight
+ * to the output). */
 static void box43(uint32_t outW, uint32_t outH, RhiRect *box)
 {
-    rd__present_box(outW, outH, 4.0f / 3.0f, box);
+    rd__ui_box(outW, outH, box);
 }
 
 /* The output: the swapchain's next image, or rd's headless present target

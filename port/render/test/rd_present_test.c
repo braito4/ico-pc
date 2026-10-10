@@ -1327,6 +1327,36 @@ static void checkScales(void)
     rd__apply_display();
 }
 
+/* rd_ui_box_of: the 2D layer's centred 4:3 box inside the presentation box
+ * (the pointer's mapping, the deferred text's box, the movie's box) */
+static void checkUiBox(void)
+{
+    static const struct {
+        RdRect in, want;
+        const char *name;
+    } cases[] = {
+        {{0, 0, 960, 720}, {0, 0, 960, 720}, "4:3 in 4:3"},
+        {{240, 0, 1440, 1080}, {240, 0, 1440, 1080}, "the 4:3 box of 16:9 output is its own"},
+        {{0, 0, 1920, 1080}, {240, 0, 1440, 1080}, "16:9: the pillar"},
+        {{0, 0, 3840, 720}, {1440, 0, 960, 720}, "48:9: the pillar"},
+        {{100, 50, 1600, 900}, {300, 50, 1200, 900}, "an offset 16:9 box"},
+        {{0, 152, 1280, 720}, {160, 152, 960, 720}, "16:9 letterboxed in 5:4"},
+        {{0, 0, 500, 500}, {0, 0, 500, 500}, "a box narrower than 4:3 is kept whole"},
+    };
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        const RdRect u = rd_ui_box_of(&cases[i].in);
+        CHECK(u.x == cases[i].want.x && u.y == cases[i].want.y && u.w == cases[i].want.w &&
+                  u.h == cases[i].want.h,
+              "ui box %s: %d,%d %ux%u, want %d,%d %ux%u", cases[i].name, u.x, u.y, u.w, u.h,
+              cases[i].want.x, cases[i].want.y, cases[i].want.w, cases[i].want.h);
+    }
+    /* the movie's box is the same rectangle for an output: 4:3 pillar of 16:9 */
+    RhiRect b;
+    rd__ui_box(1920, 1080, &b);
+    CHECK(b.x == 240 && b.y == 0 && b.w == 1440 && b.h == 1080, "ui box: rd__ui_box 1920x1080");
+}
+
 static void checkBoxes(void)
 {
     RhiRect b;
@@ -1726,6 +1756,12 @@ static void checkWide169(void)
     uint32_t w, h;
     uint8_t *p = readTarget(RD_TARGET_SCENE, &w, &h);
     CHECK(p && w == FW && h == 512, "wide169: SCENE is 688x512, square texels (%ux%u)", w, h);
+    {
+        /* rd_ui_box: the 4:3 pillar of the 960 x 540 output's 16:9 box */
+        const RdRect u = rd_ui_box();
+        CHECK(u.x == 120 && u.y == 0 && u.w == 720 && u.h == 540,
+              "wide169: rd_ui_box is the 720 x 540 pillar (%d,%d %ux%u)", u.x, u.y, u.w, u.h);
+    }
     if (p && w == FW && h == 512) {
 #define PX(x, y) (&p[((y) * (int)FW + (x)) * 4])
         /* the UI sprite at its GS X: 4:3 columns 128..383 are texels 216..471 */
@@ -3441,6 +3477,7 @@ int main(int argc, char **argv)
     const char *dir = argc > 1 ? argv[1] : ".";
     checkOptions(dir);
     checkBoxes();
+    checkUiBox();
     checkCoverage();
     RdSettings st = originalSettings();
     st.outputWidth = st.outputHeight = 0;

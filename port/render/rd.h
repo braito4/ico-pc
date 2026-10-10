@@ -687,6 +687,18 @@ typedef struct RdOverlayCtx {
 
 typedef void (*RdOverlayFn)(const RdOverlayCtx *ctx, void *user);
 
+/* The 2D layer's box (v0.6.0): the game's 640 x 448 grid is a centred 4:3
+ * box inside the presentation box, in output pixels.  At 4:3 it is the
+ * presentation box; on a wider picture it is the pillar of the box that
+ * holds the frame's 4:3 columns (GS 2048 -+ 256); a box narrower than 4:3
+ * is kept whole.  rd_ui_box_of gives it for any presentation box (an
+ * overlay's ctx->box); rd_ui_box for the box the presenter uses for the
+ * output in force (g_rd.settings).  The pointer's mapping into the grid
+ * (port/ui/ui_host.c), the deferred text's box and scissor and the movie's
+ * box (rd_video.c) all read it. */
+RdRect rd_ui_box_of(const RdRect *present);
+RdRect rd_ui_box(void);
+
 void rd_set_present_overlay(RdOverlayFn fn, void *user);
 RdOverlayFn rd_get_present_overlay(void **user);
 bool rd_present_blank(void);

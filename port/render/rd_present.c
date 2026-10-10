@@ -171,6 +171,46 @@ static void outputBox(uint32_t outW, uint32_t outH, RhiRect *box)
     rd__present_box(outW, outH, we == (float)ICO_FRAME_BASE_W ? RD_ASPECT_43 : we / 384.0f, box);
 }
 
+/* the UI box's left edge and width in a presentation box, exactly: the
+ * box's own width unless it is wider than 4:3, else its height's 4:3 */
+static void uiBoxF(const RdRect *b, float *left, float *w)
+{
+    const float bw = (float)b->w, bh = (float)b->h;
+    *w = bw < bh * (4.0f / 3.0f) ? bw : bh * (4.0f / 3.0f);
+    *left = (float)b->x + (bw - *w) * 0.5f;
+}
+
+RdRect rd_ui_box_of(const RdRect *present)
+{
+    RdRect o = *present;
+    /* the 4:3 width of the box's height with rd__present_box's rounding: a
+     * box built for 4:3 is its own UI box whatever the rounding */
+    const uint64_t w43 = ((uint64_t)present->h * 4u + 1u) / 3u;
+    if (present->w > w43) {
+        float left, w;
+        uiBoxF(present, &left, &w);
+        o.w = (uint32_t)(w + 0.5f);
+        o.x = (int32_t)floorf(left + 0.5f);
+    }
+    return o;
+}
+
+RdRect rd_ui_box(void)
+{
+    RhiRect b;
+    outputBox(g_rd.settings.outputWidth, g_rd.settings.outputHeight, &b);
+    const RdRect p = {b.x, b.y, b.w, b.h};
+    return rd_ui_box_of(&p);
+}
+
+void rd__ui_box(uint32_t outW, uint32_t outH, RhiRect *box)
+{
+    outputBox(outW, outH, box);
+    const RdRect p = {box->x, box->y, box->w, box->h};
+    const RdRect u = rd_ui_box_of(&p);
+    *box = (RhiRect){u.x, u.y, u.w, u.h};
+}
+
 /* The texels of a source sw wide that step 2 leaves out at each side: the
  * frame's columns past its exact width, (gsW - wExact) / 2 GS pixels at
  * sw / gsW texels each (W5 refines it with the interpolation and the CRT
@@ -896,14 +936,19 @@ static bool textRegion(const TextPending *t, const TextSeg *g, RhiRect *out)
     const RhiRect real = {b->x, b->y, (uint32_t)b->w, (uint32_t)b->h};
     const float bx = (float)real.x, by = (float)real.y, bw = (float)real.w, bh = (float)real.h;
     const float W = (float)t->gsW, H = (float)t->gsH;
-    /* the 4:3 picture the UI is drawn in (font.h ui_begin_overlay) */
-    const float w43 = bw < bh * (4.0f / 3.0f) ? bw : bh * (4.0f / 3.0f);
-    const float left = bx + (bw - w43) * 0.5f;
+    /* the 2D layer's 4:3 box inside the presentation box (rd_ui_box_of's): the
+     * frame's centre 512 columns, GS 2048 -+ 256 */
+    float left, w43;
+    uiBoxF(b, &left, &w43);
     /* the scissor: a side at the target's edge stays at the box's edge,
-     * the others move with the UI (W3-UI: rd_ui_box, the 4:3 columns of the
-     * native frame) */
-    float x0 = t->sc[0] <= 0 ? bx : left + (float)t->sc[0] * w43 / W;
-    float x1 = t->sc[2] >= (int32_t)t->gsW - 1 ? bx + bw : left + (float)(t->sc[2] + 1) * w43 / W;
+     * the others move with the UI.  A UI-tagged scissor is in the target's
+     * pixels, 512 of which are the UI box (the frame is gsW wide: its centre
+     * 512 columns); GS pixel p is (p - (W - 512) / 2) of them */
+    const float ox = (W - (float)ICO_FRAME_BASE_W) * 0.5f;
+    float x0 = t->sc[0] <= 0 ? bx : left + ((float)t->sc[0] - ox) * w43 / (float)ICO_FRAME_BASE_W;
+    float x1 = t->sc[2] >= (int32_t)t->gsW - 1
+                   ? bx + bw
+                   : left + ((float)(t->sc[2] + 1) - ox) * w43 / (float)ICO_FRAME_BASE_W;
     float y0 = by + (float)t->sc[1] * bh / H;
     float y1 = by + (float)(t->sc[3] + 1) * bh / H;
     /* the reduction's crop (rd_post.c postReduction): 2 pixels left and

@@ -1474,6 +1474,9 @@ void rd__present_record(RhiCommandList cl);
 /* The presentation box of aspect (4:3: the Original integer
  * box) centred in outW x outH; rd_video.c's movie box is the 4:3 one. */
 void rd__present_box(uint32_t outW, uint32_t outH, float aspect, RhiRect *box);
+/* the 2D layer's 4:3 box (rd.h rd_ui_box_of) inside the presentation box of
+ * an outW x outH output: the movie's box */
+void rd__ui_box(uint32_t outW, uint32_t outH, RhiRect *box);
 /* The reduction pass's border crop: columns at each side and rows of
  * DISPLAY's gsH / 2 at the top and bottom (GsBase.c) that it leaves black.
  * Shared with the presenter's deferred text, which keeps off that border

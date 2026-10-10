@@ -483,6 +483,34 @@ static void testField(void)
     }
 }
 
+/* the movie's box is the 2D layer's 4:3 box inside the picture's box
+ * (rd_present.c rd__ui_box): the 4:3 pillar of a 16:9 picture on a 16:9
+ * output, the picture's own 4:3 part when the output is another shape */
+static void testMovieBox(void)
+{
+    const uint32_t gsW = g_rd.gsW;
+    const float fw = g_rd.frameWExact, fa = g_rd.frameAspect;
+    RhiRect a, b;
+    g_rd.gsW = 688;
+    g_rd.frameWExact = 0.0f;
+    g_rd.frameAspect = 16.0f / 9.0f;
+    rd__ui_box(1920, 1080, &a);
+    rd__present_box(1920, 1080, 4.0f / 3.0f, &b);
+    CHECK(a.x == b.x && a.y == b.y && a.w == b.w && a.h == b.h,
+          "movie box: 16:9 picture on 16:9: the 4:3 pillar (%d,%d %ux%u)", a.x, a.y, a.w, a.h);
+    /* the 16:9 picture letterboxed in 5:4 (1280 x 720 at y 152): its 4:3 part is 960 across */
+    rd__ui_box(1280, 1024, &a);
+    CHECK(a.x == 160 && a.y == 152 && a.w == 960 && a.h == 720,
+          "movie box: 16:9 picture in 5:4: its 960 x 720 4:3 part (%d,%d %ux%u)", a.x, a.y, a.w,
+          a.h);
+    g_rd.gsW = 512;
+    rd__ui_box(1920, 1080, &a);
+    CHECK(a.x == b.x && a.w == b.w && a.h == b.h, "movie box: 4:3 frame: the 4:3 box");
+    g_rd.gsW = gsW;
+    g_rd.frameWExact = fw;
+    g_rd.frameAspect = fa;
+}
+
 int main(void)
 {
     RdSettings s;
@@ -496,6 +524,7 @@ int main(void)
         return 77;
     }
     printf("rd_video_test: adapter %s\n", rhi_adapter_name());
+    testMovieBox();
     testFlat();
     testRamp();
     testMirror();
