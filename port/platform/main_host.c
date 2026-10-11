@@ -1533,6 +1533,7 @@ static int host_main(int argc, char **argv)
     unsigned long ticks = 0;
     unsigned long watchdog;
     int have_ticks = 0;
+    int logs_ready;
     int picked;
     int warned = 0;
     int r;
@@ -1553,6 +1554,8 @@ static int host_main(int argc, char **argv)
         logs_dir[0] = '\0';
         log_path[0] = '\0';
     }
+    /* Traces and pad recordings still use the logs folder with --console. */
+    logs_ready = logs_dir[0] != '\0' && ico_make_dir(logs_dir) == 0;
     if (a.console && !have_console) {
         ico_host_message_box("--console: there is no console to log to (start ico_pc from a "
                              "command prompt); the log goes to logs\\ico-pc.log instead",
@@ -1561,7 +1564,7 @@ static int host_main(int argc, char **argv)
     }
     if (a.console) {
         log_path[0] = '\0';
-    } else if (log_path[0] == '\0' || ico_make_dir(logs_dir) != 0 ||
+    } else if (log_path[0] == '\0' || !logs_ready ||
                (keep_previous_log(logs_dir, log_path), ico_host_redirect_output(log_path) != 0)) {
         fprintf(stderr, "ico_pc: cannot write %s; logging to the console\n", log_path);
         log_path[0] = '\0';
