@@ -2255,7 +2255,12 @@ extern int ico_title_logo_skip(const char *model);
    reads nodes[].scale; the other paths multiply nodeMtx (or the node scale
    times it) in, so the row is the one place every path reads.  Its x is
    the screen's x: the draw's model-to-screen matrix is +0x640 (the
-   500-unit projection, no rotation) times the node's lengths and position. */
+   500-unit projection, no rotation) times the node's lengths and position.
+   Only x is stretched and the UVs kept, which is the picture extended: the
+   plane's texture is a 32 x 32 sheet of one colour (RGB 255, alpha 0x80
+   throughout) and its 176 vertices all carry (255, 255, 255, 127) (the
+   title's frame dumps), so its colour does not vary across it and the
+   stretch only draws more of it. */
 extern int ico_title_fullframe_model(const char *model);
 
 void reg_DispObj(Sub15C *o)

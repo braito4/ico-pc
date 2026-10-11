@@ -520,7 +520,11 @@ width as it goes; the game itself is not touched), and writes
 at that width: the frame width is set, the scene is remade
 (`rd_reset_scene`) and the paused camera rebuilds the game's matrices,
 the cull included, so a draw beside the 4:3 picture is really drawn
-there. Each `.png` is the frame's DISPLAY target at its native width, not
+there. The sweep renders with the game's own camera rule: while it runs,
+the photo camera's free-camera drawing (which keeps the triangles with a
+vertex behind the eye) is off, so the frames drop what the game's camera
+drops, as in play; the same holds whenever the photo camera has not been
+moved or zoomed. Each `.png` is the frame's DISPLAY target at its native width, not
 cropped. Afterwards the live width and scene come back by themselves. Leaving photo mode
 during a sweep ends it with what was captured so far; the log says
 `aspect sweep:` for each step. The zip is also a valid input to

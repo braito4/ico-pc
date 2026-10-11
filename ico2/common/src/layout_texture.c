@@ -119,7 +119,12 @@ static const SprRect primarySpriteRect = {-5120, -1808, 10240, 3616}; /* derived
    gif_FullFrameBegin and gif_FullFrameEnd (GifPacket.h): the 640-grid helpers
    then scale x by the native frame width / 640 and the window build tags the
    primitives RD_SPACE_FULLFRAME.  Decided on the layout's data, never on
-   pixels. */
+   pixels.  Only x is scaled and the UV kept, which is the picture
+   extended: every spanning item of the shipped tables (the bars at grid
+   lines 0 and 200, 640 x 70 and 640 x 60, texProperty 178/179 to 431/432
+   in layouts 17 to 64) samples the single texel (10, 110) of
+   text/menu_*_01.tm2 (texW = texH = 1), a flat colour, so stretching it
+   is drawing more of it; the primary sprite is untextured. */
 extern void gif_FullFrameBegin(void);
 extern void gif_FullFrameEnd(void);
 /* renderer R7d: GifHost.h's key of the decoder's primitives, so the
@@ -543,12 +548,17 @@ static void display_texture(int no, LtProperty *e)
         pcol.a = 127;
         gif_StartPacketPri(11);
         gif_SetZTest(0);
+        /* PC port: a full-frame item's sparkle points are scattered over
+           the item as it is drawn, the native frame's width (the same
+           count; at 4:3 the frame is the 4:3 box) */
+        LT_FULL_BEGIN(full);
         for (i = 0; i < box.w * box.h / 1200; i++) {
             u.pt[0] = box.x + rand() % box.w;
             u.pt[1] = box.y + rand() % box.h;
             pcol.a = rand() % 127;
             gif_PointOffset(u.pt, 0x800000, &pcol, 1);
         }
+        LT_FULL_END(full);
         gif_EndPacket();
     }
     if (e->masked == 0) {

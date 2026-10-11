@@ -196,15 +196,18 @@ int ico_demo_walk_analyse(IcoDemoWalkPlan *p, int frames, int nodes, const void 
     return ok;
 }
 
-int ico_demo_walk_should_start(float dx, float dy, int depth_ok, int native_w, int native_h)
+int ico_demo_walk_should_start(float x0, float x1, float dy, int depth_ok, int native_w,
+                               int native_h)
 {
     const float hw = (float)native_w * 0.5f;
     const float hh = (float)native_h * 0.5f;
 
-    if (!depth_ok || fabsf(dy) > hh) {
+    if (!depth_ok || fabsf(dy) > hh || x1 < x0) {
         return 0;
     }
-    return fabsf(dx) > DW_HALF_43 && fabsf(dx) <= hw;
+    /* right of the picture: the span's left edge past it, inside the frame;
+       left of it the mirror */
+    return (x0 > DW_HALF_43 && x0 <= hw) || (x1 < -DW_HALF_43 && x1 >= -hw);
 }
 
 int ico_demo_walk_should_stop(float dx, float dy, int depth_ok, int native_w, int native_h)
@@ -216,7 +219,8 @@ int ico_demo_walk_should_stop(float dx, float dy, int depth_ok, int native_w, in
 }
 
 float ico_demo_walk_update(IcoDemoWalkActor *a, const IcoDemoWalkPlan *p, float frame, float play,
-                           float dx, float dy, int depth_ok, int native_w, int native_h)
+                           float dx, float dy, float x0, float x1, int depth_ok, int native_w,
+                           int native_h)
 {
     if (!p->valid || frame < (float)p->stop) {
         a->state = ICO_DEMO_WALK_IDLE;
@@ -224,7 +228,7 @@ float ico_demo_walk_update(IcoDemoWalkActor *a, const IcoDemoWalkPlan *p, float 
         return -1.0f;
     }
     if (a->state == ICO_DEMO_WALK_IDLE) {
-        if (!ico_demo_walk_should_start(dx, dy, depth_ok, native_w, native_h)) {
+        if (!ico_demo_walk_should_start(x0, x1, dy, depth_ok, native_w, native_h)) {
             a->state = ICO_DEMO_WALK_DECLINED;
             return -1.0f;
         }
@@ -330,8 +334,9 @@ static IcoDemoWalkActor *actorFor(const void *actor, int motion)
 
 int ico_demo_walk_tick(const void *actor, int motion, const char *motion_name, const void *data,
                        int frames, int nodes, IcoDemoWalkRootFn root_at, IcoDemoWalkPoseFn pose_at,
-                       float frame, float play, float dx, float dy, int depth_ok, int native_w,
-                       int native_h, float *pose_frame, float *root_out3)
+                       float frame, float play, float dx, float dy, float x0, float x1,
+                       int depth_ok, int native_w, int native_h, float *pose_frame,
+                       float *root_out3)
 {
     const IcoDemoWalkPlan *p;
     IcoDemoWalkActor *a;
@@ -345,7 +350,7 @@ int ico_demo_walk_tick(const void *actor, int motion, const char *motion_name, c
         return 0;
     }
     a = actorFor(actor, motion);
-    e = ico_demo_walk_update(a, p, frame, play, dx, dy, depth_ok, native_w, native_h);
+    e = ico_demo_walk_update(a, p, frame, play, dx, dy, x0, x1, depth_ok, native_w, native_h);
     if (e < 0.0f) {
         return 0;
     }

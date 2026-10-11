@@ -848,6 +848,10 @@ static void checkPhotoView(void)
     CHECK(ico_photo_view_saved(), "photo: entered");
     CHECK(slotDiff(&p, &g) == -1, "photo: enter leaves matrixptr+0x%X as it was", slotDiff(&p, &g));
     CHECK(camSame(&p, &g), "photo: enter, the frame's camera is the game's");
+    /* the photo camera not moved yet: the game's camera rule (no
+       rd_free_camera) */
+    CHECK(rd__rec_frame() && !rd__rec_frame()->freeCamera,
+          "photo: enter, the game camera's rule (not a free camera)");
     CHECK(p.focus == g.focus, "photo: enter, currentFocusDistance");
     const float fov0 = ico_photo_fov_deg(&g.cam);
     CHECK(fabsf(ico_photo_fov_now() - fov0) < 1e-3f, "photo: the field of view %.4f (want %.4f)",
@@ -891,6 +895,23 @@ static void checkPhotoView(void)
               s_slot[i]);
     }
     CHECK(z.focus == (int)(PHOTO_D * k), "photo: the reflections' distance %d", z.focus);
+
+    {
+        /* zoomed: a free camera; the aspect sweep (an aspect forced) keeps
+           the game camera's rule, and the free camera is back after it */
+        RdFrame *fr = (RdFrame *)rd__rec_frame();
+        const IcoPhotoPad still = photoPad(0);
+        CHECK(fr && fr->freeCamera, "photo: zoomed, a free camera");
+        if (fr) {
+            fr->freeCamera = 0;
+            ico_video_frame_force_aspect(16.0f / 9.0f);
+            photoTicks(&still, 1);
+            CHECK(!fr->freeCamera, "photo: the sweep keeps the game camera's rule");
+            ico_video_frame_force_aspect(0.0f);
+            photoTicks(&still, 1);
+            CHECK(fr->freeCamera, "photo: after the sweep, a free camera again");
+        }
+    }
 
     /* leave: everything back byte for byte, a camera cut */
     const unsigned cut0 = ico_video_cut_serial();

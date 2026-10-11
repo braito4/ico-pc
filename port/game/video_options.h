@@ -254,6 +254,9 @@ void ico_video_frame(IcoFrame *out, int h);
    and clearing it brings the live width back the same way.  Only the frame
    follows: the presentation (ico_video_aspect) is untouched. */
 void ico_video_frame_force_aspect(float aspect);
+/* 1 while ico_video_frame_force_aspect holds an aspect (the aspect sweep,
+   window_host.c), else 0 */
+int ico_video_frame_forced(void);
 /* The effect switches in force (issue 11), 1 or 0: plain functions the
    game's files declare extern (staticBlur.c, GsBase.c, ZFog.c), read at
    most once a frame. */

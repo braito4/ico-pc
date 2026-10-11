@@ -57,12 +57,15 @@ static float pasteToFBPoint[4] = {0.0f, 0.0f, 0.0f, 1.0f}; /* derived name */
  *            W / 4, their heights the PS2's; a rectangle or UV range drawn
  *            over such a buffer takes its x BASE (the buffer's left edge,
  *            -SB_X(2048) for a 256-wide one) and its x EXTENT through SB_X,
- *            while a DELTA in the buffer's own pixels (the blur passes'
- *            shrinks rm, um, cur and pre, the taps' +-10/16 px, half-texel
- *            and border offsets of 4, 8, 16 or 24, blurUv) stays as it is,
- *            so a kernel spans the buffer pixels it spans on the PS2 and a
- *            buffer pixel covers two (or four) screen pixels at every
- *            aspect; TEX0's TBW and TW are SB_TEX0_W of the 4:3 width;
+ *            while a DELTA in the buffer's own pixels (the taps' +-10/16
+ *            px, half-texel and border offsets of 4, 8, 16 or 24, blurUv)
+ *            stays as it is, so a kernel spans the buffer pixels it spans on
+ *            the PS2 and a buffer pixel covers two (or four) screen pixels
+ *            at every aspect; the SHRINKS of the glow and depth-of-field
+ *            passes (rm, um, cur, pre) are a scale about the buffer's left
+ *            edge, so they keep the PS2's slope and are anchored at the 4:3
+ *            part's left edge (sbShrinkAt, sbShrinkSpan); TEX0's TBW and TW
+ *            are SB_TEX0_W of the 4:3 width;
  *   ADDRESS  every TBP and FBP (workBase, 0x3F00, work buffer 2's pad
  *            SB_WORK2_PAD_FBP) stays the PS2's: the host maps them to
  *            targets by address and class.
@@ -83,6 +86,34 @@ static void sbWorkRect(int *o, int bx, int dx, int y, int w, int h) /* port name
     o[1] = y;
     o[2] = SB_X(w);
     o[3] = h;
+}
+
+/* PC port: the glow's and the depth of field's shrink passes (blurPass,
+ * depthFieldPass).  The PS2 draws a 256-wide work buffer into its twin as
+ * one sprite whose rect (or UV range) is d sixteenths shorter than the
+ * other's, so texel u = x * base / (base - d) (plus the half-texel and
+ * border offsets): a scale about the buffer's LEFT edge, whose sub-pixel
+ * phase x * d / (16 * 256) is the game's fixed blur pattern across the
+ * picture.  On a wider buffer the same delta about the left edge would put
+ * a different phase on every 4:3 column (equal only at the centre).  So the
+ * shrink keeps the PS2's slope (span * d / base, base the PS2's span of
+ * 4096 or 4064 sixteenths) and is anchored at the 4:3 part's left edge,
+ * a = W / 4 - 128 buffer pixels: the rect or UV start moves right by
+ * a * 16 * d / base sixteenths, so buffer column a + x samples texel
+ * a + (the PS2's texel for x), the PS2's picture in the 4:3 columns.  At
+ * 4:3 a is 0 and span is base: the start offset is 0 and the shrink is d,
+ * the PS2's numbers. */
+static int sbShrinkAt(int d, int base) /* port name */
+{
+    const int a = SB_X(256) / 2 - 128;
+
+    return (a * 16 * d + base / 2) / base;
+}
+
+/* the span (1/16 px) shrunk by d at the PS2's slope: span - span * d / base */
+static int sbShrinkSpan(int span, int d, int base) /* port name */
+{
+    return span - (int)(((long long)span * d + base / 2) / base);
 }
 
 /* as in GifPacket.h, which this file does not include */
@@ -454,9 +485,11 @@ static inline void blurPass(int fb, int tex, int rm, int um, void *col) /* deriv
     gif_SetGsReg(8, 5);
     gif_SetAlpha(1, 4, 0);
     {
-        /* WORK: the shrinks rm and um are DELTAS in the buffer's pixels */
-        int rect[4] = {-SB_X(2048), -1024, SB_X(4096) - rm, 2048 - rm};
-        int uv[4] = {8, 8, SB_X(4096) - um, 2048 - um};
+        /* WORK: the shrinks rm and um at the PS2's slope, anchored at the
+           4:3 part's left edge (sbShrinkAt); the y shrink as the PS2's */
+        int rect[4] = {-SB_X(2048) + sbShrinkAt(rm, 4096), -1024,
+                       sbShrinkSpan(SB_X(4096), rm, 4096), 2048 - rm};
+        int uv[4] = {8 + sbShrinkAt(um, 4096), 8, sbShrinkSpan(SB_X(4096), um, 4096), 2048 - um};
 
         gif_SpriteSensitiveOrg(rect, 0, uv, col, 0);
     }
@@ -1183,10 +1216,14 @@ static inline int depthFieldPass(int n, int cur, int pre) /* derived name */
     gif_SetAlpha(1, 4, 0);
 
     {
-        /* WORK: the one-pixel border (16, -32) and the shrinks cur and pre
-           are DELTAS */
-        int rect[4] = {-SB_X(2048) + 16, -1008, SB_X(4096) - 32 - cur, 2016 - cur};
-        int uv[4] = {24, 24, SB_X(4096) - 32 - pre, 2016 - pre};
+        /* WORK: the one-pixel border (16, -32) is a DELTA; the shrinks cur
+           and pre of the bordered span (the PS2's 4064) at the PS2's slope,
+           anchored at the 4:3 part's left edge (sbShrinkAt); the y shrink
+           as the PS2's */
+        int rect[4] = {-SB_X(2048) + 16 + sbShrinkAt(cur, 4064), -1008,
+                       sbShrinkSpan(SB_X(4096) - 32, cur, 4064), 2016 - cur};
+        int uv[4] = {24 + sbShrinkAt(pre, 4064), 24, sbShrinkSpan(SB_X(4096) - 32, pre, 4064),
+                     2016 - pre};
 
         gif_SpriteSensitiveOrg(rect, 0, uv, &depthPassCol, 0);
     }

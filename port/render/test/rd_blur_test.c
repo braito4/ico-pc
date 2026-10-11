@@ -744,7 +744,11 @@ static void recordWide(int fw, int whole[N_WIDE_CASES])
             const float ox = (float)(0x8000 - (int32_t)(p->st.gsW / 2) * 16);
             const float x0 = p->r.rect[0], x1 = p->r.rect[2];
             offT += x0 < ox - 16.0f || x1 > ox + (float)(t->w * 16 + 16);
-            whole[k] += x1 - x0 >= (float)((t->w - 4) * 16);
+            /* across: within 1/32 of the buffer (4 pixels of a 128-wide
+               one; the glow's and the depth of field's shrinks, at most
+               2% of the PS2's 256, scale with the buffer at the PS2's
+               slope: blurPass, depthFieldPass) */
+            whole[k] += (x1 - x0) * 32.0f >= (float)t->w * 16.0f * 31.0f;
             const uint32_t src = texTarget(&p->st, NULL);
             const RdTargetRec *s = src ? rd__target_rec(src) : NULL;
             if (s) {
@@ -760,6 +764,87 @@ static void recordWide(int fw, int whole[N_WIDE_CASES])
         CHECK(offT == 0 && offS == 0,
               "%s: %d rects off their buffer, %d UV ranges off their source", what, offT, offS);
     }
+}
+
+/* (w) the glow's and the depth of field's shrink passes (staticBlur.c
+ * blurPass, depthFieldPass): a work buffer into its twin, the rect or the
+ * UV range shrunk.  For each such sprite (x slope not 1) the map from the
+ * buffer's column x (1/16 px from its left edge) to the texel u */
+typedef struct ShrinkMap {
+    float bx0, u0, slope;
+} ShrinkMap;
+
+#define MAX_SHRINK 64
+
+/* the shrink sprites of the glow (post 4: blur ten times, two passes
+   each) and the depth of field (post 2: six passes), recorded at the
+   current frame width; the count */
+static int recordShrinks(ShrinkMap *m)
+{
+    static const int kPost[2] = {4, 2};
+    int n = 0;
+    for (int c = 0; c < 2; c++) {
+        setStage(kPost[c], 0, 64);
+        FullScreenEffectBefore();
+        FullScreenEffectAfter();
+        dl_Swap();
+        collectFrame(rd__last_frame());
+        for (int i = 0; i < s_nspr; i++) {
+            const Spr *p = &s_spr[i];
+            const int d = named(p->st.color), sv = named(texTarget(&p->st, NULL));
+            if ((p->kind != RD_POST_BLOOM && p->kind != RD_POST_FLARE && p->kind != RD_POST_DOF) ||
+                (d != RD_TARGET_WORK0 && d != RD_TARGET_WORK1) ||
+                (sv != RD_TARGET_WORK0 && sv != RD_TARGET_WORK1) || d == sv) {
+                continue;
+            }
+            const float ox = (float)(0x8000 - (int32_t)(p->st.gsW / 2) * 16);
+            const float w = p->r.rect[2] - p->r.rect[0];
+            const float slope = w > 0.0f ? (p->r.uv[2] - p->r.uv[0]) / w : 0.0f;
+            if (slope == 1.0f || n >= MAX_SHRINK) {
+                continue;
+            }
+            m[n].bx0 = p->r.rect[0] - ox;
+            m[n].u0 = p->r.uv[0];
+            m[n].slope = slope;
+            n++;
+        }
+    }
+    return n;
+}
+
+/* (w) the shrink passes at fw keep the PS2's sub-pixel pattern on the 4:3
+ * columns: buffer column a + x (a = fw / 4 - 128, the 4:3 part's left edge
+ * in the half-width buffer) samples texel a + the 4:3 run's texel for x,
+ * for x across the 4:3 part (within 2/16 px: the anchor's rounding to the
+ * GS's 1/16 grid); at 4:3 every shrink starts at the buffer's left edge
+ * (the border 16 for the depth of field), the PS2's rects and UVs */
+static void checkShrinksWide(int fw, const ShrinkMap *m43, int n43, const ShrinkMap *mw, int nw)
+{
+    CHECK(n43 >= 26 && nw == n43,
+          "(w) shrinks: %d sprites at 4:3 (want 20 glow + 6 depth of field), %d at W %d", n43, nw,
+          fw);
+    int ps2 = 0, bad = 0;
+    float worst = 0.0f;
+    const float a16 = (float)((fw / 4 - 128) * 16);
+    for (int i = 0; i < n43 && i < nw; i++) {
+        ps2 += !((m43[i].bx0 == 0.0f && m43[i].u0 == 8.0f) ||
+                 (m43[i].bx0 == 16.0f && m43[i].u0 == 24.0f));
+        for (int x = 0; x <= 4096; x += 1024) {
+            const float u43 = m43[i].u0 + ((float)x - m43[i].bx0) * m43[i].slope;
+            const float uw = mw[i].u0 + (a16 + (float)x - mw[i].bx0) * mw[i].slope - a16;
+            const float e = fabsf(uw - u43);
+            worst = e > worst ? e : worst;
+            bad += e > 2.0f;
+        }
+    }
+    CHECK(ps2 == 0, "(w) shrinks: %d of the 4:3 run's start off the PS2's (0, 8) or (16, 24)", ps2);
+    CHECK(bad == 0,
+          "(w) shrinks at W %d: %d samples of the 4:3 columns read off the 4:3 run's texel (worst "
+          "%.2f / 16 px)",
+          fw, bad, (double)worst);
+    printf("  (w) %d shrink passes at W %d: the 4:3 columns' texels the 4:3 run's (worst %.2f / 16 "
+           "px)\n",
+           nw, fw, (double)worst);
 }
 
 /* (w) the screen softening's passes (rd_post.c AA_DOWNSAMPLE and
@@ -817,8 +902,12 @@ static void checkRecordingWide(void)
     const int fw = 2048;
     int at43[N_WIDE_CASES], wide[N_WIDE_CASES];
 
+    static ShrinkMap sh43[MAX_SHRINK], shw[MAX_SHRINK];
+    int nsh43, nshw;
+
     InitStaticBlur(0, (float[4]){0.3f, -0.2f, -1.0f, 0.0f});
     recordWide(W, at43);
+    nsh43 = recordShrinks(sh43);
     checkAaRecordAt(W);
     rd_shutdown();
     setFrameWidth(fw);
@@ -851,6 +940,8 @@ static void checkRecordingWide(void)
               kTargetNames[kSizes[i].id], t ? t->w : 0, t ? t->h : 0, kSizes[i].w, kSizes[i].h);
     }
     recordWide(fw, wide);
+    nshw = recordShrinks(shw);
+    checkShrinksWide(fw, sh43, nsh43, shw, nshw);
     checkAaRecordAt(fw);
     for (int k = 0; k < N_WIDE_CASES; k++) {
         CHECK(wide[k] == at43[k],
@@ -2544,6 +2635,98 @@ static void checkFeedbackWide(void)
     systemStatus[0] = status0;
 }
 
+/* (w) the glow (post 4) and the depth of field (post 2) on the device at
+ * W 512 and 1536 (a = 256 buffer pixels: the glow's shrink anchors,
+ * a * d / 256, and spans, 3 * 4096 * d / 4096, land on the GS's 1/16 grid
+ * exactly, so the glow's 4:3 columns are the 4:3 run's byte for byte, 32
+ * pixels in from their edges, where the kernel reaches what lies beside
+ * them); the depth of field's anchors, a * cur / 254, round to that grid,
+ * so its 4:3 columns are the 4:3 run's within the bilinear weights' 1/16
+ * steps (no channel more than 24 off, at most 1% of the pixels more than
+ * 4).  Before the anchor (a scale about the buffer's left edge) the
+ * texel phase drifted by a * d / 4096 pixels across the 4:3 columns. */
+static void checkShrinksWideDevice(void)
+{
+    static const int kW[2] = {W, 1536}, kPost[2] = {4, 2};
+    const int screenHeight = ScreenHeight, status0 = systemStatus[0];
+    const int margin = 32;
+    ScreenHeight = QH;
+    systemStatus[0] = 0;
+    GlobalTimer = 0;
+    rd_shutdown();
+    cpuFree();
+    for (int m = 0; m < 2; m++) {
+        const int post = kPost[m];
+        for (int r = 0; r < 2; r++) {
+            const int fw = kW[r];
+            char what[64];
+            setFrameWidth(fw);
+            setStage(post, 0, 64);
+            snprintf(what, sizeof(what), "(w) post %d W %d", post, fw);
+            qInit(what, RD_PRESET_ORIGINAL, 0.0f, 0);
+            cpuInit();
+            clearAll();
+            for (int n = 0; n < 2; n++) {
+                dl_SetDLPriority(0);
+                putImageAt(rd_target(RD_TARGET_SCENE), rd_target(RD_TARGET_SCENE), fw, QH, 0, QH, 0,
+                           1);
+                putImageAt(rd_target(RD_TARGET_SCENE), rd_target(RD_TARGET_SCENE), fw, QH, 180, 260,
+                           Q_Z_FACE, 1);
+                FullScreenEffectBefore();
+                FullScreenEffectAfter();
+                snprintf(what, sizeof(what), "(w) post %d W %d frame %d", post, fw, n);
+                runFrame(what, failures < 10);
+            }
+            const CpuT *sc = &s_cpu[RD_TARGET_SCENE];
+            const int c0 = (fw - W) / 2;
+            for (int y = 0; sc->c && sc->w == fw && y < QH; y++) {
+                memcpy(&s_wCentre[r][(size_t)y * W * 4], &sc->c[((size_t)y * fw + c0) * 4],
+                       (size_t)W * 4);
+            }
+            CHECK(sc->c && sc->w == fw && sc->h == QH, "(w) post %d W %d: SCENE %dx%d", post, fw,
+                  sc->w, sc->h);
+            CHECK(rhi_vk_validation_error_count() == 0, "(w) post %d W %d: %u validation errors",
+                  post, fw, rhi_vk_validation_error_count());
+            rd_shutdown();
+            cpuFree();
+        }
+        int over4 = 0, worst = 0, n = 0, changed = 0;
+        for (int y = 0; y < QH; y++) {
+            for (int x = margin; x < W - margin; x++) {
+                const size_t i = ((size_t)y * W + x) * 4;
+                int d = 0;
+                for (int c = 0; c < 4; c++) {
+                    const int e = abs((int)s_wCentre[0][i + c] - (int)s_wCentre[1][i + c]);
+                    d = e > d ? e : d;
+                }
+                worst = d > worst ? d : worst;
+                over4 += d > 4;
+                changed += memcmp(&s_wCentre[0][i], &s_img[((size_t)y * W + x) * 4], 3) != 0;
+                n++;
+            }
+        }
+        printf("  (w) post %d at W 512 and 1536: the 4:3 columns (%d in from their edges) at most "
+               "%d LSB off the 4:3 run's, %d of %d pixels more than 4, %d changed by the effect\n",
+               post, margin, worst, over4, n, changed);
+        if (post == 4) {
+            CHECK(worst == 0,
+                  "(w) the glow: the wide frame's 4:3 columns differ from the 4:3 "
+                  "run's by up to %d LSB",
+                  worst);
+        } else {
+            CHECK(worst <= 24 && over4 * 100 <= n,
+                  "(w) the depth of field: the wide frame's 4:3 columns differ from the 4:3 run's "
+                  "by up to %d LSB, %d pixels more than 4",
+                  worst, over4);
+        }
+        CHECK(changed > 1000, "(w) post %d: the effect changed the picture (%d pixels)", post,
+              changed);
+    }
+    setFrameWidth(W);
+    ScreenHeight = screenHeight;
+    systemStatus[0] = status0;
+}
+
 static void checkPipelines(void)
 {
     static RdPipeKeyInt keys[512];
@@ -2657,6 +2840,7 @@ int main(void)
     checkQueenPresents();
     checkMotionBlurPresentsScaled(); /* issue 28: re-initialises rd (2x) */
     checkFeedbackWide();             /* W4, issue 61: re-initialises rd (W 512, 2048) */
+    checkShrinksWideDevice();        /* the shrink anchor: re-initialises rd (W 512, 1536) */
     if (failures) {
         printf("rd_blur_test: %d failures\n", failures);
         return 1;

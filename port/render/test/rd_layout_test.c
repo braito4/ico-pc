@@ -22,6 +22,9 @@
  *     x scaled by the native frame's width / 640 (688 at 16:9: the item
  *     covers GS 2048 -+ 344); an item that does not span (a menu row) stays
  *     UI, 512 / 640 of the grid about the centre, whatever the frame's width;
+ *   - a full-frame item's sparkle points (gif_PointOffset in the item's
+ *     full-frame scope) are scaled by the native frame's width / 640 and
+ *     full-frame-tagged, reaching past the 4:3 box as the item does;
  *   - the boot signs' backdrop (common/src/kanban.c, compiled in:
  *     kanbanExec on a layout with no items): the 640 x 224 grid sprite is
  *     full-frame, covering GS 2048 -+ 1024 at W = 2048 (48:9) in the
@@ -495,6 +498,59 @@ static void checkWide(void)
     gif_HostSetFrameWidth(512);
 }
 
+/* a selected full-frame item's sparkle points (display_texture's
+   gif_PointOffset loop, inside the item's gif_FullFrameBegin scope) at a
+   native frame 688 wide: the grid's 0 and its right end 640 - 1 land at
+   2048 and 2048 + 319 * 688 / 640 GS pixels (past the 4:3 box's 2048 + 256),
+   full-frame-tagged, as the item they sparkle on is */
+static void checkSparkleWide(void)
+{
+    static const uint8_t black[4] = {0, 0, 0, 0x80};
+    const int FW = 688;
+    GifColor pcol = {0, 0, 0, 100};
+    int pt0[2] = {0, 0}, pt1[2] = {319 * 16, 0};
+    Walk w;
+
+    gif_HostSetFrameWidth(FW);
+    dl_SetDLPriority(0);
+    rd_set_target(rd_target(RD_TARGET_SCENE), rd_target(RD_TARGET_SCENE), 512, 512, 1);
+    rd_clear_target(rd_target(RD_TARGET_SCENE), black, 1, 0);
+    gif_StartPacketPri(11);
+    gif_SetZTest(0);
+    gif_FullFrameBegin();
+    gif_PointOffset(pt0, 0x800000, (unsigned char *)&pcol, 1);
+    gif_PointOffset(pt1, 0x800000, (unsigned char *)&pcol, 1);
+    gif_FullFrameEnd();
+    gif_EndPacket();
+    dl_Swap();
+    const RdFrame *f = rd__last_frame();
+    memset(&w, 0, sizeof(w));
+    if (!f) {
+        CHECK(0, "sparkle: a closed wide frame");
+        gif_HostSetFrameWidth(512);
+        return;
+    }
+    RdStateBlock s = f->startState;
+    rd__walk(f, 0, &s, collect, &w);
+    int xs[2], n = 0, full = 1;
+    for (int i = 0; i < w.screens; i++) {
+        const RdScreenVtx *v = (const RdScreenVtx *)(f->payload + w.scr[i]->u[0]);
+        full &= w.scr[i]->b[0] == RD_PRIM_POINTS && w.scr[i]->b[1] == RD_SPACE_FULLFRAME;
+        for (uint32_t k = 0; k < w.scr[i]->u[1] && n < 2; k++) {
+            xs[n++] = v[k].x;
+        }
+    }
+    CHECK(n == 2 && full, "sparkle: %d points, full-frame-tagged points %d", n, full);
+    if (n == 2) {
+        const int x1 = 0x8000 + 319 * 16 * FW / 640;
+        CHECK(xs[0] == gs16(0x8000) && xs[1] == gs16(x1) && x1 > 0x8000 + 256 * 16,
+              "sparkle: the grid's 0 and 319 at %d and %d (want %d and %d: the native frame's "
+              "width over 640)",
+              xs[0], xs[1], gs16(0x8000), gs16(x1));
+    }
+    gif_HostSetFrameWidth(512);
+}
+
 /* ------------------------------------------ the boot signs' backdrop */
 
 /* kanbanExec's backdrop (common/src/kanban.c, compiled into this test) at a
@@ -650,6 +706,7 @@ int main(void)
     }
     checkKeyedRow();
     checkWide();
+    checkSparkleWide();
     checkKanbanBackdrop(2048);
     checkKanbanBackdrop(512);
     rd_shutdown();

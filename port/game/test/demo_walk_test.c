@@ -9,8 +9,10 @@
  *     to the end (D1_C18's shape) stops at the last frame; standing, rising
  *     and too-short motions have no plan;
  *   - the decision: at gsFrame.w 512 the extension never starts, for any
- *     root position, depth or frame; at 2048 it starts only outside the 4:3
- *     picture and inside the native frame, and holds once the root is
+ *     body span, depth or frame; at 2048 it starts only when the soldier's
+ *     whole span is outside the 4:3 picture on one side (a root past the
+ *     side with a limb still in the picture is declined) and its near edge
+ *     inside the native frame, and holds once the root is
  *     ICO_DEMO_WALK_MARGIN past the native frame's side or behind the camera;
  *   - the walk: the cycle frame and the root e frames past the stop, a
  *     declined actor staying declined, a replay from before the stop
@@ -34,6 +36,10 @@ static int failures;
 #define NEAR(a, b, e) (fabsf((float)(a) - (float)(b)) <= (e))
 
 #define TWO_PI 6.2831853f
+
+/* a soldier's body across 60 pixels about a root at screen x (the span
+   ico_demo_walk_update's start decision reads) */
+#define BODY(x) (x) - 30.0f, (x) + 30.0f
 
 /* a synthetic motion: the root moves rootStep a frame up to rootStop, the
    node keys swing with period `period` up to poseStop, then hold */
@@ -116,28 +122,42 @@ static void testDecision(void)
     int depth;
 
     /* 4:3: the native frame is the 4:3 picture, nothing is outside the one
-       and inside the other */
+       and inside the other, for any span */
     for (depth = 0; depth < 2; depth++) {
         for (dy = -400; dy <= 400; dy += 8) {
             for (dx = -3000; dx <= 3000; dx++) {
-                CHECK(ico_demo_walk_should_start((float)dx, (float)dy, depth, 512, 448) == 0);
+                CHECK(ico_demo_walk_should_start((float)dx, (float)dx, (float)dy, depth, 512,
+                                                 448) == 0);
+                CHECK(ico_demo_walk_should_start((float)dx, (float)dx + 90.0f, (float)dy, depth,
+                                                 512, 448) == 0);
             }
         }
     }
-    CHECK(ico_demo_walk_should_start(256.5f, 0.0f, 1, 512, 448) == 0);
+    CHECK(ico_demo_walk_should_start(256.5f, 300.0f, 0.0f, 1, 512, 448) == 0);
 
-    /* 48:9 (2048 wide): the band beside the 4:3 picture */
-    CHECK(ico_demo_walk_should_start(300.0f, 0.0f, 1, 2048, 448) == 1);
-    CHECK(ico_demo_walk_should_start(-300.0f, 100.0f, 1, 2048, 448) == 1);
-    CHECK(ico_demo_walk_should_start(1024.0f, 0.0f, 1, 2048, 448) == 1);
-    CHECK(ico_demo_walk_should_start(256.0f, 0.0f, 1, 2048, 448) == 0);
-    CHECK(ico_demo_walk_should_start(100.0f, 0.0f, 1, 2048, 448) == 0);
-    CHECK(ico_demo_walk_should_start(1025.0f, 0.0f, 1, 2048, 448) == 0);
-    CHECK(ico_demo_walk_should_start(300.0f, 225.0f, 1, 2048, 448) == 0);
-    CHECK(ico_demo_walk_should_start(300.0f, 0.0f, 0, 2048, 448) == 0);
+    /* 48:9 (2048 wide): the whole body in the band beside the 4:3 picture */
+    CHECK(ico_demo_walk_should_start(270.0f, 330.0f, 0.0f, 1, 2048, 448) == 1);
+    CHECK(ico_demo_walk_should_start(-330.0f, -270.0f, 100.0f, 1, 2048, 448) == 1);
+    CHECK(ico_demo_walk_should_start(1000.0f, 1060.0f, 0.0f, 1, 2048, 448) == 1);
+    CHECK(ico_demo_walk_should_start(1024.0f, 1100.0f, 0.0f, 1, 2048, 448) == 1);
+    /* the root past the picture's side, a limb still in it (the PS2 showed
+       that limb frozen): the keys play */
+    CHECK(ico_demo_walk_should_start(250.0f, 330.0f, 0.0f, 1, 2048, 448) == 0);
+    CHECK(ico_demo_walk_should_start(-330.0f, -250.0f, 0.0f, 1, 2048, 448) == 0);
+    CHECK(ico_demo_walk_should_start(256.0f, 330.0f, 0.0f, 1, 2048, 448) == 0);
+    CHECK(ico_demo_walk_should_start(256.01f, 330.0f, 0.0f, 1, 2048, 448) == 1);
+    /* across the picture, inside it, past the native frame */
+    CHECK(ico_demo_walk_should_start(-300.0f, 300.0f, 0.0f, 1, 2048, 448) == 0);
+    CHECK(ico_demo_walk_should_start(70.0f, 130.0f, 0.0f, 1, 2048, 448) == 0);
+    CHECK(ico_demo_walk_should_start(1025.0f, 1085.0f, 0.0f, 1, 2048, 448) == 0);
+    /* the root below the frame, the root behind the camera, a node behind
+       it (no span) */
+    CHECK(ico_demo_walk_should_start(270.0f, 330.0f, 225.0f, 1, 2048, 448) == 0);
+    CHECK(ico_demo_walk_should_start(270.0f, 330.0f, 0.0f, 0, 2048, 448) == 0);
+    CHECK(ico_demo_walk_should_start(1.0f, 0.0f, 0.0f, 1, 2048, 448) == 0);
     /* 16:9 (688 wide) */
-    CHECK(ico_demo_walk_should_start(300.0f, 0.0f, 1, 688, 448) == 1);
-    CHECK(ico_demo_walk_should_start(345.0f, 0.0f, 1, 688, 448) == 0);
+    CHECK(ico_demo_walk_should_start(270.0f, 330.0f, 0.0f, 1, 688, 448) == 1);
+    CHECK(ico_demo_walk_should_start(345.0f, 400.0f, 0.0f, 1, 688, 448) == 0);
 
     /* the hold: past the native side by the margin, or behind */
     CHECK(ico_demo_walk_should_stop(1100.0f, 0.0f, 1, 2048, 448) == 0);
@@ -179,21 +199,23 @@ static void testWalk(void)
             float f = frame < 249.0f ? frame : 249.0f;
             float x = f < 130.0f ? x0 : screenX(x0, 6.0f, f - 130.0f);
 
-            CHECK(ico_demo_walk_update(&a, &p, f, play, x, 0.0f, 1, 512, 448) < 0.0f);
+            CHECK(ico_demo_walk_update(&a, &p, f, play, x, 0.0f, BODY(x), 1, 512, 448) < 0.0f);
         }
         CHECK(a.state == ICO_DEMO_WALK_IDLE || a.state == ICO_DEMO_WALK_DECLINED);
     }
 
     /* 48:9: before the stop the keys play */
     memset(&a, 0, sizeof(a));
-    CHECK(ico_demo_walk_update(&a, &p, 0.0f, 0.0f, 400.0f, 0.0f, 1, 2048, 448) < 0.0f);
-    CHECK(ico_demo_walk_update(&a, &p, 129.5f, 129.5f, 400.0f, 0.0f, 1, 2048, 448) < 0.0f);
+    CHECK(ico_demo_walk_update(&a, &p, 0.0f, 0.0f, 400.0f, 0.0f, BODY(400.0f), 1, 2048, 448) <
+          0.0f);
+    CHECK(ico_demo_walk_update(&a, &p, 129.5f, 129.5f, 400.0f, 0.0f, BODY(400.0f), 1, 2048, 448) <
+          0.0f);
     /* the first tick at the stop, the root in the band: the walk starts */
-    e = ico_demo_walk_update(&a, &p, 130.5f, 130.5f, 400.0f, 0.0f, 1, 2048, 448);
+    e = ico_demo_walk_update(&a, &p, 130.5f, 130.5f, 400.0f, 0.0f, BODY(400.0f), 1, 2048, 448);
     CHECK(a.state == ICO_DEMO_WALK_WALKING);
     CHECK(NEAR(e, 0.5f, 1e-4f));
     /* it walks on the play clock, the frame held or not */
-    e = ico_demo_walk_update(&a, &p, 249.0f, 175.5f, 700.0f, 0.0f, 1, 2048, 448);
+    e = ico_demo_walk_update(&a, &p, 249.0f, 175.5f, 700.0f, 0.0f, BODY(700.0f), 1, 2048, 448);
     CHECK(NEAR(e, 45.5f, 1e-4f));
     pf = ico_demo_walk_pose(&p, 45.0f, root);
     CHECK(NEAR(pf, 95.0f, 1e-4f)); /* the cycle 90..130, 5 frames in */
@@ -203,31 +225,45 @@ static void testWalk(void)
     pf = ico_demo_walk_pose(&p, 80.0f, root);
     CHECK(NEAR(pf, 90.0f, 1e-4f)); /* two cycles on: the cycle's first frame */
     /* past the native side by the margin: held there */
-    e = ico_demo_walk_update(&a, &p, 249.0f, 260.0f, 1200.0f, 0.0f, 1, 2048, 448);
+    e = ico_demo_walk_update(&a, &p, 249.0f, 260.0f, 1200.0f, 0.0f, BODY(1200.0f), 1, 2048, 448);
     CHECK(a.state == ICO_DEMO_WALK_HELD);
     CHECK(NEAR(e, 130.0f, 1e-4f));
-    CHECK(NEAR(ico_demo_walk_update(&a, &p, 249.0f, 400.0f, 1500.0f, 0.0f, 1, 2048, 448), 130.0f,
-               1e-4f));
+    CHECK(NEAR(
+        ico_demo_walk_update(&a, &p, 249.0f, 400.0f, 1500.0f, 0.0f, BODY(1500.0f), 1, 2048, 448),
+        130.0f, 1e-4f));
     /* the same motion again from its start: the keys, then a new decision */
-    CHECK(ico_demo_walk_update(&a, &p, 0.0f, 401.0f, 400.0f, 0.0f, 1, 2048, 448) < 0.0f);
+    CHECK(ico_demo_walk_update(&a, &p, 0.0f, 401.0f, 400.0f, 0.0f, BODY(400.0f), 1, 2048, 448) <
+          0.0f);
     CHECK(a.state == ICO_DEMO_WALK_IDLE);
 
     /* inside the 4:3 picture at the stop: declined for good (the PS2 showed
        the stop), even when the camera later leaves him in the band */
     memset(&a, 0, sizeof(a));
-    CHECK(ico_demo_walk_update(&a, &p, 130.0f, 130.0f, 100.0f, 0.0f, 1, 2048, 448) < 0.0f);
+    CHECK(ico_demo_walk_update(&a, &p, 130.0f, 130.0f, 100.0f, 0.0f, BODY(100.0f), 1, 2048, 448) <
+          0.0f);
     CHECK(a.state == ICO_DEMO_WALK_DECLINED);
-    CHECK(ico_demo_walk_update(&a, &p, 140.0f, 140.0f, 400.0f, 0.0f, 1, 2048, 448) < 0.0f);
+    CHECK(ico_demo_walk_update(&a, &p, 140.0f, 140.0f, 400.0f, 0.0f, BODY(400.0f), 1, 2048, 448) <
+          0.0f);
+    /* the root past the picture's side but a limb still in it at the stop:
+       declined (the PS2 showed that limb frozen) */
+    memset(&a, 0, sizeof(a));
+    CHECK(ico_demo_walk_update(&a, &p, 130.0f, 130.0f, 280.0f, 0.0f, 240.0f, 320.0f, 1, 2048, 448) <
+          0.0f);
+    CHECK(a.state == ICO_DEMO_WALK_DECLINED);
+    CHECK(ico_demo_walk_update(&a, &p, 140.0f, 140.0f, 400.0f, 0.0f, BODY(400.0f), 1, 2048, 448) <
+          0.0f);
     /* already past the native frame at the stop: declined */
     memset(&a, 0, sizeof(a));
-    CHECK(ico_demo_walk_update(&a, &p, 130.0f, 130.0f, 1100.0f, 0.0f, 1, 2048, 448) < 0.0f);
+    CHECK(ico_demo_walk_update(&a, &p, 130.0f, 130.0f, 1100.0f, 0.0f, BODY(1100.0f), 1, 2048, 448) <
+          0.0f);
     CHECK(a.state == ICO_DEMO_WALK_DECLINED);
 
     /* the cap: a root that never leaves holds after the most frames */
     memset(&a, 0, sizeof(a));
-    CHECK(ico_demo_walk_update(&a, &p, 130.0f, 0.0f, 400.0f, 0.0f, 1, 2048, 448) >= 0.0f);
-    e = ico_demo_walk_update(&a, &p, 249.0f, ICO_DEMO_WALK_MAX_FRAMES + 1.0f, 400.0f, 0.0f, 1, 2048,
-                             448);
+    CHECK(ico_demo_walk_update(&a, &p, 130.0f, 0.0f, 400.0f, 0.0f, BODY(400.0f), 1, 2048, 448) >=
+          0.0f);
+    e = ico_demo_walk_update(&a, &p, 249.0f, ICO_DEMO_WALK_MAX_FRAMES + 1.0f, 400.0f, 0.0f,
+                             BODY(400.0f), 1, 2048, 448);
     CHECK(a.state == ICO_DEMO_WALK_HELD);
     CHECK(NEAR(e, ICO_DEMO_WALK_MAX_FRAMES + 1.0f, 1e-3f));
 }
@@ -250,26 +286,26 @@ static void testHook(void)
 
     /* not listed: never, wherever the root is */
     CHECK(ico_demo_walk_tick(&actorA, 1001, "D1_C17_SA", &sa, 250, 4, synthRoot, synthPose, 140.0f,
-                             140.0f, 400.0f, 0.0f, 1, 2048, 448, &pf, root) == 0);
+                             140.0f, 400.0f, 0.0f, BODY(400.0f), 1, 2048, 448, &pf, root) == 0);
     /* listed, at 4:3: never */
     for (w = 0; w < 300; w++) {
         CHECK(ico_demo_walk_tick(&actorA, 1004, "D1_C23_SA", &sa, 250, 4, synthRoot, synthPose,
-                                 (float)w, (float)w, 300.0f + (float)w * 5.0f, 0.0f, 1, 512, 448,
-                                 &pf, root) == 0);
+                                 (float)w, (float)w, 300.0f + (float)w * 5.0f, 0.0f,
+                                 BODY(300.0f + (float)w * 5.0f), 1, 512, 448, &pf, root) == 0);
     }
     /* listed, at 48:9: from the stop in the band */
     CHECK(ico_demo_walk_tick(&actorB, 1027, "D1_C23_SC", &sb, 250, 4, synthRoot, synthPose, 120.0f,
-                             120.0f, 400.0f, 0.0f, 1, 2048, 448, &pf, root) == 0);
+                             120.0f, 400.0f, 0.0f, BODY(400.0f), 1, 2048, 448, &pf, root) == 0);
     CHECK(ico_demo_walk_tick(&actorB, 1027, "D1_C23_SC", &sb, 250, 4, synthRoot, synthPose, 130.0f,
-                             130.0f, 400.0f, 0.0f, 1, 2048, 448, &pf, root) == 1);
+                             130.0f, 400.0f, 0.0f, BODY(400.0f), 1, 2048, 448, &pf, root) == 1);
     CHECK(NEAR(pf, 90.0f, 1e-4f));
     CHECK(ico_demo_walk_tick(&actorB, 1027, "D1_C23_SC", &sb, 250, 4, synthRoot, synthPose, 150.0f,
-                             150.0f, 500.0f, 0.0f, 1, 2048, 448, &pf, root) == 1);
+                             150.0f, 500.0f, 0.0f, BODY(500.0f), 1, 2048, 448, &pf, root) == 1);
     CHECK(NEAR(pf, 110.0f, 1e-4f));
     CHECK(NEAR(root[0], 100.0f - 260.0f - 40.0f, 1e-2f));
     /* a new motion on the actor starts over */
     CHECK(ico_demo_walk_tick(&actorB, 1004, "D1_C23_SA", &sa, 250, 4, synthRoot, synthPose, 20.0f,
-                             151.0f, 500.0f, 0.0f, 1, 2048, 448, &pf, root) == 0);
+                             151.0f, 500.0f, 0.0f, BODY(500.0f), 1, 2048, 448, &pf, root) == 0);
 }
 
 int main(void)

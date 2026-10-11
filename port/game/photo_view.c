@@ -67,6 +67,15 @@ static void leave(void)
     }
 }
 
+#ifdef ICO_RD
+/* 1 when the photo camera ov at zoom k is the game camera at enter: the
+   same view matrix, no zoom */
+static int photoIsGameCamera(const RdCamera *ov, float k)
+{
+    return k == 1.0f && memcmp(ov->view, v.game0.view, sizeof(ov->view)) == 0;
+}
+#endif
+
 void ico_photo_view_tick(void)
 {
     ico_photo_set_left(0);
@@ -94,7 +103,13 @@ void ico_photo_view_tick(void)
 #ifdef ICO_RD
     /* the renderer keeps the triangles with a vertex behind this camera
        (RdCamera.freeCamera): the game's cameras rely on them being dropped,
-       a free camera does not; the headless build has no renderer */
-    rd_free_camera();
+       a free camera does not; the headless build has no renderer.  The
+       game's own rule stays while the aspect sweep runs (its frames are
+       the game's frame at each width, so a draw the game's rule drops
+       beside the picture shows in the sweep as it does in play) and while
+       the photo camera is still the game's camera (not moved, no zoom) */
+    if (!ico_video_frame_forced() && !photoIsGameCamera(&ov, k)) {
+        rd_free_camera();
+    }
 #endif
 }

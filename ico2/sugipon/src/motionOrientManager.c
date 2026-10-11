@@ -1000,16 +1000,41 @@ static inline void rotateNodes(char *m, SkelNode *s, void *q) /* derived name */
    the 4:3 picture but inside the native frame (gsFrame.w), the motion's last
    walk cycle repeats and the root goes on at the walk's speed until it is
    past the native frame's side; then he holds there.  At 4:3 the two
-   pictures are one and the keys play as on the PS2.  The decision reads the
-   root's world position (node 0's matrix, the last tick's) through the
-   camera, as IsPointIsInScreen (poly-flat.c) does. */
+   pictures are one and the keys play as on the PS2.  The decision reads
+   every node's world position (the node matrices, the last tick's) through
+   the camera, as IsPointIsInScreen (poly-flat.c) does: the walk starts only
+   when the whole body (the joints' box widened for the skin,
+   ICO_DEMO_WALK_SKIN) is outside the 4:3 picture, so no limb the PS2 showed
+   frozen there walks; the hold reads the root (node 0). */
 typedef void (*DemoWalkRootFn)(const void *data, int frame, float *out3);
 typedef void (*DemoWalkPoseFn)(const void *data, int frame, int node, float *out3);
 extern int ico_demo_walk_tick(const void *actor, int motion, const char *motion_name,
                               const void *data, int frames, int nodes, DemoWalkRootFn root_at,
                               DemoWalkPoseFn pose_at, float frame, float play, float dx, float dy,
-                              int depth_ok, int native_w, int native_h, float *pose_frame,
-                              float *root_out3);
+                              float x0, float x1, int depth_ok, int native_w, int native_h,
+                              float *pose_frame, float *root_out3);
+
+/* demo_walk.h's ICO_DEMO_WALK_SKIN: the joints' box widened by this much of
+   its height on each side */
+#define DEMO_WALK_SKIN 0.125f
+
+/* node i's world position (its matrix's translation row) projected through
+   the camera matrix m: screen pixels from the picture's centre, 0 when it
+   is behind the camera */
+static int demoWalkProject(float *m, const float *t, float *x, float *y)
+{
+    float pos[4] __attribute__((aligned(16)));
+    int out[4] __attribute__((aligned(16)));
+
+    pos[0] = t[0];
+    pos[1] = t[1];
+    pos[2] = t[2];
+    pos[3] = 1.0f;
+    sceVu0RotTransPers(out, m, pos, 1);
+    *x = (float)out[0] / 16.0f - 2048.0f;
+    *y = (float)out[1] / 16.0f - 2048.0f;
+    return out[2] >= 0 && out[2] <= 0x0FFFFFF0;
+}
 
 static void demoWalkRoot(const void *data, int frame, float *out3)
 {
@@ -1035,31 +1060,53 @@ static void demoWalkExtend(void *self, struct MotCtrl *w, int *md, int n, char *
                            SkelNode *skel, char *mot, float *v, float *rv)
 {
     float buf[16] __attribute__((aligned(16)));
-    float pos[4] __attribute__((aligned(16)));
-    int out[4] __attribute__((aligned(16)));
     float root[3];
     float poseFrame;
     float frame;
     float tmp[4];
-    const float *t = (const float *)((char *)MOWORK(self)->nodeMtx + 0x30);
+    const char *mtx = (const char *)MOWORK(self)->nodeMtx;
+    const int nodes = MOWORK(self)->nodeNum;
+    float dx;
+    float dy;
+    float x0;
+    float x1;
+    float y0;
+    float y1;
     int depthOk;
+    int all;
+    int i;
 
-    pos[0] = t[0];
-    pos[1] = t[1];
-    pos[2] = t[2];
-    pos[3] = 1.0f;
     sceVu0UnitMatrix(buf);
     sceVu0MulMatrix(buf, matrixptr + 0x80, buf);
     sceVu0MulMatrix(buf, matrixptr + 0xC0, buf);
-    sceVu0RotTransPers(out, buf, pos, 1);
-    depthOk = out[2] >= 0 && out[2] <= 0x0FFFFFF0;
+    /* the root (node 0) for the hold; every node for the start's span */
+    depthOk = demoWalkProject(buf, (const float *)(mtx + 0x30), &dx, &dy);
+    x0 = x1 = dx;
+    y0 = y1 = dy;
+    all = depthOk;
+    for (i = 1; i < nodes; i++) {
+        float x;
+        float y;
+
+        all &= demoWalkProject(buf, (const float *)(mtx + i * 64 + 0x30), &x, &y);
+        x0 = x < x0 ? x : x0;
+        x1 = x > x1 ? x : x1;
+        y0 = y < y0 ? y : y0;
+        y1 = y > y1 ? y : y1;
+    }
+    if (all) {
+        x0 -= DEMO_WALK_SKIN * (y1 - y0);
+        x1 += DEMO_WALK_SKIN * (y1 - y0);
+    } else {
+        x0 = 1.0f; /* a node behind the camera: no span, no start */
+        x1 = 0.0f;
+    }
     /* a motion held at its end (UpdateFrameCounter's playMode 2) reads as
        its last frame */
     frame = w->frameEnd ? (float)(md[0] - 1) : w->animFrame;
     if (ico_demo_walk_tick(self, w->motion, motionKind[w->motion].name, md, md[0], n, demoWalkRoot,
-                           demoWalkPose, frame, w->playTime, (float)out[0] / 16.0f - 2048.0f,
-                           (float)out[1] / 16.0f - 2048.0f, depthOk, gsFrame.w, ScreenHeight,
-                           &poseFrame, root)) {
+                           demoWalkPose, frame, w->playTime, dx, dy, x0, x1, depthOk, gsFrame.w,
+                           ScreenHeight, &poseFrame, root)) {
         GetFloatingMotion((StreamElem *)mot, poseFrame, tmp, md, n, blendless, skel);
         v[0] = root[0];
         v[1] = root[1];

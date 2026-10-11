@@ -27,11 +27,17 @@
  *     difference at shorter periods, P from 4 to 80, two whole cycles before
  *     the stop), the cycle being the P frames that end at the stop;
  *   - the velocity: the horizontal root travel over that cycle divided by P.
- * When the motion's frame first reaches the stop the actor's root is
- * projected through the camera: when it is outside the camera's 4:3 picture
- * (|x| > 256 pixels from the centre) and inside the native frame (|x| <=
- * gsFrame.w / 2, |y| <= h / 2, in front of the camera), the extension
- * starts; otherwise the motion's own keys play to the end as on the PS2.
+ * When the motion's frame first reaches the stop the actor is projected
+ * through the camera: every node of the skeleton (the last tick's node
+ * matrices), the box of their screen positions widened by
+ * ICO_DEMO_WALK_SKIN of its height on each side (the body reaches past its
+ * joints: the head's top, the fingers, the toes).  When that whole box is
+ * outside the camera's 4:3 picture on one side (beyond 256 pixels from the
+ * centre: no limb of the soldier is in the picture the PS2 showed, which
+ * keeps his frozen pose), its near edge is inside the native frame (|x| <=
+ * gsFrame.w / 2), the root is inside it vertically (|y| <= h / 2) and every
+ * node is in front of the camera, the extension starts; otherwise the
+ * motion's own keys play to the end as on the PS2.
  * While it runs, the walk cycle repeats and the root advances at the
  * velocity from the root at the stop, e motion frames after the stop (the
  * motion's play clock); once the root projects ICO_DEMO_WALK_MARGIN pixels
@@ -53,6 +59,9 @@
 /* pixels past the native frame's edge the root walks before the hold (the
    soldier's far side is still in the picture when the root crosses it) */
 #define ICO_DEMO_WALK_MARGIN 128.0f
+/* the projected joints' box is widened by this fraction of its height on
+   each side for the decision (the skin past the joints) */
+#define ICO_DEMO_WALK_SKIN 0.125f
 /* motion frames the extension walks at most */
 #define ICO_DEMO_WALK_MAX_FRAMES 600.0f
 
@@ -96,21 +105,26 @@ int ico_demo_walk_listed(const char *motion_name);
 int ico_demo_walk_analyse(IcoDemoWalkPlan *p, int frames, int nodes, const void *data,
                           IcoDemoWalkRootFn root_at, IcoDemoWalkPoseFn pose_at);
 
-/* 1 when a root dx, dy pixels from the picture's centre (depth_ok 0 behind
-   the camera) starts the extension: outside the 4:3 picture, inside the
-   native frame native_w x native_h.  Never at native_w 512. */
-int ico_demo_walk_should_start(float dx, float dy, int depth_ok, int native_w, int native_h);
+/* 1 when a soldier whose body spans x0 .. x1 pixels across from the
+   picture's centre, his root dy pixels down from it (depth_ok 0 when the
+   root is behind the camera; x1 < x0, no span, when a node is), starts the
+   extension: the whole span outside the 4:3 picture on one side, its near
+   edge inside the native frame native_w x native_h.  Never at native_w
+   512. */
+int ico_demo_walk_should_start(float x0, float x1, float dy, int depth_ok, int native_w,
+                               int native_h);
 
 /* 1 when a walking root has gone: ICO_DEMO_WALK_MARGIN past the native
    frame's edge, or behind the camera */
 int ico_demo_walk_should_stop(float dx, float dy, int depth_ok, int native_w, int native_h);
 
 /* One geometry tick of actor state *a for plan *p at motion frame `frame`
-   and play clock `play`, the root projected at dx, dy.  Returns the motion
-   frames past the stop the extension plays (>= 0), or -1 when the motion's
-   own keys play. */
+   and play clock `play`, the root projected at dx, dy and the body across
+   x0 .. x1 (the start decision's span).  Returns the motion frames past the
+   stop the extension plays (>= 0), or -1 when the motion's own keys play. */
 float ico_demo_walk_update(IcoDemoWalkActor *a, const IcoDemoWalkPlan *p, float frame, float play,
-                           float dx, float dy, int depth_ok, int native_w, int native_h);
+                           float dx, float dy, float x0, float x1, int depth_ok, int native_w,
+                           int native_h);
 
 /* What to play e frames past the stop: the pose frame in the walk cycle and
    the root (out3). */
@@ -122,8 +136,9 @@ float ico_demo_walk_pose(const IcoDemoWalkPlan *p, float e, float *root_out3);
    *pose_frame and root_out3 to play; 0 when the motion's keys play. */
 int ico_demo_walk_tick(const void *actor, int motion, const char *motion_name, const void *data,
                        int frames, int nodes, IcoDemoWalkRootFn root_at, IcoDemoWalkPoseFn pose_at,
-                       float frame, float play, float dx, float dy, int depth_ok, int native_w,
-                       int native_h, float *pose_frame, float *root_out3);
+                       float frame, float play, float dx, float dy, float x0, float x1,
+                       int depth_ok, int native_w, int native_h, float *pose_frame,
+                       float *root_out3);
 
 /* forget every plan and actor state */
 void ico_demo_walk_reset(void);
