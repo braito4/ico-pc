@@ -2,28 +2,30 @@
 """tools/content_table_check.py: the content table (port/render/rd_content_hide.c)
 against saved frames.
 
-The renderer draws the native frustum at every aspect: outside the Original
-preset a triangle that fails a VU program's region test is drawn, clipped by
-the GPU, where the PS2 drops it.  The stage geometry made for the PS2's 4:3
-picture is listed in the content table with a verb, HIDE (drawn nowhere) or
-HIDE43 (drawn only inside the 4:3 columns, as the PS2 draws it).  This tool
-drives port/render/rd_replay_tool over dumps; the table's verbs are
-overridden per run through ICO_RD_CONTENT_HIDE (rd_mesh.c
-rd__content_hide_set: "N=off", "N=hide", "N=hide43").
+The renderer draws one camera on the native frame: a triangle that fails a
+VU program's region test is not drawn when what the GPU would draw of it
+reaches into the camera's picture (GS X 2048 -+ 256), as the PS2 does not
+draw it, and is drawn, clipped by the GPU, when it lies wholly beside the
+picture (seen only on a frame wider than 4:3).  The stage geometry made
+for the PS2's 4:3 picture that passes the region test beside it (closing
+planes) is listed in the content table with the verb HIDE (drawn
+nowhere).  This tool drives port/render/rd_replay_tool over dumps; the
+table's verbs are overridden per run through ICO_RD_CONTENT_HIDE (rd_mesh.c
+rd__content_hide_set: "N=off", "N=hide").
 
   decide  for every entry of the table, on every 4:3 dump whose list draws
           the entry's mesh: the frame at 4:3 (every target and the present,
-          Original 1x and Enhanced 2x) with the entry off, HIDE43 and HIDE.
-          off and HIDE43 must be the same, byte for byte (at 4:3 HIDE43 is
-          the PS2's rule: the table changes nothing there).  HIDE the same
-          as off on every such dump -> HIDE is enough (the triangles never
-          reach the 4:3 picture); else HIDE43.  Exit 1 when off and HIDE43
-          differ, or the table lists HIDE where a dump shows HIDE43 is
-          needed.
+          Original 1x and Enhanced 2x) with the entry off and HIDE.  HIDE
+          the same as off, byte for byte, on every such dump -> HIDE (the
+          triangles never reach the 4:3 picture); else the faces show in
+          the 4:3 picture and the entry must go: the mesh stays unlisted,
+          drawn as geometry.  Exit 1 when an entry is listed HIDE and a
+          dump shows its faces at 4:3.
   report  the meshes that are NOT listed and are expected not to need an
-          entry: by default st26a_p1 and st26a_near (the opening's cliff
-          and tree card) on the opening dumps and the waterfall mist
-          wf_smoke1 (issue 57) on the patched waterfall dump.  For each
+          entry (the region rule covers them): by default st26a_p1 and
+          st26a_near (the opening's cliff and tree card) on the opening
+          dumps and the waterfall mist wf_smoke1 (issue 57) on the patched
+          waterfall dump.  For each
           dump at each aspect it holds (a v10 dump: its own aspect; an
           aspect sweep zip, Shift+F12 in photo mode: 4:3, 16:9, 32:9, 48:9
           and 60:9; a dump before v10 is 4:3 only, the wider aspects are
@@ -31,10 +33,9 @@ rd__content_hide_set: "N=off", "N=hide", "N=hide43").
           in Enhanced and in Original, each with and without the mesh's
           draws (--nop).  The pixels the mesh adds in Enhanced but not in
           Original are what its clipped triangles draw: their count inside
-          the 4:3 columns and beside them, their box and mean colour, and a
-          picture with them in magenta (OUT/report/...png).  A report, not
-          a gate: a mesh whose clipped pixels show what the original never
-          showed (rock, a trunk across the picture) gets an entry.
+          the camera's picture and beside it, their box and mean colour,
+          and a picture with them in magenta (OUT/report/...png).  Inside
+          the picture there should be none.  A report, not a gate.
   all     decide over the dump list, then report (the default)
 
   python3 -I tools/content_table_check.py [--tool T] [--out DIR] [--dumps LIST]
@@ -88,7 +89,7 @@ def read_table(path=TABLE):
     src = open(path, encoding="utf-8").read()
     body = src[src.index("rd__content_hide[] = {"):]
     out = []
-    for m in re.finditer(r'\{\s*"([^"]*)"\s*,\s*RD_(HIDE43|HIDE)\s*,', body):
+    for m in re.finditer(r'\{\s*"([^"]*)"\s*,\s*RD_(HIDE)\s*,', body):
         note = m.group(1)
         out.append((len(out), note.split(":", 1)[0].strip(), note, m.group(2)))
     return out
@@ -272,7 +273,7 @@ def cmd_decide(args, dumps):
                     continue
                 for setting, sargs in DECIDE_SETTINGS.items():
                     dirs = {}
-                    for verb in ("off", "hide43", "hide"):
+                    for verb in ("off", "hide"):
                         d = os.path.join(tmp, "%d-%s-%s-%s" % (i, os.path.basename(path), setting, verb))
                         os.makedirs(d, exist_ok=True)
                         rc, out = run_tool(args.tool, [path, "-", "--pass-dump", d] + sargs,
@@ -282,14 +283,8 @@ def cmd_decide(args, dumps):
                             fails += 1
                         dirs[verb] = d
                     pngs = sorted(f for f in os.listdir(dirs["off"]) if f.endswith(".png"))
-                    diff43 = [f for f in pngs if not same_png(os.path.join(dirs["off"], f),
-                                                              os.path.join(dirs["hide43"], f))]
                     diffh = [f for f in pngs if not same_png(os.path.join(dirs["off"], f),
                                                              os.path.join(dirs["hide"], f))]
-                    if diff43:
-                        say("FAIL entry %d (%s) %s %s: HIDE43 changes the 4:3 frame: %s" %
-                            (i, mesh, os.path.basename(path), setting, " ".join(diff43)))
-                        fails += 1
                     evidence[i].append((os.path.basename(path), setting, not diffh, diffh))
     shutil.rmtree(tmp, ignore_errors=True)
     for i, mesh, note, verb in table:
@@ -297,16 +292,16 @@ def cmd_decide(args, dumps):
         if not ev:
             say("entry %d %s (%s): no 4:3 dump draws it; no evidence" % (i, verb, mesh))
             continue
-        need43 = [e for e in ev if not e[2]]
-        verdict = "HIDE43" if need43 else "HIDE"
+        shows = [e for e in ev if not e[2]]
         for d, setting, same, diff in ev:
             say("entry %d (%s) %s %s: HIDE %s" %
                 (i, mesh, d, setting, "is the same picture" if same else "changes " + " ".join(diff)))
-        say("entry %d (%s): listed %s, the dumps say %s%s" %
-            (i, mesh, verb, verdict, "" if verdict == verb else
-             (" (HIDE would do)" if verdict == "HIDE" else " FAIL")))
-        if verb == "HIDE" and verdict == "HIDE43":
+        if shows:
+            say("entry %d (%s): FAIL: its faces show in the 4:3 picture; leave the mesh unlisted "
+                "(drawn as geometry)" % (i, mesh))
             fails += 1
+        else:
+            say("entry %d (%s): HIDE (never in the 4:3 picture)" % (i, mesh))
     return 1 if fails else 0
 
 

@@ -23,16 +23,14 @@ typedef struct IcoFrameCB {
     float target[4];    /* w, h of the bound target in GS pixels, 1/w, 1/h */
     float origin[4];    /* xy GS window coordinate of the target's top-left, zw added after */
 
-    /* The native frame (common.hlsli g_frame, g_frame43): frame[0] the
-     * region scale, 512 / W on a target as wide as the native frame W,
-     * exactly 1 on every other target and at 4:3 (rd_replay.c
-     * rd__frame_group_ex); frame43[0..1] the bound target's 4:3 columns in
-     * its texels, (w / 2 -+ 256) sx on a frame-wide target, 0 .. w sx on
-     * the others.  The rest reserved (0).  No position is transformed,
-     * and no shader reads them (the VU region test reads the position as
-     * computed, vu_common.hlsli). */
+    /* The native frame (common.hlsli g_frame): frame[0] the region
+     * scale, 512 / W on a target as wide as the native frame W, exactly 1
+     * on every other target and at 4:3 (rd_replay.c rd__frame_group_ex).
+     * The rest, and frameReserved, reserved (0).  No position is
+     * transformed, and no shader reads them (the VU region test reads the
+     * position as computed, vu_common.hlsli). */
     float frame[4];
-    float frame43[4];
+    float frameReserved[4];
 
     /* x = 1 / 2^24 (PSMZ24 scale); yz the bound target's texels per GS
      * pixel (1 in Original); w = 1: the VU programs output unquantised X, Y
@@ -204,7 +202,7 @@ _Static_assert(offsetof(IcoFrameCB, origin) == 240, "origin");
 
 _Static_assert(offsetof(IcoFrameCB, frame) == 256, "frame");
 
-_Static_assert(offsetof(IcoFrameCB, frame43) == 272, "frame43");
+_Static_assert(offsetof(IcoFrameCB, frameReserved) == 272, "frameReserved");
 
 _Static_assert(offsetof(IcoFrameCB, z) == 288, "z");
 
@@ -271,19 +269,18 @@ typedef struct IcoVuBoneCB {
 
 /* IcoVuCB.draw[2] (VU_* in vu_common.hlsli). */
 enum {
-    ICO_VU_CLIP_REGION = 0,  /* region test: a failing triangle is dropped in the
-                              * Original preset (FrameCB misc[1] 0), GPU-clipped at the
-                              * native frustum in Enhanced and under ICO_VU_BEHIND_EYE */
+    ICO_VU_CLIP_REGION = 0,  /* region test: a failing triangle whose clipped extent
+                              * reaches the camera's picture (GS X 2048 -+ 256) is dropped,
+                              * one wholly beside it GPU-clipped at the native frustum, in
+                              * either preset; every one GPU-clipped under
+                              * ICO_VU_BEHIND_EYE */
     ICO_VU_CLIP_NONE = 1,    /* normal_c code 34: no test, X/Y wrap to 16 bits */
     ICO_VU_CLIP_SCISSOR = 2, /* code 36: clip-space flags, trivial reject, GPU clipping */
     ICO_VU_CLIP_MASK = 3,
-    ICO_VU_PROBE = 16,        /* tests: one value per pixel of a 16-wide RGBA8_UINT target */
-    ICO_VU_CUT_ONLY = 32,     /* scissor: only the triangles SCISSOR_COMMON draws (first draw) */
-    ICO_VU_KICK_ONLY = 64,    /* scissor: only the triangles the strip kicks (second draw) */
-    ICO_VU_DROP_HIDDEN = 128, /* the triangles marked ICO_VU_INDEX_HIDE43 are not drawn
-                               * (the parts of a frame-wide target beside the 4:3
-                               * columns, rd_replay.c doVu) */
-    ICO_VU_BEHIND_EYE = 256   /* region test and particle window: a failing triangle or
+    ICO_VU_PROBE = 16,      /* tests: one value per pixel of a 16-wide RGBA8_UINT target */
+    ICO_VU_CUT_ONLY = 32,   /* scissor: only the triangles SCISSOR_COMMON draws (first draw) */
+    ICO_VU_KICK_ONLY = 64,  /* scissor: only the triangles the strip kicks (second draw) */
+    ICO_VU_BEHIND_EYE = 256 /* region test and particle window: a failing triangle or
                                * sprite is GPU-clipped, not dropped, in either preset
                                * (photo mode's free camera, RdCamera.freeCamera) */
 };
@@ -309,12 +306,9 @@ enum {
 #define ICO_VU_INDEX_LATER 0x40000000u
 /* The content table (port/render/rd_content_hide.c, rd_mesh.c
  * markContentHidden), set on the three indices of a triangle of a listed
- * artist trick: HIDE, drawn nowhere; HIDE43, drawn only inside the 4:3
- * columns of a frame-wide target and there as the PS2 draws it (a draw
- * with ICO_VU_DROP_HIDDEN skips it: rd_replay.c's parts beside the
- * columns).  vu_common.hlsli's VU_INDEX_HIDE, VU_INDEX_HIDE43 */
+ * artist trick: HIDE, drawn nowhere.  vu_common.hlsli's VU_INDEX_HIDE.
+ * Bit 28 is unused */
 #define ICO_VU_INDEX_HIDE 0x20000000u
-#define ICO_VU_INDEX_HIDE43 0x10000000u
 #define ICO_VU_INDEX_MASK 0x0FFFFFFFu
 /* kick * 4 + corner below 2^28: the meshes rd_mesh.c marks have fewer
  * vertices */

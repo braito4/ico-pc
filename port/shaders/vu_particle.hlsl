@@ -44,12 +44,11 @@ VuSprite vu_particle(uint i)
     o.drawn = !alphaZero && vu_inside(float4(p0, h.w), clipMin, clipMax) &&
               vu_inside(float4(p1, h.w), clipMin, clipMax);
     // The port keeps the alpha test and the w window (the particle in
-    // front of the eye and before the far limit) in every preset; the x/y
-    // window (1024..3071, prim_InitParticleByPartition) drops a sprite in
-    // the Original preset only, as the triangles' region test does
-    // (vu_region_drops): elsewhere a sprite outside it is drawn and the
-    // GPU clips the quad (vu_particle_vs). That window is fixed in GS
-    // pixels, so on a wide frame it ends at the frame's edge at 48:9 and
+    // front of the eye and before the far limit); a sprite outside the x/y
+    // window (1024..3071, prim_InitParticleByPartition) is dropped when its
+    // quad reaches the camera's picture, as the triangles' region test is,
+    // and drawn whole beside it (vu_particle_vs). That window is fixed in
+    // GS pixels, so on a wide frame it ends at the frame's edge at 48:9 and
     // inside it at 60:9, where a sprite with a corner past it vanished whole.
     o.shown = !alphaZero && clipMin.w < h.w && h.w < clipMax.w;
     o.c0 = int3(vu_ftoi4(p0.x), vu_ftoi4(p0.y), vu_ftoi4(p0.z));
@@ -106,11 +105,16 @@ VuVSOut vu_particle_vs(uint vid : SV_VertexID)
     if (!s.shown) {
         return o;
     }
-    // A sprite the PS2 skips for its x/y window: dropped in the Original
-    // preset, drawn whole (the GPU clips the quad) in Enhanced and under
-    // photo mode's free camera, as the region test's triangles are
-    if (!s.drawn && vu_region_drops(false)) {
-        return o;
+    // A sprite the PS2 skips for its x/y window, as the region test's
+    // triangles (vu_triangle_out): not drawn when its quad reaches into the
+    // camera's picture, drawn whole (the GPU clips the quad) when wholly
+    // beside it and under photo mode's free camera, in both presets
+    if (!s.drawn && (vu_draw.z & VU_F_BEHIND_EYE) == 0u) {
+        float x0 = vu_ndc(float2(s.c0.xy) * (1.0 / 16.0)).x;
+        float x1 = vu_ndc(float2(s.c1.xy) * (1.0 / 16.0)).x;
+        if (vu_reaches_picture(min(x0, x1), max(x0, x1))) {
+            return o;
+        }
     }
     // corners of the two triangles: (0,0) (1,0) (0,1), (0,1) (1,0) (1,1)
     uint c = vid % 6u;

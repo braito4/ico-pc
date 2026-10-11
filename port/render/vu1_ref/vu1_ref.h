@@ -154,20 +154,21 @@ enum {
 };
 
 /* A strip triangle whose vertices' region tests are insideA..C: all inside,
- * drawn exactly; one outside, dropped in the Original preset (the PS2
- * drops it) and for a triangle of the content table's HIDE43 verb,
- * clipped in Enhanced at any aspect, and clipped in either preset under
- * photo mode's free camera (freeCamera, ICO_VU_BEHIND_EYE).  hide: the
- * triangle carries ICO_VU_INDEX_HIDE (never drawn); hide43:
- * ICO_VU_INDEX_HIDE43, which a draw with ICO_VU_DROP_HIDDEN (dropHidden,
- * the parts beside the 4:3 columns) leaves out. */
+ * drawn exactly; one outside: clipped under photo mode's free camera
+ * (freeCamera, ICO_VU_BEHIND_EYE); else not drawn when reaches (what the
+ * GPU draws of it, cut to 0 <= z <= w, meets the camera's picture, GS X
+ * 2048 -+ 256: vu_cut_reaches_picture), as the PS2 does not draw it, and
+ * clipped when it lies wholly beside it.  The same in both presets (preset
+ * changes nothing here).  hide: the triangle carries ICO_VU_INDEX_HIDE
+ * (never drawn). */
 int vu1ref_region_draw(int preset, int freeCamera, int insideA, int insideB, int insideC, int hide,
-                       int hide43, int dropHidden);
+                       int reaches);
 /* A particle: shown (alpha non-zero, w inside the window) and drawn (the
  * VU's test, both corners inside its x/y window too).  Not drawn by the VU:
- * dropped in the Original preset, the whole sprite (the GPU clips it) in
- * Enhanced and under the free camera. */
-int vu1ref_particle_draw(int preset, int freeCamera, int drawn, int shown);
+ * the whole sprite (the GPU clips it) under the free camera; else dropped
+ * when its quad reaches the camera's picture (reaches), drawn whole when
+ * wholly beside it; the same in both presets. */
+int vu1ref_particle_draw(int preset, int freeCamera, int drawn, int shown, int reaches);
 
 /* ------------------------------------------------------------- draws
  * in = the batch at TOP: in[0] is the GIF tag (NLOOP in the low 15 bits of

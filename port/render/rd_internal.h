@@ -612,13 +612,9 @@ typedef struct RdMeshRec {
      * ICO_VU_INDEX_LATER on each triangle that overlaps an earlier
      * triangle of the mesh in its plane (rd_mesh.c markLaterOverlaps);
      * NULL when none does (rd__mesh_draw_index); also ICO_VU_INDEX_HIDE
-     * or ICO_VU_INDEX_HIDE43 on each triangle of a content table entry
-     * (rd_content_hide.c, rd_mesh.c markContentHidden) */
+     * on each triangle of a content table entry (rd_content_hide.c,
+     * rd_mesh.c markContentHidden) */
     uint32_t *drawIndex;
-    /* drawIndex holds an ICO_VU_INDEX_HIDE43 triangle: rd_replay.c draws
-     * the mesh on a frame-wide target in three parts, the sides beside the
-     * 4:3 columns without them */
-    uint8_t hidden43;
     uint32_t indexCount;
     RdVuBatchRec *batches;
     uint32_t lastUsed;   /* g_rd.frameCounter of the last draw recorded */
@@ -685,7 +681,7 @@ static inline const uint32_t *rd__mesh_draw_index(const RdMeshRec *m)
     return m->drawIndex ? m->drawIndex : m->index;
 }
 
-/* dst's drawIndex (and hidden43) becomes a copy of src's (none when src
+/* dst's drawIndex becomes a copy of src's (none when src
  * has none): the interpolation's scratch meshes draw their source's (rd_interp.c);
  * false on no memory (dst then has none) */
 bool rd__vu_mesh_copy_draw_index(RdMeshRec *dst, const RdMeshRec *src);
@@ -694,7 +690,7 @@ bool rd__vu_mesh_copy_draw_index(RdMeshRec *dst, const RdMeshRec *src);
  * 4:3 picture, by the stream bits of its black corners, and what the
  * renderer does with it.  RD_HIDE_OFF is never listed (an override's
  * "off"). */
-typedef enum RdHideVerb { RD_HIDE_OFF = 0, RD_HIDE = 1, RD_HIDE43 = 2 } RdHideVerb;
+typedef enum RdHideVerb { RD_HIDE_OFF = 0, RD_HIDE = 1 } RdHideVerb;
 
 typedef struct RdContentHide {
     const char *model; /* where it is, for the reader */
@@ -710,7 +706,7 @@ extern const int rd__content_hide_count;
 /* rd_mesh.c: the verbs the meshes created from now on are marked with,
  * for tools/content_table_check.py (the environment variable
  * ICO_RD_CONTENT_HIDE, read when the first mesh is marked) and the tests.
- * spec: comma-separated "off", "hide", "hide43" or "table" for every entry
+ * spec: comma-separated "off", "hide" or "table" for every entry
  * (table: as listed), or "N=verb" for entry N; NULL is "table".  False
  * (nothing changed) on a bad spec. */
 bool rd__content_hide_set(const char *spec);
@@ -1783,13 +1779,12 @@ RdUniform rd__frame_group_z(uint32_t targetW, uint32_t targetH, float originX, f
                             float zScale);
 /* FrameCB with the native frame's region scale (g_frame.x; 1 for none:
  * rd__region_scale gives a target's) and the target's texels per GS pixel
- * in g_z.yz; g_frame43 the target's 4:3 columns in its texels. */
+ * in g_z.yz. */
 RdUniform rd__frame_group_ex(uint32_t targetW, uint32_t targetH, float originX, float originY,
                              float zScale, float regionScale, float scaleX, float scaleY);
 /* The region scale of a draw into tc: 512 / W on a target of the native
  * frame's GS size W x H (g_rd.gsW x gsH: SCENE, WORK2, AURA_WORK, the shadow
- * count, a block the game sizes as the frame) when W is not 512, the share
- * of the 4:3 columns (doVu's HIDE43 split, hide43Parts, tests it; FrameCB
+ * count, a block the game sizes as the frame) when W is not 512 (FrameCB
  * g_frame.x carries it, which no shader reads: the VU region test compares
  * the position as computed); exactly 1 otherwise (every target at 4:3). */
 float rd__region_scale(const RdTargetRec *tc);

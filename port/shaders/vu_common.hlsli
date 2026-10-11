@@ -68,56 +68,26 @@ StructuredBuffer<float4> vu_stream : register(t0, space1);
 // order.
 #define VU_F_CUT_ONLY 32u
 #define VU_F_KICK_ONLY 64u
-// The parts of a frame-wide target beside the 4:3 columns are drawn with
-// VU_F_DROP_HIDDEN: a triangle marked VU_INDEX_HIDE43 (the content table's
-// HIDE43 verb, rd_content_hide.c) is not drawn there (vu_content_hidden;
-// rd_replay.c doVu splits the draw only for a mesh with such a mark)
-#define VU_F_DROP_HIDDEN 128u
 // Photo mode's free camera (RdCamera.freeCamera): every triangle failing the
 // region test, and every particle outside its x/y window, is drawn
 // GPU-clipped over the whole picture, a vertex behind the eye or not, in
-// either preset (vu_region_drops, vu_particle_vs)
+// either preset (vu_triangle_out, vu_particle_vs)
 #define VU_F_BEHIND_EYE 256u
 // Issue 25: the index bit of a triangle that overlaps an earlier triangle of
 // its mesh in the same plane (shader_consts.h ICO_VU_INDEX_LATER; static
 // prelit and lit meshes, rd_mesh.c markLaterOverlaps); vu_later_out
 #define VU_INDEX_LATER 0x40000000u
 // The content table (port/render/rd_content_hide.c, rd_mesh.c
-// markContentHidden): the index bits of a triangle of an artist trick made
-// for the 4:3 picture. HIDE: drawn nowhere. HIDE43: drawn only inside the
-// 4:3 columns, and there as the PS2 draws it (vu_region_drops). Static
-// prelit and lit meshes only; shader_consts.h ICO_VU_INDEX_HIDE, _HIDE43
+// markContentHidden): the index bit of a triangle of an artist trick made
+// for the 4:3 picture, drawn nowhere (HIDE). Static prelit and lit meshes
+// only; shader_consts.h ICO_VU_INDEX_HIDE
 #define VU_INDEX_HIDE 0x20000000u
-#define VU_INDEX_HIDE43 0x10000000u
 #define VU_INDEX_MASK 0x0FFFFFFFu
 
-// Whether the triangle of index value vid is left out of this draw: a
-// HIDE triangle in every draw, a HIDE43 one in a draw of the parts beside
-// the 4:3 columns (VU_F_DROP_HIDDEN).
+// Whether the triangle of index value vid is left out of every draw (HIDE).
 bool vu_content_hidden(uint vid)
 {
-    return (vid & VU_INDEX_HIDE) != 0u ||
-           ((vid & VU_INDEX_HIDE43) != 0u && (vu_draw.z & VU_F_DROP_HIDDEN) != 0u);
-}
-
-// The Original preset (FrameCB g_misc.y 0, rd.h RD_PRESET_ORIGINAL): the
-// renderer reproduces the PS2's picture, which the game only allows at
-// 4:3 (video_options.c ico_video_preset).
-bool vu_original()
-{
-    return g_misc.y == 0.0;
-}
-
-// Whether a triangle that fails the region test is dropped, as the PS2
-// drops it: in the Original preset, and for a triangle of the content
-// table's HIDE43 verb (marked: the 4:3 picture's artist trick keeps the
-// PS2's rule wherever it is drawn); never under photo mode's free camera
-// (VU_F_BEHIND_EYE). Everywhere else the GPU clips it at the native
-// frustum (vu_triangle_out). The particles' x/y window follows the same
-// rule (vu_particle_vs).
-bool vu_region_drops(bool marked)
-{
-    return (vu_draw.z & VU_F_BEHIND_EYE) == 0u && (vu_original() || marked);
+    return (vid & VU_INDEX_HIDE) != 0u;
 }
 
 #define VU_PROBE_FIELDS 16u
@@ -348,6 +318,72 @@ float4 vu_cut_position(VuVtx v)
 
 static const float4 VU_CULLED = float4(2.0, 2.0, 2.0, 1.0); // outside x <= w: clipped away
 
+// The camera's picture: the GS X range the game's camera projects its 4:3
+// picture into, 2048 -+ 256 GS pixels (gsb_SetVSMatrix's centre and the
+// 512-pixel screen). The projection is the same at every aspect, so this
+// is the same part of the camera's view on every frame; a frame wider
+// than 4:3 shows more of the view beside it.
+static const float VU_PICTURE_X0 = 1792.0;
+static const float VU_PICTURE_X1 = 2304.0;
+
+// Whether a clip-space x range lo .. hi (positions, x / w, as vu_ndc maps
+// GS pixels) meets the camera's picture. Conservative at its edges: a
+// range that ends exactly on an edge covers no pixel centre inside, but
+// counts as reaching it.
+bool vu_reaches_picture(float lo, float hi)
+{
+    float l = vu_ndc(float2(VU_PICTURE_X0, 0.0)).x;
+    float r = vu_ndc(float2(VU_PICTURE_X1, 0.0)).x;
+    return lo < r && hi > l;
+}
+
+// Corners p[0..n) of a convex polygon in clip space cut to
+// dot(plane, v) >= 0 (Sutherland-Hodgman). A triangle cut by two planes has
+// at most five corners.
+void vu_clip_corners(inout float4 p[5], inout uint n, float4 plane)
+{
+    float4 q[5] = p;
+    uint m = 0u;
+    for (uint i = 0u; i < n; i++) {
+        float4 a = p[i];
+        float4 b = p[i + 1u < n ? i + 1u : 0u];
+        float da = dot(plane, a);
+        float db = dot(plane, b);
+        if (da >= 0.0 && m < 5u) {
+            q[m] = a;
+            m++;
+        }
+        if ((da >= 0.0) != (db >= 0.0) && m < 5u) {
+            q[m] = lerp(a, b, da / (da - db));
+            m++;
+        }
+    }
+    p = q;
+    n = m;
+}
+
+// Whether what the GPU draws of the triangle with clip-space corners a, b
+// and c (vu_cut_position) reaches into the camera's picture: the triangle
+// cut to 0 <= z <= w as the GPU clips it, its x extent met with the
+// picture's (vu_reaches_picture). A triangle cut away whole reaches
+// nothing.
+bool vu_cut_reaches_picture(float4 a, float4 b, float4 c)
+{
+    float4 p[5] = {a, b, c, c, c};
+    uint n = 3u;
+    vu_clip_corners(p, n, float4(0.0, 0.0, 1.0, 0.0));
+    vu_clip_corners(p, n, float4(0.0, 0.0, -1.0, 1.0));
+    float lo = 1e30;
+    float hi = -1e30;
+    for (uint i = 0u; i < n; i++) {
+        // a corner left at w = 0 (z = 0 there too) lies at infinity on its x's side
+        float x = p[i].w > 0.0 ? p[i].x / p[i].w : (p[i].x >= 0.0 ? 1e30 : -1e30);
+        lo = min(lo, x);
+        hi = max(hi, x);
+    }
+    return n >= 3u && vu_reaches_picture(lo, hi);
+}
+
 VuVSOut vu_out_init()
 {
     VuVSOut o;
@@ -359,9 +395,8 @@ VuVSOut vu_out_init()
 
 // The triangle k-2, k-1, k: what the GS draws of it. me is the corner this invocation outputs.
 // mode: VU_CLIP_*; the programs without a scissor or no-test variant pass
-// VU_CLIP_REGION whatever vu_draw.z says. marked: the triangle carries
-// VU_INDEX_HIDE43 (vu_region_drops; vu_triangle_out passes false).
-VuVSOut vu_triangle_out_marked(VuVtx a, VuVtx b, VuVtx c, VuVtx me, uint mode, bool marked)
+// VU_CLIP_REGION whatever vu_draw.z says.
+VuVSOut vu_triangle_out(VuVtx a, VuVtx b, VuVtx c, VuVtx me, uint mode)
 {
     VuVSOut o = vu_out_init();
     o.col = float4(me.rgba);
@@ -381,30 +416,43 @@ VuVSOut vu_triangle_out_marked(VuVtx a, VuVtx b, VuVtx c, VuVtx me, uint mode, b
     }
     if (mode == VU_CLIP_REGION) {
         // On the PS2 any vertex outside the region sets ADC on itself and
-        // the next two, and the triangle is not drawn. The test runs as
-        // the program's own, on the position as computed, at every aspect
-        // (VuVtx.inside, the tests' probe field). The port (user decision
-        // 2026-10-10, v0.6.0: the native frustum is the truth at every
-        // aspect):
+        // the next two, and the triangle is not drawn. That test is the
+        // camera's own: the program's, on the position as computed
+        // (VuVtx.inside, the tests' probe field), and the projection is
+        // the same at every aspect. The port's rule, one camera on the
+        // native frame (user decision 2026-10-11 after v0.6.0-rc1's forest
+        // shot: "don't draw things that would've been hidden, but 4:3 is
+        // not a separate viewport, it's a camera; don't render something
+        // that will get clipped off inside of the 4:3"), the same in both
+        // presets:
         // - all three vertices inside: drawn exactly (vu_vtx_position, on
         //   the ftoi4 grid);
-        // - a failing triangle in the Original preset is dropped, as the
-        //   PS2 drops it: the Original picture is the PS2's (it is 4:3);
-        // - a failing triangle everywhere else (Enhanced at any aspect,
-        //   photo mode's free camera VU_F_BEHIND_EYE in either preset) is
-        //   drawn, clipped by the GPU at the native frustum, with code 36's
-        //   corner rule (vu_cut_position: the GS position where the vertex
-        //   has one, the homogeneous form of h where it is behind the eye,
-        //   saturated or below GS Z 0; every program computes h before the
-        //   test): what the 4:3 window cut off stays in the picture (a wall
-        //   with one vertex past the window, issue 29; the sea at the old
-        //   bridge whose only triangles there have a vertex behind the eye;
-        //   a walkway low under the free camera).
-        // The artist tricks that only work with the PS2's drops (closing
-        // planes, a camera that passes through scenery) are content data,
-        // the table of rd_content_hide.c: a HIDE triangle never reaches
-        // here (vu_content_hidden), a HIDE43 one (marked) keeps the PS2's
-        // drop in the 4:3 columns it is drawn in (vu_region_drops).
+        // - a failing triangle under photo mode's free camera
+        //   (VU_F_BEHIND_EYE) is drawn, clipped by the GPU at the native
+        //   frustum (a walkway low under the camera left a hole);
+        // - a failing triangle whose GPU-clipped extent (0 <= z <= w, a
+        //   vertex behind the eye or not) reaches into the camera's
+        //   picture (GS X 2048 -+ 256, vu_cut_reaches_picture) is not
+        //   drawn, as the PS2 does not draw it: the opening's cliff
+        //   (st26a_p1, filmed from inside, vertices behind the eye) and the
+        //   forest's tree card (st26a_near, a vertex past the window, every
+        //   vertex 160 to 540 units in front of the eye) stay out of the
+        //   picture, and none is cut at the picture's edge (the waterfall's
+        //   mist, issue 57);
+        // - a failing triangle wholly beside the camera's picture (seen
+        //   only on a frame wider than 4:3) is drawn, clipped by the GPU at
+        //   the native frustum: there the PS2 showed nothing, and dropped
+        //   triangles left holes (a wall with one vertex past the window,
+        //   issue 29; at 48:9 a patch of the sea at the far left of the old
+        //   bridge whose only triangles there have a vertex behind the
+        //   eye). It never touches the picture, so nothing is discarded.
+        // At 4:3 the frame is the picture, so every failing triangle that
+        // could show reaches it: the picture is the PS2's in both presets.
+        // A drawn triangle with a vertex outside takes code 36's corner
+        // rule (vu_cut_position: the GS position where the vertex has one,
+        // the homogeneous form of h where it is behind the eye, saturated
+        // or below GS Z 0; every program computes h before the test). A
+        // HIDE triangle never reaches here (vu_content_hidden).
         // Two differences from a code-36 draw of the same triangle remain:
         // code 36's clipped triangles go through their own earlier pass
         // with ABE forced on (rd_replay.c draws them as the VU's fans,
@@ -415,7 +463,9 @@ VuVSOut vu_triangle_out_marked(VuVtx a, VuVtx b, VuVtx c, VuVtx me, uint mode, b
         // is drawn without it.
         if (a.inside && b.inside && c.inside) {
             o.pos = vu_vtx_position(me);
-        } else if (!vu_region_drops(marked)) {
+        } else if ((vu_draw.z & VU_F_BEHIND_EYE) != 0u ||
+                   !vu_cut_reaches_picture(vu_cut_position(a), vu_cut_position(b),
+                                           vu_cut_position(c))) {
             o.pos = vu_cut_position(me);
         }
         return o;
@@ -441,11 +491,6 @@ VuVSOut vu_triangle_out_marked(VuVtx a, VuVtx b, VuVtx c, VuVtx me, uint mode, b
         o.pos = vu_vtx_position(me);
     }
     return o;
-}
-
-VuVSOut vu_triangle_out(VuVtx a, VuVtx b, VuVtx c, VuVtx me, uint mode)
-{
-    return vu_triangle_out_marked(a, b, c, me, mode, false);
 }
 
 // Issue 25: a triangle marked VU_INDEX_LATER and the earlier one it

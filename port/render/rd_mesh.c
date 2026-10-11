@@ -533,8 +533,7 @@ done:
  * rd_content_hide.c lists the stage geometry made for the PS2's 4:3 picture
  * by the stream bits of its black corners; a triangle whose three vertices
  * are black corners of one entry carries the entry's verb as an index bit
- * in the draw's list (ICO_VU_INDEX_HIDE, ICO_VU_INDEX_HIDE43), the mesh's
- * own list untouched. */
+ * in the draw's list (ICO_VU_INDEX_HIDE), the mesh's own list untouched. */
 
 /* the verbs applied: the table's, or an override (rd__content_hide_set);
  * s_verbSet once the environment has been read or a spec given */
@@ -546,7 +545,7 @@ static int parseVerb(const char *t, size_t n, RdHideVerb *v)
     static const struct {
         const char *name;
         RdHideVerb verb;
-    } kVerbs[] = {{"off", RD_HIDE_OFF}, {"hide", RD_HIDE}, {"hide43", RD_HIDE43}};
+    } kVerbs[] = {{"off", RD_HIDE_OFF}, {"hide", RD_HIDE}};
 
     for (size_t i = 0; i < sizeof(kVerbs) / sizeof(kVerbs[0]); i++) {
         if (strlen(kVerbs[i].name) == n && strncmp(t, kVerbs[i].name, n) == 0) {
@@ -632,11 +631,10 @@ static int contentEntryOf(const RdMeshRec *m, uint32_t v)
 
 /* The entry's index bit into m->drawIndex (a copy of m->index made when
  * markLaterOverlaps left none) on every triangle of a listed entry whose
- * verb is not off; m->hidden43 when one is HIDE43.  The colour is the
- * layout's last quadword (prelit 2, lit 3). */
+ * verb is not off.  The colour is the layout's last quadword (prelit 2,
+ * lit 3). */
 static void markContentHidden(RdMeshRec *m)
 {
-    m->hidden43 = 0;
     const uint32_t nt = m->indexCount / 3, qpv = m->qwPerVertex;
     if (qpv != RD_VU_QW_PRELIT && qpv != RD_VU_QW_LIT) {
         return;
@@ -664,12 +662,8 @@ static void markContentHidden(RdMeshRec *m)
             }
             memcpy(m->drawIndex, m->index, (size_t)m->indexCount * 4);
         }
-        const uint32_t bit = verb == RD_HIDE ? ICO_VU_INDEX_HIDE : ICO_VU_INDEX_HIDE43;
         for (int c = 0; c < 3; c++) {
-            m->drawIndex[t * 3 + (uint32_t)c] |= bit;
-        }
-        if (verb == RD_HIDE43) {
-            m->hidden43 = 1;
+            m->drawIndex[t * 3 + (uint32_t)c] |= ICO_VU_INDEX_HIDE;
         }
     }
 }
@@ -678,14 +672,12 @@ bool rd__vu_mesh_copy_draw_index(RdMeshRec *dst, const RdMeshRec *src)
 {
     free(dst->drawIndex);
     dst->drawIndex = NULL;
-    dst->hidden43 = 0;
     if (!src->drawIndex || dst->indexCount != src->indexCount) {
         return !src->drawIndex;
     }
     dst->drawIndex = malloc((size_t)src->indexCount * 4);
     if (dst->drawIndex) {
         memcpy(dst->drawIndex, src->drawIndex, (size_t)src->indexCount * 4);
-        dst->hidden43 = src->hidden43;
     }
     return dst->drawIndex != NULL;
 }

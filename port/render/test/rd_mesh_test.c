@@ -969,25 +969,21 @@ static void stretchWidePixels(void)
 }
 
 /* ---------------------------------------------------- the content table */
-/* rd_content_hide.c's verbs (rd_mesh.c markContentHidden, rd_replay.c
- * hide43Parts) on the top of the listed closing box (st08a_p4, four black
- * corners of entry 0, HIDE43), a mesh of its own as the stage has it.
- *   recording: the table's entry 0 is the box, HIDE43; its two triangles
- *     carry ICO_VU_INDEX_HIDE43 in the draw's index list (the mesh's own
- *     list untouched) and the mesh is marked hidden43; the same quad grey,
- *     or black but moved half a unit, is not; the interpolation's copy of
- *     the list takes the mark with it.  Overridden (rd__content_hide_set)
- *     to "0=hide" the triangles carry ICO_VU_INDEX_HIDE and the mesh needs
- *     no split; "off" leaves them unmarked; a bad spec changes nothing
- *   16:9 on the native frame (688 wide): HIDE43 drawn inside the 4:3
- *     columns (texels 88..599) it shows; beside them (GS X 2310..2378, past
- *     the columns' 2304 and inside the frame's 2392) it does not, while
- *     the grey and the moved quads there do; across the columns' edge its
- *     part inside is the unmarked mesh's to the bit and nothing of it shows
- *     beside.  HIDE: drawn nowhere, inside the columns either
- *   4:3: HIDE43 and unmarked meshes' pictures are the same, byte for byte,
- *     inside the picture and across its edge (one draw); HIDE draws
- *     nothing */
+/* rd_content_hide.c's verb (rd_mesh.c markContentHidden) on the top of the
+ * listed closing box (st08a_p4, four black corners of entry 0, HIDE), a
+ * mesh of its own as the stage has it.
+ *   recording: the table's entry 0 is the box, HIDE; its two triangles
+ *     carry ICO_VU_INDEX_HIDE in the draw's index list (the mesh's own
+ *     list untouched); the same quad grey, or black but moved half a unit,
+ *     is not marked; the interpolation's copy of the list takes the mark
+ *     with it.  Overridden (rd__content_hide_set) to "off" the triangles
+ *     are unmarked; a bad spec (the retired "hide43" among them) changes
+ *     nothing
+ *   16:9 on the native frame (688 wide) and 4:3: the HIDE box is drawn
+ *     nowhere, inside the camera's picture (GS X 2000..2068), beside it
+ *     (2310..2378, past the picture's 2304 and inside the frame's 2392) or
+ *     across its edge; the unmarked box, the grey and the moved quads are
+ *     drawn there (one draw: no split) */
 
 static const uint32_t kBoxTop[4][3] = {{0xc518a521u, 0xc5696b2bu, 0xc431a218u},
                                        {0xc4c78446u, 0xc5696b2bu, 0xc42abb35u},
@@ -1031,7 +1027,6 @@ static RdMesh closingMesh(const uint8_t rgb[3], float shift, int unmark)
     if (r && unmark) {
         free(r->drawIndex);
         r->drawIndex = NULL;
-        r->hidden43 = 0;
     }
     return m;
 }
@@ -1043,8 +1038,7 @@ static int closingMarked(const RdMeshRec *a, uint32_t bit)
 {
     int ok = a->indexCount == 6 && a->drawIndex != NULL;
     for (uint32_t i = 0; ok && i < a->indexCount; i++) {
-        ok = a->drawIndex[i] == (a->index[i] | bit) &&
-             (a->index[i] & (ICO_VU_INDEX_HIDE | ICO_VU_INDEX_HIDE43)) == 0;
+        ok = a->drawIndex[i] == (a->index[i] | bit) && (a->index[i] & ICO_VU_INDEX_HIDE) == 0;
     }
     return ok;
 }
@@ -1052,10 +1046,10 @@ static int closingMarked(const RdMeshRec *a, uint32_t bit)
 static void closingPlaneChecks(void)
 {
     CHECK(rd__content_hide_count >= 1 && rd__content_hide_count <= RD_CONTENT_HIDE_MAX &&
-              rd__content_hide[0].verb == RD_HIDE43 &&
+              rd__content_hide[0].verb == RD_HIDE &&
               strncmp(rd__content_hide[0].model, "st08a_p4", 8) == 0,
-          "content table: entry 0 is st08a_p4's box, HIDE43 (%d entries)", rd__content_hide_count);
-    CHECK(rd__content_hide_set(NULL) && rd__content_hide_verb(0) == RD_HIDE43,
+          "content table: entry 0 is st08a_p4's box, HIDE (%d entries)", rd__content_hide_count);
+    CHECK(rd__content_hide_set(NULL) && rd__content_hide_verb(0) == RD_HIDE,
           "content table: the table's verb applies");
     const RdMesh black = closingMesh(kClosingBlack, 0.0f, 0);
     const RdMesh grey = closingMesh(kClosingGrey, 0.0f, 0);
@@ -1063,39 +1057,32 @@ static void closingPlaneChecks(void)
     RdMeshRec *a = rd__mesh_rec(black.id), *g = rd__mesh_rec(grey.id);
     RdMeshRec *mv = rd__mesh_rec(moved.id);
     if (a && g && mv) {
-        CHECK(a->hidden43 && closingMarked(a, ICO_VU_INDEX_HIDE43),
-              "content table: the black box top carries HIDE43 (%u indices, hidden43 %u)",
-              a->indexCount, a->hidden43);
-        CHECK(!g->hidden43 && !g->drawIndex, "content table: the grey quad is not marked");
-        CHECK(!mv->hidden43 && !mv->drawIndex, "content table: the moved black quad is not marked");
-        CHECK(rd__vu_mesh_copy_draw_index(g, a) && g->hidden43 && g->drawIndex &&
+        CHECK(closingMarked(a, ICO_VU_INDEX_HIDE),
+              "content table: the black box top carries HIDE (%u indices)", a->indexCount);
+        CHECK(!g->drawIndex, "content table: the grey quad is not marked");
+        CHECK(!mv->drawIndex, "content table: the moved black quad is not marked");
+        CHECK(rd__vu_mesh_copy_draw_index(g, a) && g->drawIndex &&
                   memcmp(g->drawIndex, a->drawIndex, 6 * 4) == 0,
               "content table: a copy of the list takes the mark");
-        CHECK(rd__vu_mesh_copy_draw_index(g, mv) && !g->hidden43 && !g->drawIndex,
+        CHECK(rd__vu_mesh_copy_draw_index(g, mv) && !g->drawIndex,
               "content table: a copy of an unmarked list drops it");
     }
     rd_destroy_vu_mesh(black);
     rd_destroy_vu_mesh(grey);
     rd_destroy_vu_mesh(moved);
 
-    /* the verbs overridden: HIDE marks without a split, off none */
-    CHECK(rd__content_hide_set("0=hide") && rd__content_hide_verb(0) == RD_HIDE,
-          "content table: \"0=hide\" overrides entry 0");
-    const RdMesh hidden = closingMesh(kClosingBlack, 0.0f, 0);
-    const RdMeshRec *h = rd__mesh_rec(hidden.id);
-    CHECK(h && !h->hidden43 && closingMarked(h, ICO_VU_INDEX_HIDE),
-          "content table: HIDE marks the black box top ICO_VU_INDEX_HIDE, no split");
-    rd_destroy_vu_mesh(hidden);
+    /* the verb overridden: off leaves the box unmarked */
     CHECK(rd__content_hide_set("off") && rd__content_hide_verb(0) == RD_HIDE_OFF,
           "content table: \"off\" overrides every entry");
     const RdMesh off = closingMesh(kClosingBlack, 0.0f, 0);
     const RdMeshRec *o = rd__mesh_rec(off.id);
-    CHECK(o && !o->hidden43 && !o->drawIndex, "content table: off leaves the box unmarked");
+    CHECK(o && !o->drawIndex, "content table: off leaves the box unmarked");
     rd_destroy_vu_mesh(off);
-    CHECK(!rd__content_hide_set("hide44") && !rd__content_hide_set("999=hide") &&
-              !rd__content_hide_set("0=") && rd__content_hide_verb(0) == RD_HIDE_OFF,
+    CHECK(!rd__content_hide_set("hide43") && !rd__content_hide_set("0=hide43") &&
+              !rd__content_hide_set("999=hide") && !rd__content_hide_set("0=") &&
+              rd__content_hide_verb(0) == RD_HIDE_OFF,
           "content table: a bad spec changes nothing");
-    CHECK(rd__content_hide_set("hide,0=hide43") && rd__content_hide_verb(0) == RD_HIDE43,
+    CHECK(rd__content_hide_set("off,0=hide") && rd__content_hide_verb(0) == RD_HIDE,
           "content table: the tokens apply in order");
     rd__content_hide_set(NULL);
 }
@@ -1132,7 +1119,7 @@ static void closingDraw(RdMesh m, float tx)
     dl_Swap();
 }
 
-static uint8_t s_closingA[WT * 512 * 4], s_closingB[WT * 512 * 4];
+static uint8_t s_closingA[WT * 512 * 4];
 
 static int closingRead(uint8_t *img, uint32_t *w)
 {
@@ -1154,9 +1141,9 @@ static int closingCount(const uint8_t *img, uint32_t w, int x0, int x1)
     return n;
 }
 
-#define CLOSING_IN 2196.0f     /* GS X 2000..2068: inside the 4:3 columns */
-#define CLOSING_BESIDE 2506.0f /* 2310..2378: beside them at 16:9 */
-#define CLOSING_ACROSS 2466.0f /* 2270..2338: across their right edge (2304) */
+#define CLOSING_IN 2196.0f     /* GS X 2000..2068: inside the camera's picture */
+#define CLOSING_BESIDE 2506.0f /* 2310..2378: beside it at 16:9 */
+#define CLOSING_ACROSS 2466.0f /* 2270..2338: across its right edge (2304) */
 
 /* the texels drawn by mesh m at tx, the whole target (-1: no read) */
 static int closingDrawn(RdMesh m, float tx)
@@ -1173,89 +1160,34 @@ static void closingPixels(int wide)
     const RdMesh plain = closingMesh(kClosingBlack, 0.0f, 1);
     const RdMesh grey = closingMesh(kClosingGrey, 0.0f, 0);
     const RdMesh moved = closingMesh(kClosingBlack, 0.5f, 0);
-    rd__content_hide_set("0=hide");
-    const RdMesh hidden = closingMesh(kClosingBlack, 0.0f, 0);
-    rd__content_hide_set(NULL);
     const RdTargetRec *tc = rd__target_rec(rd_target(RD_TARGET_SCENE).id);
     if (!tc) {
         CHECK(0, "content table %s: SCENE has no record", at);
         return;
     }
-    /* the 4:3 columns' texels, as hide43Parts rounds them (the whole
-     * target at 4:3) */
-    const float c = (float)tc->w * 0.5f, half = wide ? 256.0f : c;
-    const int bx0 = (int)floorf((c - half) * tc->sx), bx1 = (int)ceilf((c + half) * tc->sx);
-    uint32_t wa = 0, wb = 0;
     if (wide) {
         CHECK(s_sceneW == WT && tc->w == WT && rd__region_scale(tc) == 512.0f / (float)WT,
               "content table 16:9: SCENE is the native frame (%u wide, region scale %g)", tc->w,
               (double)rd__region_scale(tc));
-        closingDraw(black, CLOSING_IN);
-        const int okIn = closingRead(s_closingA, &wa);
-        const int in = okIn ? closingCount(s_closingA, wa, bx0, bx1) : 0;
-        const int inOut =
-            okIn ? closingCount(s_closingA, wa, 0, bx0) + closingCount(s_closingA, wa, bx1, (int)wa)
-                 : -1;
-        CHECK(okIn && in >= 1500 && inOut == 0,
-              "content table 16:9: HIDE43 inside the 4:3 columns is drawn (%d texels, %d beside)",
-              in, inOut);
-        int beside[3];
-        const RdMesh which[3] = {black, grey, moved};
-        for (int i = 0; i < 3; i++) {
-            beside[i] = closingDrawn(which[i], CLOSING_BESIDE);
-        }
-        printf("  content table 16:9: 4:3 columns texels %d..%d of %u; beside them: HIDE43 box "
-               "%d texels, grey %d, moved %d\n",
-               bx0, bx1 - 1, wa, beside[0], beside[1], beside[2]);
-        CHECK(beside[0] == 0, "content table 16:9: HIDE43 beside the 4:3 columns is not drawn (%d)",
-              beside[0]);
-        CHECK(beside[1] >= 1500 && beside[2] >= 1500,
-              "content table 16:9: the grey and the moved quads are drawn there (%d, %d)",
-              beside[1], beside[2]);
-        closingDraw(black, CLOSING_ACROSS);
-        const int okA = closingRead(s_closingA, &wa);
-        closingDraw(plain, CLOSING_ACROSS);
-        const int okB = closingRead(s_closingB, &wb);
-        int same = okA && okB && wa == wb;
-        for (int y = 0; same && y < 512; y++) {
-            same = memcmp(&s_closingA[(size_t)y * wa * 4], &s_closingB[(size_t)y * wb * 4],
-                          (size_t)bx1 * 4) == 0;
-        }
-        const int ina = okA ? closingCount(s_closingA, wa, bx0, bx1) : 0;
-        const int outa = okA ? closingCount(s_closingA, wa, bx1, (int)wa) : -1;
-        const int outb = okB ? closingCount(s_closingB, wb, bx1, (int)wb) : 0;
-        CHECK(same && ina >= 500 && outa == 0 && outb >= 500,
-              "content table 16:9: HIDE43 across the edge, the part inside is the unmarked "
-              "mesh's (same %d, %d texels) and none beside (%d; unmarked %d)",
-              same, ina, outa, outb);
-        const int hIn = closingDrawn(hidden, CLOSING_IN),
-                  hBeside = closingDrawn(hidden, CLOSING_BESIDE);
-        CHECK(hIn == 0 && hBeside == 0,
-              "content table 16:9: HIDE is drawn nowhere (%d inside the columns, %d beside)", hIn,
-              hBeside);
-    } else {
-        const float txs[2] = {CLOSING_IN, CLOSING_ACROSS};
-        for (int i = 0; i < 2; i++) {
-            closingDraw(black, txs[i]);
-            const int okA = closingRead(s_closingA, &wa);
-            closingDraw(plain, txs[i]);
-            const int okB = closingRead(s_closingB, &wb);
-            const int n = okA ? closingCount(s_closingA, wa, 0, (int)wa) : 0;
-            CHECK(okA && okB && wa == wb && n >= 500 &&
-                      memcmp(s_closingA, s_closingB, (size_t)wa * 512 * 4) == 0,
-                  "content table 4:3: the HIDE43 mesh's picture is the unmarked one's (%s, "
-                  "%d texels)",
-                  i == 0 ? "inside" : "across the edge", n);
-            const int hn = closingDrawn(hidden, txs[i]);
-            CHECK(hn == 0, "content table 4:3: HIDE is drawn nowhere (%s, %d texels)",
-                  i == 0 ? "inside" : "across the edge", hn);
-        }
+    }
+    /* inside the picture, across its right edge, and (16:9) beside it */
+    const float txs[3] = {CLOSING_IN, CLOSING_ACROSS, CLOSING_BESIDE};
+    static const char *const where[3] = {"inside the picture", "across its edge", "beside it"};
+    for (int i = 0; i < (wide ? 3 : 2); i++) {
+        const int h = closingDrawn(black, txs[i]), p = closingDrawn(plain, txs[i]);
+        const int g = closingDrawn(grey, txs[i]), m = closingDrawn(moved, txs[i]);
+        printf("  content table %s %s: HIDE box %d texels, unmarked %d, grey %d, moved %d\n", at,
+               where[i], h, p, g, m);
+        CHECK(h == 0, "content table %s: HIDE is drawn nowhere (%s, %d texels)", at, where[i], h);
+        CHECK(p >= 500 && g >= 500 && m >= 500,
+              "content table %s: the unmarked box, the grey and the moved quads are drawn %s (%d, "
+              "%d, %d)",
+              at, where[i], p, g, m);
     }
     rd_destroy_vu_mesh(black);
     rd_destroy_vu_mesh(plain);
     rd_destroy_vu_mesh(grey);
     rd_destroy_vu_mesh(moved);
-    rd_destroy_vu_mesh(hidden);
 }
 
 /* -------------------------------------------------------- strip order */

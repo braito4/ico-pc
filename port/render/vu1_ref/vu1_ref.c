@@ -128,30 +128,34 @@ int vu1ref_static_kicks(const float *stw, const int *batchFirst, int count, int 
 }
 
 int vu1ref_region_draw(int preset, int freeCamera, int insideA, int insideB, int insideC, int hide,
-                       int hide43, int dropHidden)
+                       int reaches)
 {
-    /* vu_content_hidden: HIDE in every draw, HIDE43 in the parts beside the
-     * 4:3 columns */
-    if (hide || (hide43 && dropHidden)) {
+    (void)preset; /* one camera: the same rule in both presets */
+    /* vu_content_hidden */
+    if (hide) {
         return VU1REF_DRAW_NONE;
     }
     if (insideA && insideB && insideC) {
         return VU1REF_DRAW_EXACT;
     }
-    /* vu_region_drops */
-    if (!freeCamera && (preset == VU1REF_ORIGINAL || hide43)) {
-        return VU1REF_DRAW_NONE;
+    /* vu_triangle_out: the free camera, then vu_cut_reaches_picture */
+    if (freeCamera) {
+        return VU1REF_DRAW_CLIPPED;
     }
-    return VU1REF_DRAW_CLIPPED;
+    return reaches ? VU1REF_DRAW_NONE : VU1REF_DRAW_CLIPPED;
 }
 
-int vu1ref_particle_draw(int preset, int freeCamera, int drawn, int shown)
+int vu1ref_particle_draw(int preset, int freeCamera, int drawn, int shown, int reaches)
 {
+    (void)preset;
     if (!shown) {
         return VU1REF_DRAW_NONE;
     }
     if (drawn) {
         return VU1REF_DRAW_EXACT;
     }
-    return !freeCamera && preset == VU1REF_ORIGINAL ? VU1REF_DRAW_NONE : VU1REF_DRAW_CLIPPED;
+    if (freeCamera) {
+        return VU1REF_DRAW_CLIPPED;
+    }
+    return reaches ? VU1REF_DRAW_NONE : VU1REF_DRAW_CLIPPED;
 }
