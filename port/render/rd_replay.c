@@ -824,8 +824,10 @@ static void flushScreenRun(Replay *r);
 static void beginPass(Replay *r, RdTargetRec *c, RdTargetRec *d, uint32_t cid, uint32_t did,
                       RhiLoadOp colorLoad, const float clear[4], RhiLoadOp depthLoad,
                       float clearDepth, bool storage);
+
 static bool passWantsReadable(const RdTargetRec *c);
 static bool msaaPass(Replay *r, RdTargetRec *c, RdTargetRec *d, uint32_t cid, uint32_t did);
+
 static void msaaAttach(RdTargetRec *c, RdTargetRec *d, RhiLoadOp colorLoad, RhiLoadOp depthLoad,
                        RhiTexture *colorTex, RhiTexture *depthTex);
 
