@@ -45,6 +45,13 @@
  *            the native one, 688 / 512 narrower (and by 1.12 more when
  *            blended), y untouched; the frame's camera carries the aspect;
  *            the matrices that place anything never change
+ *   strips   GifPacket.c's CPU strips at 512, 688 and 2560: isInScreen's
+ *            PS2 compares (0 .. 0xFFF0) at every width; a triangle reaching
+ *            the camera's picture with a vertex past them dropped at every
+ *            width; one wholly beside the picture with a vertex past even
+ *            the old scaled window drawn on the wide frames (XYZ2_HI) and
+ *            dropped at 512 as the PS2; one with a vertex behind the eye
+ *            dropped
  * On a Vulkan device (exit 77 without one, after the recording checks):
  *   camera   rd__camera_probe (FrameCB through camera_probe_ps) against the
  *            C products and sceVu0RotTransPers through matrixptr+0x100
@@ -1951,6 +1958,118 @@ static void checkDecoder(void)
     tick();
 }
 
+/* ------------------------------------- the CPU strips' window (GifPacket.c)
+   isInScreen keeps the PS2's compares, 0 .. 0xFFF0, at every native width;
+   on a frame wider than 4:3 a strip triangle with a failing vertex is
+   kicked only when its three Z values are in range (in front of the eye)
+   and its x extent lies wholly beside the camera's picture (GS X 1792 ..
+   2304: gifHostBeside), its vertex past 16 bits through XYZ2_HI.  One
+   gif_Draw2DStripG of three vertices (pixels, Z) per case; returns the
+   triangles recorded, the first one's vertices in out. */
+static int stripCase(int fw, const int px[3][3], RdScreenVtx out[3])
+{
+    int v[3][4];
+    GifColor col[3];
+    int tris = 0;
+
+    tick();
+    gsFrame.w = fw;
+    gsFrame.fbw = (fw + 63) / 64;
+    gif_HostSetFrameWidth(fw);
+    for (int i = 0; i < 3; i++) {
+        v[i][0] = px[i][0] * 16;
+        v[i][1] = px[i][1] * 16;
+        v[i][2] = px[i][2];
+        v[i][3] = 0;
+        col[i].r = col[i].g = col[i].b = 0x80;
+        col[i].a = 0x80;
+    }
+    gif_StartPacketPri(DEC_LIST);
+    gif_SetDrawEnviroment(0x800, 0, (unsigned int)fw, 448, 1, 0);
+    gif_Draw2DStripG(&v[0][0], col, 3, 0);
+    gif_EndPacket();
+    tick();
+    const RdFrame *f = rd__last_frame();
+    if (!f) {
+        return -1;
+    }
+    const RdCmdList *l = &f->lists[DEC_LIST];
+    for (uint32_t i = 0; i < l->count; i++) {
+        const RdCmd *c = &l->cmds[i];
+        if (c->type == RDC_SCREEN && c->b[0] == RD_PRIM_TRIANGLES) {
+            const RdScreenVtx *sv = (const RdScreenVtx *)(f->payload + c->u[0]);
+            if (tris == 0 && c->u[1] >= 3) {
+                memcpy(out, sv, 3 * sizeof(*sv));
+            }
+            tris += (int)(c->u[1] / 3);
+        }
+    }
+    return tris;
+}
+
+static void checkStripWindow(void)
+{
+    static const int widths[] = {512, 688, 2560};
+    /* all three inside: drawn at every width */
+    static const int in[3][3] = {
+        {2000, 2000, 0x100000}, {2100, 2000, 0x100000}, {2050, 2100, 0x100000}};
+    /* reaching the picture, a vertex at x 4200 (67200 > 0xFFF0, inside
+       the window the port scaled by W / 512 before): dropped everywhere */
+    static const int reach[3][3] = {
+        {2000, 2000, 0x100000}, {2100, 2000, 0x100000}, {4200, 2100, 0x100000}};
+    /* wholly beside the picture, a vertex at x 5600 (89600, past even the
+       scaled window at 688): drawn on a wide frame, through XYZ2_HI */
+    static const int beside[3][3] = {
+        {2400, 2000, 0x100000}, {2500, 2100, 0x100000}, {5600, 2050, 0x100000}};
+    /* the same with that vertex's Z negative (behind the eye): dropped */
+    static const int behind[3][3] = {
+        {2400, 2000, 0x100000}, {2500, 2100, 0x100000}, {5600, 2050, -16}};
+
+    for (unsigned int i = 0; i < sizeof(widths) / sizeof(widths[0]); i++) {
+        const int fw = widths[i];
+        RdScreenVtx t[3];
+        int n;
+        volatile int p[4] = {0xFFF0, 0x8000, 0x100000, 0};
+
+        /* the PS2's compares at every width */
+        CHECK(_IsInScreen(p) == 1, "strips %d: x 0xFFF0 passes", fw);
+        p[0] = 0xFFF1;
+        CHECK(_IsInScreen(p) == 0, "strips %d: x 0xFFF1 fails", fw);
+        p[0] = -1;
+        CHECK(_IsInScreen(p) == 0, "strips %d: x -1 fails", fw);
+        n = stripCase(fw, in, t);
+        CHECK(n == 1 && t[0].x == 32000 && t[2].y == 33600,
+              "strips %d: the inside triangle drawn (%d, x %d)", fw, n, n > 0 ? t[0].x : -1);
+        n = stripCase(fw, reach, t);
+        CHECK(n == 0,
+              "strips %d: the triangle reaching the picture with a vertex past 0xFFF0 is "
+              "dropped (%d)",
+              fw, n);
+        n = stripCase(fw, beside, t);
+        if (fw == ICO_FRAME_BASE_W) {
+            /* 4:3: the PS2's drop (the rule is off; the packet is the PS2's) */
+            CHECK(n == 0,
+                  "strips 512: the triangle past 0xFFF0 is dropped as the PS2 drops it "
+                  "(%d)",
+                  n);
+        } else {
+            CHECK(n == 1 && t[2].x == 89600 && t[2].y == 2050 * 16 && t[0].x == 2400 * 16,
+                  "strips %d: the triangle wholly beside the picture is drawn, its far vertex "
+                  "at x %d (want 89600)",
+                  fw, n, n > 0 ? t[2].x : -1);
+        }
+        n = stripCase(fw, behind, t);
+        CHECK(n == 0,
+              "strips %d: a triangle beside the picture with a vertex behind the eye is "
+              "dropped (%d)",
+              fw, n);
+    }
+    gsFrame.w = ICO_FRAME_BASE_W;
+    gsFrame.fbw = ICO_FRAME_BASE_W / 64;
+    gif_HostSetFrameWidth(ICO_FRAME_BASE_W);
+    tick();
+}
+
 static void boot(void)
 {
     matrixptr = s_spr;
@@ -1977,6 +2096,7 @@ static void recordingChecks(void)
     checkPhotoView();
     checkCull();
     checkDecoder();
+    checkStripWindow();
 }
 
 int main(void)

@@ -57,8 +57,9 @@
  *             1376, 2560: a draw left behind beside the 4:3 columns but
  *             inside the native frame is not of prev alone (outsideCur at
  *             W / 2), one past the frame's edge is; at 2560 a CPU-projected
- *             triangle past 0xFFFF (XYZ2_HI) re-projects, at 512 it stays
- *             as its tick drew it; pool.c's grids at usc 1 / 1376
+ *             triangle past 0xFFFF (XYZ2_HI) wholly beside the picture
+ *             re-projects, at 512 it stays as its tick drew it; one across
+ *             the picture stays at both; pool.c's grids at usc 1 / 1376
  * On a device (skipped without one):
  *   pixels    replays of the blended frame at alpha 0 and 1 equal the
  *             previous and current frames' replays byte for byte; at 0.5 the
@@ -5361,11 +5362,15 @@ static void testReprojectOneTick(void)
  *             not drawn; a B past the native frame's edge (W / 2 + 40
  *             beyond the centre at 28 degrees) is, through the blended
  *             camera
- *   reproject (reprojProject's window) at W 2560 a CPU-projected triangle
- *             of one tick whose vertices pass 0xFFFF (XYZ2_HI's signed 32
- *             bits: GS x about 4900 half way) moves with the blended camera,
+ *   reproject (reprojProject's window, the GS's 16 bits at every width,
+ *             and reprojSetup's one-camera exception) at W 2560 a
+ *             CPU-projected triangle of one tick whose vertices pass 0xFFFF
+ *             (XYZ2_HI's signed 32 bits: GS x about 4900 half way), wholly
+ *             beside the camera's picture, moves with the blended camera,
  *             each vertex where it puts the world point; at 512 the same
- *             triangle stays whole as its tick drew it (the GS's 16 bits)
+ *             triangle stays whole as its tick drew it (the exception is
+ *             off).  A triangle from GS x about 2048 to past 0xFFFF, across
+ *             the picture, stays whole as its tick drew it at both widths
  *   pool      (W 1376) pool.c's grids with usc 1 / 1376: the command keeps
  *             the scale, and the STs half way are the formula's through the
  *             blended camera at that scale */
@@ -5419,19 +5424,21 @@ static void nativeOutside(uint32_t W)
     rd_destroy_vu_mesh(mesh);
 }
 
-/* a triangle of the wall at z 300 from world x x0, 20 across and up */
-static void nwTri(const double *v, const double *q, double x0, RdScreenVtx *o)
+/* a triangle of the wall at z 300 from world x x0, 20 across and up;
+ * reach: from world x 0 to x0 instead, across the camera's picture */
+static void nwTri(const double *v, const double *q, double x0, int reach, RdScreenVtx *o)
 {
     const double w[3][3] = {{x0, 0.0, 300.0}, {x0 + 20.0, 0.0, 300.0}, {x0, 20.0, 300.0}};
+    const double wr[3][3] = {{0.0, 0.0, 300.0}, {x0, 0.0, 300.0}, {0.0, 20.0, 300.0}};
     for (int k = 0; k < 3; k++) {
-        rpCpuVertex(v, q, w[k], 0.0f, 0.0f, &o[k]);
+        rpCpuVertex(v, q, reach ? wr[k] : w[k], 0.0f, 0.0f, &o[k]);
     }
 }
 
 /* tick k of lockCamera's camera: in list 7, marked, a key-0 triangle at
  * world x 1300 (GS x about 4270 at tick 0, 5920 at tick 1: 12.4 past
  * 0xFFFF) */
-static void nwFrame(int k, RdScreenVtx tri[3])
+static void nwFrame(int k, int reach, RdScreenVtx tri[3])
 {
     rd_begin_frame();
     frameHead();
@@ -5448,7 +5455,7 @@ static void nwFrame(int k, RdScreenVtx tri[3])
     rd_set_camera(&cam);
     rd_select_list(7);
     rd_frame_projected(1);
-    nwTri(v, q, 1300.0, tri);
+    nwTri(v, q, 1300.0, reach, tri);
     rd_screen_prims(RD_PRIM_TRIANGLES, tri, 3, RD_SPACE_WORLD, 0, 0);
     rd_frame_projected(0);
     rd_end_frame(0);
@@ -5458,8 +5465,8 @@ static void nativeReproject(uint32_t W)
 {
     RdInterpStats st;
     RdScreenVtx t0[3], t1[3];
-    nwFrame(0, t0);
-    nwFrame(1, t1);
+    nwFrame(0, 0, t0);
+    nwFrame(1, 0, t1);
     const RdFrame *cu = rd__last_frame();
     const RdScreenVtx *c = screenVtx(cu, rpScreen(cu, 7, 0));
     const RdFrame *f = rd__interp_frame(rd__prev_frame(), cu, 0.5f, 1, &st);
@@ -5495,6 +5502,53 @@ static void nativeReproject(uint32_t W)
               "puts the world points, %d past 0xFFFF; x %.3f)",
               W, at, past, o[0].x / 16.0);
     }
+}
+
+/* The one-camera exception's other side (GifPacket.c gifHostBeside,
+ * reprojSetup): a triangle from world x 0 to 1300 (GS x about 2048 to
+ * past 0xFFFF), across the camera's picture, its x 1300 vertices past the
+ * GS's 16 bits at both ticks.  At every width it stays whole as its tick
+ * drew it: through the blended camera it reaches the picture with a
+ * vertex past the window, which the PS2 drops (before the fix the window
+ * scaled by W / 512 took it at 2560).  At 512 the window and the outcome
+ * are the 4:3 ones, byte for byte (the exception is off there). */
+static void nativeReprojectReach(uint32_t W)
+{
+    RdInterpStats st;
+    RdScreenVtx t0[3], t1[3];
+    nwFrame(0, 1, t0);
+    nwFrame(1, 1, t1);
+    const RdFrame *cu = rd__last_frame();
+    const RdScreenVtx *c = screenVtx(cu, rpScreen(cu, 7, 0));
+    const RdFrame *f = rd__interp_frame(rd__prev_frame(), cu, 0.5f, 1, &st);
+    const RdScreenVtx *o = f ? screenVtx(f, rpScreen(f, 7, 0)) : NULL;
+    if (!c || !o) {
+        CHECK(0, "native %u: the reaching triangle drawn", W);
+        return;
+    }
+    double vt[16], q[16], qv[16];
+    lockCamera(0.5, vt);
+    rpProj(q);
+    mul4(q, vt, qv);
+    const double w[3][3] = {{0.0, 0.0, 300.0}, {1300.0, 0.0, 300.0}, {0.0, 20.0, 300.0}};
+    double lo = 1e30, hi = -1e30;
+    int kept = 0;
+    for (int i = 0; i < 3; i++) {
+        double want[2];
+        s6Project(qv, w[i], want);
+        lo = fmin(lo, want[0]);
+        hi = fmax(hi, want[0]);
+        kept += o[i].x == c[i].x && o[i].y == c[i].y && o[i].z == c[i].z;
+    }
+    /* the premise: half way it crosses the picture (1792 .. 2304) and its
+     * far vertex is past the GS's 16 bits (4096 pixels) */
+    CHECK(lo < 2304.0 && hi > 1792.0 && hi > 4096.0 && c[1].x > 0xFFFF,
+          "native %u: the reaching triangle spans x %.1f .. %.1f half way (cur x1 %d)", W, lo, hi,
+          c[1].x);
+    CHECK(kept == 3,
+          "native %u: the triangle reaching the picture with a vertex past the window stays "
+          "whole as its tick drew it (%d of 3)",
+          W, kept);
 }
 
 static void nativePool(uint32_t W)
@@ -5557,6 +5611,7 @@ static void testNativeWidths(void)
         }
         if (kW[i] == ICO_FRAME_BASE_W || kW[i] == 2560) {
             nativeReproject(kW[i]);
+            nativeReprojectReach(kW[i]);
         }
         if (kW[i] == 1376) {
             nativePool(kW[i]);

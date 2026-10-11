@@ -32,7 +32,8 @@ typedef struct { /* field names derived */
 
 int _IsInScreen(volatile int *v);
 /* PC port: the native frame width (port/include/ico_frame.h, 512 at 4:3)
-   isInScreen's window and the window build's GS register decoder read;
+   the CPU strips' one-camera rule (GifPacket.c gifHostBeside) and the
+   window build's GS register decoder read;
    GsBase.c's frame latch sets it at each flip, in every build */
 void gif_HostSetFrameWidth(int w);
 int gif_HostFrameWidth(void);
