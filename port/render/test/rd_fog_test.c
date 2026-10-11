@@ -740,8 +740,13 @@ static void checkPixels(int k, int tol, const char *what)
                 const uint8_t *t = &lut[((z >> 16) & 0xFF) * 4];
                 int as = (t[3] * kFog[k][8]) >> 7;
                 as = as > 255 ? 255 : as;
+                /* the fixed-function blend stops the factor at 1.0; the
+                 * exact blend (rd_dst_read.c) is the GS's, As past 0x80
+                 * overshooting */
+                const int fa =
+                    rd_blend_exact() != RD_BLEND_EXACT_OFF ? as : (as > 0x80 ? 0x80 : as);
                 for (int ch = 0; ch < 3; ch++) {
-                    want[ch] = lerp((t[ch] * 0x80) >> 7, want[ch], as > 0x80 ? 0x80 : as);
+                    want[ch] = lerp((t[ch] * 0x80) >> 7, want[ch], fa);
                 }
                 want[3] = as;
                 fogged++;

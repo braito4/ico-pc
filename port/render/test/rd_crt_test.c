@@ -566,6 +566,11 @@ static void recordFrame(RdTex t, int rich)
 
 static uint8_t s_out[OUT_MAX];
 
+/* the last present() drew with the exact GS blend (rd_dst_read.c): the
+ * recorded hashes are the fixed-function blend's (rd_crt_fixed compares
+ * them) */
+static int s_presentExact;
+
 /* rd_init with s, the frame, the present into s_out; false without a device */
 static bool present(const RdSettings *s, int rich)
 {
@@ -579,6 +584,7 @@ static bool present(const RdSettings *s, int rich)
     bool ok = n <= OUT_MAX && rd__read_present(s_out, n, &w, &h) && w == s->outputWidth &&
               h == s->outputHeight;
     CHECK(ok, "readback of the %ux%u present", s->outputWidth, s->outputHeight);
+    s_presentExact = rd_blend_exact() != RD_BLEND_EXACT_OFF;
     rd_destroy_texture(t);
     rd_shutdown();
     return ok;
@@ -639,7 +645,7 @@ static void checkOff(void)
     }
     const uint64_t off = fnv(s_out, 960 * 720 * 4);
     printf("  off: present %016llx\n", (unsigned long long)off);
-    if (s_llvmpipe) {
+    if (s_llvmpipe && !s_presentExact) {
         CHECK(off == GOLD_OFF, "off: the rd_present baseline's bytes");
     }
     for (int m = RD_CRT_SCANLINES; m < RD_CRT_MODE_COUNT; m++) {
@@ -678,7 +684,7 @@ static void checkModes(void)
                    (unsigned long long)h1);
             CHECK(h1 == h2, "modes: %s %ux%u deterministic", kModeName[m], sizes[k][0],
                   sizes[k][1]);
-            if (s_llvmpipe) {
+            if (s_llvmpipe && !s_presentExact) {
                 CHECK(h1 == kGold[m - 1][k], "modes: %s %ux%u the recorded hash", kModeName[m],
                       sizes[k][0], sizes[k][1]);
             }

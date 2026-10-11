@@ -100,6 +100,19 @@
  *            fallback off and on (rd_set_no_dual), SCENE, its depth and
  *            DISPLAY equal byte for byte; the pipeline cache is cleared
  *            after it (its states are outside the reachable set)
+ *            (drawn with the fixed-function blend, the exact blend set
+ *            off for the cell)
+ *   tint     the exact GS blend (rd_dst_read.c): PCSX2's forest tint sprite
+ *            (godrays oracle state 552, GS draw 480: RGBA 223 219 205 4,
+ *            ALPHA 0x44) over eight of its rt0 pixels gives its rt1 pixels
+ *            to the bit under every exact mode the device has; under the
+ *            fixed-function blend within 1 (the rounding up it removes)
+ *   exact    the nodual matrix under each exact mode and the fixed-function
+ *            blend: the depth the same in every mode, the hardware-exact
+ *            blends (0, 1, 5, 6 without PABE) the same, the storage path
+ *            and the attachment read the same bytes but in the storage
+ *            path's fixed-function cells, each exact mode off the
+ *            fixed-function blend somewhere
  *   pipes    every pipeline created is in the enumerated reachable set,
  *            whose screen and post part has fewer than 250 keys (with the
  *            sprite_texa_ps twins) and holds the colour mask 7 keys of the
@@ -2578,6 +2591,10 @@ static void testNoDual(void)
     static uint8_t scene[2][FRAMES][512 * 512 * 4], disp[2][FRAMES][512 * 256 * 4];
     static float depth[2][FRAMES][512 * 512];
     const bool was = rd_no_dual();
+    /* the fixed-function blend both ways: the exact blend (rd_dst_read.c)
+     * blends in the shader with neither output (testExactModes) */
+    const RdBlendExact exact = rd_blend_exact();
+    rd_set_blend_exact(RD_BLEND_EXACT_OFF);
     uint32_t noDualKeys = 0;
     for (int mode = 0; mode < 2; mode++) {
         CHECK(rd_set_no_dual(mode != 0), "rd_set_no_dual(%d) refused", mode);
@@ -2604,6 +2621,7 @@ static void testNoDual(void)
         }
     }
     rd_set_no_dual(was);
+    rd_set_blend_exact(exact);
     CHECK(noDualKeys > 0, "nodual: no *_nodual pipeline was created");
     int bad = 0, badZ = 0, badD = 0, shown = 0;
     for (int f = 0; f < FRAMES; f++) {
@@ -2653,20 +2671,243 @@ static void testNoDual(void)
     rd__pipeline_cache_clear();
 }
 
+/* ------------------------------------------------------------ exact blend */
+
+/* The forest's tint sprite as PCSX2 2.8.2's software renderer draws it (the
+ * godrays oracle, build-host/tmp/pcsx2cmp/godrays/gs/552, GS draw 480: an
+ * untextured SPRITE over the 512 x 512 SCENE, RGBA 223 219 205 4, ALPHA
+ * 0x44 = (Cs - Cd) * As >> 7 + Cd, ABE, COLCLAMP 1, FBA 0, PABE 0, FBMSK 0,
+ * Z ALWAYS without write), over eight destination pixels of its rt0 dump,
+ * each painted over a 32 x 32 cell, then the sprite: under every exact
+ * mode the device has (rd_dst_read.c) each cell is PCSX2's rt1 pixel to
+ * the bit, alpha 4; under the fixed-function blend it is within 1 and the
+ * cells that round up are counted (the bias the exact blend removes: the
+ * pass mean +5.51 +5.22 +5.19 against PCSX2's +4.98 +4.77 +4.68). */
+static const struct {
+    uint8_t dst[3], pcsx2[3];
+} kTint[8] = {
+    {{15, 22, 8}, {21, 28, 14}},  {{12, 17, 14}, {18, 23, 19}}, {{37, 40, 31}, {42, 45, 36}},
+    {{66, 84, 38}, {70, 88, 43}}, {{23, 31, 16}, {29, 36, 21}}, {{9, 9, 9}, {15, 15, 15}},
+    {{79, 89, 56}, {83, 93, 60}}, {{25, 31, 24}, {31, 36, 29}},
+};
+
+static void tintFrame(void)
+{
+    static const uint8_t black[4] = {0, 0, 0, 0}, tint[4] = {223, 219, 205, 4};
+    rd_begin_frame();
+    rd_select_list(4);
+    rd_clear_target(rd_target(RD_TARGET_SCENE), black, 0, 0);
+    rd_set_target(rd_target(RD_TARGET_SCENE), (RdTarget){0}, 512, 512, 0);
+    opaque2D();
+    rd_texture_off();
+    for (int i = 0; i < 8; i++) {
+        const uint8_t c[4] = {kTint[i].dst[0], kTint[i].dst[1], kTint[i].dst[2], 0x80};
+        sprite(512, 512, i * 32 * 16, 0, (i * 32 + 32) * 16, 32 * 16, c, 0, 0, 0, 0);
+    }
+    rd_test_gs(RD_TEST_Z_ALWAYS);
+    rd_z_write(0);
+    rd_blend(RD_BLEND_LERP_AS, 0x80, 1);
+    rd_pabe(0);
+    rd_fba(0);
+    sprite(512, 512, 0, 0, 512 * 16, 512 * 16, tint, 0, 0, 0, 0);
+    rd_end_frame(0);
+}
+
+static void testForestTint(void)
+{
+    const RdBlendExact was = rd_blend_exact();
+    for (int m = 0; m < RD_BLEND_EXACT_COUNT; m++) {
+        if (!rd_set_blend_exact((RdBlendExact)m)) {
+            printf("  forest tint: %s not on this device\n", rd__blend_exact_name(m));
+            continue;
+        }
+        tintFrame();
+        uint32_t w = 0, h = 0;
+        uint8_t *img = readTarget(RD_TARGET_SCENE, &w, &h);
+        if (!img) {
+            continue;
+        }
+        int bad = 0, up = 0, worst = 0;
+        for (int i = 0; i < 8; i++) {
+            for (int y = 0; y < 32; y++) {
+                for (int x = i * 32; x < i * 32 + 32; x++) {
+                    const uint8_t *g = &img[((size_t)y * w + (size_t)x) * 4];
+                    const int want[4] = {kTint[i].pcsx2[0], kTint[i].pcsx2[1], kTint[i].pcsx2[2],
+                                         4};
+                    for (int ch = 0; ch < 3; ch++) {
+                        const int d = (int)g[ch] - want[ch];
+                        worst = abs(d) > worst ? abs(d) : worst;
+                        up += x == i * 32 && y == 0 && d > 0;
+                    }
+                    const int off =
+                        memcmp((const int[4]){g[0], g[1], g[2], g[3]}, want, sizeof(want)) != 0;
+                    if (off && m != RD_BLEND_EXACT_OFF && bad == 0) {
+                        pixFail("forest tint", x, y, g, want);
+                    }
+                    bad += off;
+                }
+            }
+        }
+        printf("  forest tint (%s): %d of %d pixels off PCSX2's, %d of 24 channels a level up, "
+               "worst %d\n",
+               rd__blend_exact_name(m), bad, 8 * 32 * 32, up, worst);
+        if (m == RD_BLEND_EXACT_OFF) {
+            /* the blender's rounding: within a level, and the table's
+             * pixels are ones it rounds up (gs_math_test) */
+            CHECK(worst <= 1, "forest tint (fixed-function): %d levels off PCSX2's", worst);
+        } else {
+            CHECK(bad == 0, "forest tint (%s): %d pixels are not PCSX2's", rd__blend_exact_name(m),
+                  bad);
+        }
+    }
+    rd_set_blend_exact(was);
+    rhi_wait_idle();
+    rd__pipeline_cache_clear(); /* the other modes' keys are outside the reachable set */
+}
+
+/* testNoDual's matrix (every RdBlend x PABE x FBA x DATE x alpha test x
+ * colour mask x Z test x Z write, two overlapping gouraud quads in one
+ * command over noise, SCENE with its depth and DISPLAY without) under each
+ * exact mode the device has and under the fixed-function blend:
+ *   - the depth is the same in every mode, everywhere (the storage path's
+ *     split and early tests leave the Z the fixed-function draw leaves);
+ *   - the cells whose fixed-function blend is the GS's (the premultiplied
+ *     forms without PABE: modes 0, 1, 5, 6) are the same in every mode;
+ *   - the two exact modes (the attachment read and the storage path) give
+ *     the same bytes, but in the cells the storage path leaves on the
+ *     fixed-function blend (Z write under Z GEQUAL with the alpha test or
+ *     DATE, rd_dst_read.c);
+ *   - each exact mode differs from the fixed-function blend somewhere (the
+ *     rounding, FIX 0xA0 past 1.0, PABE, the Ad and mode 11 forms). */
+static void testExactModes(void)
+{
+    enum { FRAMES = 3, BLENDS_PER = RD_BLEND_COUNT / FRAMES };
+
+    static uint8_t noiseTex[64 * 64 * 4];
+    for (uint32_t i = 0; i < 64 * 64; i++) {
+        const uint32_t h = hash(i + 0x5EEDu);
+        memcpy(&noiseTex[i * 4], &h, 4);
+    }
+    RdTex noise = rd_create_texture(64, 64, noiseTex, RD_TEXA_80_80, "exact noise");
+    static uint8_t scene[RD_BLEND_EXACT_COUNT][FRAMES][512 * 512 * 4];
+    static uint8_t disp[RD_BLEND_EXACT_COUNT][FRAMES][512 * 256 * 4];
+    static float depth[RD_BLEND_EXACT_COUNT][FRAMES][512 * 512];
+    int have[RD_BLEND_EXACT_COUNT] = {0};
+    const RdBlendExact was = rd_blend_exact();
+    for (int m = 0; m < RD_BLEND_EXACT_COUNT; m++) {
+        if (!rd_set_blend_exact((RdBlendExact)m)) {
+            continue;
+        }
+        have[m] = 1;
+        for (int f = 0; f < FRAMES; f++) {
+            ndFrame(noise, f * BLENDS_PER, BLENDS_PER);
+            uint32_t w = 0, h = 0, dw = 0, dh = 0;
+            CHECK(rd__read_target(rd_target(RD_TARGET_SCENE), scene[m][f], sizeof(scene[0][0]), &w,
+                                  &h) &&
+                      w == 512 && h == 512,
+                  "exact: SCENE readback");
+            CHECK(rd__read_target_depth(rd_target(RD_TARGET_SCENE), depth[m][f],
+                                        sizeof(depth[0][0]), &dw, &dh) &&
+                      dw == 512 && dh == 512,
+                  "exact: SCENE depth readback");
+            CHECK(rd__read_target(rd_target(RD_TARGET_DISPLAY), disp[m][f], sizeof(disp[0][0]), &w,
+                                  &h) &&
+                      w == 512 && h == 256,
+                  "exact: DISPLAY readback");
+        }
+    }
+    rd_set_blend_exact(was);
+    const uint32_t perBlend = 2 * 2 * 2 * ND_AFAILS * 3 * 4; /* SCENE cells a blend */
+    int badZ = 0, badSame = 0, badModes = 0, differ[RD_BLEND_EXACT_COUNT] = {0}, shown = 0;
+    for (int m = 1; m < RD_BLEND_EXACT_COUNT; m++) {
+        if (!have[m]) {
+            continue;
+        }
+        for (int f = 0; f < FRAMES; f++) {
+            for (uint32_t i = 0; i < 512 * 512; i++) {
+                const uint32_t cell = (i / 512 / ND_CELL) * 64 + (i % 512) / ND_CELL;
+                const uint32_t b = (uint32_t)(f * BLENDS_PER) + cell / perBlend;
+                const uint32_t k = cell % perBlend;
+                const uint32_t pabe = k / (perBlend / 2);
+                const int exactInHw = (b == 0 || b == 1 || b == 5 || b == 6) && !pabe;
+                if (b >= RD_BLEND_COUNT) {
+                    continue; /* the cells past the frame's blends: background */
+                }
+                const int mz = memcmp(&depth[0][f][i], &depth[m][f][i], sizeof(float)) != 0;
+                const int mc = memcmp(&scene[0][f][i * 4], &scene[m][f][i * 4], 4) != 0;
+                badZ += mz;
+                differ[m] += mc;
+                if (exactInHw && mc) {
+                    badSame++;
+                    if (shown++ < 8) {
+                        printf("FAIL exact (%s): SCENE (%u,%u) blend %u differs from the "
+                               "fixed-function draw\n",
+                               rd__blend_exact_name(m), i % 512, i / 512, b);
+                    }
+                }
+            }
+        }
+    }
+    if (have[RD_BLEND_EXACT_STORAGE] && have[RD_BLEND_EXACT_ATTACHMENT]) {
+        const int S = RD_BLEND_EXACT_STORAGE, A = RD_BLEND_EXACT_ATTACHMENT;
+        for (int f = 0; f < FRAMES; f++) {
+            for (uint32_t i = 0; i < 512 * 512; i++) {
+                const uint32_t cell = (i / 512 / ND_CELL) * 64 + (i % 512) / ND_CELL;
+                const uint32_t k = cell % perBlend;
+                /* k = ((((pabe * 2 + fba) * 2 + date) * ND_AFAILS + af) * 3 + mask) * 4 + zz */
+                const uint32_t zz = k % 4, af = (k / 12) % ND_AFAILS,
+                               date = (k / (12 * ND_AFAILS)) % 2;
+                const int fallback = (zz & 1) && (zz >> 1) && (af > 0 || date);
+                if (fallback) {
+                    continue; /* the storage path's fixed-function cells */
+                }
+                if (memcmp(&scene[S][f][i * 4], &scene[A][f][i * 4], 4) != 0) {
+                    badModes++;
+                    if (shown++ < 16) {
+                        const uint8_t *a = &scene[S][f][i * 4], *c = &scene[A][f][i * 4];
+                        printf(
+                            "FAIL exact: SCENE (%u,%u): storage %u %u %u %u, attachment %u %u %u "
+                            "%u\n",
+                            i % 512, i / 512, a[0], a[1], a[2], a[3], c[0], c[1], c[2], c[3]);
+                    }
+                }
+            }
+            badModes += memcmp(disp[S][f], disp[A][f], sizeof(disp[0][0])) != 0;
+        }
+    }
+    printf("  exact modes: fixed-function%s%s; pixels off the fixed-function draw %d (storage), %d "
+           "(attachment); depth %d, hardware-exact cells %d, storage against attachment %d "
+           "differ\n",
+           have[RD_BLEND_EXACT_STORAGE] ? ", storage" : "",
+           have[RD_BLEND_EXACT_ATTACHMENT] ? ", attachment read" : "",
+           differ[RD_BLEND_EXACT_STORAGE], differ[RD_BLEND_EXACT_ATTACHMENT], badZ, badSame,
+           badModes);
+    CHECK(badZ == 0, "exact: the depth differs from the fixed-function draw's (%d pixels)", badZ);
+    CHECK(badSame == 0, "exact: %d pixels of blends the hardware does exactly differ", badSame);
+    CHECK(badModes == 0, "exact: the storage path and the attachment read differ (%d)", badModes);
+    for (int m = 1; m < RD_BLEND_EXACT_COUNT; m++) {
+        CHECK(!have[m] || differ[m] > 0,
+              "exact (%s): nothing differs from the fixed-function blend", rd__blend_exact_name(m));
+    }
+    rd_destroy_texture(noise);
+    rhi_wait_idle();
+    rd__pipeline_cache_clear(); /* outside the reachable set, as testNoDual's */
+}
+
 /* -------------------------------------------------------------- pipelines */
 
 static void testPipelines(void)
 {
-    static RdPipeKeyInt keys[512], keysNd[512];
+    static RdPipeKeyInt keys[RD_PIPELINE_REACHABLE_MAX], keysNd[RD_PIPELINE_REACHABLE_MAX];
     /* both sets, with dual-source blending (keys) and with the
      * two-pass fallback (keysNd); the created keys are in the set of the
      * mode the test runs in */
     const bool was = rd_no_dual();
     rd_set_no_dual(false);
-    const uint32_t ns = rd__enumerate_reachable_screen(keys, 512);
-    const uint32_t n = rd__enumerate_reachable(keys, 512);
+    const uint32_t ns = rd__enumerate_reachable_screen(keys, RD_PIPELINE_REACHABLE_MAX);
+    const uint32_t n = rd__enumerate_reachable(keys, RD_PIPELINE_REACHABLE_MAX);
     rd_set_no_dual(true);
-    const uint32_t nNd = rd__enumerate_reachable(keysNd, 512);
+    const uint32_t nNd = rd__enumerate_reachable(keysNd, RD_PIPELINE_REACHABLE_MAX);
     rd_set_no_dual(was);
     const RdPipeKeyInt *mine = was ? keysNd : keys;
     const uint32_t nMine = was ? nNd : n;
@@ -2741,7 +2982,7 @@ static void testPipelines(void)
     for (uint32_t i = 0; i < c; i++) {
         const RdPipeKeyInt *k = rd__pipeline_key_at(i);
         int found = 0;
-        for (uint32_t j = 0; j < nMine && j < 512; j++) {
+        for (uint32_t j = 0; j < nMine && j < RD_PIPELINE_REACHABLE_MAX; j++) {
             found |= rd__pipe_key_equal(k, &mine[j]);
         }
         CHECK(found,
@@ -3906,9 +4147,12 @@ int main(int argc, char **argv)
         printf("SKIP rd_pixel_test: no usable Vulkan device\n");
         return 77;
     }
-    printf("rd_pixel_test: adapter %s%s\n", rhi_adapter_name(),
-           rd_no_dual() ? " (two-pass blend fallback)" : "");
+    printf("rd_pixel_test: adapter %s%s, blend %s\n", rhi_adapter_name(),
+           rd_no_dual() ? " (two-pass blend fallback)" : "",
+           rd__blend_exact_name(rd_blend_exact()));
     testNoDual(); /* first: it clears the pipeline cache */
+    testForestTint();
+    testExactModes(); /* these two clear it too */
     testOrder();
     testHalfOffset();
     testRailing(0);

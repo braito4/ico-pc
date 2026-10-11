@@ -878,10 +878,10 @@ static void testAa1Plans(void)
 
 static void testEnumeration(void)
 {
-    static RdPipeKeyInt keys[512];
-    uint32_t n = rd__enumerate_reachable(keys, 512);
-    const uint32_t ns = rd__enumerate_reachable_screen(keys, 512);
-    n = rd__enumerate_reachable(keys, 512);
+    static RdPipeKeyInt keys[RD_PIPELINE_REACHABLE_MAX];
+    uint32_t n = rd__enumerate_reachable(keys, RD_PIPELINE_REACHABLE_MAX);
+    const uint32_t ns = rd__enumerate_reachable_screen(keys, RD_PIPELINE_REACHABLE_MAX);
+    n = rd__enumerate_reachable(keys, RD_PIPELINE_REACHABLE_MAX);
     printf("  reachable pipelines: %u (screen and post %u, VU programs %u)\n", n, ns, n - ns);
     CHECK(ns > 0 && ns < 250, "reachable screen and post pipelines %u must stay under 250", ns);
     CHECK(n < RD_PIPELINE_REACHABLE_MAX, "reachable pipeline count %u must stay under %d", n,

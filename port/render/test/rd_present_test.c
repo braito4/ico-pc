@@ -635,6 +635,9 @@ static void recordRichFrame(RdTex t, int reduce)
 
 typedef struct FrameHashes {
     uint64_t display, scene, present;
+    /* the RdBlendExact the frame was drawn with (rd_dst_read.c): the
+     * recorded hashes below are the fixed-function blend's (0) */
+    int exact;
 } FrameHashes;
 
 /* rd_init with s, the rich frame, the three hashes; false without a device */
@@ -652,6 +655,7 @@ static bool richFrame(const RdSettings *s, FrameHashes *h)
     h->scene = p ? fnv(p, (size_t)w * hh * 4) : 0;
     static uint8_t out[960 * 720 * 4];
     h->present = rd__read_present(out, sizeof(out), &w, &hh) ? fnv(out, sizeof(out)) : 0;
+    h->exact = (int)rd_blend_exact();
     rd_destroy_texture(t);
     rd_shutdown();
     return true;
@@ -1521,7 +1525,14 @@ static void checkOriginal(void)
     printf("  original: display %016llx scene %016llx present %016llx\n",
            (unsigned long long)h.display, (unsigned long long)h.scene,
            (unsigned long long)h.present);
-    if (s_llvmpipe) {
+    if (s_llvmpipe && h.exact) {
+        /* the fade, the letterbox and the brightness are LERPs into
+         * DISPLAY: the exact blend's bytes are not the recorded ones (the
+         * fixed-function run, rd_present_fixed, compares them) */
+        printf("  original: the exact blend (%s): the recorded fixed-function hashes are not "
+               "compared\n",
+               rd__blend_exact_name(h.exact));
+    } else if (s_llvmpipe) {
         CHECK(h.display == GOLD_DISPLAY && h.scene == GOLD_SCENE && h.present == GOLD_PRESENT,
               "original: the recorded bytes (the PS2 picture as before the display options)");
     } else {
@@ -2859,7 +2870,7 @@ static void checkOverlay(uint64_t presentNoOverlay)
         CHECK(h.present == presentNoOverlay,
               "overlay: without a callback the present hashes %016llx, not %016llx",
               (unsigned long long)h.present, (unsigned long long)presentNoOverlay);
-        CHECK(!s_llvmpipe || h.present == GOLD_PRESENT,
+        CHECK(!s_llvmpipe || h.exact || h.present == GOLD_PRESENT,
               "overlay: without a callback the present is the recorded one");
     }
 }
