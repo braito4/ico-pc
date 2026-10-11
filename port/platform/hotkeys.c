@@ -9,12 +9,17 @@
 
 IcoHotkey ico_hotkey_for(unsigned int key, int repeat)
 {
+    return ico_hotkey_for_mod(key, repeat, 0);
+}
+
+IcoHotkey ico_hotkey_for_mod(unsigned int key, int repeat, int shift)
+{
     if (repeat) {
         return ICO_HOTKEY_NONE;
     }
     switch (key) {
     case ICO_HOTKEY_KEY_F12:
-        return ICO_HOTKEY_FRAME_DUMP;
+        return shift ? ICO_HOTKEY_ASPECT_SWEEP : ICO_HOTKEY_FRAME_DUMP;
     case ICO_HOTKEY_KEY_F11:
         return ICO_HOTKEY_STATS_FAST;
     default:
@@ -54,6 +59,30 @@ int ico_frame_dump_paths(const char *dir, const char *stamp, unsigned int vsync,
         }
         if (png_size > 0) {
             png[0] = '\0';
+        }
+        if (zip_size > 0) {
+            zip[0] = '\0';
+        }
+        return -1;
+    }
+    return 0;
+}
+
+int ico_sweep_paths(const char *dir, const char *stamp, char *prefix, size_t prefix_size, char *zip,
+                    size_t zip_size)
+{
+    const size_t n = strlen(dir);
+#ifdef _WIN32
+    const char *sep = n > 0 && (dir[n - 1] == '/' || dir[n - 1] == '\\') ? "" : "\\";
+#else
+    const char *sep = n > 0 && dir[n - 1] == '/' ? "" : "/";
+#endif
+    const int a = snprintf(prefix, prefix_size, "%s%ssweep-%s-", dir, sep, stamp);
+    const int b = snprintf(zip, zip_size, "%s%ssweep-%s.zip", dir, sep, stamp);
+
+    if (a < 0 || (size_t)a >= prefix_size || b < 0 || (size_t)b >= zip_size) {
+        if (prefix_size > 0) {
+            prefix[0] = '\0';
         }
         if (zip_size > 0) {
             zip[0] = '\0';

@@ -1,0 +1,21 @@
+# Dump list for tools/native_frame_check.py.  MACHINE-LOCAL: these are paths on
+# the maintainer's machine; the dumps themselves are never committed.  Missing
+# files are reported and skipped.  Relative paths are relative to this file;
+# '*' globs are allowed.  Point another machine at its own list with
+# ICO_DUMPS=/path/to/list (or a folder of .rddump/.zip files).
+#
+# dist/ (the rc3 test frames: opening forest, bridge, waterfall)
+/primary/dev/ico-pc/dist/frame-20261010-083039-v7967.rddump
+/primary/dev/ico-pc/dist/frame-20261010-115424-v934.rddump
+/primary/dev/ico-pc/dist/frame-20261010-115431-v1251.rddump
+/primary/dev/ico-pc/dist/frame-20261010-092508-v3839.rddump
+# session scratchpads (v722, issue 29 z1/z2, the patched waterfall dump, issues 57/58)
+/tmp/claude-1005/-primary-dev-ico-pc/a1ed8b0a-07f4-4e1c-858b-75eb8a2d6dfb/scratchpad/v722/frame-20261010-001602-v722.rddump
+/tmp/claude-1005/-primary-dev-ico-pc/a1ed8b0a-07f4-4e1c-858b-75eb8a2d6dfb/scratchpad/shots/i29/z1/frame-20261009-180352-v31438.rddump
+/tmp/claude-1005/-primary-dev-ico-pc/a1ed8b0a-07f4-4e1c-858b-75eb8a2d6dfb/scratchpad/shots/i29/z2/frame-20261009-182115-v9755.rddump
+/tmp/claude-1005/-primary-dev-ico-pc/86c429c2-4347-4a0e-b699-ff35d7027b91/scratchpad/fwdump/patched.rddump
+/tmp/claude-1005/-primary-dev-ico-pc/86c429c2-4347-4a0e-b699-ff35d7027b91/scratchpad/i57/zip57/frame-20261010-172821-v2031.rddump
+/tmp/claude-1005/-primary-dev-ico-pc/86c429c2-4347-4a0e-b699-ff35d7027b91/scratchpad/i58/frame-20261010-180116-v58511.rddump
+# older capture sets
+/primary/dev/ico-dumps/*.rddump
+/primary/tmp/railing/*.rddump

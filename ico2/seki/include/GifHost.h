@@ -40,6 +40,9 @@ typedef RdTex (*GifTex0Resolver)(unsigned long long tex0, int list);
 
 void gif_HostSetTex0Resolver(GifTex0Resolver fn);
 void gif_HostFlush(void);
+/* the native frame width the decoder's field widths and work-buffer
+   classes read: gif_HostSetFrameWidth / gif_HostFrameWidth, GifPacket.h
+   (every build has them) */
 void gif_HostScreenPrims(RdPrim type, const RdScreenVtx *v, unsigned int n, RdSpace space,
                          int uvFixed);
 /* writes to GS register reg (0..255) that were counted, not decoded */

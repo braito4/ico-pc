@@ -674,7 +674,8 @@ RhiPipeline rhi_create_pipeline(const RhiPipelineDesc *d)
     };
     VkPipelineMultisampleStateCreateInfo ms = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
-        .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+        .rasterizationSamples =
+            d->samples > 1u ? (VkSampleCountFlagBits)d->samples : VK_SAMPLE_COUNT_1_BIT,
     };
     const RhiDepthStencilState *dss = &d->depthStencil;
     VkPipelineDepthStencilStateCreateInfo ds = {

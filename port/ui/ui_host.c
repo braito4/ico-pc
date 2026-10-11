@@ -55,8 +55,8 @@ static void hostOverlayTop(const RdOverlayCtx *ctx, void *user)
        pointer's hit test: this layer's ctx is always the output and its
        box, where the overlay's is the CRT filter's grid under the filter
        (the pointer's place is a fraction of the window) */
-    ui_mouse_set_view((int)ctx->outW, (int)ctx->outH, ctx->box.x, ctx->box.y, (int)ctx->box.w,
-                      (int)ctx->box.h);
+    const RdRect ui = rd_ui_box_of(&ctx->box); /* the 4:3 box the menus are drawn in */
+    ui_mouse_set_view((int)ctx->outW, (int)ctx->outH, ui.x, ui.y, (int)ui.w, (int)ui.h);
     ui_touch_draw_overlay(ctx);
 }
 #endif

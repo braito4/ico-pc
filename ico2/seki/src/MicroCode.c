@@ -11,6 +11,10 @@
 #include "GifHost.h"
 #include "rd_mesh.h"
 
+/* GifPacket.h, which this file does not include: the native frame width
+   the GS register decoder reads (512 at 4:3) */
+extern int gif_HostFrameWidth(void);
+
 #endif
 
 /* Indexed by the microprogram id the mesh and shadow paths pass around;
@@ -442,9 +446,15 @@ static void mcHostPacked(unsigned int desc, const unsigned int *q)
         mcHostPackedQ = q[2];
         break;
     case 0x3: /* UV */
-        mcHostAdPush(0x03, (unsigned long long)(q[0] & 0x3FFF) |
-                               ((unsigned long long)(q[1] & 0x3FFF) << 16));
+    {
+        /* PC port: the GS's 14 bits at 4:3, as the decoder reads them;
+           16 on a wide frame, where a frame-spanning UV passes 1024 texels
+           (GifPacket.c's field widths) */
+        const unsigned long long m = gif_HostFrameWidth() > 512 ? 0xFFFF : 0x3FFF;
+
+        mcHostAdPush(0x03, (unsigned long long)(q[0] & m) | ((unsigned long long)(q[1] & m) << 16));
         break;
+    }
     case 0x4: /* XYZF2 */
     case 0xC: /* XYZF3 */
         mcHostAdPush(desc == 0x4 && !adc ? 0x04 : 0x0C,

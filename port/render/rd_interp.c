@@ -755,7 +755,7 @@ typedef struct CamBlend {
     double vp[16], vc[16]; /* the two ticks' views */
     double ep[16], ec[16]; /* Vp^-1 Vt, Vc^-1 Vt */
     double vt[16], it[16]; /* the blended view and its inverse */
-    double pc[16];         /* cur's projection (RdCamera.proj43) */
+    double pc[16];         /* cur's projection (RdCamera.proj) */
     double lc[16];         /* Pt Pc^-1: cur's projection to the blended one */
     int zoom;              /* the projections differ (the zoom eases) */
     double pp[16];         /* prev's projection */
@@ -799,9 +799,9 @@ static void camSetup(const RdFrame *prev, const RdFrame *cur, float t)
      * blends it with the rest of its block, a draw that is cur's takes
      * Pt = lerp(Pp, Pc) through Pt Pc^-1 */
     double pp[16], pt[16], ipc[16];
-    loadF16(prev->camera.proj43, pp);
-    loadF16(cur->camera.proj43, s_cam.pc);
-    if (memcmp(prev->camera.proj43, cur->camera.proj43, sizeof(prev->camera.proj43)) != 0 &&
+    loadF16(prev->camera.proj, pp);
+    loadF16(cur->camera.proj, s_cam.pc);
+    if (memcmp(prev->camera.proj, cur->camera.proj, sizeof(prev->camera.proj)) != 0 &&
         invert4d(s_cam.pc, ipc)) {
         for (int i = 0; i < 16; i++) {
             pt[i] = (1.0 - t) * pp[i] + t * s_cam.pc[i];
@@ -1015,7 +1015,7 @@ static bool camRebase(float (*m)[4], const double *e, int mats, const double *l,
  * through its tick's camera (lightning.c set_vertex, lineManager.c,
  * Shadow.c's volumes, GifPacket.c's rotTransPers strips, RegistPacket.c's
  * lines): GS X / 16, Y / 16 and Z / 16 are x / w, y / w and z / w of the
- * world point through S = proj43 view (RdCamera; GsBase.c's +0x100), which
+ * world point through S = proj view (RdCamera; GsBase.c's +0x100), which
  * inverts.  While the camera moves, each vertex is taken back into the
  * world through its tick's S^-1 and projected with the blended camera St =
  * Pt Vt, the camera every VU draw is re-based on (camSetup, camRebase), in
@@ -1043,6 +1043,7 @@ typedef struct ReprojCam {
     int on;
     double ip[16], ic[16]; /* (Pp Vp)^-1 and (Pc Vc)^-1: the ticks' GS screen to world */
     float st[16];          /* Pt Vt, world to GS screen, columns as a VU block holds them */
+    float xLo, xHi;        /* the window a re-projected X (12.4) may land in (reprojSetup) */
 } ReprojCam;
 
 static ReprojCam s_rp;
@@ -1079,6 +1080,17 @@ static void reprojSetup(float t)
         }
         s_rp.st[i] = (float)st[i];
     }
+    /* X's window: the GS's 16 bits (0 .. 65536 in 12.4) on a 512 frame; on
+     * a native frame W wide the window GifPacket.c's isInScreen lets the
+     * game's CPU prims through, that one scaled by k = W / 512 about the
+     * centre 0x8000 (its vertices past 0 .. 0xFFFF reach the renderer as
+     * XYZ2_HI's signed 32 bits), so a prim the game drew there is
+     * re-projected as it would be at 4:3 instead of staying as its tick drew
+     * it.  At k = 1 the bounds are 0 and 65536 exactly.  Y keeps the PS2's
+     * window, as isInScreen does */
+    const double k = (double)(s_out.gsW ? s_out.gsW : ICO_FRAME_BASE_W) / ICO_FRAME_BASE_W;
+    s_rp.xLo = (float)(32768.0 - 32768.0 * k);
+    s_rp.xHi = (float)(32768.0 + 32768.0 * k);
     s_rp.on = 1;
 }
 
@@ -1120,8 +1132,9 @@ static bool reprojUnproject(const double *inv, const RdScreenVtx *v, double p[3]
 
 /* the world point p through St as the VU computes a vertex (vu_mat with w
  * 1, vu_divide, vu_ftoi4) into o's X, Y and Z, and its w; false (o
- * untouched) when w is not positive, X or Y leaves the GS's 16-bit window
- * or Z the ftoi4 range */
+ * untouched) when w is not positive, X leaves the frame's window (s_rp.xLo
+ * .. xHi: the GS's 16 bits at 4:3), Y the GS's 16 bits or Z the ftoi4
+ * range */
 static bool reprojProject(const double p[3], RdScreenVtx *o, double *w)
 {
     const float *m = s_rp.st;
@@ -1139,7 +1152,7 @@ static bool reprojProject(const double p[3], RdScreenVtx *o, double *w)
     }
     const float q = 1.0f / h[3];
     const float gx = h[0] * q * 16.0f, gy = h[1] * q * 16.0f, gz = h[2] * q * 16.0f;
-    if (!(gx >= 0.0f && gx < 65536.0f) || !(gy >= 0.0f && gy < 65536.0f) ||
+    if (!(gx >= s_rp.xLo && gx < s_rp.xHi) || !(gy >= 0.0f && gy < 65536.0f) ||
         !(gz >= 1.0f && gz < 2147483648.0f)) {
         return false;
     }
@@ -1161,7 +1174,7 @@ static void reprojStq(RdScreenVtx *v, double w, double wNew)
 
 /* why a vertex was not re-projected: it has no world point (Z 0 or
  * saturated, not in front of its tick's camera), or St cannot draw its
- * point (not in front, or past the GS's 16-bit window or ftoi4's range) */
+ * point (not in front, or past the frame's window or ftoi4's range) */
 enum { RP_NO_POINT = 1, RP_NO_PROJECTION = 2 };
 
 /* v (a vertex of the tick whose S^-1 is inv) moved by d in the world and
@@ -3880,15 +3893,13 @@ static bool prevSphere(const RdFrame *prev, const RdCmd *pc, const uint8_t *p, d
 
 /* whether the sphere is wholly outside cur's picture: beyond one of the
  * planes of S = Pc Vc (world to GS screen) through the picture's edges,
- * GS 2048 (GsBase.c's centre) +- the half width (gsW / 2 widened by the
- * display's aspect: rd_replay.c's wide x scale g_rd.wideX) and +- gsH / 2,
- * or behind the eye (w <= 0) */
+ * GS 2048 (GsBase.c's centre) +- the half width (gsW / 2: the native
+ * frame's) and +- gsH / 2, or behind the eye (w <= 0) */
 static bool outsideCur(const double c[3], double r)
 {
     double sc[16];
     mul4d(s_cam.pc, s_cam.vc, sc);
-    const float wide = g_rd.wideX > 0.0f && g_rd.wideX < 1.0f ? g_rd.wideX : 1.0f;
-    const double hw = 0.5 * (double)(s_out.gsW ? s_out.gsW : 512u) / (double)wide;
+    const double hw = 0.5 * (double)(s_out.gsW ? s_out.gsW : 512u);
     const double hh = 0.5 * (double)(s_out.gsH ? s_out.gsH : 448u);
     double pl[5][4];
     for (int k = 0; k < 4; k++) {
@@ -4429,7 +4440,13 @@ static uint32_t flapReport(void)
 /* ------------------------------------------------------------ the frame */
 
 /* the camera turned or moved past RD_INTERP_CAMERA_TURN / _MOVE in the tick
- * (rd_camera_blend.h, the rule the game's cull shares) */
+ * (rd_camera_blend.h, the rule the game's cull shares).  The limits are of
+ * the camera alone, the same at every aspect: a turn under them blends into
+ * real views of the scene however wide the frame (the slerped rotation, the
+ * native projection unchanged), and a wider frame only shows more of each
+ * view, so the horizontal field of view gives no reason to scale them; the
+ * cuts they are there for (a teleported camera) are as large at 60:9 as at
+ * 4:3 */
 static bool cameraJump(const RdCamera *p, const RdCamera *c)
 {
     return rdcb_camera_jump(p->view, c->view) != 0;
@@ -4467,7 +4484,7 @@ int rd__interp_snap(const RdFrame *prev, const RdFrame *cur)
 static void lerpCamera(RdCamera *o, const RdCamera *p, const RdCamera *c, float t)
 {
     lerpFloats(o->view, p->view, c->view, 16, t);
-    lerpFloats(o->proj43, p->proj43, c->proj43, 16, t);
+    lerpFloats(o->proj, p->proj, c->proj, 16, t);
     lerpFloats(&o->zoom, &p->zoom, &c->zoom, 1, t);
     lerpFloats(&o->nearZ, &p->nearZ, &c->nearZ, 1, t);
     lerpFloats(&o->farZ, &p->farZ, &c->farZ, 1, t);

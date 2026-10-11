@@ -235,8 +235,9 @@ unfold.
 
 Options > Display > Aspect ratio decides how the picture fits:
 
-- **Auto** fills a wide phone screen. The game shows more of the scene to
-  the sides instead of leaving bars.
+- **Auto** fills a wide phone screen. The game draws the whole width
+  natively and shows more of the scene to the sides instead of leaving
+  bars. Menus, subtitles and movies stay in a 4:3 box in the middle.
 - The normal 4:3 setting shows bars at the sides, as on the PS2.
 - On a folding screen that is nearly square, the picture keeps its 4:3
   shape with bars above and below. It is not cropped.

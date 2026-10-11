@@ -40,7 +40,8 @@
  *                  PS2 chains one packet per object
  *   shadow_Draw    rd_shadow_resolve (the count into the count target), then
  *                  the packet's register writes and sprites in order: the
- *                  256/128/64 chain into SHADOW0..2 and the three
+ *                  256/128/64 chain into SHADOW0..2 (W/2, W/4, W/8 across
+ *                  on a frame W wide) and the three
  *                  composites into SCENE, so the state they leave leaks
  *                  into the rest of list 3 and the next lists as on the GS
  * The level-0 texture is the count target's RGBA view where the GS reads
@@ -114,12 +115,12 @@ static void shadowHostStripPos(int i, const int *v, int plus)
 
 static void shadowHostReset(void)
 {
-    RdTarget cnt = rd_shadow_count_target((uint32_t)ScreenWidth, (uint32_t)ScreenHeight);
+    /* FRAME: the count is scene-sized, the native width */
+    RdTarget cnt = rd_shadow_count_target((uint32_t)gsFrame.w, (uint32_t)ScreenHeight);
 
     /* setFrame(0x142), ZBUF 0xC0 with ZMSK, TEST 0x30000, the clear sprite
        (PRIM 0x406) */
-    rd_set_target(cnt, rd_target(RD_TARGET_SCENE), (uint32_t)ScreenWidth, (uint32_t)ScreenHeight,
-                  0);
+    rd_set_target(cnt, rd_target(RD_TARGET_SCENE), (uint32_t)gsFrame.w, (uint32_t)ScreenHeight, 0);
     rd_z_write(0);
     rd_test_gs(0x30000);
     rd_abe(0);
@@ -138,7 +139,7 @@ static void shadowHostReset(void)
 static RdTarget shadowHostLevel(int i)
 {
     if (i == 0) {
-        return rd_shadow_count_target((uint32_t)ScreenWidth, (uint32_t)ScreenHeight);
+        return rd_shadow_count_target((uint32_t)gsFrame.w, (uint32_t)ScreenHeight); /* FRAME */
     }
     return rd_target((RdTargetId)(RD_TARGET_SHADOW0 + i - 1));
 }
@@ -178,7 +179,7 @@ static void shadowHostSprite(const int *r, const int *uv, const unsigned char *c
    it in FBP 0x142, then TEST, ZBUF, COLCLAMP, FBA, TEXA and TEX1 */
 static void shadowHostDrawBegin(void)
 {
-    rd_set_target(shadowHostLevel(0), rd_target(RD_TARGET_SCENE), (uint32_t)ScreenWidth,
+    rd_set_target(shadowHostLevel(0), rd_target(RD_TARGET_SCENE), (uint32_t)gsFrame.w,
                   (uint32_t)ScreenHeight, 0);
     rd_shadow_resolve();
     rd_test_gs(0x30000);
@@ -189,12 +190,12 @@ static void shadowHostDrawBegin(void)
     rd_sampler_filter(RD_FILTER_LINEAR, RD_FILTER_LINEAR);
 }
 
-/* one chain step: level i into level i + 1 */
+/* one chain step: level i into level i + 1, (W >> (i + 1)) x (512 >> (i +
+   1)) (FRAME across: the PS2's 256, 128 and 64 per 512 columns) */
 static void shadowHostChain(int i, const int *r, const int *uv, const unsigned char *col)
 {
-    uint32_t w = 512u >> (i + 1);
-
-    rd_set_target(shadowHostLevel(i + 1), (RdTarget){0}, w, w, 0);
+    rd_set_target(shadowHostLevel(i + 1), (RdTarget){0}, (uint32_t)(gsFrame.w >> (i + 1)),
+                  512u >> (i + 1), 0);
     shadowHostTex0(i);
     shadowHostSprite(r, uv, col, 0);
 }
@@ -206,7 +207,7 @@ static void shadowHostCompositeBegin(void)
 {
     RdTarget scene = rd_target(RD_TARGET_SCENE);
 
-    rd_set_target(scene, scene, (uint32_t)ScreenWidth, (uint32_t)ScreenHeight, RD_TARGET_OFFSET);
+    rd_set_target(scene, scene, (uint32_t)gsFrame.w, (uint32_t)ScreenHeight, RD_TARGET_OFFSET);
     rd_blend_func(RD_BLEND_LERP_AS, 0);
     rd_test_gs(0x3400D);
 }
@@ -226,7 +227,7 @@ static void shadowHostDrawEnd(void)
 
     rd_z_write(1);
     rd_test_gs(0x50000);
-    rd_set_target(scene, scene, (uint32_t)ScreenWidth, (uint32_t)ScreenHeight, RD_TARGET_OFFSET);
+    rd_set_target(scene, scene, (uint32_t)gsFrame.w, (uint32_t)ScreenHeight, RD_TARGET_OFFSET);
 }
 
 #endif /* ICO_RD */
@@ -271,10 +272,12 @@ static int killShadowRequest = 0; /* derived name */
         PacketBufferStruct.ptr.c = ((c) + 0x20);                                                   \
     }
 /* FRAME_1, SCISSOR_1 and XYOFFSET_1 for a w by h buffer at base fbp, the
- * window centred on the GS's 2048.0 origin and moved by ox, oy sixteenths. */
+ * window centred on the GS's 2048.0 origin and moved by ox, oy sixteenths.
+ * PC port: FBW is (w + 63) / 64, covering a native width that is not a
+ * multiple of 64 (688 at 16:9); w >> 6 for every PS2 width. */
 #define setFrame(fbp, w, h, ox, oy) /* derived name */                                             \
     {                                                                                              \
-        setGsReg(0x4C, (fbp) | ((long long)(((w) >> 6) & 0x3F) << 16));                            \
+        setGsReg(0x4C, (fbp) | ((long long)((((w) + 63) >> 6) & 0x3F) << 16));                     \
         setGsReg(0x40, ((long long)((w) - 1) << 16) | ((long long)((h) - 1) << 48));               \
         setGsReg(0x18, (((long long)(2048 - (w) / 2) << 4) + (ox)) |                               \
                            ((((long long)(2048 - (h) / 2) << 4) + (oy)) << 32));                   \
@@ -316,17 +319,19 @@ void shadow_Reset(void)
     dl_SetDLPriority(3);
     gifStartPacketPath1(c);
     {
-        int full[4] = {-ScreenWidth / 2 * 16, -ScreenHeight / 2 * 16, ScreenWidth * 16,
+        /* PC port: FRAME, the native width (512 at 4:3): the clears span
+           the frame the volumes are counted over */
+        int full[4] = {-gsFrame.w / 2 * 16, -ScreenHeight / 2 * 16, gsFrame.w * 16,
                        ScreenHeight * 16};
-        int band[4] = {-ScreenWidth / 2 * 16, -ScreenHeight / 2 * 16, ScreenWidth * 16, 256};
+        int band[4] = {-gsFrame.w / 2 * 16, -ScreenHeight / 2 * 16, gsFrame.w * 16, 256};
         unsigned char col[4] = {0};
 
-        setFrame(0x140, ScreenWidth, ScreenHeight, 0, 0);
+        setFrame(0x140, gsFrame.w, ScreenHeight, 0, 0);
         setGsReg(0x4E, 0xC0 | ((long long)0x30 << 24) | ((long long)1 << 32));
         setGsReg(0x47, 0x30000);
         spriteRect(band, col, 0x406);
 
-        setFrame(0x142, ScreenWidth, ScreenHeight, 0, 0);
+        setFrame(0x142, gsFrame.w, ScreenHeight, 0, 0);
         setGsReg(0x4E, 0xC0 | ((long long)0x30 << 24) | ((long long)1 << 32));
         setGsReg(0x47, 0x30000);
         spriteRect(full, col, 0x406);
@@ -416,12 +421,23 @@ void shadow_Draw(void)
                                           {4, 4, 4096, 4096},
                                           {4, 4, 2048, 2048},
                                           {4, 4, 1024, 1024}}; /* derived name */
-        int rect[4][4] = {{4, 4, ScreenWidth * 16, ScreenHeight * 16},
-                          {4, 4, ScreenWidth * 8, ScreenHeight * 8},
-                          {4, 4, ScreenWidth * 4, ScreenHeight * 4},
-                          {4, 4, ScreenWidth * 2, ScreenHeight * 2}};
-        int off[4] = {-(ScreenWidth >> 1) * 16, -(ScreenHeight >> 1) * 16, ScreenWidth * 16,
+        /* PC port: FRAME, the native width (512 at 4:3): level i is
+           gsFrame.w >> i across (the count, then SHADOW0..2: the PS2's
+           sizes per 512 columns, rd_core.c namedTargetDesc) and 512 >> i
+           high, its UV spans its width; every UV stays in 4 .. 40964,
+           non-negative and inside the 16 bits spriteUV packs and the
+           decoder reads on a wide frame */
+        int rect[4][4] = {{4, 4, gsFrame.w * 16, ScreenHeight * 16},
+                          {4, 4, gsFrame.w * 8, ScreenHeight * 8},
+                          {4, 4, gsFrame.w * 4, ScreenHeight * 4},
+                          {4, 4, gsFrame.w * 2, ScreenHeight * 2}};
+        int off[4] = {-(gsFrame.w >> 1) * 16, -(ScreenHeight >> 1) * 16, gsFrame.w * 16,
                       ScreenHeight * 16};
+        /* the chain's rects and UVs at the frame's width: level i + 1's
+           sprite levelRect[i + 1] across its own width (x base -(w / 2) *
+           16 - 4, the -4 a delta), level i's UV levelUV[i] across its */
+        int chainRect[4][4];
+        int chainUV[4][4];
         unsigned char col[4] = {128, 128, 128, GlobalStageSetting.shadowDepth};
         int dbg = 0; /* local debug switch, see the test in the upward loop */
         int i;
@@ -440,27 +456,41 @@ void shadow_Draw(void)
         shadowHostDrawBegin();
 #endif
 
+        for (i = 0; i < 4; i++) {
+            const int lw = ico_frame_x(&gsFrame, 512 >> i); /* gsFrame.w >> i */
+
+            chainRect[i][0] = -(lw / 2) * 16 + (levelRect[i][0] + (512 >> i) / 2 * 16);
+            chainRect[i][1] = levelRect[i][1];
+            chainRect[i][2] = lw * 16;
+            chainRect[i][3] = levelRect[i][3];
+            chainUV[i][0] = levelUV[i][0];
+            chainUV[i][1] = levelUV[i][1];
+            chainUV[i][2] = lw * 16;
+            chainUV[i][3] = levelUV[i][3];
+        }
         for (i = 0; i < 3; i++) {
-            setFrame(levelFbp[i + 1], 512 >> (i + 1), 512 >> (i + 1), 0, 0);
+            /* PC port: FRAME across, the PS2's height; TEX0's TBW and TW of
+               level i's width (ico_frame_tex0_w: (512 >> i) / 64 and 9 - i
+               at 4:3), its TH the PS2's */
+            setFrame(levelFbp[i + 1], gsFrame.w >> (i + 1), 512 >> (i + 1), 0, 0);
             if (i == 0) {
-                *PacketBufferStruct.ptr.d++ = levelTbp[i] | ((long long)(512 >> i) / 64 << 14) |
-                                              ((long long)1 << 20) | ((long long)(9 - i) << 26) |
-                                              ((long long)(9 - i) << 30) |
+                *PacketBufferStruct.ptr.d++ = levelTbp[i] | ico_frame_tex0_w(&gsFrame, 512 >> i) |
+                                              ((long long)1 << 20) | ((long long)(9 - i) << 30) |
                                               ((long long)0x8000 << 19);
                 *PacketBufferStruct.ptr.d++ = 0x06;
             } else {
-                *PacketBufferStruct.ptr.d++ =
-                    levelTbp[i] | ((long long)(512 >> i) / 64 << 14) | ((long long)(9 - i) << 26) |
-                    ((long long)(9 - i) << 30) | ((long long)0x8000 << 19);
+                *PacketBufferStruct.ptr.d++ = levelTbp[i] | ico_frame_tex0_w(&gsFrame, 512 >> i) |
+                                              ((long long)(9 - i) << 30) |
+                                              ((long long)0x8000 << 19);
                 *PacketBufferStruct.ptr.d++ = 0x06;
             }
-            spriteUV(levelRect[i + 1], levelUV[i], col, 0x116);
+            spriteUV(chainRect[i + 1], chainUV[i], col, 0x116);
 #ifdef ICO_RD
-            shadowHostChain(i, levelRect[i + 1], levelUV[i], col);
+            shadowHostChain(i, chainRect[i + 1], chainUV[i], col);
 #endif
         }
 
-        setFrame(0x40, ScreenWidth, ScreenHeight, 0, 0);
+        setFrame(0x40, gsFrame.w, ScreenHeight, 0, 0);
         setGsReg(0x42, 0x44);
         setGsReg(0x47, 0x3400D);
 #ifdef ICO_RD
@@ -476,9 +506,8 @@ void shadow_Draw(void)
             if (dbg) {
                 col2[0] = col2[1] = col2[2] = col2[3] = 0x80;
             }
-            *PacketBufferStruct.ptr.d++ = levelTbp[i] | ((long long)(512 >> i) / 64 << 14) |
-                                          ((long long)(9 - i) << 26) | ((long long)(9 - i) << 30) |
-                                          ((long long)0x8000 << 19);
+            *PacketBufferStruct.ptr.d++ = levelTbp[i] | ico_frame_tex0_w(&gsFrame, 512 >> i) |
+                                          ((long long)(9 - i) << 30) | ((long long)0x8000 << 19);
             *PacketBufferStruct.ptr.d++ = 0x06;
             setGsReg(0x14, 0x60);
             spriteUV(off, rect[i], col2, 0x156);
@@ -489,7 +518,7 @@ void shadow_Draw(void)
 
         setGsReg(0x4E, 0x300000C0);
         setGsReg(0x47, 0x50000);
-        setFrame(0x40, ScreenWidth, ScreenHeight, screenOffsetX, screenOffsetY);
+        setFrame(0x40, gsFrame.w, ScreenHeight, screenOffsetX, screenOffsetY);
 #ifdef ICO_RD
         shadowHostDrawEnd();
 #endif
@@ -835,10 +864,10 @@ static inline float clipVolumeEdge(VECTOR *pa, VECTOR *pb, float sgn) /* derived
         }
     }
 
-    /* PC port: the edge clip at +-ScreenWidth about the centre across, k
-       times that on a wide picture so a shadow at its sides is not cut
-       (GsBase.c; at most 2047 pixels, inside the 16-bit GS window; the
-       PS2's 512 at 4:3) */
+    /* PC port: the edge clip at +-gsFrame.w about the centre across (FRAME:
+       the PS2's +-ScreenWidth, 512, at 4:3), so a shadow at a wide frame's
+       sides is not cut (GsBase.c; at most 2047 pixels, inside the 16-bit
+       GS window) */
     fw = gsb_HostShadowClipX();
     rate[0] = rate[1] = 1.0f;
     /* a wholly visible edge returns at once */

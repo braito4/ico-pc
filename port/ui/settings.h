@@ -98,6 +98,11 @@ void ui_settings_set_quit_handler(void (*fn)(void));
    is installed; the window host installs it so the row follows Alt+Enter and
    the window manager.  NULL removes it (headless, tests). */
 void ui_settings_set_window_mode_query(int (*fn)(void));
+/* The Anti-aliasing row's list: the RdAntiAlias values (a bit each, as
+   rd_aa_supported_mask) the row steps through.  Without a query the
+   renderer's own answer (a build without it: Off and the supersampling
+   values). */
+void ui_settings_set_aa_mask_query(unsigned (*fn)(void));
 /* Display > Texture pack reads fn (texpack_count, the replacements
    found at start) to tell an installed pack from none ("None installed",
    the row then does not step); NULL, or none installed, is none. */
@@ -229,6 +234,7 @@ typedef enum UiSettingsOpt {
     UI_OPT_PRESET,
     UI_OPT_RESOLUTION,
     UI_OPT_ASPECT,
+    UI_OPT_ANTI_ALIAS, /* [video] anti_aliasing, stepped through rd_aa_supported_mask */
     UI_OPT_WINDOW_MODE,
     UI_OPT_VSYNC,
     UI_OPT_FILTER,

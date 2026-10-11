@@ -10,11 +10,8 @@ int ui_mouse_to_grid(const UiMouseView *v, float px, float py, float *gx, float 
     if (v == 0 || v->w <= 0.0f || v->h <= 0.0f) {
         return 0;
     }
-    const float wide = v->h * 4.0f / 3.0f;
-    const float w = v->w < wide ? v->w : wide;
-    const float left = v->x + (v->w - w) * 0.5f;
     if (gx) {
-        *gx = (px - left) * 640.0f / w;
+        *gx = (px - v->x) * 640.0f / v->w;
     }
     if (gy) {
         *gy = 2.0f + (py - v->y) * 448.0f / v->h;

@@ -54,7 +54,7 @@ static float _IsInScreen2(int *p)
     if (0x0FFFFFF0 < p[2]) {
         return -1.0f;
     }
-    hw = ScreenWidth / 2;
+    hw = gsFrame.w / 2; /* the native width: 512 at 4:3, so 256 as ScreenWidth / 2 was */
     if (p[0] < (0x800 - hw) * 16) {
         return -1.0f;
     }

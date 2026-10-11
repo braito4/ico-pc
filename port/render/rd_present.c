@@ -1,12 +1,16 @@
 /* rd_present.c: DISPLAY to the output.
  *
  * The PS2 picture: the reduced DISPLAY frame
- * (512 x H/2) is shown in a centred 4:3 rectangle of the output, each line
- * doubled (field-line doubling, nearest vertically) and filtered bilinearly
+ * (W x H/2, W the native frame's width: 512 at 4:3) is shown in a centred
+ * rectangle of the output of the frame's aspect, each line doubled
+ * (field-line doubling, nearest vertically) and filtered bilinearly
  * horizontally.  Two blits:
- *   1. DISPLAY -> lines target (512 x H), nearest: exact line doubling;
- *   2. lines target -> the aspect's box of the output, bilinear, black
- *      outside.
+ *   1. DISPLAY -> lines target (W x H), nearest: exact line doubling;
+ *   2. lines target -> the box of the output, bilinear, black outside: the
+ *      frame's exact width wExact (rd__frame_wexact; the box's aspect
+ *      wExact / 384), the (W - wExact) / 2 columns past it at each side
+ *      left out of the source rectangle (W a multiple of 16 overshoots
+ *      512 k by less than 8 pixels a side; none at 4:3).
  * The output is the swapchain backbuffer with a window, or a headless RGBA8
  * texture of RdSettings.outputWidth x outputHeight (tests, the replay tool;
  * none when either is 0).
@@ -24,9 +28,10 @@
  *                 present goes through here, the interpolated ones
  *                 (rd_present) included; UI prims were flipped at replay
  *                 (rd_replay.c mirrorUi) so they read normally
- * The box takes the aspect option (g_rd.outAspect, 4:3 for a zeroed
- * RdSettings); the projection side is rd_frame.c rd__fill_camera_cb, the
- * replay's wide x scale and GsBase.c gsbHostWideX.  With the full-height
+ * The box takes the frame's exact width (the last frame camera's aspect,
+ * else the aspect option g_rd.outAspect; 4:3 for a 512-wide frame and a
+ * zeroed RdSettings); the frame's width is GsBase.c's native frame
+ * (gsFrame), drawn as the game projects it.  With the full-height
  * option DISPLAY's texture has the scene's height (rd__target_scale_of) and
  * step 1 is skipped.
  * The scene resolution needs nothing here: DISPLAY's texture is whatever
@@ -65,7 +70,9 @@
  * rows draw as quads into the scene, as in the Original preset), the
  * overlay's prims are laid out on the filter's source grid and drawn into it,
  * and rd__crt_record draws the box from DISPLAY in place of steps 1 and 2 (no
- * line doubling: the scanlines are DISPLAY's own lines).  The filter is the
+ * line doubling: the scanlines are DISPLAY's own lines), cropped as step 2
+ * crops but to whole GS pixels, in a box of that grid's shape (rd__crt_box;
+ * the 4:3 box at 512).  The filter is the
  * present's last pass but for the top layer below.  Off, steps 1 and 2 draw
  * the box.
  *
@@ -128,18 +135,96 @@ static int32_t roundPx(float v)
  * (rd__apply_display) */
 static const RdPresentPreset s_present = {RD_FILTER_NEAREST, RD_FILTER_LINEAR, 1, 1};
 
-/* step 2's box in an outW x outH output */
-static void outputBox(uint32_t outW, uint32_t outH, RhiRect *box)
-{
-    rd__present_box(outW, outH, g_rd.outAspect, box);
-}
-
 static float clampAspect(float a)
 {
     if (!(a > RD_ASPECT_43 + 1e-4f)) {
         return RD_ASPECT_43;
     }
-    return a > RD_ASPECT_MAX ? RD_ASPECT_MAX : a;
+    return a > ICO_FRAME_ASPECT_MAX ? ICO_FRAME_ASPECT_MAX : a;
+}
+
+/* The exact width of a frame gsW wide for a display aspect: 512 exactly at
+ * 512 (4:3: the Original integer box and no crop, whatever the aspect
+ * asked), else 384 aspect (512 k) held to gsW. */
+static float wexactFor(float aspect)
+{
+    const uint32_t gw = g_rd.gsW ? g_rd.gsW : ICO_FRAME_BASE_W;
+    if (gw == ICO_FRAME_BASE_W) {
+        return (float)ICO_FRAME_BASE_W;
+    }
+    const float we = 384.0f * clampAspect(aspect);
+    return we < (float)gw ? we : (float)gw;
+}
+
+float rd__frame_wexact(void)
+{
+    const uint32_t gw = g_rd.gsW ? g_rd.gsW : ICO_FRAME_BASE_W;
+    if (gw != ICO_FRAME_BASE_W && g_rd.frameWExact >= (float)ICO_FRAME_BASE_W) {
+        return g_rd.frameWExact < (float)gw ? g_rd.frameWExact : (float)gw;
+    }
+    return wexactFor(g_rd.frameAspect > 0.0f ? g_rd.frameAspect : g_rd.outAspect);
+}
+
+/* step 2's box in an outW x outH output: the frame's exact width over its
+ * height, wExact / 384 (4:3 exactly at 512) */
+static void outputBox(uint32_t outW, uint32_t outH, RhiRect *box)
+{
+    const float we = rd__frame_wexact();
+    rd__present_box(outW, outH, we == (float)ICO_FRAME_BASE_W ? RD_ASPECT_43 : we / 384.0f, box);
+}
+
+/* the UI box's left edge and width in a presentation box, exactly: the
+ * box's own width unless it is wider than 4:3, else its height's 4:3 */
+static void uiBoxF(const RdRect *b, float *left, float *w)
+{
+    const float bw = (float)b->w, bh = (float)b->h;
+    *w = bw < bh * (4.0f / 3.0f) ? bw : bh * (4.0f / 3.0f);
+    *left = (float)b->x + (bw - *w) * 0.5f;
+}
+
+RdRect rd_ui_box_of(const RdRect *present)
+{
+    RdRect o = *present;
+    /* the 4:3 width of the box's height with rd__present_box's rounding: a
+     * box built for 4:3 is its own UI box whatever the rounding */
+    const uint64_t w43 = ((uint64_t)present->h * 4u + 1u) / 3u;
+    if (present->w > w43) {
+        float left, w;
+        uiBoxF(present, &left, &w);
+        o.w = (uint32_t)(w + 0.5f);
+        o.x = (int32_t)floorf(left + 0.5f);
+    }
+    return o;
+}
+
+RdRect rd_ui_box(void)
+{
+    RhiRect b;
+    outputBox(g_rd.settings.outputWidth, g_rd.settings.outputHeight, &b);
+    const RdRect p = {b.x, b.y, b.w, b.h};
+    return rd_ui_box_of(&p);
+}
+
+void rd__ui_box(uint32_t outW, uint32_t outH, RhiRect *box)
+{
+    outputBox(outW, outH, box);
+    const RdRect p = {box->x, box->y, box->w, box->h};
+    const RdRect u = rd_ui_box_of(&p);
+    *box = (RhiRect){u.x, u.y, u.w, u.h};
+}
+
+/* The texels of a source sw wide that step 2 leaves out at each side: the
+ * frame's columns past its exact width, (gsW - wExact) / 2 GS pixels at
+ * sw / gsW texels each (the CRT filter crops the same columns rounded to
+ * whole GS pixels: rd_crt.c rd__crt_grid).  0 at 512 (4:3). */
+static float sourceCrop(uint32_t sw)
+{
+    const uint32_t gw = g_rd.gsW ? g_rd.gsW : ICO_FRAME_BASE_W;
+    const float we = rd__frame_wexact();
+    if (gw == ICO_FRAME_BASE_W || !(we < (float)gw)) {
+        return 0.0f;
+    }
+    return ((float)gw - we) * 0.5f * (float)sw / (float)gw;
 }
 
 bool rd__apply_display(void)
@@ -147,9 +232,11 @@ bool rd__apply_display(void)
     const RdSettings *st = &g_rd.settings;
     /* every option applies whatever the preset; a zeroed
      * RdSettings is the PS2 picture (scale 0 and no size is the GS size
-     * unless the Enhanced flag asks for the output's box, below) */
+     * unless the Enhanced flag asks for the output's box, below).  The GS
+     * size is the native frame's (gsW: GsBase.c gsFrame.w, as wide as the
+     * aspect asks), so a scale is the resolution's alone, the same both
+     * ways */
     const float aspect = clampAspect(st->aspect);
-    const float wide = RD_ASPECT_43 / aspect;
     const float gw = (float)g_rd.gsW, gh = (float)g_rd.gsH;
     float w, h;
     /* the CRT filter shows the PS2's pixels, so the scene
@@ -159,21 +246,58 @@ bool rd__apply_display(void)
     const float scale = rd__crt_on() ? 1.0f : st->sceneScale;
     if (scale > 0.0f) {
         h = gh * scale;
-        w = gw * scale * aspect / RD_ASPECT_43;
+        w = gw * scale;
     } else if (st->sceneWidth && st->sceneHeight) {
         w = (float)st->sceneWidth;
         h = (float)st->sceneHeight;
     } else if (st->preset == RD_PRESET_ENHANCED && st->outputWidth && st->outputHeight) {
-        /* "window": the presentation box.  Only with the Enhanced flag, so
-         * a zeroed RdSettings (the tests', the replay tool's default) stays
-         * the GS size; the host sends scale 1 for the Original rows */
+        /* "window": the presentation box, one texel an output pixel.  Only
+         * with the Enhanced flag, so a zeroed RdSettings (the tests', the
+         * replay tool's default) stays the GS size; the host sends scale 1
+         * for the Original rows.  The box shows the frame's exact width, so
+         * the texture is gsW / wExact of the box across (1 at 4:3); the
+         * box keeps the PS2's pixel shape (7:6 at 448 lines) */
         RhiRect b;
         rd__present_box(st->outputWidth, st->outputHeight, aspect, &b);
-        w = (float)b.w;
+        const float we = wexactFor(aspect);
+        w = we == gw ? (float)b.w : (float)b.w * gw / we;
         h = (float)b.h;
     } else {
         w = gw;
         h = gh;
+    }
+    /* supersampling (RdSettings.antiAlias, rd__aa_mode: never under the
+     * Original preset): the scene at 2 or 4 times the Resolution row's
+     * size, before the GPU's limit below (and the halving fallback after
+     * it, createNamedTargets); the presenter box-reduces DISPLAY back
+     * (rd__present_record).  Not under the CRT filter, which shows the
+     * PS2's pixels at 1x */
+    const int aaMode = rd__aa_mode();
+    const float ssaaAsked = rd__crt_on() ? 1.0f : (float)rd__aa_ssaa_factor(aaMode);
+    float ssaa = ssaaAsked;
+    float perPx = 0.0f; /* the Resolution row's texels an output pixel, 0 unknown */
+    if (ssaa > 1.0f && st->outputWidth && st->outputHeight) {
+        /* only as much as the picture lacks: a scene that already has
+         * the factor's texels an output pixel both ways is supersampled
+         * as it stands (8x at 48:9 on a 3840x2160 display is over 4 texels
+         * a pixel each way).  The rule: t = the smaller of the two axes'
+         * texels an output pixel (across: the frame's exact width of w over
+         * the box's width; down: DISPLAY's rows, h or h / 2 at half
+         * height, over the box's height); the factor applied is
+         * ceil(factor / t), at least 1 and at most the factor */
+        RhiRect b;
+        rd__present_box(st->outputWidth, st->outputHeight, aspect, &b);
+        const float tx = w * (wexactFor(aspect) / gw) / (float)b.w;
+        const float ty = (st->fullHeightScene ? h : h * 0.5f) / (float)b.h;
+        perPx = tx < ty ? tx : ty;
+        if (perPx > 0.0f) {
+            const float need = ceilf(ssaa / perPx - 1e-4f);
+            ssaa = need < 1.0f ? 1.0f : (need > ssaa ? ssaa : need);
+        }
+    }
+    if (ssaa > 1.0f) {
+        w *= ssaa;
+        h *= ssaa;
     }
     /* from the GS size up to the GPU's largest render target, both axes scaled
      * together so the shape is kept (16384 where there is no device) */
@@ -189,6 +313,17 @@ bool rd__apply_display(void)
     if (h > lim) {
         w *= lim / h;
         h = lim;
+    }
+    /* MSAA on a tile-based GPU: the multisampled scene pair (4 + 8 bytes a
+     * sample) shares the phone's memory, so the scale halves (both axes, not
+     * below the GS size) until the pair fits RD_MSAA_TILER_BUDGET */
+    if (g_rd.hasDevice && rhi_limits()->tiler && rd_aa_samples(aaMode) > 1u) {
+        const double per = 12.0 * (double)rd_aa_samples(aaMode);
+        while ((double)w * (double)h * per > (double)RD_MSAA_TILER_BUDGET && w > gw * 1.5f &&
+               h > gh * 1.5f) {
+            w *= 0.5f;
+            h *= 0.5f;
+        }
     }
     const float sx = w / gw < 1.0f ? 1.0f : w / gw;
     const float sy = h / gh < 1.0f ? 1.0f : h / gh;
@@ -209,9 +344,19 @@ bool rd__apply_display(void)
      * settingsPending) and at init, never per frame */
     if (changed || aspect != g_rd.outAspect || filter != g_rd.filterUpgrade ||
         vs != g_rd.vsyncApplied) {
-        rd__log("display: scene %gx%g%s, work %g, aspect %.3f, filter %u, %s height, vsync %s",
+        char ssaaNote[96] = "";
+        if (ssaaAsked > 1.0f && ssaa > 1.0f && ssaa < ssaaAsked) {
+            snprintf(ssaaNote, sizeof(ssaaNote),
+                     " (at %gx: the resolution has %.2f texels an output pixel)", (double)ssaa,
+                     (double)perPx);
+        } else if (ssaaAsked > 1.0f && !(ssaa > 1.0f)) {
+            snprintf(ssaaNote, sizeof(ssaaNote),
+                     " (skipped: the resolution has %.2f texels an output pixel)", (double)perPx);
+        }
+        rd__log("display: scene %gx%g%s, work %g, aspect %.3f, filter %u, %s height, vsync %s%s%s",
                 (double)sx, (double)sy, crtLock ? " (CRT: 1x)" : "", (double)work, (double)aspect,
-                (unsigned)filter, full ? "full" : "half", st->vsync ? "on" : "off");
+                (unsigned)filter, full ? "full" : "half", st->vsync ? "on" : "off",
+                aaMode == RD_AA_OFF ? "" : rd__aa_label(aaMode), ssaaNote);
     }
     if (changed) {
         g_rd.sceneReqSx = sx;
@@ -221,7 +366,7 @@ bool rd__apply_display(void)
         g_rd.sceneFellBack = false;
     }
     g_rd.workScale = work;
-    g_rd.wideX = wide;
+    g_rd.ssaa = ssaa;
     g_rd.outAspect = aspect;
     g_rd.filterUpgrade = filter;
     g_rd.fullHeight = full;
@@ -284,7 +429,7 @@ bool rd__present_acquire(void)
         }
         g_rd.presentOut = rhi_create_texture(&(RhiTextureDesc){
             w, h, 1, RHI_FMT_RGBA8_UNORM,
-            RHI_TEX_RENDER_TARGET | RHI_TEX_SAMPLED | RHI_TEX_COPY_SRC, "rd present out"});
+            RHI_TEX_RENDER_TARGET | RHI_TEX_SAMPLED | RHI_TEX_COPY_SRC, "rd present out", 0});
         g_rd.presentOutState = RHI_STATE_UNDEFINED;
         g_rd.presentOutW = w;
         g_rd.presentOutH = h;
@@ -295,11 +440,12 @@ bool rd__present_acquire(void)
     return g_rd.presentOut.id != 0;
 }
 
-/* src (sw x sh) into box of dst in a pass of its own; keepOpen leaves the
- * pass open for the caller to draw more into dst and end it */
+/* src (sw x sh) into box of dst in a pass of its own, crop texels left out
+ * at each side of src (sourceCrop; 0: all of it); keepOpen leaves the pass
+ * open for the caller to draw more into dst and end it */
 static void blit(RhiCommandList cl, RhiTexture src, uint32_t sw, uint32_t sh, RhiTexture dst,
                  RhiFormat dstFmt, uint32_t dw, uint32_t dh, RhiLoadOp load, const RhiRect *box,
-                 RdFilter filter, int mirror, bool keepOpen)
+                 RdFilter filter, int mirror, float crop, bool keepOpen)
 {
     RhiRenderPassDesc p;
     memset(&p, 0, sizeof(p));
@@ -323,9 +469,12 @@ static void blit(RhiCommandList cl, RhiTexture src, uint32_t sw, uint32_t sh, Rh
         cb.mode[0] = ICO_DF_TEXTURED | ICO_DF_TCC_RGBA;
         /* mirrored: the source rectangle right to left (blit_vs interpolates
          * u0 + t (u1 - u0)): u = sw (1 - t), exact at the box's pixel
-         * centres when the scale is a power of two */
-        cb.uvRect[0] = mirror ? (float)sw : 0.0f;
-        cb.uvRect[2] = mirror ? 0.0f : (float)sw;
+         * centres when the scale is a power of two.  A crop narrows it by
+         * as much at each side (none at 4:3: the same constants) */
+        const float u0 = crop > 0.0f ? crop : 0.0f;
+        const float u1 = crop > 0.0f ? (float)sw - crop : (float)sw;
+        cb.uvRect[0] = mirror ? u1 : u0;
+        cb.uvRect[2] = mirror ? u0 : u1;
         cb.uvRect[3] = (float)sh;
         cb.tex[0] = (float)sw;
         cb.tex[1] = (float)sh;
@@ -345,9 +494,100 @@ static void blit(RhiCommandList cl, RhiTexture src, uint32_t sw, uint32_t sh, Rh
 
 void rd__present_blit(RhiCommandList cl, RhiTexture src, uint32_t sw, uint32_t sh, RhiTexture dst,
                       RhiFormat dstFmt, uint32_t dw, uint32_t dh, RhiLoadOp load,
-                      const RhiRect *box, RdFilter filter, int mirror)
+                      const RhiRect *box, RdFilter filter, int mirror, float crop)
 {
-    blit(cl, src, sw, sh, dst, dstFmt, dw, dh, load, box, filter, mirror, false);
+    blit(cl, src, sw, sh, dst, dstFmt, dw, dh, load, box, filter, mirror, crop, false);
+}
+
+/* ------------------------------------------------------ the supersampling
+ * With anti-aliasing on (rd__aa_mode, never under the Original preset) and
+ * more than one source texel per output pixel both ways (supersampling
+ * makes it 2 or 4 at the window's resolution), step 2's source is first
+ * box-averaged into a texture of the box's own size (aa_reduce_ps: the mean
+ * over each pixel's footprint on a 1/16-texel grid, rounded half up; exact
+ * for the integer ratios), and step 2 then draws that texture into the box
+ * one texel a pixel, nearest, mirrored as before.  The crop (sourceCrop) is
+ * taken in the reduce.  Off, or at 1 texel a pixel or fewer, nothing here
+ * runs and the box blit samples DISPLAY as before. */
+static struct {
+    RhiTexture tex;
+    RhiState state;
+    uint32_t w, h;
+} s_reduce;
+
+/* the footprint of one of B pixels over an extent of S16 sixteenths
+ * (a = S16 / B, b = S16 % B: aa_reduce_ps) */
+static void reduceAxis(uint32_t s16, uint32_t b, uint32_t c16, uint32_t out[4])
+{
+    out[0] = s16 / b;
+    out[1] = s16 % b;
+    out[2] = b;
+    out[3] = c16;
+}
+
+/* the reduce into s_reduce; false (nothing recorded) when it does not apply
+ * or cannot run.  On true *src, *sw, *sh are the reduced texture's */
+static bool reduceRecord(RhiCommandList cl, RhiTexture *src, uint32_t *sw, uint32_t *sh,
+                         const RhiRect *box, float crop)
+{
+    if (rd__aa_mode() == RD_AA_OFF || box->w == 0 || box->h == 0) {
+        return false;
+    }
+    const float ew = (float)*sw - 2.0f * (crop > 0.0f ? crop : 0.0f);
+    if (!(ew > (float)box->w && (float)*sh > (float)box->h)) {
+        return false; /* one texel a pixel or fewer: the box blit as before */
+    }
+    if (!s_reduce.tex.id || s_reduce.w != box->w || s_reduce.h != box->h) {
+        if (s_reduce.tex.id) {
+            rhi_destroy_texture(s_reduce.tex);
+        }
+        s_reduce.tex = rhi_create_texture(&(RhiTextureDesc){box->w, box->h, 1, RHI_FMT_RGBA8_UNORM,
+                                                            RHI_TEX_RENDER_TARGET | RHI_TEX_SAMPLED,
+                                                            "rd present reduce", 0});
+        s_reduce.state = RHI_STATE_UNDEFINED;
+        s_reduce.w = box->w;
+        s_reduce.h = box->h;
+    }
+    const RdPipeKeyInt k = rd__post_key(RD_VS_BLIT, RD_FS_AA_REDUCE, RHI_FMT_RGBA8_UNORM);
+    const RhiPipeline pipe = rd__get_pipeline(&k);
+    if (!s_reduce.tex.id || !pipe.id) {
+        return false;
+    }
+    IcoDrawCB cb;
+    memset(&cb, 0, sizeof(cb));
+    reduceAxis((uint32_t)(ew * 16.0f + 0.5f), box->w,
+               (uint32_t)((crop > 0.0f ? crop : 0.0f) * 16.0f + 0.5f), cb.col);
+    reduceAxis(*sh * 16u, box->h, 0u, cb.blend);
+    cb.mode[0] = *sw;
+    cb.mode[1] = *sh;
+    cb.uvRect[2] = cb.uvRect[3] = 1.0f;
+    cb.tex[0] = cb.tex[1] = cb.tex[2] = cb.tex[3] = 1.0f;
+    rd__transition(cl, s_reduce.tex, &s_reduce.state, RHI_STATE_RENDER_TARGET);
+    RhiRenderPassDesc p;
+    memset(&p, 0, sizeof(p));
+    p.color[0].texture = s_reduce.tex;
+    p.color[0].load = RHI_LOAD_DONT_CARE;
+    p.colorCount = 1;
+    p.width = box->w;
+    p.height = box->h;
+    rhi_cmd_begin_render_pass(cl, &p);
+    const RhiViewport vp = {0.0f, 0.0f, (float)box->w, (float)box->h, 0.0f, 1.0f};
+    rhi_cmd_set_viewport(cl, &vp);
+    const RhiRect all = {0, 0, box->w, box->h};
+    rhi_cmd_set_scissor(cl, &all);
+    rhi_cmd_set_pipeline(cl, pipe);
+    rd__bind_uniform(cl, 0, rd__frame_group(box->w, box->h, 0.0f, 0.0f));
+    rd__bind_uniform(cl, 1, rd__draw_group(&cb));
+    rhi_cmd_set_bind_group(cl, 2,
+                           rd__tex_group(*src, rd__sampler(RD_FILTER_NEAREST, RD_FILTER_NEAREST,
+                                                           RD_WRAP_CLAMP, RD_WRAP_CLAMP)));
+    rhi_cmd_draw(cl, 3, 0, 1);
+    rhi_cmd_end_render_pass(cl);
+    rd__transition(cl, s_reduce.tex, &s_reduce.state, RHI_STATE_SHADER_READ);
+    *src = s_reduce.tex;
+    *sw = box->w;
+    *sh = box->h;
+    return true;
 }
 
 /* ------------------------------------------------------ the effects depth
@@ -419,7 +659,7 @@ static void depthShutdown(void)
  * run, and the plain blit draws the box */
 static bool depthBlit(RhiCommandList cl, RhiTexture src, uint32_t sw, uint32_t sh, RhiTexture dst,
                       RhiFormat dstFmt, uint32_t dw, uint32_t dh, const RhiRect *box,
-                      RdFilter filter, int mirror)
+                      RdFilter filter, int mirror, float crop)
 {
     RdTargetRec *ts = rd__target_rec(RD_TARGET_SCENE + 1);
     if (!ts || !ts->withDepth || !ts->depth.id || ts->depthState == RHI_STATE_UNDEFINED) {
@@ -433,7 +673,7 @@ static bool depthBlit(RhiCommandList cl, RhiTexture src, uint32_t sw, uint32_t s
          * tests' readback) */
         s_depth.out = rhi_create_texture(&(RhiTextureDesc){
             dw, dh, 1, RHI_FMT_D32F, RHI_TEX_DEPTH_STENCIL | RHI_TEX_SAMPLED | RHI_TEX_COPY_SRC,
-            "rd effects depth"});
+            "rd effects depth", 0});
         s_depth.outState = RHI_STATE_UNDEFINED;
         s_depth.outW = dw;
         s_depth.outH = dh;
@@ -477,8 +717,10 @@ static bool depthBlit(RhiCommandList cl, RhiTexture src, uint32_t sw, uint32_t s
         cb.col[i] = 0x80;
     }
     cb.mode[0] = ICO_DF_TEXTURED | ICO_DF_TCC_RGBA;
-    cb.uvRect[0] = mirror ? (float)sw : 0.0f;
-    cb.uvRect[2] = mirror ? 0.0f : (float)sw;
+    const float u0 = crop > 0.0f ? crop : 0.0f;
+    const float u1 = crop > 0.0f ? (float)sw - crop : (float)sw;
+    cb.uvRect[0] = mirror ? u1 : u0;
+    cb.uvRect[2] = mirror ? u0 : u1;
     cb.uvRect[3] = (float)sh;
     cb.tex[0] = (float)sw;
     cb.tex[1] = (float)sh;
@@ -842,24 +1084,36 @@ static bool textRegion(const TextPending *t, const TextSeg *g, RhiRect *out)
     const RhiRect real = {b->x, b->y, (uint32_t)b->w, (uint32_t)b->h};
     const float bx = (float)real.x, by = (float)real.y, bw = (float)real.w, bh = (float)real.h;
     const float W = (float)t->gsW, H = (float)t->gsH;
-    /* the 4:3 picture the UI is drawn in (font.h ui_begin_overlay) */
-    const float w43 = bw < bh * (4.0f / 3.0f) ? bw : bh * (4.0f / 3.0f);
-    const float left = bx + (bw - w43) * 0.5f;
-    /* the scissor: a side at the target's edge stays at the box's edge
-     * (rd__wide_scissor), the others move with the UI */
-    float x0 = t->sc[0] <= 0 ? bx : left + (float)t->sc[0] * w43 / W;
-    float x1 = t->sc[2] >= (int32_t)t->gsW - 1 ? bx + bw : left + (float)(t->sc[2] + 1) * w43 / W;
+    /* the 2D layer's 4:3 box inside the presentation box (rd_ui_box_of's): the
+     * frame's centre 512 columns, GS 2048 -+ 256 */
+    float left, w43;
+    uiBoxF(b, &left, &w43);
+    /* the scissor: a side at the target's edge stays at the box's edge,
+     * the others move with the UI.  A UI-tagged scissor is in the target's
+     * pixels, 512 of which are the UI box (the frame is gsW wide: its centre
+     * 512 columns); GS pixel p is (p - (W - 512) / 2) of them */
+    const float ox = (W - (float)ICO_FRAME_BASE_W) * 0.5f;
+    float x0 = t->sc[0] <= 0 ? bx : left + ((float)t->sc[0] - ox) * w43 / (float)ICO_FRAME_BASE_W;
+    float x1 = t->sc[2] >= (int32_t)t->gsW - 1
+                   ? bx + bw
+                   : left + ((float)(t->sc[2] + 1) - ox) * w43 / (float)ICO_FRAME_BASE_W;
     float y0 = by + (float)t->sc[1] * bh / H;
     float y1 = by + (float)(t->sc[3] + 1) * bh / H;
     /* the reduction's crop (rd_post.c postReduction): 2 pixels left and
-     * right, 8 lines of DISPLAY's H / 2 top and bottom (2 below 512), which
-     * the picture holds black.  With full pixel on the reduction draws
-     * the whole frame (rd_replay.c), so there is no black strip to keep
-     * the text out of */
+     * right of the native frame, 8 lines of DISPLAY's H / 2 top and bottom
+     * (2 below 512), which the picture holds black.  The box shows the
+     * frame's exact width we, (W - we) / 2 columns left out at each side
+     * (sourceCrop), so what is left of the 2 columns is 2 less that, none
+     * once the crop passes them (all of them at 4:3).  With full pixel on
+     * the reduction draws the whole frame (rd_replay.c), so there is no
+     * black strip to keep the text out of */
     if (!g_rd.settings.fullPixel) {
         const float crop = (float)rd__reduction_crop(t->gsH), half = H * 0.5f;
-        x0 = fmaxf(x0, bx + bw * 2.0f / W);
-        x1 = fminf(x1, bx + bw * (W - 2.0f) / W);
+        const float wf = rd__frame_wexact();
+        const float we = wf > 0.0f && wf < W ? wf : W;
+        const float edge = fmaxf(0.0f, 2.0f - (W - we) * 0.5f);
+        x0 = fmaxf(x0, bx + bw * edge / we);
+        x1 = fminf(x1, bx + bw * (we - edge) / we);
         y0 = fmaxf(y0, by + bh * crop / half);
         y1 = fminf(y1, by + bh * (half - crop) / half);
     }
@@ -1200,7 +1454,7 @@ static void captureRecord(RhiCommandList cl, RhiTexture out, RhiState *outState,
         }
         s_cap.tex = rhi_create_texture(&(RhiTextureDesc){s_outW, s_outH, 1, s_outFormat,
                                                          RHI_TEX_COPY_SRC | RHI_TEX_COPY_DST,
-                                                         "rd photo capture"});
+                                                         "rd photo capture", 0});
         s_cap.state = RHI_STATE_UNDEFINED;
         s_cap.w = s_outW;
         s_cap.h = s_outH;
@@ -1305,6 +1559,10 @@ void rd__present_record(RhiCommandList cl)
     const int mirror = pr->mirror && rd__mirror_on();
     bool filtered = false, uiInPicture = false;
     if (rd__crt_on()) {
+        /* the filter's box: its grid's shape (the exact width in whole
+         * columns, rd__crt_grid), box at 4:3 */
+        RhiRect cbox;
+        rd__crt_box(s_outW, s_outH, &cbox);
         if (depthWanted()) {
             /* the filter replaces the box blit that carries the effects depth */
             rd__log_once(RD_ONCE_EFFECTS_DEPTH_CRT,
@@ -1319,15 +1577,16 @@ void rd__present_record(RhiCommandList cl)
              * the CRT filter that UI is inside the filtered picture, so the
              * capture takes a pass without it and the shown picture a
              * second pass with it */
-            capOk = rd__crt_record(cl, disp, out, s_outFormat, s_outW, s_outH, &box, mirror, false);
+            capOk =
+                rd__crt_record(cl, disp, out, s_outFormat, s_outW, s_outH, &cbox, mirror, false);
             if (capOk) {
                 captureRecord(cl, out, outState, false);
             }
         }
         /* a failed capture pass: the box blit below, the capture before the
          * overlay as without the filter */
-        filtered =
-            capOk && rd__crt_record(cl, disp, out, s_outFormat, s_outW, s_outH, &box, mirror, true);
+        filtered = capOk &&
+                   rd__crt_record(cl, disp, out, s_outFormat, s_outW, s_outH, &cbox, mirror, true);
         uiInPicture = filtered && ui;
         rd__perf_post(cl, -1);
     }
@@ -1340,7 +1599,7 @@ void rd__present_record(RhiCommandList cl)
             }
             g_rd.presentLines = rhi_create_texture(
                 &(RhiTextureDesc){lw, lh, 1, RHI_FMT_RGBA8_UNORM,
-                                  RHI_TEX_RENDER_TARGET | RHI_TEX_SAMPLED, "rd present lines"});
+                                  RHI_TEX_RENDER_TARGET | RHI_TEX_SAMPLED, "rd present lines", 0});
             g_rd.presentLinesState = RHI_STATE_UNDEFINED;
             g_rd.presentLinesW = lw;
             g_rd.presentLinesH = lh;
@@ -1348,7 +1607,7 @@ void rd__present_record(RhiCommandList cl)
         rd__transition(cl, g_rd.presentLines, &g_rd.presentLinesState, RHI_STATE_RENDER_TARGET);
         const RhiRect full = {0, 0, lw, lh};
         blit(cl, disp->color, disp->tw, disp->th, g_rd.presentLines, RHI_FMT_RGBA8_UNORM, lw, lh,
-             RHI_LOAD_DONT_CARE, &full, pr->doubleFilter, 0, false);
+             RHI_LOAD_DONT_CARE, &full, pr->doubleFilter, 0, 0.0f, false);
         rd__transition(cl, g_rd.presentLines, &g_rd.presentLinesState, RHI_STATE_SHADER_READ);
         src = g_rd.presentLines;
         sw = lw;
@@ -1369,13 +1628,23 @@ void rd__present_record(RhiCommandList cl)
         /* with the effects depth when asked for and an
          * effects program is loaded (never under the CRT filter, even when
          * it could not draw) */
+        /* the frame's columns past its exact width left out (none at 4:3) */
+        float crop = sourceCrop(sw);
+        RdFilter scaleFilter = pr->scaleFilter;
+        /* anti-aliasing: the source box-averaged to the box first when it
+         * has more than a texel a pixel (the reduce takes the crop; the box
+         * blit is then one texel a pixel, nearest) */
+        if (rd__aa_mode() != RD_AA_OFF && reduceRecord(cl, &src, &sw, &sh, &box, crop)) {
+            crop = 0.0f;
+            scaleFilter = RD_FILTER_NEAREST;
+        }
         const bool depth = depthWanted() && !rd__crt_on() &&
                            depthBlit(cl, src, sw, sh, out, s_outFormat, s_outW, s_outH, &box,
-                                     pr->scaleFilter, mirror);
+                                     scaleFilter, mirror, crop);
         if (!depth) {
             open = !rd__crt_on();
             blit(cl, src, sw, sh, out, s_outFormat, s_outW, s_outH, RHI_LOAD_CLEAR, &box,
-                 pr->scaleFilter, mirror, open);
+                 scaleFilter, mirror, crop, open);
         }
     }
     /* the deferred text, drawn in list order with the regions and colours
@@ -1434,7 +1703,11 @@ void rd__present_shutdown(void)
         rhi_destroy_texture(s_probe.tex); /* rd_display_probe's */
     }
     memset(&s_probe, 0, sizeof(s_probe));
-    depthShutdown();    /* the effects depth */
+    depthShutdown(); /* the effects depth */
+    if (s_reduce.tex.id) {
+        rhi_destroy_texture(s_reduce.tex); /* the supersampling's reduce */
+    }
+    memset(&s_reduce, 0, sizeof(s_reduce));
     rd__crt_shutdown(); /* the CRT filter */
     /* the overlay's prims (the registration stays), the deferred text's list */
     free(s_ov.v);
@@ -1463,7 +1736,7 @@ bool rd_display_probe(uint8_t rgba[RD_DISPLAY_PROBE_POINTS][4])
     if (!s_probe.tex.id) {
         s_probe.tex = rhi_create_texture(
             &(RhiTextureDesc){RD_DISPLAY_PROBE_POINTS, 1, 1, disp->format,
-                              RHI_TEX_COPY_DST | RHI_TEX_COPY_SRC, "rd display probe"});
+                              RHI_TEX_COPY_DST | RHI_TEX_COPY_SRC, "rd display probe", 0});
         s_probe.state = RHI_STATE_UNDEFINED;
         s_probe.format = disp->format;
         if (!s_probe.tex.id) {

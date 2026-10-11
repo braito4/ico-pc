@@ -118,6 +118,7 @@
 #include "matrixDrive.h"
 #include "particleEffect.h"
 #include "ico_math.h"
+#include "../../include/ico_frame.h"
 
 static int failures;
 
@@ -136,6 +137,9 @@ static int failures;
 
 /* ------------------------------------------------- what the files import */
 int ScreenWidth = W, ScreenHeight = H;
+/* GsBase.c's native frame: 4:3 (particleEffect.c's draw gate, darkVolume.c's
+   frame) */
+IcoFrame gsFrame = {W, H, W / 64, (float)W, 4.0f / 3.0f};
 float center_X = 2048.0f, center_Y = 2048.0f;
 float vsWidth = 640.0f, vsHeight = 448.0f;
 int screenOffsetX, screenOffsetY;
@@ -313,13 +317,6 @@ void apply_matrix_w1(void *out, void *m, void *in)
 void InitTableSin(void) {}
 
 void InitQuaternionDrive(void) {}
-
-/* port/game/video_options.c: the picture's width over 4:3, 1 here
-   (particleEffect.c's draw gate) */
-float ico_video_wide_x(void)
-{
-    return 1.0f;
-}
 
 /* GsBase.c: lineManager.c _getLine's x clip, the 4:3 half-width here */
 float gsb_HostLineHalfWidth(void)

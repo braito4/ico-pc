@@ -8,7 +8,15 @@
  *
  *   char[8]  "ICORDMP\0"
  *   u32      version, sizeof(RdCmd), sizeof(RdStateBlock), sizeof(RdScreenVtx)
- *   u32      gsW, gsH, number, keep, hasCamera
+ *   u32      gsW, gsH
+ *   (version 10: f32 aspect, f32 wExact, u32 cullW: the native frame the
+ *            game built the tick for.  aspect is the display aspect
+ *            (gsFrame.aspect), wExact the visible width in GS pixels
+ *            (512 k; the presenter crops (cullW - wExact) / 2 a side), cullW
+ *            the width the cull and the draws used (the head's gsW; the
+ *            frame's own gsW is the renderer context's).  A version 3 to
+ *            9 dump has none and loads as aspect 4/3, wExact 512, cullW 512)
+ *   u32      number, keep, hasCamera
  *   RdCamera camera (raw)
  *   RdStateBlock startState, endState (version 3: without the trailing aa1,
  *            80 bytes; rd__load_frame reads it with AA1 off)
@@ -183,6 +191,13 @@ static bool wraw(FILE *fp, const void *p, size_t n)
     return n == 0 || fwrite(p, 1, n, fp) == n;
 }
 
+static bool wf32(FILE *fp, float v)
+{
+    uint32_t u;
+    memcpy(&u, &v, sizeof(u));
+    return w32(fp, u);
+}
+
 bool rd__dump_frame(const RdFrame *f, const char *path)
 {
     if (!f || !path) {
@@ -199,8 +214,10 @@ bool rd__dump_frame(const RdFrame *f, const char *path)
     bool ok = wraw(fp, RD_DUMP_MAGIC, 8) && w32(fp, RD_DUMP_VERSION) &&
               w32(fp, (uint32_t)sizeof(RdCmd)) && w32(fp, (uint32_t)sizeof(RdStateBlock)) &&
               w32(fp, (uint32_t)sizeof(RdScreenVtx)) && w32(fp, f->gsW) && w32(fp, f->gsH) &&
-              w32(fp, f->number) && w32(fp, f->keep) && w32(fp, f->hasCamera) &&
-              wraw(fp, &f->camera, sizeof(f->camera)) &&
+              wf32(fp, f->aspect > 0.0f ? f->aspect : 4.0f / 3.0f) &&
+              wf32(fp, f->wExact > 0.0f ? f->wExact : (float)f->gsW) &&
+              w32(fp, f->cullW ? f->cullW : f->gsW) && w32(fp, f->number) && w32(fp, f->keep) &&
+              w32(fp, f->hasCamera) && wraw(fp, &f->camera, sizeof(f->camera)) &&
               wraw(fp, &f->startState, sizeof(RdStateBlock)) &&
               wraw(fp, &f->endState, sizeof(RdStateBlock));
     for (int l = 0; ok && l < RD_LIST_COUNT; l++) {
@@ -295,6 +312,57 @@ static bool r32(FILE *fp, uint32_t *v)
     }
     *v = (uint32_t)b[0] | ((uint32_t)b[1] << 8) | ((uint32_t)b[2] << 16) | ((uint32_t)b[3] << 24);
     return true;
+}
+
+static bool rraw(FILE *fp, void *p, size_t n);
+
+static bool rf32(FILE *fp, float *v)
+{
+    uint32_t u;
+    if (!r32(fp, &u)) {
+        return false;
+    }
+    memcpy(v, &u, sizeof(u));
+    return true;
+}
+
+/* the version 10 frame fields must be a frame the renderer can size: an
+ * aspect from 4:3 to the widest, a native (cull) width from 512 to the
+ * widest frame and a visible width within it (ico_frame.h).  cullW is the
+ * head's gsW; the frame's own gsW is the renderer's context width (512 at
+ * 4:3 and in a record-only test), so the two are not compared. */
+static bool frameFieldsOk(float aspect, float wExact, uint32_t cullW)
+{
+    return aspect >= 4.0f / 3.0f - 1e-4f && aspect <= ICO_FRAME_ASPECT_MAX + 1e-4f &&
+           wExact >= (float)ICO_FRAME_BASE_W - 1e-3f && cullW >= (uint32_t)ICO_FRAME_BASE_W &&
+           cullW <= (uint32_t)ICO_FRAME_W_MAX && wExact <= (float)cullW + 1e-3f;
+}
+
+bool rd__dump_peek(const char *path, RdDumpInfo *info)
+{
+    FILE *fp = ico_fopen(path, "rb");
+    if (!fp || !info) {
+        if (fp) {
+            fclose(fp);
+        }
+        return false;
+    }
+    char magic[8];
+    uint32_t skip = 0;
+    memset(info, 0, sizeof(*info));
+    bool ok = rraw(fp, magic, 8) && memcmp(magic, RD_DUMP_MAGIC, 8) == 0 &&
+              r32(fp, &info->version) && info->version >= 3u && info->version <= RD_DUMP_VERSION &&
+              r32(fp, &skip) && r32(fp, &skip) && r32(fp, &skip) && r32(fp, &info->gsW) &&
+              r32(fp, &info->gsH);
+    info->aspect = 4.0f / 3.0f;
+    info->wExact = (float)ICO_FRAME_BASE_W;
+    info->cullW = ICO_FRAME_BASE_W;
+    if (ok && info->version >= 10u) {
+        ok = rf32(fp, &info->aspect) && rf32(fp, &info->wExact) && r32(fp, &info->cullW) &&
+             frameFieldsOk(info->aspect, info->wExact, info->cullW);
+    }
+    fclose(fp);
+    return ok;
 }
 
 static bool rraw(FILE *fp, void *p, size_t n)
@@ -460,9 +528,17 @@ bool rd__load_frame(const char *path, RdFrame *out)
        16 fixed targets, so its first temporary slot's low half is 17;
        version 8 RD_TARGET_DISPLAY_HELD: 17 before it, low half 18 */
     tgtMap.fixedCount = ver <= 5u ? 16u : (ver <= 7u ? 17u : RD_TARGET_COUNT);
-    ok = r32(fp, &out->gsW) && r32(fp, &out->gsH) && r32(fp, &out->number) && r32(fp, &out->keep) &&
-         r32(fp, &out->hasCamera) && rraw(fp, &out->camera, sizeof(out->camera)) &&
-         rraw(fp, &out->startState, szState) && rraw(fp, &out->endState, szState);
+    ok = r32(fp, &out->gsW) && r32(fp, &out->gsH);
+    out->aspect = 4.0f / 3.0f;
+    out->wExact = (float)ICO_FRAME_BASE_W;
+    out->cullW = ICO_FRAME_BASE_W;
+    if (ok && ver >= 10u) {
+        ok = rf32(fp, &out->aspect) && rf32(fp, &out->wExact) && r32(fp, &out->cullW) &&
+             frameFieldsOk(out->aspect, out->wExact, out->cullW);
+    }
+    ok = ok && r32(fp, &out->number) && r32(fp, &out->keep) && r32(fp, &out->hasCamera) &&
+         rraw(fp, &out->camera, sizeof(out->camera)) && rraw(fp, &out->startState, szState) &&
+         rraw(fp, &out->endState, szState);
     for (int l = 0; ok && l < RD_LIST_COUNT; l++) {
         uint32_t n = 0;
         ok = r32(fp, &n) && n < (1u << 24);

@@ -475,6 +475,72 @@ static void test_video_effects_depth(const char *dir)
     ico_video_reload();
 }
 
+/* [video] anti_aliasing (default off): the names, the file read, the
+   round trip, the Original preset forcing it off in force, and the setter */
+static void test_video_anti_alias(const char *dir)
+{
+    static const char *const names[ICO_AA_COUNT] = {"off",   "ssaa2", "ssaa4",
+                                                    "msaa2", "msaa4", "msaa8"};
+    char path[512];
+    IcoVideoOptions o;
+    const char *text;
+    FILE *f;
+    int aa = -1;
+
+    ico_video_defaults(&o);
+    CHECK(o.antiAlias == ICO_AA_OFF);
+    for (int i = 0; i < ICO_AA_COUNT; i++) {
+        CHECK(ico_video_parse_anti_alias(names[i], &aa) == 0 && aa == i);
+        CHECK(strcmp(ico_video_anti_alias_name(i), names[i]) == 0);
+    }
+    CHECK(ico_video_parse_anti_alias("MSAA4", &aa) == 0 && aa == ICO_AA_MSAA4);
+    aa = 7;
+    CHECK(ico_video_parse_anti_alias("fxaa", &aa) == -1 && aa == 7);
+    CHECK(strcmp(ico_video_anti_alias_name(99), "off") == 0);
+    snprintf(path, sizeof(path), "%s/options_aa_test.toml", dir);
+    f = fopen(path, "wb");
+    if (f == NULL) {
+        fprintf(stderr, "cannot write %s\n", path);
+        failures++;
+        return;
+    }
+    /* no preset (Original): the shortcut puts it off */
+    fputs("[video]\nanti_aliasing = \"msaa4\"\n", f);
+    fclose(f);
+    ico_config_reset(path, "/nonexistent/options_test.ini");
+    ico_video_reload();
+    ico_video_get(&o);
+    CHECK(ico_video_preset(&o) == ICO_VIDEO_ORIGINAL);
+    CHECK(o.antiAlias == ICO_AA_OFF && ico_video_anti_alias() == ICO_AA_OFF);
+    /* Original rows with it set at run time: off in force */
+    o.antiAlias = ICO_AA_MSAA4;
+    ico_video_set(&o);
+    CHECK(ico_video_anti_alias() == ICO_AA_OFF);
+    /* Enhanced: in force */
+    ico_video_set_preset(&o, ICO_VIDEO_ENHANCED);
+    o.antiAlias = ICO_AA_SSAA2;
+    ico_video_set(&o);
+    CHECK(ico_video_anti_alias() == ICO_AA_SSAA2);
+    ico_video_set_anti_alias(ICO_AA_MSAA8);
+    CHECK(ico_video_anti_alias() == ICO_AA_MSAA8);
+    ico_video_set_anti_alias(42);
+    CHECK(ico_video_anti_alias() == ICO_AA_OFF);
+    ico_video_set_anti_alias(ICO_AA_SSAA4);
+    CHECK(ico_video_save() == 0);
+    text = read_text(path);
+    CHECK(text != NULL && strstr(text, "anti_aliasing = \"ssaa4\"") != NULL);
+    ico_config_reset(path, "/nonexistent/options_test.ini");
+    ico_video_reload();
+    CHECK(ico_video_anti_alias() == ICO_AA_SSAA4);
+    /* the Original shortcut turns it off */
+    ico_video_get(&o);
+    ico_video_set_preset(&o, ICO_VIDEO_ORIGINAL);
+    CHECK(o.antiAlias == ICO_AA_OFF);
+    remove(path);
+    ico_config_reset("/nonexistent/options_test.toml", "/nonexistent/options_test.ini");
+    ico_video_reload();
+}
+
 /* [video] full_pixel (default off): the default, the file read, the
    normalising, the round trip, and the presets leaving it alone */
 static void test_video_full_pixel(const char *dir)
@@ -765,6 +831,7 @@ int main(int argc, char **argv)
     test_video_effects(argc > 1 ? argv[1] : ".");
     test_video_effects_depth(argc > 1 ? argv[1] : ".");
     test_video_full_pixel(argc > 1 ? argv[1] : ".");
+    test_video_anti_alias(argc > 1 ? argv[1] : ".");
     test_video_models(argc > 1 ? argv[1] : ".");
     test_video_auto(argc > 1 ? argv[1] : ".");
     test_video_interpolate();

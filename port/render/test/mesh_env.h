@@ -227,14 +227,18 @@ int ico_title_logo_skip(const char *model)
     return 0;
 }
 
-/* port/game/title_logo.c: reg_DispObj's full-width title models; the
+/* port/game/title_logo.c: reg_DispObj's full-frame title models; the
    model a case names (none unless one does) */
-static const char *s_stretchModel;
+static const char *s_fullFrameModel;
 
-int ico_title_stretch_model(const char *model)
+int ico_title_fullframe_model(const char *model)
 {
-    return s_stretchModel != NULL && strcmp(model, s_stretchModel) == 0;
+    return s_fullFrameModel != NULL && strcmp(model, s_fullFrameModel) == 0;
 }
+
+/* GsBase.c's native frame (gsFrame, latched at the flip): 4:3 unless a case
+   sets another width (reg_DispObj widens a full-frame model by w / 512) */
+IcoFrame gsFrame = {512, 512, 8, 512.0f, 4.0f / 3.0f};
 
 int ico_arena_contains(const void *p, __SIZE_TYPE__ n)
 {

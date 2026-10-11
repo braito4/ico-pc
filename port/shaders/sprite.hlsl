@@ -7,8 +7,10 @@
 //   loc 1  RHI_VTX_U32x1        Z, GS value (PSMZ24 scale unless FrameCB.g_z says otherwise)
 //   loc 2  RHI_VTX_U8x4_UINT    RGBA 0..255, alpha 0x80 = 1.0
 //   loc 3  RHI_VTX_F32x2        UV in texels of t1
-// Entries: sprite_ui_vs and sprite_world_vs differ only in the FrameCB.g_space
-// slot they apply; sprite_ps serves both.
+// Entries: sprite_ui_vs and sprite_world_vs are the same mapping (no space
+// transforms a position: a GS X is drawn where the game put it at every
+// aspect); the two entries keep the draw's RD_SPACE_UI / WORLD tag in the
+// pipeline key. sprite_ps serves both.
 //
 // sprite_aa1_ui_vs, sprite_aa1_world_vs and sprite_aa1_ps draw the lines
 // and triangles PRIM.AA1 antialiases. Their vertex (IcoSpriteAa1Vertex,
@@ -35,10 +37,10 @@ struct SpriteVSOut
     VK_LOC(1) float2 uv : TEXCOORD0; // normalised
 };
 
-SpriteVSOut sprite_vertex(SpriteVSIn i, int space)
+SpriteVSOut sprite_vertex(SpriteVSIn i)
 {
     SpriteVSOut o;
-    o.pos = float4(gs_xy_to_ndc(i.xy, space), gs_depth(i.z), 1.0);
+    o.pos = float4(gs_xy_to_ndc(i.xy), gs_depth(i.z), 1.0);
     o.col = float4(i.col);
     o.uv = i.uv * g_tex.zw;
     return o;
@@ -46,12 +48,12 @@ SpriteVSOut sprite_vertex(SpriteVSIn i, int space)
 
 SpriteVSOut sprite_ui_vs(SpriteVSIn i)
 {
-    return sprite_vertex(i, SPACE_UI);
+    return sprite_vertex(i);
 }
 
 SpriteVSOut sprite_world_vs(SpriteVSIn i)
 {
-    return sprite_vertex(i, SPACE_WORLD);
+    return sprite_vertex(i);
 }
 
 Texture2D<float4> g_texture : register(t1, space2);
@@ -71,7 +73,7 @@ DualOut sprite_ps(SpriteVSOut i)
     uint4 col = uint4(floor(i.col + 0.5));
     if ((g_mode.x & DF_TEXTURED) != 0u) {
         // UV primitives: the GS's level of detail with Q = 1 (gs_sample)
-        const float4 tf = gs_sample(g_texture, g_sampler, gs_block_uv(i.uv), 1.0);
+        const float4 tf = gs_sample(g_texture, g_sampler, i.uv, 1.0);
         uint4 t = uint4(floor(tf * 255.0 + 0.5));
         t = gs_texa_expand(t, g_mode.y & 0xFFu, g_mode.y >> 8);
         col = gs_texture_function(t, col, g_mode.x);
@@ -97,8 +99,8 @@ DualOut sprite_texa_ps(SpriteVSOut i)
     uint4 col = uint4(floor(i.col + 0.5));
     if ((g_mode.x & DF_TEXTURED) != 0u) {
         uint4 t = (g_mode.x & DF_GS_LOD) != 0u
-                      ? gs_texa_texture_lod(g_texture, gs_block_uv(i.uv), 1.0, g_mode.x)
-                      : gs_texa_texture(g_texture, g_sampler, gs_block_uv(i.uv), g_mode.x);
+                      ? gs_texa_texture_lod(g_texture, i.uv, 1.0, g_mode.x)
+                      : gs_texa_texture(g_texture, g_sampler, i.uv, g_mode.x);
         col = gs_texture_function(t, col, g_mode.x);
     }
     if (gs_alpha_discard(g_mode.z, g_mode.w, col.a)) {
@@ -121,7 +123,7 @@ uint4 sprite_colour(float4 pos, float4 vcol, float2 uv, float q)
     }
     uint4 col = uint4(floor(vcol + 0.5));
     if ((g_mode.x & DF_TEXTURED) != 0u) {
-        uint4 t = uint4(floor(gs_sample(g_texture, g_sampler, gs_block_uv(uv), q) * 255.0 + 0.5));
+        uint4 t = uint4(floor(gs_sample(g_texture, g_sampler, uv, q) * 255.0 + 0.5));
         t = gs_texa_expand(t, g_mode.y & 0xFFu, g_mode.y >> 8);
         col = gs_texture_function(t, col, g_mode.x);
     }
@@ -145,10 +147,10 @@ struct SpriteAa1VSOut
     VK_LOC(2) noperspective float cov : TEXCOORD1;
 };
 
-SpriteAa1VSOut sprite_aa1_vertex(SpriteAa1VSIn i, int space)
+SpriteAa1VSOut sprite_aa1_vertex(SpriteAa1VSIn i)
 {
     SpriteAa1VSOut o;
-    o.pos = float4(gs_xy_to_ndc(i.xy, space), gs_depth(i.z), 1.0);
+    o.pos = float4(gs_xy_to_ndc(i.xy), gs_depth(i.z), 1.0);
     o.col = float4(i.col);
     o.uv = i.uv * g_tex.zw;
     o.cov = i.cov;
@@ -157,12 +159,12 @@ SpriteAa1VSOut sprite_aa1_vertex(SpriteAa1VSIn i, int space)
 
 SpriteAa1VSOut sprite_aa1_ui_vs(SpriteAa1VSIn i)
 {
-    return sprite_aa1_vertex(i, SPACE_UI);
+    return sprite_aa1_vertex(i);
 }
 
 SpriteAa1VSOut sprite_aa1_world_vs(SpriteAa1VSIn i)
 {
-    return sprite_aa1_vertex(i, SPACE_WORLD);
+    return sprite_aa1_vertex(i);
 }
 
 // The coverage alpha: a = the coverage on the
@@ -212,10 +214,10 @@ struct SpriteStqVSOut
     VK_LOC(1) noperspective float3 stq : TEXCOORD0; // s, t normalised, q
 };
 
-SpriteStqVSOut sprite_stq_vertex(SpriteStqVSIn i, int space)
+SpriteStqVSOut sprite_stq_vertex(SpriteStqVSIn i)
 {
     SpriteStqVSOut o;
-    o.pos = float4(gs_xy_to_ndc(i.xy, space), gs_depth(i.z), 1.0);
+    o.pos = float4(gs_xy_to_ndc(i.xy), gs_depth(i.z), 1.0);
     o.col = float4(i.col);
     o.stq = float3(i.uv * g_tex.zw, i.q);
     return o;
@@ -223,12 +225,12 @@ SpriteStqVSOut sprite_stq_vertex(SpriteStqVSIn i, int space)
 
 SpriteStqVSOut sprite_stq_ui_vs(SpriteStqVSIn i)
 {
-    return sprite_stq_vertex(i, SPACE_UI);
+    return sprite_stq_vertex(i);
 }
 
 SpriteStqVSOut sprite_stq_world_vs(SpriteStqVSIn i)
 {
-    return sprite_stq_vertex(i, SPACE_WORLD);
+    return sprite_stq_vertex(i);
 }
 
 DualOut sprite_stq_ps(SpriteStqVSOut i)

@@ -536,7 +536,7 @@ static V3 row(const float *v, int i)
 
 float ico_photo_fov_deg(const RdCamera *cam)
 {
-    const float fy = cam ? fabsf(cam->proj43[5]) : 0.0f;
+    const float fy = cam ? fabsf(cam->proj[5]) : 0.0f;
     return fy > 0.0f ? 2.0f * atanf(ICO_PHOTO_HALF_H / fy) * 180.0f / PI_F : 0.0f;
 }
 
@@ -555,7 +555,7 @@ static void keepBasis(const RdCamera *game, V3 r0, V3 y0, V3 f0)
     b->eye0 = scale(add(add(scale(r0, t.x), scale(y0, t.y)), scale(f0, t.z)), -1.0f);
     /* the world's vertical: the axis nearest the picture's up (view -y when
        the projection puts +y down the screen, as the GS does) */
-    const V3 upv = game->proj43[5] >= 0.0f ? scale(unit(y0), -1.0f) : unit(y0);
+    const V3 upv = game->proj[5] >= 0.0f ? scale(unit(y0), -1.0f) : unit(y0);
     V3 w = v3(0.0f, 0.0f, 0.0f);
     if (fabsf(upv.x) >= fabsf(upv.y) && fabsf(upv.x) >= fabsf(upv.z)) {
         w.x = upv.x >= 0.0f ? 1.0f : -1.0f;
@@ -704,13 +704,13 @@ int ico_photo_camera(RdCamera *out, const RdCamera *game)
     }
     /* the projection narrowed by zoom about the picture's centre (the image
        of the forward axis: column 2 over its w) */
-    const float *p = game->proj43;
+    const float *p = game->proj;
     const float k = st->zoom > 0.0f ? st->zoom : 1.0f;
     if (k != 1.0f && p[11] != 0.0f) {
         const float cx = p[8] / p[11], cy = p[9] / p[11];
         for (int c = 0; c < 4; c++) {
-            out->proj43[c * 4 + 0] = k * p[c * 4 + 0] + (1.0f - k) * cx * p[c * 4 + 3];
-            out->proj43[c * 4 + 1] = k * p[c * 4 + 1] + (1.0f - k) * cy * p[c * 4 + 3];
+            out->proj[c * 4 + 0] = k * p[c * 4 + 0] + (1.0f - k) * cx * p[c * 4 + 3];
+            out->proj[c * 4 + 1] = k * p[c * 4 + 1] + (1.0f - k) * cy * p[c * 4 + 3];
         }
         out->zoom = game->zoom * k;
     }

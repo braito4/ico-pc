@@ -462,8 +462,10 @@ static size_t pageBytes(const MfPage *p)
    to whole strip texels a sheet texel: rounded up from a quarter past
    (2.11 for 1080 lines in the "window" resolution is 2, 2.41 is 3), 1 ..
    ICO_SHEET_SCALE_MAX (4K's 4.8 is 4).  The texels per GS pixel across are
-   the same in the 4:3 picture the menus are drawn in, so one scale serves
-   both axes. */
+   the same at every aspect (the GS frame is as wide as the aspect asks,
+   rd_get_scene_scale) and equal to those down but under the Window
+   resolution, whose box keeps the PS2's pixel shape, so the vertical scale
+   serves both axes. */
 static int mfScale(void)
 {
     if (s_forceScale > 0) {

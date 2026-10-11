@@ -23,7 +23,11 @@
 //            for images and in Original)
 // FrameCB: g_origin.xy the XYOFFSET of the bound target (GS pixels, + 0.5 y
 // with the half-line offset), g_z.x the GS Z scale of its depth, g_z.yz the
-// bound target's texels per GS pixel (1 in Original).
+// bound target's texels per GS pixel (1 in Original). The target is as wide
+// as the native frame in GS pixels, so the scale is the resolution's alone,
+// the same both ways (y == z) but under the Window resolution, whose box
+// keeps the PS2's 7:6 pixel shape (rd_present.c rd__apply_display); the
+// two are read apart for that.
 //
 // Scaled targets: a texel stands for the GS pixel coordinate its centre falls on, (pos / s - 0.5)
 // in 12.4, and the texture coordinates address t1 at its own scale (UV

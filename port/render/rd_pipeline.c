@@ -403,6 +403,7 @@ bool rd__fs_has_no_dual(uint8_t fs)
     case RD_FS_FONT_SHEET:
     case RD_FS_FOG:
     case RD_FS_FOG_BUFFER:
+    case RD_FS_FOG_MS:
     case RD_FS_VU:
     case RD_FS_VU_TEXA:
         return true;
@@ -636,9 +637,11 @@ static RhiPipeline createPipeline(const RdPipeKeyInt *k)
         shadowStencil(k->gs.stencil, &d.depthStencil); /* the shadow count */
     }
     d.colorFormats[0] = (RhiFormat)k->colorFmt;
-    d.colorCount = 1;
+    /* no colour format: a depth-only pass (the MSAA depth resolve) */
+    d.colorCount = k->colorFmt != RHI_FMT_UNKNOWN ? 1u : 0u;
     d.depthFormat = (RhiFormat)k->depthFmt;
     d.debugName = "rd";
+    d.samples = k->gs.msaa; /* 0: single-sampled */
     return rhi_create_pipeline(&d);
 }
 
@@ -660,6 +663,15 @@ static uint32_t keyHash(const RdPipeKeyInt *k)
 
 RhiPipeline rd__get_pipeline(const RdPipeKeyInt *k)
 {
+    /* the MSAA epoch: a pipeline fetched for a multisampled pass draws with
+     * its sample count (single-sampled passes keep msaa 0: the same keys as
+     * without anti-aliasing) */
+    RdPipeKeyInt mk;
+    if (g_rd.passSamples > 1 && k->gs.msaa != g_rd.passSamples) {
+        mk = *k;
+        mk.gs.msaa = g_rd.passSamples;
+        k = &mk;
+    }
     /* without dual-source blending a gs_dual_out entry draws
      * as its *_nodual twin; the planned passes come through rd__expand_no_dual,
      * the single keys (the shadow count's volumes) are turned here */
@@ -886,7 +898,7 @@ uint32_t rd__enumerate_reachable_crt(RdPipeKeyInt *out, uint32_t max, uint32_t n
 
 int rd__fog_plan(const RdStateBlock *s, RhiFormat colorFmt, int buffer, RdDrawPass out[2])
 {
-    const int np = rd__plan_screen_draw(s, RD_PRIM_TRIANGLES, RD_SPACE_FULLSCREEN, colorFmt,
+    const int np = rd__plan_screen_draw(s, RD_PRIM_TRIANGLES, RD_SPACE_FULLFRAME, colorFmt,
                                         RHI_FMT_UNKNOWN, out);
     for (int i = 0; i < np; i++) {
         out[i].key.gs.program = RD_PROG_POST;

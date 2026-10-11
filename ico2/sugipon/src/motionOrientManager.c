@@ -991,6 +991,85 @@ static inline void rotateNodes(char *m, SkelNode *s, void *q) /* derived name */
     } while (i != -1);
 }
 
+/* PC port (issue 68): port/game/demo_walk.c.  The opening's soldiers'
+   motions (D1_C18_*, replayed in cut 22, and D1_C23_*) were keyed for the
+   PS2's 4:3 camera: once a soldier had left that picture its keys stop (the
+   root, then every key holds) or the motion ends while the cut goes on, and
+   on a wider native frame he stands frozen beside the picture.  When the
+   motion reaches the frame its walk stops and the soldier's root is outside
+   the 4:3 picture but inside the native frame (gsFrame.w), the motion's last
+   walk cycle repeats and the root goes on at the walk's speed until it is
+   past the native frame's side; then he holds there.  At 4:3 the two
+   pictures are one and the keys play as on the PS2.  The decision reads the
+   root's world position (node 0's matrix, the last tick's) through the
+   camera, as IsPointIsInScreen (poly-flat.c) does. */
+typedef void (*DemoWalkRootFn)(const void *data, int frame, float *out3);
+typedef void (*DemoWalkPoseFn)(const void *data, int frame, int node, float *out3);
+extern int ico_demo_walk_tick(const void *actor, int motion, const char *motion_name,
+                              const void *data, int frames, int nodes, DemoWalkRootFn root_at,
+                              DemoWalkPoseFn pose_at, float frame, float play, float dx, float dy,
+                              int depth_ok, int native_w, int native_h, float *pose_frame,
+                              float *root_out3);
+
+static void demoWalkRoot(const void *data, int frame, float *out3)
+{
+    float r[4];
+
+    GetMotionRootPos(r, (void *)data, frame);
+    out3[0] = r[0];
+    out3[1] = r[1];
+    out3[2] = r[2];
+}
+
+static void demoWalkPose(const void *data, int frame, int node, float *out3)
+{
+    float e[8] __attribute__((aligned(16)));
+
+    _getMotion(e, (void *)data, node, frame);
+    out3[0] = e[4];
+    out3[1] = e[5];
+    out3[2] = e[6];
+}
+
+static void demoWalkExtend(void *self, struct MotCtrl *w, int *md, int n, char *blendless,
+                           SkelNode *skel, char *mot, float *v, float *rv)
+{
+    float buf[16] __attribute__((aligned(16)));
+    float pos[4] __attribute__((aligned(16)));
+    int out[4] __attribute__((aligned(16)));
+    float root[3];
+    float poseFrame;
+    float frame;
+    float tmp[4];
+    const float *t = (const float *)((char *)MOWORK(self)->nodeMtx + 0x30);
+    int depthOk;
+
+    pos[0] = t[0];
+    pos[1] = t[1];
+    pos[2] = t[2];
+    pos[3] = 1.0f;
+    sceVu0UnitMatrix(buf);
+    sceVu0MulMatrix(buf, matrixptr + 0x80, buf);
+    sceVu0MulMatrix(buf, matrixptr + 0xC0, buf);
+    sceVu0RotTransPers(out, buf, pos, 1);
+    depthOk = out[2] >= 0 && out[2] <= 0x0FFFFFF0;
+    /* a motion held at its end (UpdateFrameCounter's playMode 2) reads as
+       its last frame */
+    frame = w->frameEnd ? (float)(md[0] - 1) : w->animFrame;
+    if (ico_demo_walk_tick(self, w->motion, motionKind[w->motion].name, md, md[0], n, demoWalkRoot,
+                           demoWalkPose, frame, w->playTime, (float)out[0] / 16.0f - 2048.0f,
+                           (float)out[1] / 16.0f - 2048.0f, depthOk, gsFrame.w, ScreenHeight,
+                           &poseFrame, root)) {
+        GetFloatingMotion((StreamElem *)mot, poseFrame, tmp, md, n, blendless, skel);
+        v[0] = root[0];
+        v[1] = root[1];
+        v[2] = root[2];
+        rv[0] = v[0];
+        rv[1] = v[1];
+        rv[2] = v[2];
+    }
+}
+
 static void getMotionGeometry(void *self)
 {
     SkelNode *skel = MOWORK(self)->skel;
@@ -1019,6 +1098,11 @@ static void getMotionGeometry(void *self)
         if (motionKind[w->motion].blendKind == 320) {
             GetFloatingMotion((StreamElem *)mot, w->animFrame, v.f, md, n, blendless, skel);
             GetFloatingMotionRootPos(rv.f, md, w->lastFrame);
+            /* PC port (issue 68): an opening soldier (DEMOMOTCTRL, kind 5)
+               whose keys stop beside a wide picture walks on off it */
+            if (((GObj *)self)->kind == 5) {
+                demoWalkExtend(self, w, md, n, blendless, skel, mot, v.f, rv.f);
+            }
         } else {
             getNodeBlendedFloatingMotion((StreamElem *)mot, v.f, w->motion, n, blendless, self,
                                          w->animFrame);

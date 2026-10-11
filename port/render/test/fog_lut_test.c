@@ -28,9 +28,12 @@
 #include "rd.h"
 #include "typedef.h"
 #include "ZFog.h"
+#include "../../include/ico_frame.h"
 
 /* ------------------------------------------------- what ZFog.c imports */
 int ScreenWidth = 512, ScreenHeight = 448;
+/* GsBase.c's native frame: 4:3 */
+IcoFrame gsFrame = {512, 448, 8, 512.0f, 4.0f / 3.0f};
 int screenOffsetX, screenOffsetY;
 int debug_font_flag;
 int debug_fullscreen_effect = 1;

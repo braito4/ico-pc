@@ -31,6 +31,23 @@ typedef struct { /* field names derived */
 } GifRect; /* derived name */
 
 int _IsInScreen(volatile int *v);
+/* PC port: the native frame width (port/include/ico_frame.h, 512 at 4:3)
+   isInScreen's window and the window build's GS register decoder read;
+   GsBase.c's frame latch sets it at each flip, in every build */
+void gif_HostSetFrameWidth(int w);
+int gif_HostFrameWidth(void);
+/* PC port (v0.6.0): the GIF_SP_FULL scope.  The 640-grid helpers (gif_Sprite,
+   gif_SpriteSensitive and their Offset forms, gif_Point, gif_PointOffset,
+   gif_Line, gif_LineOffset) map x to the centred 4:3 box: grid x * ScreenWidth
+   / 640 (UI).  Between gif_FullFrameBegin and gif_FullFrameEnd they map it to
+   the whole native frame, grid x * (gif_HostFrameWidth() / 640), so a 640-wide
+   item covers the frame at every aspect; the window build tags the scope's
+   primitives RD_SPACE_FULLFRAME.  y is unchanged.  Only an item that covers
+   the frame by its layout data enters it (layout_texture.c: the primary
+   sprite and the items whose grid rect spans 0 .. 640); never decided on
+   pixels.  Scopes nest; at 4:3 the numbers are the UI helpers' own. */
+void gif_FullFrameBegin(void);
+void gif_FullFrameEnd(void);
 int gif_CheckOpen(void);
 void gif_Draw2DStripG(int *v, GifColor *col, int n, int prim);
 void gif_DrawPolyF4(void *p0, void *p1, void *p2, void *p3, int r, int g, int b, int a, int prim);

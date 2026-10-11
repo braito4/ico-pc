@@ -46,7 +46,7 @@ static int hazardCell(void)
         return 0;
     }
     int failures = 0;
-    RhiTextureDesc td = {16, 16, 1, RHI_FMT_RGBA8_UNORM, RHI_TEX_RENDER_TARGET, "hazardA"};
+    RhiTextureDesc td = {16, 16, 1, RHI_FMT_RGBA8_UNORM, RHI_TEX_RENDER_TARGET, "hazardA", 0};
     RhiTexture a = rhi_create_texture(&td);
     td.debugName = "hazardB";
     RhiTexture b = rhi_create_texture(&td);
@@ -203,7 +203,7 @@ static int limitsCell(void)
     RhiTexture *tex = calloc(MAX_TRY, sizeof(*tex));
     uint32_t made = 0;
     while (tex && made < MAX_TRY) {
-        RhiTextureDesc td = {4, 4, 1, RHI_FMT_RGBA8_UNORM, RHI_TEX_SAMPLED, "limits"};
+        RhiTextureDesc td = {4, 4, 1, RHI_FMT_RGBA8_UNORM, RHI_TEX_SAMPLED, "limits", 0};
         tex[made] = rhi_create_texture(&td);
         if (!tex[made].id) {
             break;

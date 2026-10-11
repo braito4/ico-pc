@@ -1177,6 +1177,10 @@ void rhi_cmd_copy_texture(RhiCommandList cl, RhiTexture src, RhiRect srcRegion, 
     if (!c || !s || !d) {
         return;
     }
+    if (s->samples > 1u || d->samples > 1u) {
+        VKR_LOG("rhi_cmd_copy_texture: a multisampled texture is not copied (resolve it)");
+        return;
+    }
     VkImageCopy r = {
         .srcSubresource = {s->aspects, 0, 0, 1},
         .srcOffset = {srcRegion.x, srcRegion.y, 0},
@@ -1187,6 +1191,33 @@ void rhi_cmd_copy_texture(RhiCommandList cl, RhiTexture src, RhiRect srcRegion, 
     vkr_hz_copy(c, s, NULL, d, 0, NULL);
     vkCmdCopyImage(c->cb, s->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, d->image,
                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &r);
+    g_vkr.stats.copies++;
+}
+
+void rhi_cmd_resolve_color(RhiCommandList cl, RhiTexture src, RhiTexture dst)
+{
+    VkrCmdList *c = vkr_get_cmd(cl);
+    VkrTexture *s = vkr_get_texture(src);
+    VkrTexture *d = vkr_get_texture(dst);
+    if (!c || !s || !d) {
+        return;
+    }
+    if (s->samples <= 1u || d->samples > 1u || s->width != d->width || s->height != d->height ||
+        s->format != d->format || !(s->aspects & VK_IMAGE_ASPECT_COLOR_BIT)) {
+        VKR_LOG("rhi_cmd_resolve_color: needs a multisampled colour texture and a "
+                "single-sampled one of its size and format");
+        return;
+    }
+    VkImageResolve r = {
+        .srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+        .srcOffset = {0, 0, 0},
+        .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+        .dstOffset = {0, 0, 0},
+        .extent = {s->width, s->height, 1},
+    };
+    vkr_hz_copy(c, s, NULL, d, 0, NULL);
+    vkCmdResolveImage(c->cb, s->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, d->image,
+                      VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &r);
     g_vkr.stats.copies++;
 }
 
@@ -1240,8 +1271,8 @@ bool rhi_readback_texture(RhiTexture h, RhiViewAspect aspect, void *dst, size_t 
                           uint32_t *outRowPitch)
 {
     VkrTexture *t = vkr_get_texture(h);
-    if (!t || !dst) {
-        return false;
+    if (!t || !dst || t->samples > 1u) {
+        return false; /* a multisampled texture is resolved first (rhi.h) */
     }
     if (aspect == RHI_ASPECT_DEPTH && !(t->aspects & VK_IMAGE_ASPECT_DEPTH_BIT)) {
         return false;
