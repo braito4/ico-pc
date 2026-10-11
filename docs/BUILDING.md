@@ -207,6 +207,8 @@ The `ios-app` preset defaults to the host DXC at
 The script builds the app and writes `dist/ico-pc-ios-unsigned.ipa`, with
 licenses inside the bundle and a separate `dist/ico-pc-ios.map` for crash
 offsets. No provisioning profile or signing identity is required.
+The app includes an original AI-generated illustration as its iPhone and
+iPad icon (`port/platform/ios/icons/`), not artwork extracted from the disc.
 The dependency fetch also installs the pinned libchdr and libmpeg2 source
 trees, using `tools/fetch_deps.sh --game-only`.
 

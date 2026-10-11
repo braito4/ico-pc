@@ -11,6 +11,23 @@
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>${ICO_IOS_VERSION}</string>
     <key>CFBundleVersion</key><string>${ICO_IOS_BUILD}</string>
+    <key>CFBundleIconFile</key><string>Icon180.png</string>
+    <key>CFBundleIcons</key>
+    <dict>
+        <key>CFBundlePrimaryIcon</key>
+        <dict>
+            <key>CFBundleIconFiles</key><array><string>Icon120</string><string>Icon180</string></array>
+            <key>UIPrerenderedIcon</key><true/>
+        </dict>
+    </dict>
+    <key>CFBundleIcons~ipad</key>
+    <dict>
+        <key>CFBundlePrimaryIcon</key>
+        <dict>
+            <key>CFBundleIconFiles</key><array><string>Icon152</string><string>Icon167</string></array>
+            <key>UIPrerenderedIcon</key><true/>
+        </dict>
+    </dict>
     <key>LSRequiresIPhoneOS</key><true/>
     <key>MinimumOSVersion</key><string>${CMAKE_OSX_DEPLOYMENT_TARGET}</string>
     <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
