@@ -662,6 +662,7 @@ RhiPipeline rhi_create_pipeline(const RhiPipelineDesc *d)
         return out;
     }
     p->layoutCount = d->layoutCount;
+    p->dstRead = (uint8_t)d->dstRead;
 
     VkPipelineShaderStageCreateInfo stages[2] = {
         {

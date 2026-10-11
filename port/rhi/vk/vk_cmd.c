@@ -914,6 +914,7 @@ void rhi_cmd_begin_render_pass(RhiCommandList cl, const RhiRenderPassDesc *pass)
     }
     g_vkr.cmdBeginRendering(c->cb, &ri);
     c->inPass = true;
+    c->storageDrawn = c->drawnInPass = false;
     g_vkr.stats.renderPasses++;
 
     /* defaults: full-target viewport and scissor */
@@ -1072,6 +1073,41 @@ void rhi_cmd_set_blend_constant(RhiCommandList cl, const float rgba[4])
     }
 }
 
+/* A destination-read draw (rhi.h RhiDstRead) needs no barrier before it:
+ * the interlock orders a storage draw's critical sections after the
+ * pass's earlier ones (primitive order, the image Coherent), and the
+ * rasterization-order attachment access orders an attachment read after
+ * the pass's earlier colour writes.  The validation layer's
+ * synchronisation checks model neither, so with g_vkr.storageBarriers
+ * (under the layer, or ICO_VK_STORAGE_BARRIERS=1) a by-region barrier
+ * from the pass's earlier writes goes before it (inside the render pass:
+ * dynamic rendering local read).  drawnInPass / storageDrawn: a draw, a
+ * storage draw, recorded in the open pass. */
+static void vkr_dst_order(VkrCmdList *c)
+{
+    const uint8_t dst = c->pipeline ? c->pipeline->dstRead : (uint8_t)RHI_DST_READ_NONE;
+    if (c->inPass && g_vkr.storageBarriers) {
+        VkMemoryBarrier mb = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        VkPipelineStageFlags src = 0, dstStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        if (dst == RHI_DST_READ_STORAGE && c->storageDrawn) {
+            src = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+            mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+            mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        } else if (dst == RHI_DST_READ_ATTACHMENT && c->drawnInPass) {
+            src = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+            mb.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            mb.dstAccessMask = VK_ACCESS_INPUT_ATTACHMENT_READ_BIT;
+        }
+        if (src) {
+            vkCmdPipelineBarrier(c->cb, src, dstStage, VK_DEPENDENCY_BY_REGION_BIT, 1, &mb, 0, NULL,
+                                 0, NULL);
+            g_vkr.stats.barriers++;
+        }
+    }
+    c->drawnInPass = true;
+    c->storageDrawn = c->storageDrawn || dst == RHI_DST_READ_STORAGE;
+}
+
 void rhi_cmd_draw(RhiCommandList cl, uint32_t vertexCount, uint32_t firstVertex,
                   uint32_t instanceCount)
 {
@@ -1080,6 +1116,7 @@ void rhi_cmd_draw(RhiCommandList cl, uint32_t vertexCount, uint32_t firstVertex,
         return;
     }
     vkr_flush_barriers(c);
+    vkr_dst_order(c);
     vkr_flush_bind_groups(c);
     vkCmdDraw(c->cb, vertexCount, instanceCount ? instanceCount : 1u, firstVertex, 0);
     g_vkr.stats.draws++;
@@ -1093,6 +1130,7 @@ void rhi_cmd_draw_indexed(RhiCommandList cl, uint32_t indexCount, uint32_t first
         return;
     }
     vkr_flush_barriers(c);
+    vkr_dst_order(c);
     vkr_flush_bind_groups(c);
     vkCmdDrawIndexed(c->cb, indexCount, instanceCount ? instanceCount : 1u, firstIndex,
                      vertexOffset, 0);

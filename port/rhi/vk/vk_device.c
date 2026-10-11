@@ -281,6 +281,7 @@ static bool vkr_create_instance(const RhiDeviceDesc *desc)
     if (debug) {
         if (vkr_has_layer("VK_LAYER_KHRONOS_validation")) {
             layers[layerCount++] = "VK_LAYER_KHRONOS_validation";
+            g_vkr.validationOn = true;
         } else {
             VKR_LOG("debugLayers: VK_LAYER_KHRONOS_validation not installed; continuing without");
         }
@@ -748,6 +749,22 @@ static bool vkr_create_device(void)
         g_vkr.rasterOrder = !fake && (extOrder || extOrderArm) &&
                             qOrder.rasterizationOrderColorAttachmentAccess && extLocal &&
                             qLocal.dynamicRenderingLocalRead;
+        /* local read for the attachment read, and with the interlock for
+         * the barriers a pass may record between draws (vk_cmd.c
+         * vkr_dst_order) */
+        g_vkr.localRead =
+            extLocal && qLocal.dynamicRenderingLocalRead && (g_vkr.rasterOrder || g_vkr.interlock);
+        /* the interlock and the rasterization-order access order a
+         * destination read after the pass's earlier draws, so no barrier
+         * is needed between them; the validation layer's synchronisation
+         * checks model neither, so under it (and with
+         * ICO_VK_STORAGE_BARRIERS=1) vkr_dst_order puts a by-region barrier
+         * before such a draw */
+        {
+            const char *sb = getenv("ICO_VK_STORAGE_BARRIERS");
+            g_vkr.storageBarriers =
+                g_vkr.localRead && (g_vkr.validationOn || (sb && sb[0] && sb[0] != '0'));
+        }
         VKR_LOG("destination read: interlock %s, rasterization-order attachment read %s%s",
                 g_vkr.interlock ? "yes" : "no", g_vkr.rasterOrder ? "yes" : "no",
                 fake ? " (ICO_VK_FAKE_NO_DST)" : "");
@@ -770,6 +787,8 @@ static bool vkr_create_device(void)
             exts[extCount++] = extOrder
                                    ? VK_EXT_RASTERIZATION_ORDER_ATTACHMENT_ACCESS_EXTENSION_NAME
                                    : VK_ARM_RASTERIZATION_ORDER_ATTACHMENT_ACCESS_EXTENSION_NAME;
+        }
+        if (g_vkr.localRead) {
             exts[extCount++] = VK_KHR_DYNAMIC_RENDERING_LOCAL_READ_EXTENSION_NAME;
         }
     }
@@ -784,7 +803,10 @@ static bool vkr_create_device(void)
     }
     if (g_vkr.rasterOrder) {
         qOrder.pNext = dyn.pNext;
-        qLocal.pNext = &qOrder;
+        dyn.pNext = &qOrder;
+    }
+    if (g_vkr.localRead) {
+        qLocal.pNext = dyn.pNext;
         dyn.pNext = &qLocal;
     }
     VkPhysicalDeviceVulkan12Features f12 = {
