@@ -795,8 +795,17 @@ int rhi_test_run_cells(const RhiTestConfig *cfg)
     c.psTex = makeShader(RHI_STAGE_FRAGMENT, BLOB(ps_tex), "ps_tex");
     c.psUint = makeShader(RHI_STAGE_FRAGMENT, BLOB(ps_uint), "ps_uint");
     c.psDepthResolve = makeShader(RHI_STAGE_FRAGMENT, BLOB(ps_depth_resolve), "ps_depth_resolve");
-    c.psRov = makeShader(RHI_STAGE_FRAGMENT, BLOB(ps_rov), "ps_rov");
-    c.psSubpass = makeShader(RHI_STAGE_FRAGMENT, BLOB(ps_subpass), "ps_subpass");
+    /* a destination-read shader only where its capability is enabled: the
+     * interlock's SPIR-V declares FragmentShaderPixelInterlockEXT, which a
+     * device without VK_EXT_fragment_shader_interlock enabled rejects */
+    c.psRov = (RhiShader){0};
+    c.psSubpass = (RhiShader){0};
+    if (lim->fragmentInterlock || lim->rov) {
+        c.psRov = makeShader(RHI_STAGE_FRAGMENT, BLOB(ps_rov), "ps_rov");
+    }
+    if (lim->rasterOrderAttachment) {
+        c.psSubpass = makeShader(RHI_STAGE_FRAGMENT, BLOB(ps_subpass), "ps_subpass");
+    }
 #undef BLOB
 
     const RhiFormat CF = RHI_FMT_RGBA8_UNORM, DF = RHI_FMT_D32F_S8;

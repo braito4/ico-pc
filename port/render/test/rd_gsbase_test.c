@@ -1622,8 +1622,8 @@ static void checkLetterbox(void)
 
 static void checkPipelines(void)
 {
-    static RdPipeKeyInt keys[512];
-    const uint32_t n = rd__enumerate_reachable(keys, 512);
+    static RdPipeKeyInt keys[RD_PIPELINE_REACHABLE_MAX];
+    const uint32_t n = rd__enumerate_reachable(keys, RD_PIPELINE_REACHABLE_MAX);
     const uint32_t c = rd__pipeline_count();
     for (uint32_t i = 0; i < c; i++) {
         const RdPipeKeyInt *k = rd__pipeline_key_at(i);
@@ -1631,7 +1631,7 @@ static void checkPipelines(void)
             continue; /* test only */
         }
         int found = 0;
-        for (uint32_t j = 0; j < n && j < 512; j++) {
+        for (uint32_t j = 0; j < n && j < RD_PIPELINE_REACHABLE_MAX; j++) {
             found |= rd__pipe_key_equal(k, &keys[j]);
         }
         CHECK(found, "pipeline %u (blend %u fmt %u/%u z %u/%u) not in the enumerated set", i,

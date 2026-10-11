@@ -194,7 +194,8 @@ int main(void)
      * (no 1.0 clamp), COLCLAMP 0 wraps, the Ad and FIX factors */
     CHECK(gs_dst_channel(0u, 200, 100, 0x40, 0, 0x44, 0x80, 1, false, false, 14u) == 100u,
           "mask R");
-    CHECK(gs_dst_channel(3u, 200, 100, 0x40, 0x22, 0x44, 0x80, 1, false, false, 7u) == 0x22u,
+    /* channel 3's Cd is Ad (common.hlsli passes dst.a for both) */
+    CHECK(gs_dst_channel(3u, 0x40, 0x22, 0x40, 0x22, 0x44, 0x80, 1, false, false, 7u) == 0x22u,
           "mask A keeps Ad");
     CHECK(gs_dst_channel(3u, 0, 0, 0x40, 0, 0x44, 0x80, 1, true, false, 15u) == 0xC0u, "FBA");
     CHECK(gs_dst_channel(0u, 200, 100, 0x40, 0, 0x44, 0x80, 1, false, true, 15u) == 200u,

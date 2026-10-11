@@ -424,14 +424,19 @@ void rd__transition(RhiCommandList cl, RhiTexture t, RhiState *cur, RhiState wan
 }
 
 /* every transient bind group of the replay goes through here, timed into
- * the record's bind phase and counted by kind (texture or uniform) */
+ * the record's bind phase and counted by kind (texture or uniform: the
+ * uniform layouts' groups are the frame, draw and VU ones) */
 static RhiBindGroup bindGroup(RhiBindGroupLayout layout, const RhiBinding *b, uint32_t n)
 {
     const double t0 = rd__now_ms();
     const RhiBindGroup g = rhi_create_bind_group(&(RhiBindGroupDesc){layout, b, n});
     g_rdPerf.bindMs += rd__now_ms() - t0;
     if (g.id) {
-        if (layout.id == g_rd.layoutTex.id || layout.id == g_rd.layoutInt.id) {
+        /* the exact blend's group (dstBind: the pass's target as a storage
+         * texture or input attachment) is a texture group too */
+        if (layout.id == g_rd.layoutTex.id || layout.id == g_rd.layoutInt.id ||
+            (g_rd.layoutDstStorage.id && layout.id == g_rd.layoutDstStorage.id) ||
+            (g_rd.layoutDstAttach.id && layout.id == g_rd.layoutDstAttach.id)) {
             g_rdPerf.textureGroups++;
         } else {
             g_rdPerf.uniformGroups++;
@@ -819,6 +824,7 @@ static void flushScreenRun(Replay *r);
 static void beginPass(Replay *r, RdTargetRec *c, RdTargetRec *d, uint32_t cid, uint32_t did,
                       RhiLoadOp colorLoad, const float clear[4], RhiLoadOp depthLoad,
                       float clearDepth, bool storage);
+static bool passWantsReadable(const RdTargetRec *c);
 static bool msaaPass(Replay *r, RdTargetRec *c, RdTargetRec *d, uint32_t cid, uint32_t did);
 static void msaaAttach(RdTargetRec *c, RdTargetRec *d, RhiLoadOp colorLoad, RhiLoadOp depthLoad,
                        RhiTexture *colorTex, RhiTexture *depthTex);
@@ -947,12 +953,15 @@ static void flushStencilClear(void)
     if (!tc || !td || td->depth.id != depthTex) {
         return;
     }
-    rd__transition(s_cl, tc->color, &tc->colorState, RHI_STATE_RENDER_TARGET);
+    const bool readable = passWantsReadable(tc); /* the state of its passes */
+    rd__transition(s_cl, tc->color, &tc->colorState,
+                   readable ? RHI_STATE_RENDER_TARGET_READ : RHI_STATE_RENDER_TARGET);
     rd__transition(s_cl, td->depth, &td->depthState, RHI_STATE_DEPTH_WRITE);
     RhiRenderPassDesc p;
     memset(&p, 0, sizeof(p));
     p.color[0].texture = tc->color;
     p.color[0].load = RHI_LOAD_LOAD;
+    p.color[0].readable = readable;
     p.colorCount = 1;
     p.depth.texture = td->depth;
     p.depth.depthLoad = RHI_LOAD_LOAD;
@@ -986,6 +995,14 @@ static void flushClear(void)
     endPass(r);
 }
 
+/* the exact blend's attachment read: every pass on an RGBA8 target made
+ * for it is begun readable (outside the MSAA epoch) */
+static bool passWantsReadable(const RdTargetRec *c)
+{
+    return g_rd.dstMode == RD_BLEND_EXACT_ATTACHMENT && (c->dstUsage & 2u) != 0 &&
+           c->format == RHI_FMT_RGBA8_UNORM;
+}
+
 static void beginPass(Replay *r, RdTargetRec *c, RdTargetRec *d, uint32_t cid, uint32_t did,
                       RhiLoadOp colorLoad, const float clear[4], RhiLoadOp depthLoad,
                       float clearDepth, bool storage)
@@ -995,10 +1012,7 @@ static void beginPass(Replay *r, RdTargetRec *c, RdTargetRec *d, uint32_t cid, u
      * pass (the exact blend, rd_dst_read.c) is never in it: its draws come
      * from a single-sampled pass */
     bool ms = !storage && s_ms.want > 1u && msaaPass(r, c, d, cid, did);
-    /* the exact blend's attachment read: every pass on an RGBA8 target made
-     * for it is begun readable (outside the epoch) */
-    const bool wantReadable = !storage && g_rd.dstMode == RD_BLEND_EXACT_ATTACHMENT &&
-                              (c->dstUsage & 2u) != 0 && c->format == RHI_FMT_RGBA8_UNORM;
+    const bool wantReadable = !storage && passWantsReadable(c);
     /* the pending clear as this pass's load op when it can take it
      * (the same clear values, the same render area: the whole target); a
      * storage pass has no colour attachment and a readable one does not
@@ -1428,7 +1442,10 @@ static void pendClear(Replay *r, uint32_t id, RdTargetRec *t, const float col[4]
     /* inside the MSAA epoch a clear of SCENE goes to SCENE_MS (the pass
      * that takes it, beginPass): SCENE's own textures are not touched */
     if (!(s_ms.active && t->color.id == s_ms.sceneColor)) {
-        rd__transition(s_cl, t->color, &t->colorState, RHI_STATE_RENDER_TARGET);
+        /* the state of the pass that records it (beginPass): one transition */
+        rd__transition(s_cl, t->color, &t->colorState,
+                       passWantsReadable(t) ? RHI_STATE_RENDER_TARGET_READ
+                                            : RHI_STATE_RENDER_TARGET);
         if (depth) {
             rd__transition(s_cl, t->depth, &t->depthState, RHI_STATE_DEPTH_WRITE);
         }
@@ -2501,9 +2518,8 @@ static int dstModeFor(const Replay *r)
 /* The planned passes as drawn into the open pass: the exact blend's images
  * (rd__expand_dst), then the two-pass fallback's (rd__expand_no_dual); at
  * most 4 for a plan of 2 (each pass becomes at most two). */
-static int expandPasses(const Replay *r, const RdDrawPass *in, int n, RdDrawPass out[8])
+static int expandPassesMode(const RdDrawPass *in, int n, int mode, RdDrawPass out[8])
 {
-    const int mode = dstModeFor(r);
     if (mode == RD_BLEND_EXACT_OFF && g_rd.dstMode != RD_BLEND_EXACT_OFF) {
         for (int i = 0; i < n; i++) {
             if (in[i].dstWant) {
@@ -2520,6 +2536,11 @@ static int expandPasses(const Replay *r, const RdDrawPass *in, int n, RdDrawPass
         m += rd__expand_no_dual(dx, nd, out + m);
     }
     return m;
+}
+
+static int expandPasses(const Replay *r, const RdDrawPass *in, int n, RdDrawPass out[8])
+{
+    return expandPassesMode(in, n, dstModeFor(r), out);
 }
 
 /* The open pass as the kind a pass's key draws in: a storage pass for a
@@ -4536,6 +4557,12 @@ static void doFog(Replay *r, const RdFrame *f, const RdCmd *c)
      * otherwise the read below closes it (the fog of the resolved picture) */
     RdFogSource src;
     const uint32_t scene = RD_TARGET_SCENE + 1u;
+    /* a fog on SCENE while the MSAA epoch is open blends fixed-function
+     * whichever depth it reads: per sample it draws in the epoch (no
+     * destination read there, rd_dst_read.c), and the fog of the resolved
+     * picture stands in for that one on a device without sample-rate
+     * shading, so it blends the same way rather than exactly */
+    const bool fogEpoch = s_ms.active && zid == scene && r->st.color == scene;
     const bool fogMs = !s_fogResolvedForced && s_ms.active && s_ms.depthLive && zid == scene &&
                        r->st.color == scene && !buffer && rhi_limits()->sampleRateShading &&
                        g_rd.fs[RD_FS_FOG_MS].id &&
@@ -4576,7 +4603,8 @@ static void doFog(Replay *r, const RdFrame *f, const RdCmd *c)
     }
     /* the planned passes as drawn in this pass: the exact blend's (the fog
      * is a LERP, ALPHA 0x44), the two-pass fallback's */
-    const int np = expandPasses(r, pl, npl, dp);
+    const int np =
+        fogEpoch ? expandPassesMode(pl, npl, RD_BLEND_EXACT_OFF, dp) : expandPasses(r, pl, npl, dp);
     /* per sample in the epoch the sprite covers whole pixels, as doScreen's
      * integer-aligned sprites (msaaSpriteExpand): drawn as is, its top and
      * left edges would lie on the pixel centres of the frame's first row
@@ -5479,11 +5507,16 @@ static void clearNewTargets(void)
             continue;
         }
         t->clearPending = 0;
-        rd__transition(s_cl, t->color, &t->colorState, RHI_STATE_RENDER_TARGET);
+        /* in the state the target's passes take (beginPass): no transition
+         * back and forth between this pass and the next */
+        const bool readable = passWantsReadable(t);
+        rd__transition(s_cl, t->color, &t->colorState,
+                       readable ? RHI_STATE_RENDER_TARGET_READ : RHI_STATE_RENDER_TARGET);
         RhiRenderPassDesc p;
         memset(&p, 0, sizeof(p));
         p.color[0].texture = t->color;
         p.color[0].load = RHI_LOAD_CLEAR;
+        p.color[0].readable = readable;
         p.colorCount = 1;
         if (t->withDepth && t->depth.id) {
             rd__transition(s_cl, t->depth, &t->depthState, RHI_STATE_DEPTH_WRITE);

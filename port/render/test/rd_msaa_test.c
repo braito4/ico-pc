@@ -19,7 +19,9 @@
  *            0x8000, rd_fog_selftest_test's frame): per sample (with
  *            sample-rate shading) and through the resolved depth
  *            (rd__msaa_test_fog_resolved) both equal the frame without
- *            anti-aliasing on every pixel inside a cell (its 3x3 one colour);
+ *            anti-aliasing (drawn with the fixed-function blend, which the
+ *            fog of an MSAA frame keeps) on every pixel inside a cell (its
+ *            3x3 one colour);
  *   original the Original preset with MSAA4 asked for: the frame without
  *            anti-aliasing, byte for byte. */
 #include <stdio.h>
@@ -336,9 +338,15 @@ static uint8_t s_fogMs[GW * GH * 4];
 
 static void testFog(void)
 {
+    /* the fog of an MSAA frame blends fixed-function, per sample and
+     * resolved alike (rd_dst_read.c): the frame without anti-aliasing it
+     * is compared with is drawn so too */
+    const RdBlendExact exact = rd_blend_exact();
+    rd_set_blend_exact(RD_BLEND_EXACT_OFF);
     settings(RD_PRESET_ENHANCED, RD_AA_OFF);
     fogFrame();
     fogFrame(); /* the first fogged replay of a scene size records the probe */
+    rd_set_blend_exact(exact);
     if (!readScene(s_off)) {
         return;
     }

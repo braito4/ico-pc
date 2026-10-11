@@ -687,6 +687,13 @@ static RdSettings originalSettings(void)
 #define GOLD_DISPLAY 0xe6242f6ac3b7ad9cull
 #define GOLD_SCENE 0x8da6e2ca4577cdacull
 #define GOLD_PRESENT 0x9089548e05b4f69eull
+/* The same frame under the exact GS blend's attachment read (rd_dst_read.c;
+ * llvmpipe, LLVM 19.1.7, Mesa 25.0.7): the fade, the letterbox and the
+ * brightness are LERPs into DISPLAY computed in the shader.  The values
+ * above stay the fixed-function blend's (rd_present_fixed). */
+#define GOLD_DISPLAY_EXACT 0x7174f748fabd9253ull
+#define GOLD_SCENE_EXACT 0x0f982728fcb9118cull
+#define GOLD_PRESENT_EXACT 0xea894ace64f1d717ull
 #ifdef RD_PRESENT_BASELINE
 
 /* built against the renderer from before the display options: prints the
@@ -1525,12 +1532,13 @@ static void checkOriginal(void)
     printf("  original: display %016llx scene %016llx present %016llx\n",
            (unsigned long long)h.display, (unsigned long long)h.scene,
            (unsigned long long)h.present);
-    if (s_llvmpipe && h.exact) {
-        /* the fade, the letterbox and the brightness are LERPs into
-         * DISPLAY: the exact blend's bytes are not the recorded ones (the
-         * fixed-function run, rd_present_fixed, compares them) */
-        printf("  original: the exact blend (%s): the recorded fixed-function hashes are not "
-               "compared\n",
+    if (s_llvmpipe && h.exact == RD_BLEND_EXACT_ATTACHMENT) {
+        CHECK(h.display == GOLD_DISPLAY_EXACT && h.scene == GOLD_SCENE_EXACT &&
+                  h.present == GOLD_PRESENT_EXACT,
+              "original: the recorded bytes of the exact blend (attachment read)");
+    } else if (s_llvmpipe && h.exact) {
+        /* the storage path is not recorded (llvmpipe has no interlock) */
+        printf("  original: the exact blend (%s): no recorded hashes\n",
                rd__blend_exact_name(h.exact));
     } else if (s_llvmpipe) {
         CHECK(h.display == GOLD_DISPLAY && h.scene == GOLD_SCENE && h.present == GOLD_PRESENT,
@@ -2870,7 +2878,9 @@ static void checkOverlay(uint64_t presentNoOverlay)
         CHECK(h.present == presentNoOverlay,
               "overlay: without a callback the present hashes %016llx, not %016llx",
               (unsigned long long)h.present, (unsigned long long)presentNoOverlay);
-        CHECK(!s_llvmpipe || h.exact || h.present == GOLD_PRESENT,
+        CHECK(!s_llvmpipe ||
+                  (h.exact == RD_BLEND_EXACT_ATTACHMENT ? h.present == GOLD_PRESENT_EXACT
+                                                        : h.exact || h.present == GOLD_PRESENT),
               "overlay: without a callback the present is the recorded one");
     }
 }

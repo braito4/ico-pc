@@ -804,6 +804,11 @@ typedef struct RhiStats {
     uint64_t fenceWaits, fenceWaitNs;
     uint64_t waitIdles, readbacks;
     uint64_t acquireNs, presentNs;
+    /* the by-region barriers before destination-read draws that only the
+     * validation layer's synchronisation checks need (Vulkan, under the
+     * layer or ICO_VK_STORAGE_BARRIERS=1; vk_cmd.c vkr_dst_order): not in
+     * barriers, which counts what a release build records */
+    uint64_t orderBarriers;
     /* gauges, not counts: the device memory objects alive now and
      * the most ever, their bytes, and the device's limit on their number
      * (Vulkan; 0 elsewhere) */

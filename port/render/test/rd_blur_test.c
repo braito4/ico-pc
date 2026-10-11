@@ -2847,14 +2847,14 @@ static void checkShrinksWideDevice(void)
 
 static void checkPipelines(void)
 {
-    static RdPipeKeyInt keys[512];
-    const uint32_t n = rd__enumerate_reachable(keys, 512);
+    static RdPipeKeyInt keys[RD_PIPELINE_REACHABLE_MAX];
+    const uint32_t n = rd__enumerate_reachable(keys, RD_PIPELINE_REACHABLE_MAX);
     CHECK(n < RD_PIPELINE_REACHABLE_MAX, "reachable pipelines %u", n);
     int fx = 0;
     for (uint32_t i = 0; i < rd__pipeline_count(); i++) {
         const RdPipeKeyInt *k = rd__pipeline_key_at(i);
         int found = 0;
-        for (uint32_t j = 0; j < n && j < 512; j++) {
+        for (uint32_t j = 0; j < n && j < RD_PIPELINE_REACHABLE_MAX; j++) {
             found |= rd__pipe_key_equal(&keys[j], k);
         }
         fx += k->fs == RD_FS_FX_SPRITE;

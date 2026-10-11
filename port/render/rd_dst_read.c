@@ -123,7 +123,9 @@
  * stay there.  Left on the fixed-function blend: the MSAA epoch's passes
  * (Enhanced only, never Original: a multisampled storage image or input
  * attachment is not asked for, and the resolve's mean is no GS arithmetic
- * anyway), targets other than RGBA8, the port's presentation overlay (not
+ * anyway) and the fog drawn while the epoch is open (per sample, or on the
+ * resolved picture standing in for that where sample-rate shading is
+ * missing: the two blend alike, rd_msaa_test), targets other than RGBA8, the port's presentation overlay (not
  * the game's GS), the storage path's Z-writing discarding draws under
  * GEQUAL/GREATER (above).  The staticBlur sprites and blend_int keep their
  * own exact paths.  DATE is unchanged: the snapshot is read as before.

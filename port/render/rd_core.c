@@ -797,6 +797,7 @@ uint32_t rd__temp_target_alloc(uint32_t w, uint32_t h, int withDepth, int keepAc
         t->depth = keep.depth;
         t->colorState = keep.colorState;
         t->depthState = keep.depthState;
+        t->dstUsage = keep.dstUsage; /* the texture's (rd__target_create_gpu) */
         t->snap = keep.snap;
         t->snapState = keep.snapState;
         g_rd.stats.tempReused++;
@@ -844,6 +845,7 @@ void rd__temp_target_free(uint32_t id)
         t->depth = keep.depth;
         t->colorState = keep.colorState;
         t->depthState = keep.depthState;
+        t->dstUsage = keep.dstUsage;
         t->snap = keep.snap;
         t->snapState = keep.snapState;
     }

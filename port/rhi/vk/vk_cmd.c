@@ -1101,7 +1101,7 @@ static void vkr_dst_order(VkrCmdList *c)
         if (src) {
             vkCmdPipelineBarrier(c->cb, src, dstStage, VK_DEPENDENCY_BY_REGION_BIT, 1, &mb, 0, NULL,
                                  0, NULL);
-            g_vkr.stats.barriers++;
+            g_vkr.stats.orderBarriers++; /* not stats.barriers: validation only */
         }
     }
     c->drawnInPass = true;

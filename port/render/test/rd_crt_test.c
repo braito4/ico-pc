@@ -566,9 +566,9 @@ static void recordFrame(RdTex t, int rich)
 
 static uint8_t s_out[OUT_MAX];
 
-/* the last present() drew with the exact GS blend (rd_dst_read.c): the
- * recorded hashes are the fixed-function blend's (rd_crt_fixed compares
- * them) */
+/* the RdBlendExact the last present() drew with (rd_dst_read.c): kGold
+ * is the fixed-function blend's (rd_crt_fixed), kGoldExact the attachment
+ * read's */
 static int s_presentExact;
 
 /* rd_init with s, the frame, the present into s_out; false without a device */
@@ -584,7 +584,7 @@ static bool present(const RdSettings *s, int rich)
     bool ok = n <= OUT_MAX && rd__read_present(s_out, n, &w, &h) && w == s->outputWidth &&
               h == s->outputHeight;
     CHECK(ok, "readback of the %ux%u present", s->outputWidth, s->outputHeight);
-    s_presentExact = rd_blend_exact() != RD_BLEND_EXACT_OFF;
+    s_presentExact = (int)rd_blend_exact();
     rd_destroy_texture(t);
     rd_shutdown();
     return ok;
@@ -604,8 +604,10 @@ static RdSettings outputSettings(uint32_t w, uint32_t h)
 
 static bool s_llvmpipe;
 
-/* rd_present_test.c GOLD_PRESENT: the rich frame's 960 x 720 present */
+/* rd_present_test.c GOLD_PRESENT: the rich frame's 960 x 720 present;
+ * GOLD_PRESENT_EXACT under the exact blend's attachment read */
 #define GOLD_OFF 0x9089548e05b4f69eull
+#define GOLD_OFF_EXACT 0xea894ace64f1d717ull
 
 /* The presents of the rich frame through each mode (llvmpipe, LLVM 19.1.7,
  * this file's frame; the phosphors per output pixel, the leak and the
@@ -620,6 +622,17 @@ static const uint64_t kGold[RD_CRT_MODE_COUNT - 1][2] = {
     {0x6a621fbc9e86b891ull, 0x839c2f37bbd43b15ull}, /* trinitron */
     {0xd90eb34208079b34ull, 0x8f6664aef9c91ceeull}, /* pvm */
     {0xfa878669b0bacab0ull, 0x44a618ae9e1fa647ull}, /* shadow */
+};
+
+/* the same under the exact GS blend's attachment read (rd_dst_read.c;
+ * llvmpipe, LLVM 19.1.7, Mesa 25.0.7); kGold stays the fixed-function
+ * blend's (rd_crt_fixed) */
+static const uint64_t kGoldExact[RD_CRT_MODE_COUNT - 1][2] = {
+    {0x41c3b784485e8d78ull, 0x858c33d2f4f17880ull}, /* scanlines */
+    {0x0de74e2323838d33ull, 0x7b0075fbb1fd4d32ull}, /* consumer */
+    {0x3320bceefdf5a5a1ull, 0x662f2640a74d26c7ull}, /* trinitron */
+    {0x656bc79c70138558ull, 0x070e74f71159ce17ull}, /* pvm */
+    {0xd7a5053db7e17860ull, 0x651df7c27e4ea4e7ull}, /* shadow */
 };
 
 static double boxLuma(uint32_t w, uint32_t h)
@@ -645,7 +658,9 @@ static void checkOff(void)
     }
     const uint64_t off = fnv(s_out, 960 * 720 * 4);
     printf("  off: present %016llx\n", (unsigned long long)off);
-    if (s_llvmpipe && !s_presentExact) {
+    if (s_llvmpipe && s_presentExact == RD_BLEND_EXACT_ATTACHMENT) {
+        CHECK(off == GOLD_OFF_EXACT, "off: the rd_present baseline's bytes (exact blend)");
+    } else if (s_llvmpipe && !s_presentExact) {
         CHECK(off == GOLD_OFF, "off: the rd_present baseline's bytes");
     }
     for (int m = RD_CRT_SCANLINES; m < RD_CRT_MODE_COUNT; m++) {
@@ -684,7 +699,10 @@ static void checkModes(void)
                    (unsigned long long)h1);
             CHECK(h1 == h2, "modes: %s %ux%u deterministic", kModeName[m], sizes[k][0],
                   sizes[k][1]);
-            if (s_llvmpipe && !s_presentExact) {
+            if (s_llvmpipe && s_presentExact == RD_BLEND_EXACT_ATTACHMENT) {
+                CHECK(h1 == kGoldExact[m - 1][k], "modes: %s %ux%u the recorded hash (exact blend)",
+                      kModeName[m], sizes[k][0], sizes[k][1]);
+            } else if (s_llvmpipe && !s_presentExact) {
                 CHECK(h1 == kGold[m - 1][k], "modes: %s %ux%u the recorded hash", kModeName[m],
                       sizes[k][0], sizes[k][1]);
             }
