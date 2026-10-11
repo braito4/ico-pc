@@ -10,9 +10,11 @@
  * The grid is the layouts' 640 x 448 picture (font.h): x 0..640 across the
  * 4:3 picture, y 2..450 down it (226 field lines, two y units a line).
  * ui_mouse_to_grid is the inverse of the overlay's mapping in font.h
- * (ui_begin_overlay): W = min(box.w, box.h * 4 / 3), left = box.x +
- * (box.w - W) / 2, gx = (px - left) * 640 / W, gy = 2 + (py - box.y) * 448
- * / box.h.  Nothing is mirrored (the menus are drawn unmirrored).
+ * (ui_begin_overlay) over the view, which is the 2D layer's 4:3 box on the
+ * output (rd.h rd_ui_box_of, the glue's: the centred 4:3 part of the
+ * presentation box, the box itself at 4:3): gx = (px - view.x) * 640 /
+ * view.w, gy = 2 + (py - view.y) * 448 / view.h.  Nothing is mirrored (the
+ * menus are drawn unmirrored).
  *
  * A row's box is display_texture's (layout_texture.c): w = dispW, or texW
  * when 0; h = dispH, or texH when 0 (y units); x0 = 320 - w / 2 when
@@ -43,7 +45,8 @@ enum {
 /* what a click does: the pad button it adds */
 enum { UI_MOUSE_ACT_NONE = 0, UI_MOUSE_ACT_CROSS, UI_MOUSE_ACT_LEFT, UI_MOUSE_ACT_RIGHT };
 
-/* where the picture is on the output (the presenter's box, output pixels) */
+/* where the 2D layer's 4:3 box is on the output (rd_ui_box_of of the
+   presenter's box, output pixels) */
 typedef struct UiMouseView {
     float x, y, w, h;
 } UiMouseView;

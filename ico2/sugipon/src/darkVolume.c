@@ -299,10 +299,12 @@ static __inline__ void dvCheckPacket(char *p) /* derived name */
     *PacketBufferStruct.ptr.d++ = (val);                                                           \
     *PacketBufferStruct.ptr.d++ = (reg)
 /* FRAME_1, SCISSOR_1 and XYOFFSET_1 for a w by h buffer at base fbp, moved
-   by ox, oy sixteenths (ico2/seki/src/Shadow.c's setFrame) */
+   by ox, oy sixteenths (ico2/seki/src/Shadow.c's setFrame).  PC port: FBW
+   is (w + 63) / 64, covering a native width that is not a multiple of 64
+   (688 at 16:9); w >> 6 at 512. */
 #define dvSetFrame(fbp, w, h, ox, oy) /* derived name */                                           \
     {                                                                                              \
-        dvSetGsReg(0x4C, (fbp) | ((long long)(((w) >> 6) & 0x3F) << 16));                          \
+        dvSetGsReg(0x4C, (fbp) | ((long long)((((w) + 63) >> 6) & 0x3F) << 16));                   \
         dvSetGsReg(0x40, ((long long)((w) - 1) << 16) | ((long long)((h) - 1) << 48));             \
         dvSetGsReg(0x18, (((long long)(2048 - (w) / 2) << 4) + (ox)) |                             \
                              ((((long long)(2048 - (h) / 2) << 4) + (oy)) << 32));                 \
@@ -315,7 +317,11 @@ static __inline__ void dvCheckPacket(char *p) /* derived name */
    (gif_SetGsReg); both reach the GS register decoder as on the PS2, the
    packets through mc_HostDma once chained.  Two things the decoder cannot
    know, supplied here:
-     - FRAME FBP 0x140 (TBP 0x2800) at the scene's size is a scene-sized
+     - FRAME FBP 0x140 (TBP 0x2800) at the scene's size (the native frame:
+       every frame, rect and UV extent of sonic and darkVolume is FRAME,
+       gsFrame.w wide, 512 at 4:3; the TEX0 words' TBW 8 / TW 9 stay the
+       PS2's literals, the block being bound by its TBP and the sprites'
+       UVs FST) is a scene-sized
        VRAM block, not the anti-alias buffer the decoder names for that FBP
        (AA0, 256 x 256): rd_block_target stands for it, aliased in for the
        effect's packets (R5b's rd_gs_named_block / rd_alias_target), so the
@@ -331,14 +337,14 @@ static RdTarget dvHostBlock; /* derived name */
 static void dvHostBlockBegin(void) /* derived name */
 {
     static int reported;
-    RdTarget named = rd_gs_named_block(0x2800, ScreenWidth, ScreenHeight);
+    RdTarget named = rd_gs_named_block(0x2800, gsFrame.w, ScreenHeight);
 
     if (!reported) {
         reported = 1;
         fprintf(stderr, "darkVolume: first dark volume drawn (list 10; reported once)\n");
     }
 
-    dvHostBlock = rd_block_target(0x2800, ScreenWidth, ScreenHeight, 0);
+    dvHostBlock = rd_block_target(0x2800, gsFrame.w, ScreenHeight, 0);
     if (named.id != 0 && dvHostBlock.id != 0) {
         rd_alias_target(named, dvHostBlock);
     }
@@ -347,13 +353,13 @@ static void dvHostBlockBegin(void) /* derived name */
 static void dvHostSceneZ(void) /* derived name */
 {
     if (dvHostBlock.id != 0) {
-        rd_set_target(dvHostBlock, rd_target(RD_TARGET_SCENE), ScreenWidth, ScreenHeight, 0);
+        rd_set_target(dvHostBlock, rd_target(RD_TARGET_SCENE), gsFrame.w, ScreenHeight, 0);
     }
 }
 
 static void dvHostBlockEnd(void) /* derived name */
 {
-    RdTarget named = rd_gs_named_block(0x2800, ScreenWidth, ScreenHeight);
+    RdTarget named = rd_gs_named_block(0x2800, gsFrame.w, ScreenHeight);
 
     if (named.id != 0) {
         rd_alias_target(named, (RdTarget){0});
@@ -411,14 +417,14 @@ static const DVColor volumeInnerColor = {127, 0, 98, 128}; /* derived name */
 
 static void sonic(void *pos, float t)
 {
-    int rect[4] = {-ScreenWidth / 2 * 16, -ScreenHeight / 2 * 16, ScreenWidth * 16,
-                   ScreenHeight * 16};
-    int rect2[4] = {4, 4, ScreenWidth * 16, ScreenHeight * 16};
+    /* PC port: FRAME (the native width) here and below */
+    int rect[4] = {-gsFrame.w / 2 * 16, -ScreenHeight / 2 * 16, gsFrame.w * 16, ScreenHeight * 16};
+    int rect2[4] = {4, 4, gsFrame.w * 16, ScreenHeight * 16};
 
     dl_SetDLPriority(10);
     dvHostBlockBegin();
     dvOpenPacket();
-    dvSetFrame(0x140, ScreenWidth, ScreenHeight, 0, 0);
+    dvSetFrame(0x140, gsFrame.w, ScreenHeight, 0, 0);
     dvSetGsReg(0x4E, 0x1300000C0LL);
     dvSetGsReg(0x47, 0x30000);
     dvSetGsReg(0x49, 0);
@@ -489,13 +495,13 @@ static void sonic(void *pos, float t)
     dvSetGsReg(0x4A, 0);
     dvSetGsReg(0x3B, 0x8000008080LL);
     dvSetGsReg(0x14, 0x60);
-    dvSetFrame(0x40, ScreenWidth, ScreenHeight, screenOffsetX, screenOffsetY);
+    dvSetFrame(0x40, gsFrame.w, ScreenHeight, screenOffsetX, screenOffsetY);
     dvSetGsReg(0x42, 0x44);
     dvSetGsReg(0x47, 0x30000);
     dvSetGsReg(0x06, 0x664122800LL);
     {
-        int rect3[4] = {-ScreenWidth / 2 * 16 + 500, -ScreenHeight / 2 * 16 + 500,
-                        ScreenWidth * 16 - 500, ScreenHeight * 16 - 500};
+        int rect3[4] = {-gsFrame.w / 2 * 16 + 500, -ScreenHeight / 2 * 16 + 500,
+                        gsFrame.w * 16 - 500, ScreenHeight * 16 - 500};
 
         dvSetGsReg(0x42, 0x8000000068LL);
         dvSetGsReg(0x00, 0x156);
@@ -556,7 +562,7 @@ static void sonic(void *pos, float t)
     dl_SetDLPriority(10);
     dvOpenPacket();
     {
-        int rect4[4] = {504, 504, ScreenWidth * 16 - 500, ScreenHeight * 16 - 500};
+        int rect4[4] = {504, 504, gsFrame.w * 16 - 500, ScreenHeight * 16 - 500};
         unsigned char v;
         float s = t * 3.0f;
 
@@ -570,7 +576,7 @@ static void sonic(void *pos, float t)
 
             dvSetGsReg(0x46, 1);
             dvSetGsReg(0x4A, 0);
-            dvSetFrame(0x40, ScreenWidth, ScreenHeight, screenOffsetX, screenOffsetY);
+            dvSetFrame(0x40, gsFrame.w, ScreenHeight, screenOffsetX, screenOffsetY);
             dvSetGsReg(0x06, 0x664020800LL);
             dvSetGsReg(0x14, 0x60);
             dvSetGsReg(0x47, 0x33001);
@@ -634,14 +640,14 @@ static void sonic(void *pos, float t)
 
 static void darkVolume(void *pos, float radius, float ratio, float edge)
 {
-    int rect[4] = {-ScreenWidth / 2 * 16, -ScreenHeight / 2 * 16, ScreenWidth * 16,
-                   ScreenHeight * 16};
-    int rect2[4] = {4, 4, ScreenWidth * 16, ScreenHeight * 16};
+    /* PC port: FRAME (the native width) here and below */
+    int rect[4] = {-gsFrame.w / 2 * 16, -ScreenHeight / 2 * 16, gsFrame.w * 16, ScreenHeight * 16};
+    int rect2[4] = {4, 4, gsFrame.w * 16, ScreenHeight * 16};
 
     dl_SetDLPriority(10);
     dvHostBlockBegin();
     dvOpenPacket();
-    dvSetFrame(0x140, ScreenWidth, ScreenHeight, 0, 0);
+    dvSetFrame(0x140, gsFrame.w, ScreenHeight, 0, 0);
     dvSetGsReg(0x4A, 0);
     dvSetGsReg(0x3B, 0x8000000080LL);
     dvSetGsReg(0x4E, 0x1300000C0LL);
@@ -719,7 +725,7 @@ static void darkVolume(void *pos, float radius, float ratio, float edge)
     dvSetGsReg(0x4A, 0);
     dvSetGsReg(0x3B, 0x8000008080LL);
     dvSetGsReg(0x14, 0x60);
-    dvSetFrame(0x1000040, ScreenWidth, ScreenHeight, screenOffsetX, screenOffsetY);
+    dvSetFrame(0x1000040, gsFrame.w, ScreenHeight, screenOffsetX, screenOffsetY);
     dvSetGsReg(0x42, 0x44);
     dvSetGsReg(0x47, 0x30000);
     dvSetGsReg(0x06, 0x664122800LL);

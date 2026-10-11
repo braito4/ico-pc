@@ -99,11 +99,14 @@ static void cellQuad(Vtx *v, int cell, float z, uint8_t r, uint8_t g, uint8_t b,
 typedef struct Ctx {
     RhiBindGroupLayout l0, l1, l2;
     RhiShader vs, psDual, psColor, psTex, psUint;
+    RhiShader psDepthResolve; /* multisampling: the depth's largest sample */
 } Ctx;
 
-static RhiPipeline makePipeline(const Ctx *c, RhiShader ps, RhiFormat color, RhiFormat depth,
-                                const RhiBlendState *blend, const RhiDepthStencilState *ds,
-                                const char *name)
+/* color RHI_FMT_UNKNOWN: no colour target (a depth-only pass); samples the
+ * targets' count (0: single-sampled) */
+static RhiPipeline makePipelineN(const Ctx *c, RhiShader ps, RhiFormat color, RhiFormat depth,
+                                 const RhiBlendState *blend, const RhiDepthStencilState *ds,
+                                 const char *name, uint32_t samples)
 {
     static const RhiVertexBinding vb = {0, sizeof(Vtx), false};
     static const RhiVertexAttr va[3] = {
@@ -128,15 +131,23 @@ static RhiPipeline makePipeline(const Ctx *c, RhiShader ps, RhiFormat color, Rhi
         d.depthStencil = *ds;
     }
     d.colorFormats[0] = color;
-    d.colorCount = 1;
+    d.colorCount = color != RHI_FMT_UNKNOWN ? 1u : 0u;
     d.depthFormat = depth;
     d.debugName = name;
+    d.samples = samples;
     RhiPipeline p = rhi_create_pipeline(&d);
     if (!p.id) {
         rhi_test_log("FAIL pipeline %s not created\n", name);
         failures++;
     }
     return p;
+}
+
+static RhiPipeline makePipeline(const Ctx *c, RhiShader ps, RhiFormat color, RhiFormat depth,
+                                const RhiBlendState *blend, const RhiDepthStencilState *ds,
+                                const char *name)
+{
+    return makePipelineN(c, ps, color, depth, blend, ds, name, 0u);
 }
 
 static RhiShader makeShader(RhiShaderStage stage, const void *code, size_t size, const char *entry)
@@ -220,14 +231,14 @@ static void bcCell(const Ctx *c)
     oa = oa < 16u ? 16u : oa; /* and a whole block */
 
     RhiTexture tgt = rhi_create_texture(
-        &(RhiTextureDesc){BW, BH, 1, CF, RHI_TEX_RENDER_TARGET | RHI_TEX_COPY_SRC, "bc target"});
+        &(RhiTextureDesc){BW, BH, 1, CF, RHI_TEX_RENDER_TARGET | RHI_TEX_COPY_SRC, "bc target", 0});
     RhiTexture bc1 = rhi_create_texture(&(RhiTextureDesc){
-        8, 8, LEVELS, RHI_FMT_BC1_UNORM, RHI_TEX_SAMPLED | RHI_TEX_COPY_DST, "bc1"});
-    RhiTexture bc3 = rhi_create_texture(
-        &(RhiTextureDesc){4, 4, 1, RHI_FMT_BC3_UNORM, RHI_TEX_SAMPLED | RHI_TEX_COPY_DST, "bc3"});
+        8, 8, LEVELS, RHI_FMT_BC1_UNORM, RHI_TEX_SAMPLED | RHI_TEX_COPY_DST, "bc1", 0});
+    RhiTexture bc3 = rhi_create_texture(&(RhiTextureDesc){
+        4, 4, 1, RHI_FMT_BC3_UNORM, RHI_TEX_SAMPLED | RHI_TEX_COPY_DST, "bc3", 0});
     /* a block texture is never a target */
     RhiTexture bad = rhi_create_texture(
-        &(RhiTextureDesc){4, 4, 1, RHI_FMT_BC1_UNORM, RHI_TEX_RENDER_TARGET, "bc target?"});
+        &(RhiTextureDesc){4, 4, 1, RHI_FMT_BC1_UNORM, RHI_TEX_RENDER_TARGET, "bc target?", 0});
     RhiBuffer ring = rhi_create_buffer(
         &(RhiBufferDesc){65536, RHI_BUF_VERTEX | RHI_BUF_COPY_SRC, RHI_MEM_UPLOAD, "bc ring"});
     uint8_t *map = ring.id ? rhi_map_buffer(ring) : NULL;
@@ -345,6 +356,195 @@ static void bcCell(const Ctx *c)
     }
 }
 
+/* Multisampling, for each of 2, 4 and 8 samples the device takes
+ * (RhiLimits.msaaCounts; the others are skipped): a 16 x 16 multisampled
+ * RGBA8 target with a multisampled D32F_S8 depth, cleared, a full quad at
+ * depth 0.25 in red, then a triangle over the top-left half (the diagonal
+ * x + y = 16 through pixel corners) at 0.75 in green, GEQUAL with writes.
+ * The colour is resolved (rhi_cmd_resolve_color) and read back: every pixel
+ * the triangle covers whole is green, every pixel it misses red, and the
+ * pixels on the diagonal lie between (at least one of them strictly: the
+ * samples saw both).  The depth is resolved by ps_depth_resolve (the
+ * largest sample, SV_Depth) into a single-sampled depth target and read
+ * back (with RhiLimits.depthReadback): 0.75 where any sample is green, else
+ * 0.25.  A multisampled texture is never read back. */
+static void msaaCell(const Ctx *c)
+{
+    enum { MS = 16 };
+
+    const RhiLimits *lim = rhi_limits();
+    const RhiFormat CF = RHI_FMT_RGBA8_UNORM, DF = RHI_FMT_D32F_S8;
+    const uint8_t red[4] = {255, 0, 0, 255}, green[4] = {0, 255, 0, 255};
+    for (uint32_t n = 2u; n <= 8u; n *= 2u) {
+        if ((lim->msaaCounts & n) == 0u) {
+            rhi_test_log("SKIP %s: %u samples (msaaCounts 0x%x)\n", s_label, n, lim->msaaCounts);
+            continue;
+        }
+        rhi_wait_frame();
+        RhiTextureDesc mcd = {MS,          MS, 1, CF, RHI_TEX_RENDER_TARGET | RHI_TEX_SAMPLED,
+                              "ms colour", n};
+        RhiTextureDesc mdd = {MS,         MS, 1, DF, RHI_TEX_DEPTH_STENCIL | RHI_TEX_SAMPLED,
+                              "ms depth", n};
+        RhiTextureDesc rcd = {MS,
+                              MS,
+                              1,
+                              CF,
+                              RHI_TEX_RENDER_TARGET | RHI_TEX_SAMPLED | RHI_TEX_COPY_DST |
+                                  RHI_TEX_COPY_SRC,
+                              "resolved colour",
+                              0};
+        RhiTextureDesc rdd = {
+            MS, MS, 1, DF, RHI_TEX_DEPTH_STENCIL | RHI_TEX_COPY_SRC, "resolved depth", 0};
+        RhiTexture msC = rhi_create_texture(&mcd), msD = rhi_create_texture(&mdd);
+        RhiTexture rc = rhi_create_texture(&rcd), rdep = rhi_create_texture(&rdd);
+        RhiBuffer ring =
+            rhi_create_buffer(&(RhiBufferDesc){4096, RHI_BUF_VERTEX, RHI_MEM_UPLOAD, "ms verts"});
+        uint8_t *map = ring.id ? rhi_map_buffer(ring) : NULL;
+        RhiBlendState opaque = {.writeMask = 0xF};
+        RhiDepthStencilState geq;
+        memset(&geq, 0, sizeof(geq));
+        geq.depthTest = true;
+        geq.depthWrite = true;
+        geq.depthCompare = RHI_CMP_GEQUAL;
+        RhiDepthStencilState always = geq;
+        always.depthCompare = RHI_CMP_ALWAYS;
+        RhiPipeline pDraw = makePipelineN(c, c->psColor, CF, DF, &opaque, &geq, "ms draw", n);
+        RhiPipeline pRes = makePipelineN(c, c->psDepthResolve, RHI_FMT_UNKNOWN, DF, &opaque,
+                                         &always, "ms depth resolve", 0u);
+        if (!msC.id || !msD.id || !rc.id || !rdep.id || !map || !pDraw.id || !pRes.id) {
+            rhi_test_log("FAIL %s: %u-sample resources\n", s_label, n);
+            failures++;
+            return;
+        }
+        Vtx v[15];
+        quad(&v[0], 0, 0, MS, MS, MS, MS, 0.25f, 255, 0, 0, 255);
+        /* the triangle (0,0) (16,0) (0,16) in pixels */
+        v[6] = (Vtx){-1.0f, 1.0f, 0.75f, {0, 255, 0, 255}, 0, 0};
+        v[7] = (Vtx){1.0f, 1.0f, 0.75f, {0, 255, 0, 255}, 0, 0};
+        v[8] = (Vtx){-1.0f, -1.0f, 0.75f, {0, 255, 0, 255}, 0, 0};
+        quad(&v[9], 0, 0, MS, MS, MS, MS, 0.0f, 255, 255, 255, 255); /* the depth resolve */
+        memcpy(map, v, sizeof(v));
+
+        RhiCommandList cl = rhi_begin_commands();
+        RhiTextureBarrier b0[2] = {{msC, RHI_STATE_UNDEFINED, RHI_STATE_RENDER_TARGET},
+                                   {msD, RHI_STATE_UNDEFINED, RHI_STATE_DEPTH_WRITE}};
+        rhi_cmd_barrier(cl, b0, 2);
+        RhiRenderPassDesc rp;
+        memset(&rp, 0, sizeof(rp));
+        rp.color[0].texture = msC;
+        rp.color[0].load = RHI_LOAD_CLEAR;
+        rp.color[0].clear[2] = 1.0f;
+        rp.color[0].clear[3] = 1.0f;
+        rp.colorCount = 1;
+        rp.depth.texture = msD;
+        rp.depth.depthLoad = RHI_LOAD_CLEAR;
+        rp.depth.stencilLoad = RHI_LOAD_CLEAR;
+        rp.depth.clearDepth = 0.0f;
+        rp.width = MS;
+        rp.height = MS;
+        rhi_cmd_begin_render_pass(cl, &rp);
+        rhi_cmd_set_pipeline(cl, pDraw);
+        rhi_cmd_set_vertex_buffer(cl, 0, ring, 0);
+        rhi_cmd_draw(cl, 9, 0, 1);
+        rhi_cmd_end_render_pass(cl);
+        /* the colour resolve */
+        RhiTextureBarrier b1[3] = {{msC, RHI_STATE_RENDER_TARGET, RHI_STATE_COPY_SRC},
+                                   {rc, RHI_STATE_UNDEFINED, RHI_STATE_COPY_DST},
+                                   {msD, RHI_STATE_DEPTH_WRITE, RHI_STATE_SHADER_READ}};
+        rhi_cmd_barrier(cl, b1, 3);
+        rhi_cmd_resolve_color(cl, msC, rc);
+        /* the depth resolve */
+        RhiTextureBarrier b2[2] = {{rc, RHI_STATE_COPY_DST, RHI_STATE_COPY_SRC},
+                                   {rdep, RHI_STATE_UNDEFINED, RHI_STATE_DEPTH_WRITE}};
+        rhi_cmd_barrier(cl, b2, 2);
+        RhiRenderPassDesc dp;
+        memset(&dp, 0, sizeof(dp));
+        dp.depth.texture = rdep;
+        dp.depth.depthLoad = RHI_LOAD_CLEAR;
+        dp.depth.stencilLoad = RHI_LOAD_CLEAR;
+        dp.depth.clearDepth = 0.0f;
+        dp.width = MS;
+        dp.height = MS;
+        rhi_cmd_begin_render_pass(cl, &dp);
+        rhi_cmd_set_pipeline(cl, pRes);
+        RhiBinding tb;
+        memset(&tb, 0, sizeof(tb));
+        tb.slot = 1;
+        tb.type = RHI_BIND_SAMPLED_TEXTURE;
+        tb.texture = msD;
+        tb.aspect = RHI_ASPECT_DEPTH;
+        RhiBindGroupDesc tbd = {c->l2, &tb, 1};
+        rhi_cmd_set_bind_group(cl, 2, rhi_create_bind_group(&tbd));
+        rhi_cmd_set_vertex_buffer(cl, 0, ring, 0);
+        rhi_cmd_draw(cl, 6, 9, 1);
+        rhi_cmd_end_render_pass(cl);
+        RhiTextureBarrier b3 = {rdep, RHI_STATE_DEPTH_WRITE, RHI_STATE_COPY_SRC};
+        rhi_cmd_barrier(cl, &b3, 1);
+        rhi_end_commands(cl);
+        rhi_submit(cl);
+
+        static uint8_t img[MS * MS * 4];
+        static float dep[MS * MS];
+        uint32_t pitch = 0;
+        int mixed = 0, bad = 0;
+        if (!rhi_readback_texture(rc, RHI_ASPECT_COLOR, img, sizeof(img), &pitch)) {
+            rhi_test_log("FAIL %s: %u samples: resolved colour readback\n", s_label, n);
+            failures++;
+        } else {
+            for (int y = 0; y < MS; y++) {
+                for (int x = 0; x < MS; x++) {
+                    const uint8_t *p = img + (size_t)y * pitch + (size_t)x * 4;
+                    if (x + y <= MS - 2) {
+                        bad += memcmp(p, green, 4) != 0;
+                    } else if (x + y >= MS) {
+                        bad += memcmp(p, red, 4) != 0;
+                    } else {
+                        mixed += memcmp(p, green, 4) != 0 && memcmp(p, red, 4) != 0;
+                        /* between: R falls as G rises, B 0, A 255 */
+                        bad += p[2] != 0 || p[3] != 255 || p[0] + p[1] < 254 || p[0] + p[1] > 256;
+                    }
+                }
+            }
+            rhi_test_log("%s: %u samples: %d of %d edge pixels mixed, %d wrong\n", s_label, n,
+                         mixed, MS - 1, bad);
+            if (bad || mixed == 0) {
+                rhi_test_log("FAIL %s: %u samples: the resolved colour\n", s_label, n);
+                failures++;
+            }
+        }
+        if (lim->depthReadback) {
+            if (rhi_readback_texture(rdep, RHI_ASPECT_DEPTH, dep, sizeof(dep), &pitch)) {
+                int dbad = 0;
+                for (int y = 0; y < MS; y++) {
+                    for (int x = 0; x < MS; x++) {
+                        const float want = x + y <= MS - 1 ? 0.75f : 0.25f;
+                        dbad += dep[(size_t)y * (pitch / 4u) + (size_t)x] != want;
+                    }
+                }
+                if (dbad) {
+                    rhi_test_log("FAIL %s: %u samples: the depth resolve (%d wrong)\n", s_label, n,
+                                 dbad);
+                    failures++;
+                }
+            } else {
+                rhi_test_log("FAIL %s: %u samples: resolved depth readback\n", s_label, n);
+                failures++;
+            }
+        }
+        if (rhi_readback_texture(msC, RHI_ASPECT_COLOR, img, sizeof(img), &pitch)) {
+            rhi_test_log("FAIL %s: a multisampled texture was read back\n", s_label);
+            failures++;
+        }
+        rhi_destroy_pipeline(pDraw);
+        rhi_destroy_pipeline(pRes);
+        rhi_destroy_texture(msC);
+        rhi_destroy_texture(msD);
+        rhi_destroy_texture(rc);
+        rhi_destroy_texture(rdep);
+        rhi_destroy_buffer(ring);
+    }
+}
+
 int rhi_test_run_cells(const RhiTestConfig *cfg)
 {
     failures = 0;
@@ -413,6 +613,7 @@ int rhi_test_run_cells(const RhiTestConfig *cfg)
     c.psColor = makeShader(RHI_STAGE_FRAGMENT, BLOB(ps_color), "ps_color");
     c.psTex = makeShader(RHI_STAGE_FRAGMENT, BLOB(ps_tex), "ps_tex");
     c.psUint = makeShader(RHI_STAGE_FRAGMENT, BLOB(ps_uint), "ps_uint");
+    c.psDepthResolve = makeShader(RHI_STAGE_FRAGMENT, BLOB(ps_depth_resolve), "ps_depth_resolve");
 #undef BLOB
 
     const RhiFormat CF = RHI_FMT_RGBA8_UNORM, DF = RHI_FMT_D32F_S8;
@@ -540,15 +741,15 @@ int rhi_test_run_cells(const RhiTestConfig *cfg)
     }
 
     /* textures */
-    RhiTextureDesc td = {W, H, 1, CF, RHI_TEX_RENDER_TARGET | RHI_TEX_COPY_SRC, "scene"};
+    RhiTextureDesc td = {W, H, 1, CF, RHI_TEX_RENDER_TARGET | RHI_TEX_COPY_SRC, "scene", 0};
     RhiTexture scene = rhi_create_texture(&td);
-    RhiTextureDesc dsd = {W, H, 1, DF, RHI_TEX_DEPTH_STENCIL | RHI_TEX_SAMPLED, "depth"};
+    RhiTextureDesc dsd = {W, H, 1, DF, RHI_TEX_DEPTH_STENCIL | RHI_TEX_SAMPLED, "depth", 0};
     RhiTexture depth = rhi_create_texture(&dsd);
-    RhiTextureDesc ud = {4, 4, 1, RHI_FMT_RGBA8_UINT, RHI_TEX_RENDER_TARGET, "uint"};
+    RhiTextureDesc ud = {4, 4, 1, RHI_FMT_RGBA8_UINT, RHI_TEX_RENDER_TARGET, "uint", 0};
     RhiTexture utex = rhi_create_texture(&ud);
-    RhiTextureDesc xd = {2, 2, 1, CF, RHI_TEX_SAMPLED | RHI_TEX_COPY_DST, "tex2x2"};
+    RhiTextureDesc xd = {2, 2, 1, CF, RHI_TEX_SAMPLED | RHI_TEX_COPY_DST, "tex2x2", 0};
     RhiTexture tex = rhi_create_texture(&xd);
-    RhiTextureDesc r8d = {4, 4, 1, RHI_FMT_R8_UNORM, RHI_TEX_COPY_SRC | RHI_TEX_COPY_DST, "r8"};
+    RhiTextureDesc r8d = {4, 4, 1, RHI_FMT_R8_UNORM, RHI_TEX_COPY_SRC | RHI_TEX_COPY_DST, "r8", 0};
     RhiTexture r8a = rhi_create_texture(&r8d);
     RhiTexture r8b = rhi_create_texture(&r8d);
     RhiSamplerDesc sd = {RHI_FILTER_NEAREST,
@@ -829,6 +1030,9 @@ int rhi_test_run_cells(const RhiTestConfig *cfg)
         rhi_wait_frame();
         bcCell(&c);
     }
+    if (!failures) {
+        msaaCell(&c);
+    }
 
     /* destroys are deferred; the frames in flight retire them */
     rhi_destroy_pipeline(pUint);
@@ -836,6 +1040,7 @@ int rhi_test_run_cells(const RhiTestConfig *cfg)
     rhi_destroy_buffer(vbuf);
     rhi_destroy_sampler(smp);
     rhi_destroy_shader(c.psUint);
+    rhi_destroy_shader(c.psDepthResolve);
     rhi_wait_frame();
     rhi_wait_frame();
     rhi_wait_idle();

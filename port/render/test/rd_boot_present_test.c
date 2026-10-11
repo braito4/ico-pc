@@ -15,7 +15,7 @@
  * the swapchain would get: DISPLAY through the present's box, line doubling
  * and filters) and printed with its maximum and mean (the largest of R, G,
  * B per pixel, 0..255) and its count of pixels above 16, with DISPLAY's
- * five probe points (rd_display_probe, the window's start-up log).
+ * five probe points (rd_display_probe).
  *
  * Twice: the scene at 4x, aspect 32:9, full height, anisotropic filtering
  * (the Custom preset of the report this was written for), and at 1x 16:9.

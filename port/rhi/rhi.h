@@ -168,6 +168,12 @@ typedef struct RhiTextureDesc {
     RhiFormat format;
     uint32_t usage; /* RhiTextureUsage bits */
     const char *debugName;
+    /* 0 or 1: single-sampled.  2, 4 or 8: multisampled (a count in
+     * RhiLimits.msaaCounts), a colour target or depth-stencil with one mip;
+     * a shader reads it as Texture2DMS (Load at a sample).  It is never
+     * copied (rhi_cmd_copy_texture*) or read back: its colour is resolved
+     * (rhi_cmd_resolve_color), its depth read by a shader. */
+    uint32_t samples;
 } RhiTextureDesc;
 
 /* Views: a depth-stencil texture is sampled either as depth (fog, DoF) or
@@ -397,6 +403,9 @@ typedef struct RhiPipelineDesc {
     uint32_t colorCount;
     RhiFormat depthFormat; /* RHI_FMT_UNKNOWN for none */
     const char *debugName;
+    /* the attachments' sample count: 0 or 1 single-sampled, else the
+     * RhiTextureDesc.samples of the targets it draws into */
+    uint32_t samples;
 } RhiPipelineDesc;
 
 /* ------------------------------------------------------------- passes */
@@ -509,6 +518,19 @@ typedef struct RhiLimits {
      * D3D12).  The fog then reads a copy of the scene depth first, before
      * the depth itself (rd_fog_path.c). */
     bool tiler;
+    /* Multisampling.  msaaCounts: the sample counts every
+     * multisampled target the renderer makes takes (colour RGBA8_UNORM and
+     * RGBA8_UINT, depth-stencil D32F_S8 as created, all sampled), a bit
+     * per count with the count's value (1 | 2 | 4 | 8: bit 2 = 2 samples;
+     * Vulkan's VkSampleCountFlags), 1 at least.  Vulkan:
+     * framebufferColorSampleCounts & framebufferDepthSampleCounts &
+     * sampledImageColorSampleCounts & sampledImageDepthSampleCounts &
+     * framebufferStencilSampleCounts.  D3D12: CheckFeatureSupport
+     * MULTISAMPLE_QUALITY_LEVELS > 0 for each format.
+     * sampleRateShading: a fragment shader reading SV_SampleIndex runs per
+     * sample (Vulkan sampleRateShading; D3D12 always). */
+    uint32_t msaaCounts;
+    bool sampleRateShading;
 } RhiLimits;
 
 typedef struct RhiDeviceDesc {
@@ -673,6 +695,14 @@ void rhi_cmd_copy_texture(RhiCommandList cl, RhiTexture src, RhiRect srcRegion, 
 void rhi_cmd_copy_texture_to_buffer(RhiCommandList cl, RhiTexture src, RhiViewAspect aspect,
                                     RhiRect region, RhiBuffer dst, uint64_t dstOffset,
                                     uint32_t rowPitch);
+
+/* Multisampling: src, a multisampled RGBA8_UNORM texture in
+ * RHI_STATE_COPY_SRC, into dst, a single-sampled one of its size and format
+ * in RHI_STATE_COPY_DST, each pixel the mean of its samples (Vulkan
+ * vkCmdResolveImage; D3D12 ResolveSubresource, the backend moving both to
+ * the resolve states and back).  Outside render passes; both stay in their
+ * states.  A depth is resolved by a shader (the renderer's own pass). */
+void rhi_cmd_resolve_color(RhiCommandList cl, RhiTexture src, RhiTexture dst);
 
 /* Debug markers: no-ops without debug layers. */
 void rhi_cmd_begin_label(RhiCommandList cl, const char *name);

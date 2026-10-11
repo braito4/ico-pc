@@ -371,6 +371,34 @@ static bool dx_create_heaps(void)
            d3dp_slots_init(&g_dx.dsvSlots, DX_DSV_SLOTS);
 }
 
+/* The sample counts (2, 4, 8) every multisampled target the renderer makes
+ * takes (RhiLimits.msaaCounts): a quality level for RGBA8 UNORM and UINT
+ * and the scene's depth-stencil */
+static uint32_t dx_msaa_counts(void)
+{
+    static const DXGI_FORMAT fmts[3] = {DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UINT,
+                                        DXGI_FORMAT_D32_FLOAT_S8X24_UINT};
+    uint32_t counts = 1u;
+    for (uint32_t n = 2u; n <= 8u; n *= 2u) {
+        bool all = true;
+        for (int i = 0; i < 3 && all; i++) {
+            D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS q;
+            memset(&q, 0, sizeof(q));
+            q.Format = fmts[i];
+            q.SampleCount = n;
+            q.Flags = D3D12_MULTISAMPLE_QUALITY_LEVELS_FLAG_NONE;
+            all = SUCCEEDED(ID3D12Device_CheckFeatureSupport(
+                      g_dx.device, D3D12_FEATURE_MULTISAMPLE_QUALITY_LEVELS, &q, sizeof(q))) &&
+                  q.NumQualityLevels > 0;
+        }
+        if (all) {
+            counts |= n;
+        }
+    }
+    DX_LOG("multisampling: sample counts 0x%x", counts);
+    return counts;
+}
+
 static void dx_fill_limits(void)
 {
     RhiLimits *o = &g_dx.limits;
@@ -400,6 +428,10 @@ static void dx_fill_limits(void)
     /* texture packs: BC1/2/3/7 are required of every D3D12 device
      * (feature level 11_0) */
     o->bcTextures = true;
+    /* multisampling: the counts every format takes; a shader reading
+     * SV_SampleIndex runs per sample on every device */
+    o->msaaCounts = dx_msaa_counts();
+    o->sampleRateShading = true;
 }
 
 /* ------------------------------------------------------------- lifecycle */

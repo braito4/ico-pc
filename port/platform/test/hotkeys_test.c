@@ -44,6 +44,24 @@ int main(void)
     CHECK(ico_hotkey_for(ICO_HOTKEY_KEY_F11, 0) == ICO_HOTKEY_STATS_FAST);
     CHECK(ico_hotkey_for(ICO_HOTKEY_KEY_F12, 1) == ICO_HOTKEY_NONE);
     CHECK(ico_hotkey_for(ICO_HOTKEY_KEY_F11, 1) == ICO_HOTKEY_NONE);
+    /* Shift+F12 is the aspect sweep, once per press; Shift changes nothing
+       else */
+    CHECK(ico_hotkey_for_mod(ICO_HOTKEY_KEY_F12, 0, 1) == ICO_HOTKEY_ASPECT_SWEEP);
+    CHECK(ico_hotkey_for_mod(ICO_HOTKEY_KEY_F12, 1, 1) == ICO_HOTKEY_NONE);
+    CHECK(ico_hotkey_for_mod(ICO_HOTKEY_KEY_F12, 0, 0) == ICO_HOTKEY_FRAME_DUMP);
+    CHECK(ico_hotkey_for_mod(ICO_HOTKEY_KEY_F11, 0, 1) == ICO_HOTKEY_STATS_FAST);
+    CHECK(ico_hotkey_for_mod(K_A, 0, 1) == ICO_HOTKEY_NONE);
+    {
+        char prefix[256], sweepZip[256];
+
+        CHECK(ico_sweep_paths("/p/dumps", "20261010-120000", prefix, sizeof(prefix), sweepZip,
+                              sizeof(sweepZip)) == 0);
+        CHECK(strstr(prefix, "sweep-20261010-120000-") != NULL &&
+              strstr(sweepZip, "sweep-20261010-120000.zip") != NULL);
+        CHECK(ico_sweep_paths("/p/dumps", "20261010-120000", prefix, 8, sweepZip,
+                              sizeof(sweepZip)) == -1 &&
+              prefix[0] == '\0' && sweepZip[0] == '\0');
+    }
     /* SDL3: SDLK_F11/F12 = scancode 68/69 | SDLK_SCANCODE_MASK (1 << 30) */
     CHECK(ICO_HOTKEY_KEY_F11 == (68u | (1u << 30)));
     CHECK(ICO_HOTKEY_KEY_F12 == (69u | (1u << 30)));

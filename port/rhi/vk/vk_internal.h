@@ -60,6 +60,7 @@ typedef struct VkrTexture {
     RhiFormat rhiFormat;
     VkImageAspectFlags aspects;
     uint32_t width, height, mips;
+    uint32_t samples; /* 1, or the multisampled count (RhiTextureDesc.samples) */
     bool swapchain;
     /* hazard tracking (vk_cmd.c, "Hazards"): what touched the image since
      * its last barrier, valid while hzEpoch is the recording list's: the
@@ -200,6 +201,10 @@ typedef struct VkrState {
     /* texture packs: textureCompressionBC enabled and the four BC formats
      * sampleable and copyable (RhiLimits.bcTextures) */
     bool bc;
+    /* multisampling (RhiLimits.msaaCounts, sampleRateShading): the counts
+     * every multisampled format takes, and the feature enabled */
+    uint32_t msaaCounts;
+    bool sampleRate;
     uint32_t validationErrors;
     bool deviceLost; /* a call returned VK_ERROR_DEVICE_LOST (rhi_device_lost) */
 

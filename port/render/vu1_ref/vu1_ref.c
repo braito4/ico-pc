@@ -2,13 +2,6 @@
  * by the program references. Line numbers are ico2/vusrc files. */
 #include "vu1_ref_internal.h"
 
-float vu1ref_wideX = 1.0f;
-
-void vu1ref_set_wide_x(float f)
-{
-    vu1ref_wideX = f;
-}
-
 void vu1ref_init(Vu1Ref *r)
 {
     memset(r, 0, sizeof(*r));
@@ -132,4 +125,37 @@ int vu1ref_static_kicks(const float *stw, const int *batchFirst, int count, int 
         kicks[n++] = k;
     }
     return n;
+}
+
+int vu1ref_region_draw(int preset, int freeCamera, int insideA, int insideB, int insideC, int hide,
+                       int reaches)
+{
+    (void)preset; /* one camera: the same rule in both presets */
+    /* vu_content_hidden */
+    if (hide) {
+        return VU1REF_DRAW_NONE;
+    }
+    if (insideA && insideB && insideC) {
+        return VU1REF_DRAW_EXACT;
+    }
+    /* vu_triangle_out: the free camera, then vu_cut_reaches_picture */
+    if (freeCamera) {
+        return VU1REF_DRAW_CLIPPED;
+    }
+    return reaches ? VU1REF_DRAW_NONE : VU1REF_DRAW_CLIPPED;
+}
+
+int vu1ref_particle_draw(int preset, int freeCamera, int drawn, int shown, int reaches)
+{
+    (void)preset;
+    if (!shown) {
+        return VU1REF_DRAW_NONE;
+    }
+    if (drawn) {
+        return VU1REF_DRAW_EXACT;
+    }
+    if (freeCamera) {
+        return VU1REF_DRAW_CLIPPED;
+    }
+    return reaches ? VU1REF_DRAW_NONE : VU1REF_DRAW_CLIPPED;
 }

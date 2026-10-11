@@ -3,10 +3,9 @@
 - The touch controls on phones and tablets are laid out like a PlayStation controller and use the game's own button pictures. The buttons have the same real size on every screen, never cover each other, and keep clear of a foldable's fold.
 - A new row, Options > Gameplay > East Reflector door fix (off by default), lets Ico lead Yorda by the hand through a doorway that the original game sends you both back out of, such as the one at the top of the ladder in the East Reflector.
 - F12 now saves a zip file with everything a bug report needs, ready to attach.
+- The renderer was reworked so that wide screens and every resolution are drawn natively, with the picture looking as the original did out of the box.
+- A new Anti-aliasing setting (supersampling or MSAA) under Options > Display. The picture rows (Full-height picture, Texture filtering and Brightness) moved to Options > Effects.
 
 ## Fixed
 
 - On the Save screen, the mouse can now pick an empty slot to save in, as the gamepad can.
-- At very wide aspect ratios, the sea no longer loses a patch at the edge of the picture.
-- In the waterfall area on a wide screen, the sides of the picture are no longer brighter than the middle.
-- In the opening forest, moving the camera on a wide screen no longer shows a dark shape at the edge of the picture.

@@ -152,14 +152,15 @@ static RhiBindGroup uniformGroup(RhiBindGroupLayout layout, uint32_t bindSlot, R
     return rhi_create_bind_group(&(RhiBindGroupDesc){layout, &b, 1});
 }
 
-/* The movie's box: the presenter's 4:3 box (rd_present.c rd__present_box).
- * Whatever the aspect option, the 4:3 movie is pillarboxed
- * in the output (in a 16:9 Enhanced presentation the scene fills the window
- * and the movie keeps 4:3); the full-height and resolution options do not
- * apply (the picture goes straight to the output). */
+/* The movie's box: the 2D layer's 4:3 box inside the presenter's box
+ * (rd_present.c rd__ui_box, rd.h rd_ui_box).  Whatever the aspect option,
+ * the 4:3 movie is pillarboxed in the picture's box (in a 16:9 Enhanced
+ * presentation the scene fills the window and the movie keeps 4:3); the
+ * full-height and resolution options do not apply (the picture goes straight
+ * to the output). */
 static void box43(uint32_t outW, uint32_t outH, RhiRect *box)
 {
-    rd__present_box(outW, outH, 4.0f / 3.0f, box);
+    rd__ui_box(outW, outH, box);
 }
 
 /* The output: the swapchain's next image, or rd's headless present target
@@ -216,7 +217,7 @@ static bool ensureArea(void)
     }
     s_v.area = rhi_create_texture(&(RhiTextureDesc){s_v.dispW, s_v.dispH, 1, RHI_FMT_RGBA8_UNORM,
                                                     RHI_TEX_RENDER_TARGET | RHI_TEX_SAMPLED,
-                                                    "rd video area"});
+                                                    "rd video area", 0});
     s_v.areaState = RHI_STATE_UNDEFINED;
     s_v.areaW = s_v.dispW;
     s_v.areaH = s_v.dispH;
@@ -326,7 +327,7 @@ static bool ensureField(uint32_t w, uint32_t h)
         }
         s_v.fieldTex = rhi_create_texture(&(RhiTextureDesc){w, h, 1, RHI_FMT_RGBA8_UNORM,
                                                             RHI_TEX_RENDER_TARGET | RHI_TEX_SAMPLED,
-                                                            "rd video field"});
+                                                            "rd video field", 0});
         s_v.fieldState = RHI_STATE_UNDEFINED;
         s_v.fieldW = w;
         s_v.fieldH = h;
@@ -431,7 +432,7 @@ static int presentVideo(const RdVideoPicture *pics, uint32_t w, uint32_t h, uint
             }
             s_v.planes = rhi_create_texture(&(RhiTextureDesc){tw, tall, 1, RHI_FMT_R8_UNORM,
                                                               RHI_TEX_SAMPLED | RHI_TEX_COPY_DST,
-                                                              "rd video planes"});
+                                                              "rd video planes", 0});
             s_v.planesState = RHI_STATE_UNDEFINED;
             s_v.planesW = tw;
             s_v.planesH = tall;

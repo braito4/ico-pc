@@ -187,10 +187,11 @@ void DispWaterDot(WaterDotWork *w)
                screen's centre across and 200 up and down (x 26368 .. 39168,
                y 29568 .. 35968 in 1/16 pixels), which cut dots near the
                top and bottom of the picture and the sides of a wide one.
-               GsBase.c's window is the picture's half-width (k times the
-               4:3 one) and half-height plus 144 pixels, 400 across at 4:3
-               as before, and while pictures are blended a dot an earlier
-               camera saw is drawn too. */
+               GsBase.c's window is the native frame's half-width
+               (gsFrame.w / 2) and half-height plus 144 pixels, 400 across
+               at 4:3 as before, and while pictures are blended a dot an
+               earlier camera saw is drawn too.  Inside the window x fits
+               the 16 bits packed below (55552 at the widest). */
             if (gsb_HostDotVisible(ip, &p->pos.x)) {
                 gif_SetGsReg(1, 0x80LL | (0x80LL << 8) | (0x80LL << 16) |
                                     ((long long)p->life << 24) | (0x3F800000LL << 32));

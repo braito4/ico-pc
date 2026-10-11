@@ -61,8 +61,27 @@ extern void gif_SetZWrite(int on);
 extern void gif_HostDrawKey(const void *obj, int part, int ordinal);
 
 #define KANBAN_HOST_KEY(obj, part) gif_HostDrawKey((obj), (part), 0)
+
+/* PC port (v0.6.0): the sign's backdrop is the whole 640 x 224 grid
+   (kanbanSprite), the PS2's whole picture: the black every boot sign (the
+   Sony presents sign, the card and language screens) stands on, in the
+   layout's colour (the presents sign's: black at alpha 127).  On a wide
+   frame the UI helpers put it on the centred 4:3 box only, so stage 1's
+   scenery behind the presents sign showed beside it under the loading
+   layout's near-black (alpha 127 of 128).  It is a full-frame item by its
+   data, as layout_texture.c's primary sprite is: drawn between
+   gif_FullFrameBegin and gif_FullFrameEnd (GifPacket.h), so it covers the
+   native frame at every aspect, and a 4:3 frame (512) gets the same
+   numbers. */
+extern void gif_FullFrameBegin(void);
+extern void gif_FullFrameEnd(void);
+
+#define KANBAN_FULL_BEGIN() gif_FullFrameBegin()
+#define KANBAN_FULL_END() gif_FullFrameEnd()
 #else
 #define KANBAN_HOST_KEY(obj, part) ((void)0)
+#define KANBAN_FULL_BEGIN() ((void)0)
+#define KANBAN_FULL_END() ((void)0)
 #endif
 
 /* ICO_HOST: GifPacket.c's parameter types, so arguments land where the
@@ -447,9 +466,11 @@ inline void kanbanExec(void)
         gif_SetZWrite(0);
         gif_SetAlpha(1, 7, 0);
         pkt = kanbanSprite;
+        KANBAN_FULL_BEGIN();
         KANBAN_HOST_KEY(&kanbanSprite, 0);
         gif_SpriteSensitive(pkt.i, 0xFFFFFFFFu, 0, col, 1);
         KANBAN_HOST_KEY(0, 0);
+        KANBAN_FULL_END();
         gif_SetZWrite(1);
         gif_SetZTest(1);
         gif_EndPacket();

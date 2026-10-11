@@ -136,11 +136,16 @@ typedef enum RdPrim {
     RD_PRIM_SPRITES         /* GS PRIM 6: axis-aligned rectangle per two vertices */
 } RdPrim;
 
-/* 2D space tags.  UI-tagged draws are pre-flipped in mirror mode so they
- * read correctly after the final present flip, and are anchored to the
- * centred 4:3 box in widescreen.  WORLD-tagged screen prims came from a
- * CPU projection of world positions and follow the wide projection. */
-typedef enum RdSpace { RD_SPACE_WORLD = 0, RD_SPACE_UI = 1, RD_SPACE_FULLSCREEN = 2 } RdSpace;
+/* 2D space tags; none transforms a position (the native frame: a GS X is
+ * drawn where the game put it, at every aspect).  UI-tagged draws are
+ * pre-flipped in mirror mode so they read correctly after the final present
+ * flip; the 2D layer's 640 grid lands on the frame's 4:3 columns (2048 -+
+ * 256).  WORLD-tagged screen prims came from a CPU projection of world
+ * positions.  FULLFRAME marks the game's full-frame items (an identity tag,
+ * decided by the game on its layout data: GifPacket.h's gif_FullFrameBegin
+ * scope draws them at the frame's width; the posts' rects): Full pixel
+ * extends the ones that end a pixel short of an edge. */
+typedef enum RdSpace { RD_SPACE_WORLD = 0, RD_SPACE_UI = 1, RD_SPACE_FULLFRAME = 2 } RdSpace;
 
 typedef enum RdStencilMode {
     RD_STENCIL_OFF = 0,
@@ -285,9 +290,10 @@ typedef struct RdPostParams {
 
 typedef struct RdCamera {
     float view[16];
-    float proj43[16];     /* the game's 4:3 projection (gsb_SetVSMatrix) */
-    float zoom, aspect43; /* inputs that let the renderer rebuild a wider projection with the same
-                     vertical FOV */
+    float proj[16];     /* the game's screen matrix +0xC0 (gsb_SetVSMatrix): the native
+                         * projection, the same at every aspect */
+    float zoom, aspect; /* vsParam[0]; the display aspect the frame was built for (GsBase.c
+                         * gsFrame.aspect; 4/3 in version 9 and older dumps) */
     float nearZ, farZ;
     uint8_t cut; /* 1 on a camera cut this tick; disables interpolation for the frame */
     /* 1: the port's own free camera drew this tick (photo mode, rd_free_camera):
@@ -341,14 +347,23 @@ typedef struct RdSettings {
      * Both 0 in a zeroed RdSettings. */
     uint8_t modelPack;
     uint8_t dumpModels;
-    uint8_t _pad[2];
+    /* The anti-aliasing (RdAntiAlias, [video] anti_aliasing): supersampling
+     * multiplies the scene scale and the presenter box-reduces DISPLAY;
+     * MSAA draws SCENE's first part of each frame multisampled and resolves
+     * it (rd_replay.c, the MSAA epoch).  RD_AA_OFF (0, a zeroed
+     * RdSettings) changes nothing anywhere; the host passes OFF under the
+     * Original preset, and an MSAA value outside rd_aa_supported_mask()
+     * draws as OFF. */
+    uint8_t antiAlias;
+    uint8_t _pad[1];
     /* The internal scene resolution, in texels: the scene's
      * texture is sceneWidth x sceneHeight (GS coordinates unchanged); 0 x 0
      * with sceneScale 0 = the presentation box in the window under the
      * Enhanced flag, else the GS size. */
     uint32_t sceneWidth, sceneHeight;
-    /* > 0: the scene's texture is this factor of the GS size instead
-     * (vertically; horizontally times aspect / (4/3)), e.g. 2 */
+    /* > 0: the scene's texture is this factor of the GS size instead, both
+     * ways (the GS size is the native frame's, as wide as the aspect asks),
+     * e.g. 2 */
     float sceneScale;
     /* The CRT filter (rd_crt.c): a present-time pass in either preset that
      * replaces the box blit and never touches SCENE or DISPLAY.  crtMode
@@ -377,6 +392,27 @@ typedef enum RdCrtMode {
  * override to "the mode's own" (-1). */
 void rd_crt_settings(RdSettings *s, RdCrtMode mode, float strength);
 
+/* RdSettings.antiAlias */
+typedef enum RdAntiAlias {
+    RD_AA_OFF = 0,
+    RD_AA_SSAA2 = 1, /* the scene at 2x the Resolution row's scale, box-reduced */
+    RD_AA_SSAA4 = 2, /* 4x */
+    RD_AA_MSAA2 = 3, /* SCENE multisampled, 2 samples */
+    RD_AA_MSAA4 = 4,
+    RD_AA_MSAA8 = 5,
+    RD_AA_COUNT
+} RdAntiAlias;
+
+/* The RdAntiAlias values this device can draw, a bit (1u << value) each:
+ * RD_AA_OFF and the supersampling values always; RD_AA_MSAAn when the RHI
+ * reports n samples for every SCENE format (RhiLimits.msaaCounts) and the
+ * fog reads the scene depth as a texture (not the buffer path,
+ * rd_fog_path.c); MSAA8 never on a tile-based GPU.  Before rd_init (no
+ * device): OFF and the supersampling values only. */
+uint32_t rd_aa_supported_mask(void);
+/* The sample count of an RdAntiAlias value: 2, 4 or 8 for MSAA, else 1 */
+uint32_t rd_aa_samples(int antiAlias);
+
 /* RdSettings.filterUpgrade */
 typedef enum RdFilterUpgrade {
     RD_FILTER_UPGRADE_OFF = 0, /* per texture as authored (Original) */
@@ -400,10 +436,13 @@ void rd_set_settings(const RdSettings *settings);
 const RdSettings *rd_get_settings(void);
 /* The scene's scale in force (rd_present.c
  * rd__apply_display, from the settings applied at the last rd_begin_frame):
- * the scene-class targets' texels per GS pixel across (with a wide aspect's
- * widening) and down; 1 x 1 before rd_init, at 1x and under the CRT
- * filter.  The menus' text strips are rasterised to it (port/ui/menu_font.c). */
+ * the scene-class targets' texels per GS pixel across and down, the same
+ * at every aspect (the GS frame is as wide as the aspect asks) and both
+ * ways but under the Window resolution; 1 x 1 before rd_init, at 1x and
+ * under the CRT filter.  The menus' text strips are rasterised to it
+ * (port/ui/menu_font.c). */
 void rd_get_scene_scale(float *sx, float *sy);
+
 /* The scene's vertical scale (a whole number, rounded down) when it is below
  * the scale the settings asked for, because the GPU's size limit held it
  * (rd_present.c rd__apply_display) or its memory could not hold the targets
@@ -485,10 +524,10 @@ bool rd_output_followed(uint32_t *w, uint32_t *h);
  * interpolation and the WORLD-space 2D conversion).
  * Called from gsb_MakeCommonMatrix, the point where the view
  * (matrixptr+0x80) and the screen matrix (+0xC0) are both final; view is
- * +0x80, proj43 the GS screen matrix +0xC0 (view space to GS window
- * coordinates and GS Z after the divide by w), zoom vsParam[0], aspect43
- * 4/3, nearZ/farZ vsParam[7]/[8].  Replay puts them in FrameCB: g_view,
- * g_proj = proj43, g_viewProj = proj43 x view, g_cameraPos = the eye from
+ * +0x80, proj the GS screen matrix +0xC0 (view space to GS window
+ * coordinates and GS Z after the divide by w), zoom vsParam[0], aspect
+ * the frame's display aspect, nearZ/farZ vsParam[7]/[8].  Replay puts them
+ * in FrameCB: g_view, g_proj = proj, g_viewProj = proj x view, g_cameraPos = the eye from
  * the view's inverse (w = cut), g_clip = near, far, zoom, aspect. */
 void rd_set_camera(const RdCamera *cam);
 
@@ -520,6 +559,10 @@ void rd_set_camera(const RdCamera *cam);
 bool rd_interpolation_active(void);
 bool rd_present(float alpha);
 uint32_t rd_frame_number(void);
+/* The last closed frame's number, display aspect and native GS width (the
+ * frame header, dump version 10); false before the first.  The aspect sweep
+ * (window_host.c) waits on it for a frame at the aspect it asked for. */
+bool rd_last_frame_native(uint32_t *number, float *aspect, uint32_t *gsW);
 void rd_camera_cut(void);
 /* rd_free_camera: the frame being recorded is drawn from the port's own free
  * camera (photo mode, port/game/photo_view.c), not a camera the game's
@@ -542,8 +585,8 @@ bool rd_last_present_info(RdPresentInfo *out);
 /* DISPLAY's colour (RGBA, as stored) at RD_DISPLAY_PROBE_POINTS points: the
  * centre, then the centres of the top-left, top-right, bottom-left and
  * bottom-right quarters.  Five single-texel copies and a readback that
- * waits for the GPU: for a diagnostic over a few frames, never per frame
- * in play.  False without a device or DISPLAY. */
+ * waits for the GPU: for tests (rd_boot_present_test), never per present
+ * in a window.  False without a device or DISPLAY. */
 #define RD_DISPLAY_PROBE_POINTS 5
 bool rd_display_probe(uint8_t rgba[RD_DISPLAY_PROBE_POINTS][4]);
 
@@ -672,6 +715,18 @@ typedef struct RdOverlayCtx {
 } RdOverlayCtx;
 
 typedef void (*RdOverlayFn)(const RdOverlayCtx *ctx, void *user);
+
+/* The 2D layer's box (v0.6.0): the game's 640 x 448 grid is a centred 4:3
+ * box inside the presentation box, in output pixels.  At 4:3 it is the
+ * presentation box; on a wider picture it is the pillar of the box that
+ * holds the frame's 4:3 columns (GS 2048 -+ 256); a box narrower than 4:3
+ * is kept whole.  rd_ui_box_of gives it for any presentation box (an
+ * overlay's ctx->box); rd_ui_box for the box the presenter uses for the
+ * output in force (g_rd.settings).  The pointer's mapping into the grid
+ * (port/ui/ui_host.c), the deferred text's box and scissor and the movie's
+ * box (rd_video.c) all read it. */
+RdRect rd_ui_box_of(const RdRect *present);
+RdRect rd_ui_box(void);
 
 void rd_set_present_overlay(RdOverlayFn fn, void *user);
 RdOverlayFn rd_get_present_overlay(void **user);
@@ -1049,9 +1104,9 @@ void rd_sheet_rim(const uint8_t *coverage, uint32_t w, uint32_t h, uint32_t scal
 void rd_screen_prims(RdPrim type, const RdScreenVtx *v, uint32_t count, RdSpace space, int uvFixed,
                      RdKey key);
 /* While space >= 0, rd_screen_prims records that space instead
- * of its argument (the game marks its full-screen 2D items RD_SPACE_FULLSCREEN
- * around the gif helpers that draw them: layout_texture.c's primary sprite).
- * -1 ends it.  Returns the previous value. */
+ * of its argument (a test's: no game code calls it since the game tags its
+ * full-frame items with GifPacket.h's gif_FullFrameBegin).  -1 ends it.
+ * Returns the previous value. */
 int rd_set_space_override(int space);
 /* (tests) World-space vertices with a matrix.  No game code calls it and the
  * replay has no model for its command (rd__not_implemented); rd_filter_test
@@ -1114,7 +1169,11 @@ void rd_shadow_resolve(void);
  *                  with a depth buffer when withDepth), the same target for
  *                  the same (tbp, gsW, gsH) for the rest of the frame, as
  *                  the VRAM block is one block whoever draws into it; {0}
- *                  outside a frame
+ *                  outside a frame.  Any width: the block is drawn at its
+ *                  own GS size at every aspect (one the game sizes as the
+ *                  native frame, gsFrame.w x ScreenHeight, takes the scene's
+ *                  resolution scale like SCENE; rd_core.c
+ *                  rd__target_scale_of)
  * rd_alias_target   from here on, in the current list and the open frame,
  *                  rd_set_target and rd_clear_target of `from` and rd_texture
  *                  of a view of `from` (rd_target_texture) record `to`
@@ -1259,9 +1318,11 @@ float rd_work_target_scale(uint32_t sceneHeight);
 typedef struct RdFrameHead {
     uint8_t rgba[4];   /* RGBAQ of the clear sprite (gsb_SetBGColor, alpha 0x80) */
     uint32_t z;        /* the clear sprite's Z (sceGsSetDefClear: 0) */
-    uint32_t gsW, gsH; /* the scene size (ScreenWidth, ScreenHeight) */
-    uint8_t halfY;     /* XYOFFSET.y + 8 (sceGsSetHalfOffset with half != 0) */
-    uint8_t clear;     /* fbClear: the clear packet is part of the flip */
+    uint32_t gsW, gsH; /* the scene size (GsBase.c gsFrame.w, ScreenHeight) */
+    float aspect;      /* gsFrame.aspect, wExact: gsFrame.wExact (dump version 10); 0 = 4:3 */
+    float wExact;
+    uint8_t halfY; /* XYOFFSET.y + 8 (sceGsSetHalfOffset with half != 0) */
+    uint8_t clear; /* fbClear: the clear packet is part of the flip */
     uint8_t _pad[2];
 } RdFrameHead;
 
@@ -1354,7 +1415,8 @@ const RdStats *rd_get_stats(void);
  * own targets AURA_WORK, AURA_TAP, FEED128 and its sprites), GLOW (flare,
  * bloom and the sun's eye blur), DOF (depth of field), SOFTEN (the screen
  * softening: the AA0/AA1 passes and the pass into SCENE right after them),
- * CRT (the CRT filter's passes in the present). */
+ * CRT (the CRT filter's passes in the present), MSAA (the anti-aliasing's
+ * resolve of the multisampled SCENE, rd_replay.c msaaEnd). */
 enum {
     RD_PERF_POST_REDUCTION = 0,
     RD_PERF_POST_FOG,
@@ -1364,6 +1426,8 @@ enum {
     RD_PERF_POST_DOF,
     RD_PERF_POST_SOFTEN,
     RD_PERF_POST_CRT,
+    /* the MSAA epoch's resolves of SCENE (rd_replay.c msaaEnd) */
+    RD_PERF_POST_MSAA,
     RD_PERF_POST_COUNT
 };
 
@@ -1408,6 +1472,9 @@ typedef struct RdPerfRecord {
        effect, or the scene, before them) */
     uint8_t gpuPostPartial;
     uint8_t _pad2[2];
+    /* MSAA (RdSettings.antiAlias): the replay's sample count (0 without)
+     * and the epoch's resolves of SCENE (0 or 1 a replay) */
+    uint32_t msaaSamples, msaaResolves;
 } RdPerfRecord;
 
 /* The oldest finished record not yet popped (a queue of 64; the oldest are

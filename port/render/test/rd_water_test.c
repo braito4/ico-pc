@@ -34,9 +34,14 @@
  *             positions, marked as projected by the frame camera, colour
  *             (128, 128, 128, life), ABE, ALPHA 0x48;
  *             dots 600 GS pixels left and right of the centre are dropped
- *             at 4:3 (the game's 400 pixel window) and drawn at 32:9
+ *             at 4:3 (the game's 400 pixel window) and drawn on a 32:9
+ *             frame (W = 1376: 832)
  *   cloth     DispClothMesh: a lit, textured grid in list 2 (ALPHA 0x44
  *             with ABE, CLAMP 0)
+ *   frame W   the puddle, the pool and the barrier on a native frame 1376
+ *             wide (32:9): SCENE at the frame's width, the copies across the
+ *             whole frame (UVs past the GS's 14 bits), the grid ST scale and
+ *             the refraction STs per pixel of the frame
  *
  * Pixel checks (Vulkan; exit 77 without a device, after the above):
  *   puddle    the block against a CPU raster of the VU reference's
@@ -56,12 +61,12 @@
  *   waterdot  one pixel per dot, Cd + life (ALPHA 0x48, As = life)
  *   cloth     the replay against the VU reference's triangles drawn as
  *             screen prims in the same state (rd_mesh's method), 1 LSB
- *   16:9      Enhanced at 16:9, scene 1x (widescreen reflections): the
- *             puddle's block 341 texels across holding the reflection
- *             compressed by 3/4 about its centre, its clear past the 4:3
- *             picture; SCENE after the copy registered with the picture;
- *             the pool's refracting grid against the 4:3 render at the
- *             same picture position (3 LSB)
+ *   16:9      Enhanced at 16:9, scene 1x (native blocks): the aspect alone
+ *             widens nothing; the puddle's block 256 x 256 texels (its GS
+ *             size) holding the 4:3 run's picture byte for byte; SCENE
+ *             after the copy registered with the picture; the pool's
+ *             refracting grid against the 4:3 render at the same pixel
+ *             (3 LSB)
  * Every created pipeline is enumerated; no validation error. */
 #include <math.h>
 #include <stdarg.h>
@@ -352,30 +357,36 @@ int ico_title_logo_skip(const char *model)
     return 0;
 }
 
-/* port/game/title_logo.c: reg_DispObj's full-width title models; none
+/* port/game/title_logo.c: reg_DispObj's full-frame title models; none
    here */
-int ico_title_stretch_model(const char *model)
+int ico_title_fullframe_model(const char *model)
 {
     (void)model;
     return 0;
 }
 
-/* port/game/video_options.c: how much wider than 4:3 the picture is
-   (waterDot.c's window); 1 unless a case sets it */
-static float s_wideX = 1.0f;
+/* GsBase.c's native frame (gsFrame, latched at the flip): 4:3 unless a
+   case sets another width with setFrameWidth */
+IcoFrame gsFrame = {W, H, W / 64, (float)W, 4.0f / 3.0f};
 
-float ico_video_wide_x(void)
+/* a native frame w wide, as GsBase.c's latch leaves it: gsFrame and the GIF
+   decoder's width (gif_HostSetFrameWidth); 512 is the 4:3 frame */
+static void setFrameWidth(int w)
 {
-    return s_wideX;
+    gsFrame.w = w;
+    gsFrame.fbw = (w + 63) / 64;
+    gsFrame.wExact = (float)w;
+    gsFrame.aspect = 4.0f / 3.0f * (float)w / (float)ICO_FRAME_BASE_W;
+    gif_HostSetFrameWidth(w);
 }
 
 /* GsBase.c gsb_HostDotVisible's window (waterDot.c), with no earlier
-   camera (the pictures are not blended here): the picture's half-width,
-   s_wideX times the 4:3 one, and its half-height, each plus 144 pixels;
+   camera (the pictures are not blended here): the native frame's
+   half-width gsFrame.w / 2 and its half-height, each plus 144 pixels;
    gsb_cull_test checks the real one */
 int gsb_HostDotVisible(const int *ip, const float *pos)
 {
-    const int hx = (int)(((float)(ScreenWidth / 2) * s_wideX + 144.0f) * 16.0f);
+    const int hx = (int)(((float)(gsFrame.w / 2) + 144.0f) * 16.0f);
     const int hy = (int)(((float)(ScreenHeight / 2) + 144.0f) * 16.0f);
 
     (void)pos;
@@ -726,9 +737,9 @@ static void setCommon(void)
     rd_set_vu_common(&b);
     memset(&s_frameCam, 0, sizeof(s_frameCam));
     memcpy(s_frameCam.view, matrixptr + 0x80, 64);
-    memcpy(s_frameCam.proj43, matrixptr + 0xC0, 64);
+    memcpy(s_frameCam.proj, matrixptr + 0xC0, 64);
     s_frameCam.zoom = kZoom;
-    s_frameCam.aspect43 = 4.0f / 3.0f;
+    s_frameCam.aspect = 4.0f / 3.0f;
     s_frameCam.nearZ = 2.0f;
     s_frameCam.farZ = 262144.0f;
     rd_set_camera(&s_frameCam);
@@ -1575,7 +1586,7 @@ static void checkPuddleRecording(void)
     const RdCamera *cf = rd__camera_at(f, 4, vu[0]->index);
     float scr[16];
     screenMatrix(scr, 0xE6, 0xE6);
-    CHECK(cs && memcmp(cs->proj43, scr, 64) == 0 && memcmp(cs->view, matrixptr + 0x80, 64) == 0,
+    CHECK(cs && memcmp(cs->proj, scr, 64) == 0 && memcmp(cs->view, matrixptr + 0x80, 64) == 0,
           "puddle: the reflection draw's camera scope holds the 230 x 230 screen matrix");
     CHECK(cf && memcmp(cf, &s_frameCam, sizeof(*cf)) == 0,
           "puddle: the surface draw sees the frame camera");
@@ -1712,7 +1723,7 @@ static void checkPoolRecording(void)
     const RdCamera *cs = rd__camera_at(f, 4, vu[1]->index);
     float scr[16];
     screenMatrix(scr, 0xCC, 0xCC);
-    CHECK(cs && memcmp(cs->proj43, scr, 64) == 0,
+    CHECK(cs && memcmp(cs->proj, scr, 64) == 0,
           "pool: the reflection draw's camera scope holds the 204 x 204 screen matrix");
     CHECK(rd__camera_at(f, 4, vu[0]->index) == &f->camera &&
               rd__camera_at(f, 4, vu[2]->index) == &f->camera,
@@ -1808,7 +1819,9 @@ static void checkBarrierST(const Mesh3D *m)
                            m->pos[idx].z + m->nrm[idx].z * f * kBarrierK};
             double o[3];
             projD(cam, p, o);
-            const double s = ((o[0] - 2048.0) + W / 2) / W, t = ((o[1] - 2048.0) + H / 2) / H;
+            const double fw = gsFrame.w; /* the native frame's width: W at 4:3 */
+            const double s = ((o[0] - 2048.0) + (double)(gsFrame.w / 2)) / fw,
+                         t = ((o[1] - 2048.0) + H / 2) / H;
             worst = fmax(worst, fmax(fabs(m->st[idx].x - s), fabs(m->st[idx].y - t)));
         }
     }
@@ -1906,10 +1919,10 @@ static void checkDotsRecording(void)
 
 /* The water dots' window across (DispWaterDot, GsBase.c
  * gsb_HostDotVisible): 400 GS pixels either side of the centre at 4:3 (the
- * 256 pixel half-width plus 144), the half-width times the wide factor plus
- * 144 on a wider picture (827 at 32:9).  Two dots placed through the
+ * 256 pixel half-width plus 144), the native frame's half-width plus 144
+ * on a wider one (832 at 32:9, W = 1376).  Two dots placed through the
  * game's projection 600 pixels left and right of the centre, on the centre
- * row: none drawn at 4:3, both at 32:9 (8/3). */
+ * row: none drawn at W = 512, both at W = 1376. */
 static WaterDotWork *s_edgeDots;
 
 /* the x that +0x100 projects to GS x gx (pixels) at y, z: the projection is
@@ -1926,13 +1939,13 @@ static float dotXFor(float gx, float y, float z)
     return (gx * d - b) / (a - gx * c);
 }
 
-static int edgeDotsDrawn(float wideX)
+static int edgeDotsDrawn(int frameW)
 {
-    s_wideX = wideX;
+    setFrameWidth(frameW);
     beginScene();
     DispWaterDot(s_edgeDots);
     dl_Swap();
-    s_wideX = 1.0f;
+    setFrameWidth(W);
     walkFrame(rd__last_frame());
     int n = 0;
     for (int i = 0; i < s_fd.n; i++) {
@@ -1966,10 +1979,139 @@ static void checkDotsWindow(void)
               "water dot window: dot %d at GS (%g, %g), want x %d inside the rows", i, ip[0] / 16.0,
               ip[1] / 16.0, i ? 2648 : 1448);
     }
-    const int n43 = edgeDotsDrawn(1.0f);
-    const int n329 = edgeDotsDrawn(8.0f / 3.0f);
+    const int n43 = edgeDotsDrawn(W);
+    const int n329 = edgeDotsDrawn(1376);
     CHECK(n43 == 0, "water dots 600 pixels out: none drawn at 4:3 (%d)", n43);
     CHECK(n329 == 2, "water dots 600 pixels out: both drawn at 32:9 (%d)", n329);
+}
+
+/* ======================================================= the native frame
+ * The effects on a frame wider than 4:3 (W = 1376, 32:9; setFrameWidth as
+ * GsBase.c's latch leaves gsFrame and the decoder): every frame extent the
+ * game writes is the frame's (FRAME: gsFrame.w), recorded as the GS
+ * register decoder reads it: the puddle's draw environment (SCENE at 1376
+ * x H) and its copy sprite across the whole frame (x 2048 -+ 688 in 12.4);
+ * the pool's scene copy reading the whole frame (UV to 8 + 1376 x 16 =
+ * 22024, past the GS's 14 bits: the decoder's 16 on a wide frame) and its
+ * grid's ST scale 1 / 1376; the barrier's scene copy likewise, its frame
+ * at 1376 and its refraction STs over the frame's width (the double
+ * reference with W = 1376).  The blocks are sized with the frame (W4): the
+ * puddle's and the pool's W / 2 = 688 x 256 (the PS2's 256 per 512
+ * columns), the barrier's W x 256 = 1376 x 256, each with every TEX0 of its
+ * list sampling it; the puddle's copy UV spans 230.375 x 1376 / 512 texels
+ * about the block's centre (the PS2's 7/16 texel off it kept), the pool's
+ * scene copy fills the block across.  At W = 512 these are the records the
+ * cases above check. */
+static const Cmd *lastOf(int list, int type, int first)
+{
+    const Cmd *r = NULL;
+    for (int i = 0; i < s_fd.n; i++) {
+        if (s_fd.cmd[i].list == list && (int)s_fd.cmd[i].c->type == type) {
+            r = &s_fd.cmd[i];
+            if (first) {
+                break;
+            }
+        }
+    }
+    return r;
+}
+
+static int sceneTargetsAt(int list, int fw, int *count)
+{
+    int ok = 1;
+    *count = 0;
+    for (int i = 0; i < s_fd.n; i++) {
+        const Cmd *k = &s_fd.cmd[i];
+        if (k->list == list && k->c->type == RDC_TARGET &&
+            k->c->u[0] == rd_target(RD_TARGET_SCENE).id) {
+            (*count)++;
+            ok &= k->c->u[2] == ((uint32_t)fw | (uint32_t)H << 16);
+        }
+    }
+    return ok;
+}
+
+static void checkFrameExtentsAtW(void)
+{
+    const int fw = 1376;
+    int n;
+    setFrameWidth(fw);
+
+    recordPuddle();
+    walkFrame(rd__last_frame());
+    CHECK(sceneTargetsAt(4, fw, &n) && n > 0, "W %d: the puddle's SCENE is %d x %d (%d targets)",
+          fw, fw, H, n);
+    const Cmd *spr = lastOf(4, RDC_SCREEN, 0);
+    if (spr) {
+        const RdScreenVtx *v =
+            (const RdScreenVtx *)(const void *)(rd__last_frame()->payload + spr->c->u[0]);
+        CHECK(spr->c->u[1] == 2 && v[0].x == 0x8000 - fw * 8 && v[1].x == 0x8000 + fw * 8,
+              "W %d: the puddle's copy spans the frame (x %d .. %d)", fw, v[0].x, v[1].x);
+    } else {
+        CHECK(0, "W %d: the puddle's copy sprite", fw);
+    }
+    checkBlock("W puddle", 4, (uint32_t)fw / 2, 256, 1);
+    if (spr) {
+        const RdScreenVtx *v =
+            (const RdScreenVtx *)(const void *)(rd__last_frame()->payload + spr->c->u[0]);
+        const int uw = 3686 * fw / 512, u0 = 2048 * fw / 512 + 7 - uw / 2;
+        CHECK(v[0].s == (float)u0 && v[1].s == (float)(u0 + uw) && v[0].t == 212.0f &&
+                  v[1].t == 3898.0f,
+              "W %d: the puddle's copy UV x %g .. %g about the block's centre (want %d .. %d)", fw,
+              (double)v[0].s, (double)v[1].s, u0, u0 + uw);
+    }
+    CHECK(gif_HostUndecodedTotal() == 0, "W %d: %u undecoded register writes", fw,
+          gif_HostUndecodedTotal());
+
+    recordLimited();
+    walkFrame(rd__last_frame());
+    spr = lastOf(4, RDC_SCREEN, 1);
+    if (spr) {
+        const RdScreenVtx *v =
+            (const RdScreenVtx *)(const void *)(rd__last_frame()->payload + spr->c->u[0]);
+        CHECK(spr->c->u[1] == 2 && v[0].s == 8.0f && v[1].s == (float)(8 + fw * 16),
+              "W %d: the pool's scene copy reads the frame's width (u %g .. %g)", fw,
+              (double)v[0].s, (double)v[1].s);
+    } else {
+        CHECK(0, "W %d: the pool's scene copy sprite", fw);
+    }
+    const Cmd *grid = lastOf(4, RDC_GRID, 0);
+    CHECK(grid && grid->c->b[5] != 0 && grid->c->f[0] == 1.0f / (float)fw &&
+              grid->c->f[1] == 1.0f / (float)H,
+          "W %d: the pool grid's ST scale is per pixel of the frame (%g)", fw,
+          grid ? (double)grid->c->f[0] : 0.0);
+    CHECK(sceneTargetsAt(4, fw, &n) && n > 0, "W %d: the pool's SCENE is %d x %d (%d targets)", fw,
+          fw, H, n);
+    checkBlock("W pool", 4, (uint32_t)fw / 2, 256, 1);
+    spr = lastOf(4, RDC_SCREEN, 1);
+    if (spr) {
+        const RdScreenVtx *v =
+            (const RdScreenVtx *)(const void *)(rd__last_frame()->payload + spr->c->u[0]);
+        CHECK(v[0].x == 0x8000 - fw / 2 * 8 && v[1].x == 0x8000 + fw / 2 * 8,
+              "W %d: the pool's scene copy fills the %d-wide block (x %d .. %d)", fw, fw / 2,
+              v[0].x, v[1].x);
+    }
+
+    recordBarrier();
+    walkFrame(rd__last_frame());
+    spr = lastOf(10, RDC_SCREEN, 1);
+    if (spr) {
+        const RdScreenVtx *v =
+            (const RdScreenVtx *)(const void *)(rd__last_frame()->payload + spr->c->u[0]);
+        CHECK(spr->c->u[1] == 2 && v[0].s == 8.0f && v[1].s == (float)(8 + fw * 16),
+              "W %d: the barrier's scene copy reads the frame's width (u %g .. %g)", fw,
+              (double)v[0].s, (double)v[1].s);
+    } else {
+        CHECK(0, "W %d: the barrier's scene copy sprite", fw);
+    }
+    CHECK(sceneTargetsAt(10, fw, &n) && n > 0, "W %d: the barrier's SCENE is %d x %d (%d targets)",
+          fw, fw, H, n);
+    checkBlock("W barrier", 10, (uint32_t)fw, 256, 0);
+    checkBarrierST(barrierMesh());
+    CHECK(gif_HostUndecodedTotal() == 0, "W %d: %u undecoded register writes", fw,
+          gif_HostUndecodedTotal());
+
+    setFrameWidth(W);
 }
 
 /* ================================================================ cloth */
@@ -2035,6 +2177,9 @@ static uint8_t s_img[W * H * 4], s_ref[W * H * 4], s_cover[W * H];
 
 static uint8_t s_blk[512 * 256 * 4], s_blkRef[512 * 256 * 4];
 
+/* the 4:3 run's puddle block, for the 16:9 run (wide169Pixels) */
+static uint8_t s_blk43[256 * 256 * 4];
+
 static void puddlePixels(void)
 {
     recordPuddle();
@@ -2044,6 +2189,7 @@ static void puddlePixels(void)
     if (!block || !readTarget(block, s_blk, 256, 256)) {
         return;
     }
+    memcpy(s_blk43, s_blk, sizeof(s_blk43));
     const Cmd *vu[4];
     if (vuDraws(4, vu, 4) != 2) {
         CHECK(0, "puddle: two VU draws");
@@ -2276,13 +2422,16 @@ static void poolPixels(void)
 }
 
 /* ============================================================ 16:9
- * Widescreen reflections: with
- * the Enhanced preset at 16:9 (f = 3/4) and the scene at 1x, the blocks
- * with a depth buffer are 256 x 256 GS pixels in 341 texels across and
- * draws into them take the wide x scale; the draws that sample them map
- * their 4:3 u into that (fillDrawCB, gs_block_uv). */
-#define WT 683 /* SCENE's texels across at 16:9, 1x */
-#define BT 341 /* a block's */
+ * Reflections on the native frame: the aspect alone changes nothing in the
+ * renderer.  The frame is as wide as the game builds it (here the test's
+ * game side, ScreenWidth 512, the 4:3 frame: W3 makes the game build wider
+ * frames and blocks), a block is drawn at its own GS size at every aspect
+ * (no widening, no x addressing of the draws that sample it), so with the
+ * Enhanced preset at 16:9 and the scene at 1x the puddle's block is 256 x 256
+ * texels holding the 4:3 run's picture byte for byte, the copy registers
+ * with the picture, and the pool's refracting grid is the 4:3 render. */
+#define WT W   /* SCENE's texels across: the frame's GS width at 1x */
+#define BT 256 /* a block's: its own GS width */
 
 static uint8_t s_wide[WT * H * 4], s_wblk[BT * 256 * 4];
 
@@ -2296,7 +2445,7 @@ static int nearCol(const uint8_t *a, const int b[3], int tol)
     return 1;
 }
 
-/* the 4:3 block position (x, y) against the projected quad q: 1 inside, 0
+/* the block position (x, y) against the projected quad q: 1 inside, 0
  * outside, -1 within margin of an edge */
 static int quadSide(double q[4][3], double x, double y, double margin)
 {
@@ -2316,21 +2465,22 @@ static int quadSide(double q[4][3], double x, double y, double margin)
 
 static void wide169Pixels(void)
 {
-    const double f = 0.75;
-    CHECK(fabsf(g_rd.wideX - 0.75f) < 1e-6f, "16:9: the wide factor (%g)", (double)g_rd.wideX);
+    CHECK(g_rd.sceneSx == 1.0f && g_rd.sceneSy == 1.0f && g_rd.outAspect > 1.7f,
+          "16:9: the scene at 1x both ways (%g, %g), aspect %g", (double)g_rd.sceneSx,
+          (double)g_rd.sceneSy, (double)g_rd.outAspect);
 
-    /* (1) the puddle: the block widened, its picture the 4:3 one compressed
-     * about the block's centre */
+    /* (1) the puddle: the block at its own size, the 4:3 picture */
     recordPuddle();
     walkFrame(rd__last_frame());
     uint32_t block = checkBlock("puddle 16:9", 4, 256, 256, 1);
     const RdTargetRec *br = rd__target_rec(block);
-    CHECK(br && br->tw == BT && br->th == 256 && br->wideBlock && br->wide,
-          "16:9: the puddle block is %ux%u texels (wide %d)", br ? br->tw : 0, br ? br->th : 0,
-          br ? br->wideBlock : -1);
+    CHECK(br && br->tw == BT && br->th == 256 && br->sx == 1.0f && br->sy == 1.0f,
+          "16:9: the puddle block is %ux%u texels, its GS size", br ? br->tw : 0, br ? br->th : 0);
     if (!br || br->tw != BT || !readTarget(block, s_wblk, BT, 256)) {
         return;
     }
+    CHECK(memcmp(s_wblk, s_blk43, sizeof(s_blk43)) == 0,
+          "16:9: the puddle block is the 4:3 run's byte for byte");
     double cam[16], q[4][3];
     puddleCamD(cam, 0xE6);
     for (int k = 0; k < 4; k++) {
@@ -2339,36 +2489,10 @@ static void wide169Pixels(void)
         q[k][0] -= 2048.0 - 128.0;
         q[k][1] -= 2048.0 - 128.0;
     }
-    int in = 0, out = 0, bad = 0, sideClear = 0;
-    for (int y = 0; y < 256; y++) {
-        for (int tx = 0; tx < BT; tx++) {
-            /* texel tx is GS x tx / sx of the block; the 4:3 picture's
-             * x is 128 + (x - 128) / f */
-            const double xg = tx * 256.0 / BT, x43 = 128.0 + (xg - 128.0) / f;
-            const int side = quadSide(q, x43, (double)y, 1.5);
-            if (side < 0) {
-                continue;
-            }
-            const uint8_t *g = &s_wblk[(y * BT + tx) * 4];
-            const int isQuad = g[0] == kReflCol[0] && g[1] == kReflCol[1] && g[2] == kReflCol[2];
-            const int isClear = g[0] == 128 && g[1] == 128 && g[2] == 128;
-            in += side;
-            out += !side;
-            bad += side ? !isQuad : !isClear;
-            sideClear += !side && (x43 < 0.0 || x43 >= 256.0) && isClear;
-        }
-    }
-    printf("  16:9 puddle block: %d inside, %d outside (%d beyond the 4:3 block), %d differ\n", in,
-           out, sideClear, bad);
-    CHECK(in > 1000 && bad == 0, "16:9: the puddle block is the reflection compressed by f");
-    CHECK(sideClear > 5000, "16:9: the puddle block's clear reaches past the 4:3 picture (%d)",
-          sideClear);
 
-    /* SCENE: where the surface set the alpha MSB (s_surfFba), the
-     * copy adds the block at
-     * the 4:3 position of what the pixel shows (the copy sprite stretches,
-     * the picture under it is compressed): two colours, the quad's and the
-     * clear's, 54 apart in red and -51 in green (FIX 0x60) */
+    /* SCENE: where the surface set the alpha MSB (s_surfFba), the copy adds
+     * the block at the pixel's own position: two colours, the quad's and
+     * the clear's, 54 apart in red and -51 in green (FIX 0x60) */
     if (!readTarget(rd_target(RD_TARGET_SCENE).id, s_wide, WT, H)) {
         return;
     }
@@ -2376,23 +2500,22 @@ static void wide169Pixels(void)
     int vq[3] = {-1, -1, -1}, vc[3] = {-1, -1, -1};
     for (int pass = 0; pass < 2; pass++) {
         for (int y = 1; y < H - 1; y++) {
-            for (int tx = 1; tx < WT - 1; tx++) {
+            for (int x = 1; x < WT - 1; x++) {
                 int msb = 1;
                 for (int j = -1; j <= 1; j++) {
                     for (int i = -1; i <= 1; i++) {
-                        msb &= s_wide[((y + j) * WT + tx + i) * 4 + 3] >= 0x80;
+                        msb &= s_wide[((y + j) * WT + x + i) * 4 + 3] >= 0x80;
                     }
                 }
                 if (!msb) {
                     continue;
                 }
-                const double xw = tx * (double)W / WT, x43 = W / 2 + (xw - W / 2) / f;
-                const double u = 13.25 + x43 * 230.375 / W, v = 13.25 + y * 230.375 / H;
+                const double u = 13.25 + x * 230.375 / W, v = 13.25 + y * 230.375 / H;
                 const int side = quadSide(q, u, v, 1.5);
                 if (side < 0) {
                     continue;
                 }
-                const uint8_t *g = &s_wide[(y * WT + tx) * 4];
+                const uint8_t *g = &s_wide[(y * WT + x) * 4];
                 int *ref = side ? vq : vc;
                 if (pass == 0) {
                     if (ref[0] < 0) {
@@ -2417,36 +2540,24 @@ static void wide169Pixels(void)
           "16:9: the quad and the clear through the copy (FIX 0x60)");
 
     /* (2) the pool's refracting grid (a mesh: vu_ps) samples the scene
-     * copied into the widened block where the pixel itself is: the 16:9
-     * result at texel tx is the 4:3 one at GS x tx / sx (the pattern
-     * stretches with SCENE, the grid is compressed and its 4:3 STs scaled
-     * by f).  Without the scaling a pixel d from the centre would read the
-     * copy d / f from it. */
+     * copied into the block at the pixel itself: the 16:9 result is the 4:3
+     * one at the same pixel (no x addressing of the copy) */
     recordLimited();
     walkFrame(rd__last_frame());
     block = checkBlock("pool limited 16:9", 4, 256, 256, 1);
     br = rd__target_rec(block);
-    CHECK(br && br->tw == BT && br->wideBlock, "16:9: the pool block is %u texels across",
+    CHECK(br && br->tw == BT && br->sx == 1.0f, "16:9: the pool block is %u texels across",
           br ? br->tw : 0);
     if (!readTarget(rd_target(RD_TARGET_SCENE).id, s_wide, WT, H)) {
         return;
     }
     int n = 0, badP = 0, worst = 0;
     for (int y = 0; y < H; y++) {
-        for (int tx = 0; tx < WT; tx++) {
-            const int x = (int)floor(tx * (double)W / WT + 0.5);
-            if (x < 2 || x >= W - 2 || !s_lim43Cover[y * W + x] ||
-                !interior(s_lim43Cover, W, H, x, y)) {
+        for (int x = 2; x < W - 2; x++) {
+            if (!s_lim43Cover[y * W + x] || !interior(s_lim43Cover, W, H, x, y)) {
                 continue;
             }
-            /* inside the 16:9 grid: it is the 4:3 grid compressed, so the
-             * pixel at 4:3 x43 must be covered there too */
-            const double x43 = W / 2 + (tx * (double)W / WT - W / 2) / f;
-            const int xi = (int)floor(x43);
-            if (xi < 2 || xi >= W - 2 || !interior(s_lim43Cover, W, H, xi, y)) {
-                continue;
-            }
-            const uint8_t *g = &s_wide[(y * WT + tx) * 4], *r = &s_lim43[(y * W + x) * 4];
+            const uint8_t *g = &s_wide[(y * WT + x) * 4], *r = &s_lim43[(y * W + x) * 4];
             int d = 0;
             for (int k = 0; k < 3; k++) {
                 d = abs((int)g[k] - r[k]) > d ? abs((int)g[k] - r[k]) : d;
@@ -2456,10 +2567,9 @@ static void wide169Pixels(void)
             n++;
         }
     }
-    printf("  16:9 pool: refracting grid vs 4:3 at the same picture position: %d pixels, max %d, "
-           "%d over 3\n",
+    printf("  16:9 pool: refracting grid vs 4:3 at the same pixel: %d pixels, max %d, %d over 3\n",
            n, worst, badP);
-    CHECK(n > 20000 && badP == 0, "16:9: the pool's grid samples the widened copy in place");
+    CHECK(n > 20000 && badP == 0, "16:9: the pool's grid samples the copy in place");
 }
 
 static void barrierPixels(void)
@@ -2660,6 +2770,7 @@ static void recordingChecks(void)
     recordDots();
     checkDotsRecording();
     checkDotsWindow();
+    checkFrameExtentsAtW();
     recordCloth();
     checkClothRecording();
     CHECK(s_vsCalls >= 3, "gsb_SetVSMatrix called by the effects (%d)", s_vsCalls);
@@ -2718,7 +2829,8 @@ int main(void)
     CHECK(rd__not_implemented_count() == 0, "no stubbed command replayed");
     rd_shutdown();
 
-    /* widescreen reflections: the same effects at 16:9 */
+    /* the same effects at 16:9: blocks at their own size (the game side
+       here builds the 512-wide frame) */
     st.preset = RD_PRESET_ENHANCED;
     st.aspect = 16.0f / 9.0f;
     st.sceneScale = 1.0f;

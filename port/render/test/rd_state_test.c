@@ -9,8 +9,8 @@
  *   keep       rd_end_frame(1) walks lists 11 and 12 only
  *   retention  the closed frame and the one before it are kept
  *   stubs      VU, shadow-strip and post draws are recorded with payload
- *   scissor    rd__wide_scissor: a UI scissor narrower than the target
- *              follows the wide x scale, outwards, edges stay
+ *   region     rd__region_scale: exactly 1 at 4:3, 512 / W on a target of a
+ *              W-wide frame's size, 1 on the others
  *   plans      AFAIL splits, blend paths, FIX clamps (rd__plan_screen_draw);
  *              the stair railings' state (TEST 0x5160D, ALPHA
  *              0x44 with ABE, Z write) splits into two passes that differ
@@ -25,6 +25,9 @@
  *              version 3 dump (no aa1) still loads, with AA1 off; a version
  *              5 and a version 7 dump's temps at the handles FEED_HELD and
  *              DISPLAY_HELD (appended after them) are recreated
+ *   dump v10   the native frame (aspect, wExact, cullW) after gsH round-trips
+ *              and peeks (rd__dump_peek); a version 9 dump loads as the 4:3
+ *              frame; a header the renderer cannot size is refused
  *   aa1 plans  PRIM.AA1 keys: the AA1 shaders, triangles, blending with ABE
  *              0 (DF_AA1_FULL), no Z write on lines; aa1 0 unchanged
  *   aura filter the model viewer's draw filter around the
@@ -432,11 +435,17 @@ static void cutBytes(uint8_t *buf, long *size, size_t o, size_t n)
     *size -= (long)n;
 }
 
+/* The version 10 frame fields' place: after the version word and the three
+ * sizes (8 + 16 bytes) and gsW, gsH; aspect, wExact and cullW, 12 bytes. */
+#define V10_FIELDS_AT (8 + 4 * 4 + 2 * 4)
+
 /* A dump of this version in buf rewritten in place as a version 8 one:
- * the state blocks without tex1Lod and every image without its level word
- * (and GS levels).  The version word is left to the caller. */
+ * without the version 10 frame fields, the state blocks without tex1Lod and
+ * every image without its level word (and GS levels).  The version word is
+ * left to the caller. */
 static void dumpTo8(uint8_t *buf, long *size)
 {
+    cutBytes(buf, size, V10_FIELDS_AT, 12);
     const size_t st0 = 8 + 4 * 4 + 5 * 4 + sizeof(RdCamera);
     const size_t sb = sizeof(RdStateBlock), sb8 = RD_STATE_BLOCK_V8_SIZE;
     const uint32_t sz8 = RD_STATE_BLOCK_V8_SIZE;
@@ -701,6 +710,137 @@ static void testDump(const char *dir)
     remove(path);
 }
 
+/* the whole file at path in a malloc block (NULL when unreadable) */
+static uint8_t *slurp(const char *path, long *size)
+{
+    FILE *fp = fopen(path, "rb");
+    uint8_t *buf = NULL;
+
+    if (fp && fseek(fp, 0, SEEK_END) == 0 && (*size = ftell(fp)) > 0 &&
+        fseek(fp, 0, SEEK_SET) == 0) {
+        buf = malloc((size_t)*size);
+        if (buf && fread(buf, 1, (size_t)*size, fp) != (size_t)*size) {
+            free(buf);
+            buf = NULL;
+        }
+    }
+    if (fp) {
+        fclose(fp);
+    }
+    return buf;
+}
+
+static int spit(const char *path, const uint8_t *buf, long size)
+{
+    FILE *fp = fopen(path, "wb");
+    const int ok = fp && fwrite(buf, 1, (size_t)size, fp) == (size_t)size;
+
+    if (fp) {
+        fclose(fp);
+    }
+    return ok;
+}
+
+/* Dump version 10: the native frame after gsH (aspect, wExact, cullW) round
+ * trips; rd__dump_peek reads it without a load; a version 9 dump (the same
+ * file less the three fields and with the version word 9) loads and peeks as
+ * the 4:3 frame (aspect 4/3, wExact 512, cullW 512) and leaves its content
+ * alone; a header the renderer cannot size (an aspect under 4:3, a visible
+ * width past the native one, a cull width that is not the frame's) is
+ * refused. */
+static void testDumpV10(const char *dir)
+{
+    CHECK(RD_DUMP_VERSION == 10u, "the dump version is 10 (%u)", RD_DUMP_VERSION);
+    RdFrameHead h;
+    memset(&h, 0, sizeof(h));
+    h.gsW = 1376; /* 32:9: 16 * ceil(32 * k), k = 32/9 * 3/4 */
+    h.gsH = 448;
+    h.aspect = 32.0f / 9.0f;
+    h.wExact = 512.0f * (32.0f / 9.0f * 0.75f);
+    rd_begin_frame();
+    rd_frame_head(&h);
+    rd_select_list(7);
+    draw(1);
+    rd_end_frame(0);
+    const RdFrame *f = rd__last_frame();
+    CHECK(f->aspect == h.aspect && f->wExact == h.wExact && f->cullW == 1376u,
+          "rd_frame_head sets the frame's native fields (%g, %g, %u)", (double)f->aspect,
+          (double)f->wExact, f->cullW);
+    char path[1100];
+    snprintf(path, sizeof(path), "%s/rd_state_test_v10.rddump", dir);
+    CHECK(rd__dump_frame(f, path), "v10 dump written");
+    RdDumpInfo info;
+    CHECK(rd__dump_peek(path, &info) && info.version == 10u && info.gsW == 512u &&
+              info.gsH == 512u && info.aspect == h.aspect && info.wExact == h.wExact &&
+              info.cullW == 1376u,
+          "v10 header peeked");
+    RdFrame g;
+    if (rd__load_frame(path, &g)) {
+        CHECK(g.gsW == 512u && g.aspect == h.aspect && g.wExact == h.wExact && g.cullW == 1376u &&
+                  g.number == f->number && g.lists[7].count == f->lists[7].count,
+              "v10 dump round trip (%u, %g, %g, %u)", g.gsW, (double)g.aspect, (double)g.wExact,
+              g.cullW);
+        rd__frame_free(&g);
+    } else {
+        CHECK(0, "v10 dump loaded");
+    }
+    long size = 0;
+    uint8_t *buf = slurp(path, &size);
+    CHECK(buf != NULL, "v10 dump read back");
+    if (buf) {
+        /* the same frame as version 9 */
+        const long size10 = size;
+        char path9[1100];
+        snprintf(path9, sizeof(path9), "%s/rd_state_test_v9.rddump", dir);
+        uint8_t *b9 = malloc((size_t)size);
+        memcpy(b9, buf, (size_t)size);
+        cutBytes(b9, &size, V10_FIELDS_AT, 12);
+        const uint32_t v9 = 9;
+        memcpy(b9 + 8, &v9, 4);
+        CHECK(size == size10 - 12 && spit(path9, b9, size), "v9 dump written");
+        CHECK(rd__dump_peek(path9, &info) && info.version == 9u && info.aspect == 4.0f / 3.0f &&
+                  info.wExact == 512.0f && info.cullW == 512u,
+              "v9 header peeked as the 4:3 frame");
+        if (rd__load_frame(path9, &g)) {
+            CHECK(g.aspect == 4.0f / 3.0f && g.wExact == 512.0f && g.cullW == 512u &&
+                      g.number == f->number && g.lists[7].count == f->lists[7].count &&
+                      g.payloadSize == f->payloadSize,
+                  "v9 dump loads with the 4:3 defaults (%g, %g, %u)", (double)g.aspect,
+                  (double)g.wExact, g.cullW);
+            rd__frame_free(&g);
+        } else {
+            CHECK(0, "v9 dump loaded");
+        }
+        remove(path9);
+        free(b9);
+        /* refused: an aspect under 4:3, a cull width other than gsW, a
+           visible width past the native one */
+        const float lowAspect = 1.0f, wide = 2000.0f;
+        const uint32_t badCull = 1136;
+        char pathBad[1100];
+        snprintf(pathBad, sizeof(pathBad), "%s/rd_state_test_bad.rddump", dir);
+        for (int k = 0; k < 3; k++) {
+            uint8_t *bb = malloc((size_t)size10);
+            memcpy(bb, buf, (size_t)size10);
+            memcpy(bb + V10_FIELDS_AT +
+                       (k == 0   ? 0
+                        : k == 1 ? 8
+                                 : 4),
+                   k == 0   ? (const void *)&lowAspect
+                   : k == 1 ? (const void *)&badCull
+                            : (const void *)&wide,
+                   4);
+            CHECK(spit(pathBad, bb, size10), "bad v10 dump %d written", k);
+            CHECK(!rd__dump_peek(pathBad, &info) && !rd__load_frame(pathBad, &g),
+                  "bad v10 header %d refused", k);
+            free(bb);
+        }
+        remove(pathBad);
+        free(buf);
+    }
+    remove(path);
+}
+
 static void testAa1Plans(void)
 {
     RdStateBlock s;
@@ -768,39 +908,37 @@ static void testEnumeration(void)
           sheet);
 }
 
-/* A UI scissor narrower than the target follows the wide x
- * scale about the target's centre, rounded outwards (it clips as much as the
- * draw does, no more); a side at the target's edge stays; f 1 changes nothing. */
-static void testWideScissor(void)
+/* The native frame's region scale (rd__region_scale, FrameCB g_frame.x):
+ * exactly 1 at 4:3 on every target (the region path untouched), 512 / W on a
+ * target of a W-wide frame's size and 1 on the others; no scissor or
+ * position is scaled (the old wide scissor is gone with the squeeze). */
+static void testRegionScale(void)
 {
-    int32_t x0 = 100, x1 = 300;
-    rd__wide_scissor(&x0, &x1, 512, 0.75f);
-    CHECK(x0 == 139 && x1 == 289, "wide scissor 100..300 of 512 at 0.75 is %d..%d (139..289)", x0,
-          x1);
-    /* the draw's pixels 100..300 land at 256 + 0.75 (p - 256): all inside */
-    CHECK(256.0f + 0.75f * (100.0f - 256.0f) >= (float)x0 &&
-              256.0f + 0.75f * (301.0f - 256.0f) <= (float)(x1 + 1),
-          "the scissor covers the compressed draw");
-    x0 = 0;
-    x1 = 300;
-    rd__wide_scissor(&x0, &x1, 512, 0.75f);
-    CHECK(x0 == 0 && x1 == 289, "a scissor from the left edge keeps it: %d..%d", x0, x1);
-    x0 = 100;
-    x1 = 511;
-    rd__wide_scissor(&x0, &x1, 512, 0.75f);
-    CHECK(x0 == 139 && x1 == 511, "a scissor to the right edge keeps it: %d..%d", x0, x1);
-    x0 = 0;
-    x1 = 511;
-    rd__wide_scissor(&x0, &x1, 512, 0.75f);
-    CHECK(x0 == 0 && x1 == 511, "the full-width scissor is untouched: %d..%d", x0, x1);
-    x0 = 100;
-    x1 = 300;
-    rd__wide_scissor(&x0, &x1, 512, 1.0f);
-    CHECK(x0 == 100 && x1 == 300, "f 1 leaves the scissor alone: %d..%d", x0, x1);
-    /* a one-pixel scissor stays one pixel or more and inside the target */
-    x0 = x1 = 5;
-    rd__wide_scissor(&x0, &x1, 512, 0.75f);
-    CHECK(x0 >= 0 && x1 >= x0 && x1 < 512, "a one-pixel scissor: %d..%d", x0, x1);
+    const uint32_t keepW = g_rd.gsW, keepH = g_rd.gsH;
+    RdTargetRec t;
+    memset(&t, 0, sizeof(t));
+    g_rd.gsW = 512;
+    g_rd.gsH = 448;
+    t.w = 512;
+    t.h = 448;
+    CHECK(rd__region_scale(&t) == 1.0f, "region scale: a 4:3 frame's SCENE is exactly 1 (%g)",
+          (double)rd__region_scale(&t));
+    g_rd.gsW = 688; /* 16:9 (ico_frame_width_for) */
+    t.w = 688;
+    CHECK(rd__region_scale(&t) == 512.0f / 688.0f,
+          "region scale: a 688-wide frame's target is 512 / 688 (%g)",
+          (double)rd__region_scale(&t));
+    t.w = 256;
+    t.h = 256;
+    CHECK(rd__region_scale(&t) == 1.0f, "region scale: a work buffer is 1 (%g)",
+          (double)rd__region_scale(&t));
+    t.w = 688;
+    t.h = 224;
+    CHECK(rd__region_scale(&t) == 1.0f, "region scale: DISPLAY's half height is 1 (%g)",
+          (double)rd__region_scale(&t));
+    CHECK(rd__region_scale(NULL) == 1.0f, "region scale: no target is 1");
+    g_rd.gsW = keepW;
+    g_rd.gsH = keepH;
 }
 
 /* ------------------------------------------------------- the aura filter
@@ -1280,8 +1418,7 @@ static void onDateCmd(void *user, int list, uint32_t index, const RdCmd *c, cons
     const RdTargetRec *tc = rd__target_rec(s->color);
     const RdScreenVtx *v = (const RdScreenVtx *)(w->f->payload + c->u[0]);
     const int i = w->draws++;
-    w->got[i] =
-        tc && rd__screen_area(tc, s, v, c->u[1], 0, c->b[1] == RD_SPACE_UI, 0, 0, &w->area[i]);
+    w->got[i] = tc && rd__screen_area(tc, s, v, c->u[1], 0, 0, &w->area[i]);
     RhiRect take;
     if (tc && rd__date_retake(w->heldFor, w->heldSerial, &w->held, s->color, w->serial,
                               w->got[i] ? &w->area[i] : NULL, tc->tw, tc->th, &take)) {
@@ -1377,10 +1514,9 @@ static void testDateArea(void)
     s.scissor[2] = DA_W - 1;
     s.scissor[3] = DA_H - 1;
     RhiRect a;
-    CHECK(rd__screen_area(tc, &s, q, 2, 0, 0, 0, 1, &a) && a.x == 97 && a.w == 47,
+    CHECK(rd__screen_area(tc, &s, q, 2, 0, 1, &a) && a.x == 97 && a.w == 47,
           "date area: AA1 pads three pixels: (%d) %u wide, (97) 47 expected", a.x, a.w);
-    CHECK(rd__screen_area(tc, &s, q, 2, 0, 1, 1, 0, &a) && a.x == (int32_t)tc->w - 1 - 142 &&
-              a.w == 45,
+    CHECK(rd__screen_area(tc, &s, q, 2, 1, 0, &a) && a.x == (int32_t)tc->w - 1 - 142 && a.w == 45,
           "date area: mirrored to (%d) %u wide, (%d) 45 expected", a.x, a.w,
           (int32_t)tc->w - 1 - 142);
 }
@@ -1398,9 +1534,10 @@ int main(int argc, char **argv)
     testStubs();
     testPlans();
     testDump(dir);
+    testDumpV10(dir);
     testAa1Plans();
     testEnumeration();
-    testWideScissor();
+    testRegionScale();
     testAuraFilter();
     testPassOps();
     testStencilOps();

@@ -42,11 +42,20 @@ static inline void setGsReg(long long addr, long long data) /* derived name */
     *PacketBufferStruct.ptr.d++ = addr;
 }
 
+/* PC port: the frame's extents in this file are FRAME, the native width
+   gsFrame.w (512 at 4:3): the scene copy's UV, TBW and TW take the whole
+   frame into the block, which is the frame's width across (512 x 256 at
+   4:3, W x 256 on a frame W wide: its FRAME FBW, SCISSOR and XYOFFSET and
+   the copy's rect are the frame's across, the barrier's TEX0 TBW and TW
+   its width), the refraction STs map the frame's width onto it over 0 .. 1
+   (the renderer reads a render target whole, so a block of any width), and
+   the barrier draws into the frame's FRAME/SCISSOR/XYOFFSET.  The block's
+   VRAM address is the PS2's (ADDRESS). */
 static void MakeRefractTexture(int frame)
 {
     GifColor col = {128, 128, 128, 128};
-    GifRect r = {-4096, -2048, 8192, 4096};
-    GifRect uv = {8, 8, ScreenWidth * 16, ScreenHeight * 16};
+    GifRect r = {-ico_frame_x(&gsFrame, 4096), -2048, ico_frame_x(&gsFrame, 8192), 4096};
+    GifRect uv = {8, 8, gsFrame.w * 16, ScreenHeight * 16};
     int fx;
     int fy;
 
@@ -54,11 +63,12 @@ static void MakeRefractTexture(int frame)
 
     gif_SetGsReg(0x4E, 0x1300000C0LL);
 
-    gif_SetGsReg(0x06, ((long long)(ScreenWidth / 64) << 14) | 0x664000800LL);
+    gif_SetGsReg(0x06, ico_frame_tex0_w(&gsFrame, 512) | 0x640000800LL);
 
-    setGsReg(0x4C, frame | 0x80000);
-    setGsReg(0x40, 0xFF000001FF0000LL);
-    setGsReg(0x18, 0x780000007000LL);
+    /* 0x80000, 0xFF000001FF0000 and 0x780000007000 at 4:3 */
+    setGsReg(0x4C, frame | ((long long)(gsFrame.fbw & 0x3F) << 16));
+    setGsReg(0x40, ((long long)(gsFrame.w - 1) << 16) | 0xFF000000000000LL);
+    setGsReg(0x18, ((long long)(2048 - gsFrame.w / 2) << 4) | 0x780000000000LL);
     setGsReg(0x00, 0x116);
     setGsReg(0x01, GIF_COLOR(&col));
     setGsReg(0x03, GIF_UV(uv.x, uv.y));
@@ -76,20 +86,22 @@ static void MakeRefractTexture(int frame)
 /* PC port (renderer wave 5, R5b).  The
    block queen_barrier_disp_proc allocates right after tex_ResetVramPri(10)
    is TBP 0x2800; MakeRefractTexture draws the scene into it as a 512 x 256
-   frame (FBW 8, XYOFFSET 1792/1920) and the barrier mesh samples it with
-   TEX0 TW 9, TH 8.  The GS register decoder takes the block for the named
-   AA0 target, 256 x 256; the host binds a per-frame 512 x 256 target in its
-   place in list 10 from the allocation to the mesh draw.  The register
-   writes are unchanged. */
+   frame (FBW 8, XYOFFSET 1792/1920; W x 256 on a frame W wide) and the
+   barrier mesh samples it with TEX0 TW 9, TH 8.  The GS register decoder
+   takes the block for the named AA0 target; the host binds a per-frame
+   gsFrame.w x 256 target in its place in list 10 from the allocation to the
+   mesh draw.  The register writes are unchanged. */
 static RdTarget barrierHostAlias; /* the named target the block is bound over */
 
 static void barrierHostBlock(int tbp, int begin)
 {
     gif_HostFlush();
     if (begin) {
-        barrierHostAlias = rd_gs_named_block((unsigned int)tbp, 512, 256);
+        const unsigned int bw = (unsigned int)gsFrame.w; /* FRAME: 512 at 4:3 */
+
+        barrierHostAlias = rd_gs_named_block((unsigned int)tbp, bw, 256);
         if (barrierHostAlias.id != 0) {
-            rd_alias_target(barrierHostAlias, rd_block_target((unsigned int)tbp, 512, 256, 0));
+            rd_alias_target(barrierHostAlias, rd_block_target((unsigned int)tbp, bw, 256, 0));
         }
     } else if (barrierHostAlias.id != 0) {
         rd_alias_target(barrierHostAlias, (RdTarget){0});
@@ -157,7 +169,7 @@ static void makeRefractST(float k)
             v.f[3] = 1.0f;
             _RotTransPersCurrentMatrix(&v, &v);
             barrierMesh->st[idx].x =
-                ((v.f[0] - 2048.0f) + (float)(ScreenWidth >> 1)) * (1.0f / (float)ScreenWidth);
+                ((v.f[0] - 2048.0f) + (float)(gsFrame.w >> 1)) * (1.0f / (float)gsFrame.w);
             barrierMesh->st[idx].y =
                 ((v.f[1] - 2048.0f) + (float)(ScreenHeight >> 1)) * (1.0f / (float)ScreenHeight);
         }
@@ -194,14 +206,14 @@ void queen_barrier_disp_proc(GObj *g, float k)
 #endif
     MakeRefractTexture(vram >> 5);
 
-    setGsReg(0x4C, ((long long)((ScreenWidth >> 6) & 0x3F) << 16) | 64);
-    setGsReg(0x40, ((long long)(ScreenWidth - 1) << 16) | ((long long)(ScreenHeight - 1) << 48));
-    setGsReg(0x18, (((long long)(2048 - ScreenWidth / 2) << 4) + screenOffsetX) |
+    setGsReg(0x4C, ((long long)(gsFrame.fbw & 0x3F) << 16) | 64);
+    setGsReg(0x40, ((long long)(gsFrame.w - 1) << 16) | ((long long)(ScreenHeight - 1) << 48));
+    setGsReg(0x18, (((long long)(2048 - gsFrame.w / 2) << 4) + screenOffsetX) |
                        ((((long long)(2048 - ScreenHeight / 2) << 4) + screenOffsetY) << 32));
 
     gif_SetGsReg(0x4E, 0x300000C0);
     gif_SetGsReg(0x47, 0x50000);
-    gif_SetGsReg(0x06, (vram | 0x24020000) | 0x600000000LL);
+    gif_SetGsReg(0x06, (vram | ico_frame_tex0_w(&gsFrame, 512)) | 0x600000000LL);
     gif_SetGsReg(0x14, 0x60);
 
     setGsReg(0x49, 1);

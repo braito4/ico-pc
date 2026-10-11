@@ -23,14 +23,21 @@
  *            a new count, and a live emitter drawn every tick keeps its
  *            count while 8192 other emitters are stamped (three in four
  *            deleted, the rest never drawn again)
- *   stretch  the prelit model named a full-screen title model
- *            (title_logo.c ico_title_stretch_model, stubbed): reg_DispObj
- *            records its draw with the stretch byte (b[3] 1, 0 for any
- *            other model) and ends the space override; on the device at
- *            4:3 its picture is byte-identical to the unflagged draw's, at
- *            16:9 it is drawn 4/3 wider than the unflagged (scene) draw
- *            about the centre, and three times as wide it covers both edge
- *            columns of the wide target
+ *   full-frame  the prelit model named a full-frame title model
+ *            (title_logo.c ico_title_fullframe_model, stubbed): reg_DispObj
+ *            widens its nodes' x axis (nodeMtx's x row) by the frame's
+ *            width / 512 for the draw (the VuCB's matrices change at 688,
+ *            not at 512) and puts it back; as a camera-locked node (flag 2,
+ *            title_back's kind) its model-to-screen x row is the width /
+ *            512 times the 4:3 one at 688 and 2048, the other rows
+ *            unchanged; on the device at 4:3 its picture is byte-identical
+ *            to the unflagged draw's; at 16:9 on the native frame (688 x 512)
+ *            the unflagged draw is the Enhanced 1x 4:3 picture at its GS X
+ *            (columns 88..599, nothing compressed), the full-frame one is
+ *            wider than it, and a full-frame item the game draws at the
+ *            frame's width covers all 688 columns
+ *   content table  rd_content_hide.c's verbs on the top of the listed
+ *            closing box (st08a_p4), below ("the content table")
  *   strip order  the title logo's strips Packet.c draws in another order of
  *            their entries (pac_HostStrips): the table, the I's through
  *            p2o_MakePacket, and with the disc image given as the argument
@@ -190,6 +197,9 @@ static void checkState(const RdStateBlock *s, int expectAbe, int expectFba)
     CHECK(s->gouraud == 1, "PRIM.IIP 1");
 }
 
+/* the scene's GS width: the native frame's (688 for the 16:9 checks) */
+static uint32_t s_sceneW = 512;
+
 static void recordPrelit(Sub15C *o, int clipRet)
 {
     static const uint8_t grey[4] = {40, 40, 60, 0x80};
@@ -197,7 +207,7 @@ static void recordPrelit(Sub15C *o, int clipRet)
     dl_Clear();
     setCommon();
     dl_SetDLPriority(0);
-    rd_set_target(rd_target(RD_TARGET_SCENE), rd_target(RD_TARGET_SCENE), 512, 512, 1);
+    rd_set_target(rd_target(RD_TARGET_SCENE), rd_target(RD_TARGET_SCENE), s_sceneW, 512, 1);
     rd_clear_target(rd_target(RD_TARGET_SCENE), grey, 1, 0);
     reg_DispObj(o);
     dl_Swap();
@@ -712,45 +722,134 @@ static void refClusterA(void)
 
 static void checkStretchRecording(void)
 {
+    /* VuCB 16..27 (the +0x140, +0x200 and +0x80 times the node matrices) of
+       the one draw the last recording holds */
+    float a[12 * 4], b[12 * 4], c[12 * 4], d[12 * 4];
     Found fd;
-    s_stretchModel = NULL;
+    const float *mem;
+    float node0[16];
+    memcpy(node0, s_modelA.nodeMtx[0], sizeof(node0));
+
+#define RECORD_MATRICES(dst, model, width)                                                         \
+    do {                                                                                           \
+        s_fullFrameModel = (model);                                                                \
+        gsFrame.w = (width);                                                                       \
+        recordPrelit(&s_objA, 1);                                                                  \
+        walkFrame(rd__last_frame(), &fd);                                                          \
+        CHECK(fd.n == 1, "full-frame: one draw (%d)", fd.n);                                       \
+        if (fd.n == 1) {                                                                           \
+            payloadOf(rd__last_frame(), fd.cmd[0], &mem);                                          \
+            memcpy((dst), mem + 64, sizeof(dst));                                                  \
+        }                                                                                          \
+    } while (0)
+    RECORD_MATRICES(a, NULL, 512);
+    RECORD_MATRICES(b, "test_prelit", 512);
+    CHECK(memcmp(a, b, sizeof(a)) == 0, "full-frame: at 4:3 the model's matrices are unchanged");
+    RECORD_MATRICES(c, "test_prelit", 688);
+    CHECK(memcmp(a, c, sizeof(a)) != 0, "full-frame: at 688 the model is widened");
+    CHECK(memcmp(s_modelA.nodeMtx[0], node0, sizeof(node0)) == 0,
+          "full-frame: the node matrix is put back");
+    RECORD_MATRICES(d, NULL, 688);
+    CHECK(memcmp(a, d, sizeof(a)) == 0, "full-frame: another model at 688 is not widened");
+    RECORD_MATRICES(d, NULL, 512);
+
+    /* the camera-locked node (flag 2) title_back is (its draw's matrix is
+       +0x640, the 500-unit projection, times the node's lengths and its
+       position; the dumps' title frames): reg_setMMatrixPacket takes the
+       scale from the lengths of nodeMtx's rows and never reads the node
+       scale, so the widening is on nodeMtx's x row.  The model-to-screen
+       matrix's x row (VuCB 16) is the frame's width / 512 times the 4:3
+       one at 688 and at 2048 (48:9), the other rows unchanged, and the
+       node matrix is put back */
+    {
+        static const int widths[] = {688, 2048};
+        float saved640[32];
+        float ref[12 * 4], wide[12 * 4];
+        memcpy(saved640, matrixptr + 0x640, sizeof(saved640));
+        memcpy(matrixptr + 0x640, matrixptr + 0x100, 64);
+        identity((float *)(matrixptr + 0x680));
+        s_objA.dispType = 2;
+        s_modelA.nodes[0].flags.ll = 2;
+        s_modelA.nodes[0].alpha = 1.0f; /* drawn: 1 - (1 - fade) x alpha = 0 */
+        qw4(s_modelA.nodes[0].pos, 0.0f, 0.0f, 6.4f, 1.0f);
+        RECORD_MATRICES(ref, NULL, 512);
+        RECORD_MATRICES(wide, "test_prelit", 512);
+        CHECK(memcmp(ref, wide, sizeof(ref)) == 0,
+              "full-frame, camera-locked: at 4:3 the model's matrices are unchanged");
+        CHECK(ref[0] != 0.0f && ref[1] == 0.0f && ref[2] == 0.0f,
+              "full-frame, camera-locked: the model's x is the screen's x (%g %g %g)",
+              (double)ref[0], (double)ref[1], (double)ref[2]);
+        for (unsigned i = 0; i < sizeof(widths) / sizeof(widths[0]); i++) {
+            const float k = (float)widths[i] / 512.0f;
+            RECORD_MATRICES(wide, "test_prelit", widths[i]);
+            int rowX = 1;
+            for (int e = 0; e < 4; e++) {
+                rowX &= fabsf(wide[e] - ref[e] * k) <= 1e-4f * fabsf(ref[e] * k) + 1e-6f;
+            }
+            CHECK(rowX,
+                  "full-frame, camera-locked at %d: the x row is %g times the 4:3 one "
+                  "(%g, expected %g)",
+                  widths[i], (double)k, (double)wide[0], (double)(ref[0] * k));
+            CHECK(memcmp(wide + 4, ref + 4, 12 * sizeof(float)) == 0,
+                  "full-frame, camera-locked at %d: the y, z and position rows are unchanged",
+                  widths[i]);
+            CHECK(memcmp(s_modelA.nodeMtx[0], node0, sizeof(node0)) == 0,
+                  "full-frame, camera-locked at %d: the node matrix is put back", widths[i]);
+        }
+        RECORD_MATRICES(wide, NULL, 2048);
+        CHECK(memcmp(ref, wide, 16 * sizeof(float)) == 0,
+              "full-frame, camera-locked: another model at 2048 is not widened");
+        s_objA.dispType = 0;
+        s_modelA.nodes[0].flags.ll = 0;
+        s_modelA.nodes[0].alpha = 0.0f;
+        qw4(s_modelA.nodes[0].pos, 0.0f, 0.0f, 0.0f, 0.0f);
+        memcpy(matrixptr + 0x640, saved640, sizeof(saved640));
+    }
+#undef RECORD_MATRICES
+    s_fullFrameModel = NULL;
+    gsFrame.w = 512;
+}
+
+/* the 4:3 picture of the unflagged draw in the 16:9 run's preset
+   (Enhanced 1x), for the 16:9 checks (stretch43Enhanced) */
+static uint8_t s_stretch43[512 * 512 * 4];
+static int s_have43;
+
+/* the unflagged draw at 4:3 under Enhanced 1x: the 16:9 run differs from it
+   in the frame's width alone (the Original run's picture may differ in the
+   preset's own ways) */
+static void stretch43Enhanced(void)
+{
+    s_fullFrameModel = NULL;
     recordPrelit(&s_objA, 1);
-    walkFrame(rd__last_frame(), &fd);
-    CHECK(fd.n == 1 && fd.cmd[0]->b[3] == 0, "stretch: an ordinary model's draw is not flagged");
-    s_stretchModel = "test_prelit";
-    recordPrelit(&s_objA, 1);
-    walkFrame(rd__last_frame(), &fd);
-    CHECK(fd.n == 1 && fd.cmd[0]->b[3] == 1, "stretch: the title model's draw is flagged");
-    CHECK(rd_set_space_override(-1) == -1, "stretch: reg_DispObj ends the space override");
-    s_stretchModel = NULL;
-    recordPrelit(&s_objA, 1);
-    walkFrame(rd__last_frame(), &fd);
-    CHECK(fd.n == 1 && fd.cmd[0]->b[3] == 0, "stretch: the next draw is not flagged");
+    s_have43 = readScene(s_stretch43);
+    CHECK(s_have43, "stretch 4:3 Enhanced: SCENE readback");
 }
 
 /* at 4:3 the flag changes nothing */
 static void stretchSamePixels(void)
 {
-    s_stretchModel = NULL;
+    s_fullFrameModel = NULL;
     recordPrelit(&s_objA, 1);
     const int a = readScene(s_imgA);
-    s_stretchModel = "test_prelit";
+    s_fullFrameModel = "test_prelit";
     recordPrelit(&s_objA, 1);
     const int b = readScene(s_imgB);
-    s_stretchModel = NULL;
+    s_fullFrameModel = NULL;
     CHECK(a && b, "stretch 4:3: SCENE readback");
     int cover = 0;
     for (int i = 0; i < 512 * 512; i++) {
         cover += s_imgA[i * 4] != 40 || s_imgA[i * 4 + 1] != 40 || s_imgA[i * 4 + 2] != 60;
     }
     CHECK(a && b && cover >= 2000 && memcmp(s_imgA, s_imgB, sizeof(s_imgA)) == 0,
-          "stretch 4:3: the flagged draw's picture is the unflagged one's (%d pixels drawn)",
+          "stretch 4:3: the full-frame model's picture is the unflagged one's (%d pixels drawn)",
           cover);
 }
 
-#define WT 683 /* SCENE's texels across at 16:9, 1x */
+#define WT 688 /* SCENE's GS width and texels at 16:9, 1x: the native frame */
+#define WX0 88 /* its 4:3 columns' first, (688 - 512) / 2 */
 
-static uint8_t s_wideImg[WT * 512 * 4];
+static uint8_t s_wideImg[WT * 512 * 4], s_wideA[WT * 512 * 4];
 
 /* the first and last columns of SCENE at 16:9 with a pixel drawn */
 static int wideColumns(int *x0, int *x1)
@@ -774,58 +873,117 @@ static int wideColumns(int *x0, int *x1)
     return *x1 >= *x0;
 }
 
-/* at 16:9 the scene is drawn compressed about the centre by 3/4, the
-   flagged model is not */
+/* a full-frame item as the game draws it: a sprite over the frame's width
+   (GS 2048 -+ WT / 2), tagged full-screen */
+static void recordFullFrame(void)
+{
+    static const uint8_t grey[4] = {40, 40, 60, 0x80}, white[4] = {255, 255, 255, 0x80};
+    dl_Clear();
+    setCommon();
+    dl_SetDLPriority(0);
+    rd_set_target(rd_target(RD_TARGET_SCENE), rd_target(RD_TARGET_SCENE), s_sceneW, 512, 1);
+    rd_clear_target(rd_target(RD_TARGET_SCENE), grey, 1, 0);
+    rd_test_gs(RD_TEST_Z_ALWAYS);
+    rd_z_write(0);
+    rd_blend(RD_BLEND_LERP_AS, 0x80, 0);
+    rd_abe(0);
+    rd_pabe(0);
+    rd_fba(0);
+    rd_gouraud(0);
+    rd_texture_off();
+    RdScreenVtx v[2];
+    memset(v, 0, sizeof(v));
+    v[0].x = (2048 - (int32_t)s_sceneW / 2) * 16;
+    v[0].y = (2048 - 256 + 200) * 16;
+    v[1].x = (2048 + (int32_t)s_sceneW / 2) * 16;
+    v[1].y = (2048 - 256 + 220) * 16;
+    for (int i = 0; i < 2; i++) {
+        v[i].q = 1.0f;
+        memcpy(v[i].rgba, white, 4);
+    }
+    rd_screen_prims(RD_PRIM_SPRITES, v, 2, RD_SPACE_FULLFRAME, 1, 0);
+    dl_Swap();
+}
+
+/* at 16:9 the scene is the native frame, 688 GS pixels across: the
+   unflagged draw is the 4:3 one at its GS X (nothing compressed), the
+   flagged one the same, and a full-frame item covers the frame's width.
+   The same triangles 88 pixels to the right are not interpolated to the
+   same bytes: the rasteriser evaluates colour and STQ at the pixel's
+   position in the target (llvmpipe: a plane through the target's origin),
+   and the 4:3 render itself drawn with its origin moved 88 pixels has 7
+   pixels 1 LSB off (measured 2026-10-10).  So the centre's coverage is
+   exact and its colour within 1 LSB per channel. */
 static void stretchWidePixels(void)
 {
-    CHECK(fabsf(g_rd.wideX - 0.75f) < 1e-6f, "stretch 16:9: the wide factor (%g)",
-          (double)g_rd.wideX);
+    CHECK(g_rd.gsW == WT && s_sceneW == WT, "stretch 16:9: the frame is %u wide", g_rd.gsW);
     int a0 = 0, a1 = 0, b0 = 0, b1 = 0;
-    s_stretchModel = NULL;
+    s_fullFrameModel = NULL;
     recordPrelit(&s_objA, 1);
     const int a = wideColumns(&a0, &a1);
-    s_stretchModel = "test_prelit";
+    memcpy(s_wideA, s_wideImg, sizeof(s_wideA));
+    int same = a && s_have43, outside = 0, coverage = 0, lsb = 0, maxd = 0;
+    for (int y = 0; a && y < 512; y++) {
+        for (int x = 0; x < WT; x++) {
+            const uint8_t *p = &s_wideA[(y * WT + x) * 4];
+            if (x >= WX0 && x < WX0 + 512) {
+                const uint8_t *q = &s_stretch43[(y * 512 + x - WX0) * 4];
+                const int clearP = p[0] == 40 && p[1] == 40 && p[2] == 60;
+                const int clearQ = q[0] == 40 && q[1] == 40 && q[2] == 60;
+                coverage += clearP != clearQ;
+                int d = 0;
+                for (int k = 0; k < 4; k++) {
+                    const int e = p[k] > q[k] ? p[k] - q[k] : q[k] - p[k];
+                    d = e > d ? e : d;
+                }
+                lsb += d != 0;
+                maxd = d > maxd ? d : maxd;
+            } else {
+                outside += p[0] != 40 || p[1] != 40 || p[2] != 60;
+            }
+        }
+    }
+    same &= coverage == 0 && maxd <= 1;
+    printf("  stretch 16:9: the scene draw's columns %d..%d of %d; against the 4:3 picture %d "
+           "pixels covered differently, %d off by up to %d\n",
+           a0, a1, WT, coverage, lsb, maxd);
+    CHECK(a && same && outside == 0,
+          "stretch 16:9: a world draw is the Enhanced 4:3 picture at its GS X, columns %d..%d (%d "
+          "covered differently, %d pixels off by up to %d, %d drawn beside)",
+          WX0, WX0 + 511, coverage, lsb, maxd, outside);
+    s_fullFrameModel = "test_prelit";
+    gsFrame.w = WT; /* GsBase.c's latch: reg_DispObj widens by the frame's width / 512 */
     recordPrelit(&s_objA, 1);
     const int b = wideColumns(&b0, &b1);
-    CHECK(a && b, "stretch 16:9: SCENE readback with pixels drawn");
-    if (a && b) {
-        const double c = WT / 2.0;
-        const double la = c - a0, ra = a1 + 1 - c, lb = c - b0, rb = b1 + 1 - c;
-        printf("  stretch 16:9: scene draw columns %d..%d, stretched %d..%d\n", a0, a1, b0, b1);
-        CHECK(la > 50.0 && ra > 50.0 && fabs(lb - la * 4.0 / 3.0) <= 2.5 &&
-                  fabs(rb - ra * 4.0 / 3.0) <= 2.5,
-              "stretch 16:9: the flagged draw spans 4/3 of the scene draw about the centre "
-              "(left %.1f vs %.1f, right %.1f vs %.1f)",
-              lb, la, rb, ra);
-    }
-    /* three times as wide (past the 4:3 screen's edges): across the whole
-       wide target */
-    const float keep = s_modelA.nodeMtx[0][0];
-    s_modelA.nodeMtx[0][0] = 3.0f;
-    recordPrelit(&s_objA, 1);
+    gsFrame.w = ICO_FRAME_BASE_W;
+    s_fullFrameModel = NULL;
+    CHECK(a && b && b1 - b0 > a1 - a0,
+          "stretch 16:9: the full-frame model is wider than the unflagged draw (columns %d..%d, "
+          "%d..%d)",
+          a0, a1, b0, b1);
+    recordFullFrame();
     const int w = wideColumns(&b0, &b1);
-    s_modelA.nodeMtx[0][0] = keep;
-    s_stretchModel = NULL;
     CHECK(w && b0 == 0 && b1 == WT - 1,
-          "stretch 16:9: the wide plane covers both edge columns (columns %d..%d of %d)", b0, b1,
+          "stretch 16:9: a full-frame item covers both edge columns (columns %d..%d of %d)", b0, b1,
           WT);
 }
 
-/* ------------------------------------------------------ closing planes */
-/* rd_mesh.c markWideHidden and rd_replay.c vuWideParts: the top of the
- * listed closing box (st08a_p4, four black corners of the list) as a mesh
- * of its own, as the stage has it.
- *   recording: its two triangles carry ICO_VU_INDEX_WIDE in the draw's
- *     index list (the mesh's own list untouched) and the mesh is marked;
- *     the same quad grey, or black but moved half a unit, is not; the
- *     interpolation's copy of the list takes the mark with it
- *   16:9: drawn inside the 4:3 picture it shows; beside it (GS X 2310..2378,
- *     past the 4:3 picture's 2304 and inside the wide one's 2389) it does
- *     not, while the grey and the moved quads there do; across the 4:3
- *     picture's edge its part inside is the unmarked mesh's to the bit and
- *     nothing of it shows beside
- *   4:3: the marked and unmarked meshes' pictures are the same, byte for
- *     byte, inside the picture and across its edge */
+/* ---------------------------------------------------- the content table */
+/* rd_content_hide.c's verb (rd_mesh.c markContentHidden) on the top of the
+ * listed closing box (st08a_p4, four black corners of entry 0, HIDE), a
+ * mesh of its own as the stage has it.
+ *   recording: the table's entry 0 is the box, HIDE; its two triangles
+ *     carry ICO_VU_INDEX_HIDE in the draw's index list (the mesh's own
+ *     list untouched); the same quad grey, or black but moved half a unit,
+ *     is not marked; the interpolation's copy of the list takes the mark
+ *     with it.  Overridden (rd__content_hide_set) to "off" the triangles
+ *     are unmarked; a bad spec (the retired "hide43" among them) changes
+ *     nothing
+ *   16:9 on the native frame (688 wide) and 4:3: the HIDE box is drawn
+ *     nowhere, inside the camera's picture (GS X 2000..2068), beside it
+ *     (2310..2378, past the picture's 2304 and inside the frame's 2392) or
+ *     across its edge; the unmarked box, the grey and the moved quads are
+ *     drawn there (one draw: no split) */
 
 static const uint32_t kBoxTop[4][3] = {{0xc518a521u, 0xc5696b2bu, 0xc431a218u},
                                        {0xc4c78446u, 0xc5696b2bu, 0xc42abb35u},
@@ -865,46 +1023,68 @@ static RdMesh closingMesh(const uint8_t rgb[3], float shift, int unmark)
     md.debugName = "closing";
     const RdMesh m = rd_create_vu_mesh(&md);
     RdMeshRec *r = rd__mesh_rec(m.id);
-    CHECK(r != NULL, "closing planes: rd_create_vu_mesh");
+    CHECK(r != NULL, "content table: rd_create_vu_mesh");
     if (r && unmark) {
         free(r->drawIndex);
         r->drawIndex = NULL;
-        r->wideHidden = 0;
     }
     return m;
 }
 
 static const uint8_t kClosingBlack[3] = {0, 0, 0}, kClosingGrey[3] = {90, 90, 90};
 
+/* every index of a's draw list is its own with bit set */
+static int closingMarked(const RdMeshRec *a, uint32_t bit)
+{
+    int ok = a->indexCount == 6 && a->drawIndex != NULL;
+    for (uint32_t i = 0; ok && i < a->indexCount; i++) {
+        ok = a->drawIndex[i] == (a->index[i] | bit) && (a->index[i] & ICO_VU_INDEX_HIDE) == 0;
+    }
+    return ok;
+}
+
 static void closingPlaneChecks(void)
 {
+    CHECK(rd__content_hide_count >= 1 && rd__content_hide_count <= RD_CONTENT_HIDE_MAX &&
+              rd__content_hide[0].verb == RD_HIDE &&
+              strncmp(rd__content_hide[0].model, "st08a_p4", 8) == 0,
+          "content table: entry 0 is st08a_p4's box, HIDE (%d entries)", rd__content_hide_count);
+    CHECK(rd__content_hide_set(NULL) && rd__content_hide_verb(0) == RD_HIDE,
+          "content table: the table's verb applies");
     const RdMesh black = closingMesh(kClosingBlack, 0.0f, 0);
     const RdMesh grey = closingMesh(kClosingGrey, 0.0f, 0);
     const RdMesh moved = closingMesh(kClosingBlack, 0.5f, 0);
     RdMeshRec *a = rd__mesh_rec(black.id), *g = rd__mesh_rec(grey.id);
     RdMeshRec *mv = rd__mesh_rec(moved.id);
-    if (!a || !g || !mv) {
-        return;
+    if (a && g && mv) {
+        CHECK(closingMarked(a, ICO_VU_INDEX_HIDE),
+              "content table: the black box top carries HIDE (%u indices)", a->indexCount);
+        CHECK(!g->drawIndex, "content table: the grey quad is not marked");
+        CHECK(!mv->drawIndex, "content table: the moved black quad is not marked");
+        CHECK(rd__vu_mesh_copy_draw_index(g, a) && g->drawIndex &&
+                  memcmp(g->drawIndex, a->drawIndex, 6 * 4) == 0,
+              "content table: a copy of the list takes the mark");
+        CHECK(rd__vu_mesh_copy_draw_index(g, mv) && !g->drawIndex,
+              "content table: a copy of an unmarked list drops it");
     }
-    CHECK(a->indexCount == 6 && a->wideHidden && a->drawIndex != NULL,
-          "closing planes: the black box top is marked (%u indices, marked %u)", a->indexCount,
-          a->wideHidden);
-    for (uint32_t i = 0; a->drawIndex && i < a->indexCount; i++) {
-        CHECK(a->drawIndex[i] == (a->index[i] | ICO_VU_INDEX_WIDE) &&
-                  (a->index[i] & ICO_VU_INDEX_WIDE) == 0,
-              "closing planes: index %u is %08x in the draw's list, %08x in the mesh's", i,
-              a->drawIndex[i], a->index[i]);
-    }
-    CHECK(!g->wideHidden && !g->drawIndex, "closing planes: the grey quad is not marked");
-    CHECK(!mv->wideHidden && !mv->drawIndex, "closing planes: the moved black quad is not marked");
-    CHECK(rd__vu_mesh_copy_draw_index(g, a) && g->wideHidden && g->drawIndex &&
-              memcmp(g->drawIndex, a->drawIndex, 6 * 4) == 0,
-          "closing planes: a copy of the list takes the mark");
-    CHECK(rd__vu_mesh_copy_draw_index(g, mv) && !g->wideHidden && !g->drawIndex,
-          "closing planes: a copy of an unmarked list drops it");
     rd_destroy_vu_mesh(black);
     rd_destroy_vu_mesh(grey);
     rd_destroy_vu_mesh(moved);
+
+    /* the verb overridden: off leaves the box unmarked */
+    CHECK(rd__content_hide_set("off") && rd__content_hide_verb(0) == RD_HIDE_OFF,
+          "content table: \"off\" overrides every entry");
+    const RdMesh off = closingMesh(kClosingBlack, 0.0f, 0);
+    const RdMeshRec *o = rd__mesh_rec(off.id);
+    CHECK(o && !o->drawIndex, "content table: off leaves the box unmarked");
+    rd_destroy_vu_mesh(off);
+    CHECK(!rd__content_hide_set("hide43") && !rd__content_hide_set("0=hide43") &&
+              !rd__content_hide_set("999=hide") && !rd__content_hide_set("0=") &&
+              rd__content_hide_verb(0) == RD_HIDE_OFF,
+          "content table: a bad spec changes nothing");
+    CHECK(rd__content_hide_set("off,0=hide") && rd__content_hide_verb(0) == RD_HIDE,
+          "content table: the tokens apply in order");
+    rd__content_hide_set(NULL);
 }
 
 /* one frame: SCENE cleared grey, mesh m by code 32 at x = 0.08 x + tx,
@@ -914,7 +1094,7 @@ static void closingDraw(RdMesh m, float tx)
     static const uint8_t grey[4] = {40, 40, 60, 0x80};
     dl_Clear();
     dl_SetDLPriority(0);
-    rd_set_target(rd_target(RD_TARGET_SCENE), rd_target(RD_TARGET_SCENE), 512, 512, 1);
+    rd_set_target(rd_target(RD_TARGET_SCENE), rd_target(RD_TARGET_SCENE), s_sceneW, 512, 1);
     rd_clear_target(rd_target(RD_TARGET_SCENE), grey, 1, 0);
     rd_test_gs(RD_TEST_Z_GEQUAL);
     rd_z_write(1);
@@ -939,7 +1119,7 @@ static void closingDraw(RdMesh m, float tx)
     dl_Swap();
 }
 
-static uint8_t s_closingA[WT * 512 * 4], s_closingB[WT * 512 * 4];
+static uint8_t s_closingA[WT * 512 * 4];
 
 static int closingRead(uint8_t *img, uint32_t *w)
 {
@@ -961,9 +1141,17 @@ static int closingCount(const uint8_t *img, uint32_t w, int x0, int x1)
     return n;
 }
 
-#define CLOSING_IN 2196.0f     /* GS X 2000..2068: inside the 4:3 picture */
+#define CLOSING_IN 2196.0f     /* GS X 2000..2068: inside the camera's picture */
 #define CLOSING_BESIDE 2506.0f /* 2310..2378: beside it at 16:9 */
 #define CLOSING_ACROSS 2466.0f /* 2270..2338: across its right edge (2304) */
+
+/* the texels drawn by mesh m at tx, the whole target (-1: no read) */
+static int closingDrawn(RdMesh m, float tx)
+{
+    uint32_t w = 0;
+    closingDraw(m, tx);
+    return closingRead(s_closingA, &w) ? closingCount(s_closingA, w, 0, (int)w) : -1;
+}
 
 static void closingPixels(int wide)
 {
@@ -974,69 +1162,27 @@ static void closingPixels(int wide)
     const RdMesh moved = closingMesh(kClosingBlack, 0.5f, 0);
     const RdTargetRec *tc = rd__target_rec(rd_target(RD_TARGET_SCENE).id);
     if (!tc) {
-        CHECK(0, "closing planes %s: SCENE has no record", at);
+        CHECK(0, "content table %s: SCENE has no record", at);
         return;
     }
-    /* the 4:3 picture's texels, as vuWideParts rounds them */
-    const float f = wide ? g_rd.wideX : 1.0f, c = (float)tc->w * 0.5f;
-    const int bx0 = (int)floorf((c - f * c) * tc->sx), bx1 = (int)ceilf((c + f * c) * tc->sx);
-    uint32_t wa = 0, wb = 0;
     if (wide) {
-        CHECK(fabsf(f - 0.75f) < 1e-6f, "closing planes 16:9: the wide factor (%g)", (double)f);
-        closingDraw(black, CLOSING_IN);
-        const int okIn = closingRead(s_closingA, &wa);
-        const int in = okIn ? closingCount(s_closingA, wa, bx0, bx1) : 0;
-        const int inOut =
-            okIn ? closingCount(s_closingA, wa, 0, bx0) + closingCount(s_closingA, wa, bx1, (int)wa)
-                 : -1;
-        CHECK(okIn && in >= 1500 && inOut == 0,
-              "closing planes 16:9: inside the 4:3 picture it is drawn (%d texels, %d beside)", in,
-              inOut);
-        int beside[3];
-        const RdMesh which[3] = {black, grey, moved};
-        for (int i = 0; i < 3; i++) {
-            closingDraw(which[i], CLOSING_BESIDE);
-            beside[i] =
-                closingRead(s_closingA, &wa) ? closingCount(s_closingA, wa, 0, (int)wa) : -1;
-        }
-        printf("  closing planes 16:9: 4:3 picture texels %d..%d of %u; beside it: black box "
-               "%d texels, grey %d, moved %d\n",
-               bx0, bx1 - 1, wa, beside[0], beside[1], beside[2]);
-        CHECK(beside[0] == 0, "closing planes 16:9: beside the 4:3 picture it is not drawn (%d)",
-              beside[0]);
-        CHECK(beside[1] >= 1500 && beside[2] >= 1500,
-              "closing planes 16:9: the grey and the moved quads are drawn there (%d, %d)",
-              beside[1], beside[2]);
-        closingDraw(black, CLOSING_ACROSS);
-        const int okA = closingRead(s_closingA, &wa);
-        closingDraw(plain, CLOSING_ACROSS);
-        const int okB = closingRead(s_closingB, &wb);
-        int same = okA && okB && wa == wb;
-        for (int y = 0; same && y < 512; y++) {
-            same = memcmp(&s_closingA[(size_t)y * wa * 4], &s_closingB[(size_t)y * wb * 4],
-                          (size_t)bx1 * 4) == 0;
-        }
-        const int ina = okA ? closingCount(s_closingA, wa, bx0, bx1) : 0;
-        const int outa = okA ? closingCount(s_closingA, wa, bx1, (int)wa) : -1;
-        const int outb = okB ? closingCount(s_closingB, wb, bx1, (int)wb) : 0;
-        CHECK(same && ina >= 500 && outa == 0 && outb >= 500,
-              "closing planes 16:9: across the edge the part inside is the unmarked mesh's "
-              "(same %d, %d texels) and none beside (%d; unmarked %d)",
-              same, ina, outa, outb);
-    } else {
-        const float txs[2] = {CLOSING_IN, CLOSING_ACROSS};
-        for (int i = 0; i < 2; i++) {
-            closingDraw(black, txs[i]);
-            const int okA = closingRead(s_closingA, &wa);
-            closingDraw(plain, txs[i]);
-            const int okB = closingRead(s_closingB, &wb);
-            const int n = okA ? closingCount(s_closingA, wa, 0, (int)wa) : 0;
-            CHECK(okA && okB && wa == wb && n >= 500 &&
-                      memcmp(s_closingA, s_closingB, (size_t)wa * 512 * 4) == 0,
-                  "closing planes 4:3: the marked mesh's picture is the unmarked one's (%s, "
-                  "%d texels)",
-                  i == 0 ? "inside" : "across the edge", n);
-        }
+        CHECK(s_sceneW == WT && tc->w == WT && rd__region_scale(tc) == 512.0f / (float)WT,
+              "content table 16:9: SCENE is the native frame (%u wide, region scale %g)", tc->w,
+              (double)rd__region_scale(tc));
+    }
+    /* inside the picture, across its right edge, and (16:9) beside it */
+    const float txs[3] = {CLOSING_IN, CLOSING_ACROSS, CLOSING_BESIDE};
+    static const char *const where[3] = {"inside the picture", "across its edge", "beside it"};
+    for (int i = 0; i < (wide ? 3 : 2); i++) {
+        const int h = closingDrawn(black, txs[i]), p = closingDrawn(plain, txs[i]);
+        const int g = closingDrawn(grey, txs[i]), m = closingDrawn(moved, txs[i]);
+        printf("  content table %s %s: HIDE box %d texels, unmarked %d, grey %d, moved %d\n", at,
+               where[i], h, p, g, m);
+        CHECK(h == 0, "content table %s: HIDE is drawn nowhere (%s, %d texels)", at, where[i], h);
+        CHECK(p >= 500 && g >= 500 && m >= 500,
+              "content table %s: the unmarked box, the grey and the moved quads are drawn %s (%d, "
+              "%d, %d)",
+              at, where[i], p, g, m);
     }
     rd_destroy_vu_mesh(black);
     rd_destroy_vu_mesh(plain);
@@ -1911,11 +2057,28 @@ int main(int argc, char **argv)
     CHECK(rd__not_implemented_count() == 0, "no stubbed command replayed");
     rd_shutdown();
 
-    /* a full-screen title model at 16:9 */
+    /* the reference for the 16:9 run: the same preset at 4:3 */
+    st.preset = RD_PRESET_ENHANCED;
+    st.aspect = 4.0f / 3.0f;
+    st.sceneScale = 1.0f;
+    s_sceneW = 512;
+    if (!rd_init(512, 512, &st, NULL)) {
+        CHECK(0, "rd_init at 4:3 Enhanced");
+    } else {
+        gif_HostForgetTextures();
+        gif_HostFrameReset();
+        setup();
+        buildScene();
+        stretch43Enhanced();
+        rd_shutdown();
+    }
+
+    /* a full-screen title model at 16:9, on the native frame (688 wide) */
     st.preset = RD_PRESET_ENHANCED;
     st.aspect = 16.0f / 9.0f;
     st.sceneScale = 1.0f;
-    if (!rd_init(512, 512, &st, NULL)) {
+    s_sceneW = WT;
+    if (!rd_init(WT, 512, &st, NULL)) {
         CHECK(0, "rd_init at 16:9");
     } else {
         gif_HostForgetTextures();

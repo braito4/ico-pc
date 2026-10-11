@@ -25,6 +25,12 @@
  *             mirror image of the GS's x + 0.75), so the presented UI is the
  *             same pixels with the mirror on and off; Original, and Enhanced
  *             at 1x and 2x
+ *   wide      the native frame at 16:9 (SCENE 688 x 512): UI drawn in the
+ *             640 grid's 4:3 columns (GS 2048 -+ 256) and a FULLFRAME-tagged
+ *             bar across the frame's width; SCENE with the mirror on is
+ *             the exact flip of SCENE with it off about the native centre
+ *             (the frame's 344, not the 4:3 columns' 256): the UI is flipped
+ *             in its columns, the bar is symmetric
  *   interp    Enhanced with interpolation: rd_present(0.5) of a keyed WORLD
  *             sprite moving between two frames is flipped exactly too
  */
@@ -363,6 +369,71 @@ static void testScene(void)
     printf("  scene: UI flipped about the target's centre\n");
 }
 
+/* the UI mirror about the native centre: SCENE 688 wide (16:9).  uiContent
+ * with w = 512 puts its items at GS 1792 + x, the 640 grid's 4:3 columns,
+ * which are columns 88.. of the 688-wide target; the bar is the game's
+ * full-frame item (GifPacket.h gif_FullFrameBegin) across all 688 columns */
+#define WIDE_W 688
+static uint8_t s_wideOff[WIDE_W * 512 * 4], s_wideOn[WIDE_W * 512 * 4];
+
+static void wideFrame(void)
+{
+    rd_begin_frame();
+    rd_select_list(0);
+    rd_set_target(rd_target(RD_TARGET_SCENE), (RdTarget){0}, WIDE_W, 512, 0);
+    rd_clear_target(rd_target(RD_TARGET_SCENE), kBlack, 0, 0);
+    rd_select_list(11);
+    rd_set_target(rd_target(RD_TARGET_SCENE), (RdTarget){0}, WIDE_W, 512, 0);
+    opaque2D();
+    uiContent(512, 512);
+    rd_scissor(0, 0, WIDE_W - 1, 511);
+    rd_texture_off();
+    const int32_t x0 = (2048 - WIDE_W / 2) * 16, y0 = (2048 - 256 + 300) * 16;
+    RdScreenVtx v[2] = {vtx(x0, y0, kGreen, 0, 0),
+                        vtx(x0 + WIDE_W * 16, y0 + 8 * 16, kGreen, 0, 0)};
+    rd_screen_prims(RD_PRIM_SPRITES, v, 2, RD_SPACE_FULLFRAME, 1, 0);
+    rd_end_frame(0);
+}
+
+static void testSceneWide(void)
+{
+    uint32_t w, h;
+    int fx, fy;
+    rd_set_mirror(0);
+    wideFrame();
+    if (!readTarget(RD_TARGET_SCENE, s_wideOff, sizeof(s_wideOff), &w, &h) || w != WIDE_W) {
+        CHECK(0, "wide: SCENE readback (%u x %u)", w, h);
+        return;
+    }
+    rd_set_mirror(1);
+    wideFrame();
+    if (!readTarget(RD_TARGET_SCENE, s_wideOn, sizeof(s_wideOn), &w, &h)) {
+        return;
+    }
+    const int bad = compare(s_wideOn, s_wideOff, (int)w, (int)h, 1, &fx, &fy);
+    CHECK(bad == 0, "wide: SCENE flipped about the native centre: %d pixels differ (first %d, %d)",
+          bad, fx, fy);
+    /* the UI is in the 4:3 columns 88..599 and nowhere else (above the bar) */
+    int inCols = 0, outside = 0;
+    for (int y = 0; y < 290; y++) {
+        for (int x = 0; x < WIDE_W; x++) {
+            const uint8_t *p = s_wideOff + ((size_t)y * WIDE_W + x) * 4;
+            if (p[0] | p[1] | p[2]) {
+                if (x >= 88 && x < 600) {
+                    inCols++;
+                } else {
+                    outside++;
+                }
+            }
+        }
+    }
+    CHECK(inCols > 500 && outside == 0, "wide: UI in the 4:3 columns only (%d in, %d out)", inCols,
+          outside);
+    rd_set_mirror(0);
+    printf("  wide: UI flipped about the native centre, %d lit pixels in the 4:3 columns\n",
+           inCols);
+}
+
 /* glyph-like UI: stems one to three pixels wide with whole and quarter
  * pixel edges, and a 1:1 textured run (a font's texels) */
 static void glyphContent(int w, int h)
@@ -518,6 +589,17 @@ int main(void)
     testReduce(RD_PRESET_ENHANCED, 1.0f, "Enhanced 1x");
     testReduce(RD_PRESET_ENHANCED, 2.0f, "Enhanced 2x");
     testInterp();
+    rd_shutdown();
+    s.aspect = 16.0f / 9.0f;
+    s.preset = RD_PRESET_ENHANCED;
+    s.sceneScale = 1.0f;
+    if (rd_init(WIDE_W, 512, &s, NULL)) {
+        rd__set_not_implemented_fatal(false);
+        s_tex = rd_create_texture(16, 16, s_texel, RD_TEXA_80_80, "mirror test");
+        testSceneWide();
+    } else {
+        CHECK(0, "wide: rd_init at 688");
+    }
     CHECK(rd__not_implemented_count() == 0, "no stubbed command replayed");
     const uint32_t verr = rhi_vk_validation_error_count();
     CHECK(verr == 0, "%u validation errors", verr);

@@ -4,7 +4,10 @@
  * F12's zip (dump_zip.h): a fake .rddump and log written under the build
  * folder, zipped, and read back with miniz's reader: the entry names are
  * the files' own names, the sizes and bytes match, a missing log leaves the
- * dump alone in the zip, and a missing dump writes nothing.
+ * dump alone in the zip, and a missing dump writes nothing.  The aspect
+ * sweep's zip (ico_sweep_zip): <aspect>.rddump and <aspect>.png for each of
+ * 4x3, 16x9, 32x9, 48x9 and 60x9, 4:3 first, the loose files gone after; an
+ * aspect missing a file is left out; none to zip writes nothing.
  * argv[1]: a folder the test may write in (the build folder).
  */
 #include <stdio.h>
@@ -136,6 +139,90 @@ int main(int argc, char **argv)
     CHECK(ico_frame_dump_zip(zip, dump, NULL, why, sizeof(why)) == -1);
     CHECK(why[0] != '\0');
     CHECK(ico_path_kind(zip, NULL, NULL) == -1);
+
+    /* the aspect sweep: five aspects' pairs under the prefix, in the zip as
+       <aspect>.rddump and <aspect>.png, 4:3 the first entry (and so the
+       .rddump rd_replay_tool replays) */
+    {
+        static const char *const names[ICO_SWEEP_COUNT] = {"4x3", "16x9", "32x9", "48x9", "60x9"};
+        char prefix[1200], f[1300], png[64];
+        char dumpBytes[ICO_SWEEP_COUNT][400], pngBytes[ICO_SWEEP_COUNT][200];
+
+        CHECK(
+            ico_sweep_aspect_value(0) == 4.0f / 3.0f && ico_sweep_aspect_value(1) == 16.0f / 9.0f &&
+            ico_sweep_aspect_value(2) == 32.0f / 9.0f &&
+            ico_sweep_aspect_value(3) == 48.0f / 9.0f && ico_sweep_aspect_value(4) == 60.0f / 9.0f);
+        snprintf(prefix, sizeof(prefix), "%s/sweep-x-", argv[1]);
+        snprintf(zip, sizeof(zip), "%s/sweep-x.zip", argv[1]);
+        for (int i = 0; i < ICO_SWEEP_COUNT; i++) {
+            CHECK(strcmp(ico_sweep_aspect_name(i), names[i]) == 0);
+            for (size_t k = 0; k < sizeof(dumpBytes[i]); k++) {
+                dumpBytes[i][k] = (char)(k * 3 + i);
+            }
+            for (size_t k = 0; k < sizeof(pngBytes[i]); k++) {
+                pngBytes[i][k] = (char)(k * 5 + 7 * i);
+            }
+            snprintf(f, sizeof(f), "%s%s.rddump", prefix, names[i]);
+            CHECK(put(f, dumpBytes[i], sizeof(dumpBytes[i])) == 0);
+            snprintf(f, sizeof(f), "%s%s.png", prefix, names[i]);
+            CHECK(put(f, pngBytes[i], sizeof(pngBytes[i])) == 0);
+        }
+        why[0] = '\0';
+        CHECK(ico_sweep_zip(zip, prefix, why, sizeof(why)) == ICO_SWEEP_COUNT);
+        memset(&z, 0, sizeof(z));
+        CHECK(mz_zip_reader_init_file(&z, zip, 0));
+        CHECK(mz_zip_reader_get_num_files(&z) == 2 * ICO_SWEEP_COUNT);
+        for (int i = 0; i < ICO_SWEEP_COUNT; i++) {
+            snprintf(png, sizeof(png), "%s.rddump", names[i]);
+            CHECK(entry_is(&z, png, dumpBytes[i], sizeof(dumpBytes[i])));
+            snprintf(png, sizeof(png), "%s.png", names[i]);
+            CHECK(entry_is(&z, png, pngBytes[i], sizeof(pngBytes[i])));
+        }
+        mz_zip_reader_end(&z);
+        {
+            size_t n = 0;
+            char name[64];
+            void *back = ico_dump_zip_extract(zip, &n, name, sizeof(name));
+
+            CHECK(back != NULL && n == sizeof(dumpBytes[0]) && memcmp(back, dumpBytes[0], n) == 0);
+            CHECK(strcmp(name, "4x3.rddump") == 0);
+            free(back);
+        }
+        snprintf(f, sizeof(f), "%s4x3.rddump", prefix);
+        CHECK(ico_path_kind(f, NULL, NULL) == -1);
+        snprintf(f, sizeof(f), "%s60x9.png", prefix);
+        CHECK(ico_path_kind(f, NULL, NULL) == -1);
+
+        /* 32:9 lost its picture: left out, the loose dump of it kept */
+        for (int i = 0; i < ICO_SWEEP_COUNT; i++) {
+            if (i == 2) {
+                snprintf(f, sizeof(f), "%s%s.rddump", prefix, names[i]);
+                CHECK(put(f, dumpBytes[i], sizeof(dumpBytes[i])) == 0);
+                continue;
+            }
+            snprintf(f, sizeof(f), "%s%s.rddump", prefix, names[i]);
+            CHECK(put(f, dumpBytes[i], sizeof(dumpBytes[i])) == 0);
+            snprintf(f, sizeof(f), "%s%s.png", prefix, names[i]);
+            CHECK(put(f, pngBytes[i], sizeof(pngBytes[i])) == 0);
+        }
+        CHECK(ico_sweep_zip(zip, prefix, why, sizeof(why)) == ICO_SWEEP_COUNT - 1);
+        memset(&z, 0, sizeof(z));
+        CHECK(mz_zip_reader_init_file(&z, zip, 0));
+        CHECK(mz_zip_reader_get_num_files(&z) == 2 * (ICO_SWEEP_COUNT - 1));
+        CHECK(find(&z, "32x9.rddump") < 0 && find(&z, "32x9.png") < 0);
+        CHECK(find(&z, "48x9.png") >= 0);
+        mz_zip_reader_end(&z);
+        snprintf(f, sizeof(f), "%s32x9.rddump", prefix);
+        CHECK(ico_path_kind(f, NULL, NULL) == 0);
+        remove(f);
+
+        /* nothing to zip: refused with a reason, no new file */
+        remove(zip);
+        why[0] = '\0';
+        CHECK(ico_sweep_zip(zip, prefix, why, sizeof(why)) == -1);
+        CHECK(why[0] != '\0');
+        CHECK(ico_path_kind(zip, NULL, NULL) == -1);
+    }
 
     printf("dump_zip_test: %s\n", fails ? "FAILED" : "ok");
     return fails ? 1 : 0;

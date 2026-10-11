@@ -25,6 +25,8 @@ static unsigned int s_lines, s_conflicts, s_dirtyPolls, s_lastTick;
 
 static int s_dirty;
 
+static int s_width; /* the frame width last noted, 0 before the first */
+
 static int same(const IcoPadFrame *a, const IcoPadFrame *b)
 {
     return a->buttons == b->buttons && a->lx == b->lx && a->ly == b->ly && a->rx == b->rx &&
@@ -54,6 +56,7 @@ int ico_input_record_open(const char *path, const char *header)
     s_havePending = 0;
     s_lines = s_conflicts = s_dirtyPolls = s_lastTick = 0;
     s_dirty = 0;
+    s_width = 0;
     return 0;
 }
 
@@ -143,4 +146,43 @@ void ico_input_record_close(void)
 unsigned int ico_input_record_lines(void)
 {
     return s_lines;
+}
+
+int ico_input_record_frame_lines(char *out, size_t size, int gs_width, float aspect)
+{
+    return snprintf(out, size, "# effective gs_width = %d\n# effective aspect = %.4f\n", gs_width,
+                    (double)aspect);
+}
+
+int ico_input_record_frame_diff(const char *line, int gs_width, float aspect, char *msg,
+                                size_t size)
+{
+    int w;
+    char a[32], b[32];
+
+    if (sscanf(line, "# effective gs_width = %d", &w) == 1) {
+        if (w != gs_width) {
+            snprintf(msg, size, "gs_width = %d; this run has %d", w, gs_width);
+            return 1;
+        }
+    } else if (sscanf(line, "# effective aspect = %31s", a) == 1) {
+        snprintf(b, sizeof(b), "%.4f", (double)aspect);
+        if (strcmp(a, b) != 0) {
+            snprintf(msg, size, "aspect = %s; this run has %s", a, b);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+void ico_input_record_note_width(unsigned int tick, int gs_width)
+{
+    if (s_file == NULL) {
+        return;
+    }
+    if (s_width != 0 && gs_width != s_width) {
+        fprintf(s_file, "# tick %u gs_width %d\n", tick, gs_width);
+        s_dirty = 1;
+    }
+    s_width = gs_width;
 }

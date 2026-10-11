@@ -2,8 +2,8 @@
  * port/game/video_options.h
  *
  * The display options (the [video] keys): one place that holds them, so
- * the window (port/platform/window_host.c), the game's widescreen hook
- * (ico2/seki/src/GsBase.c gsbHostWideX, under ICO_HOST) and the Settings
+ * the window (port/platform/window_host.c), the game's native frame
+ * (ico2/seki/src/GsBase.c gsFrame, from ico_video_frame) and the Settings
  * menu (port/ui/settings.c) read and write the same values.
  *
  *   [video] preset          "original"  "original" | "enhanced" | "custom"
@@ -26,6 +26,11 @@
  *                                       cut or enlarged; any preset, not part of them
  *   [video] framerate       "uncapped"  "original" | "uncapped" | N (30..1000)
  *                                       (60 on Android)
+ *   [video] anti_aliasing   "off"       "off" | "ssaa2" | "ssaa4" | "msaa2" | "msaa4" |
+ *                                       "msaa8": supersampling (the scene at 2x/4x the
+ *                                       resolution, reduced) or multisampling; not under
+ *                                       the Original preset (always off there); an MSAA
+ *                                       count the GPU lacks draws as off
  *   [video] crt             false       the CRT filter (any preset)
  *   [video] crt_mode        "consumer"  "scanlines" | "consumer" | "trinitron" | "pvm" |
  *                                       "shadow"
@@ -81,6 +86,8 @@
 #ifndef ICO_PORT_GAME_VIDEO_OPTIONS_H
 #define ICO_PORT_GAME_VIDEO_OPTIONS_H
 
+#include "../include/ico_frame.h"
+
 /* ico_video_preset: the preset the four rows add up to */
 enum { ICO_VIDEO_ORIGINAL = 0, ICO_VIDEO_ENHANCED = 1, ICO_VIDEO_CUSTOM = 2 };
 
@@ -95,14 +102,10 @@ enum {
     ICO_ASPECT_COUNT = 7
 };
 
-/* The widest the picture is made, as a multiple of the 4:3 width.  The
-   water's dot window (waterDot.c) is widened by this factor and packs its
-   x coordinate in 16 bits, which holds up to a factor of 5 (aspect 20:3);
-   48:9 is a factor of 4.  rd_present.c mirrors the aspect as RD_ASPECT_MAX
-   (the renderer is built without this module); rd_present_test checks the
-   two agree. */
-#define ICO_WIDE_X_MAX 5.0f
-#define ICO_ASPECT_MAX (4.0f / 3.0f * ICO_WIDE_X_MAX)
+/* The widest aspect the picture is made at: the native frame's
+   (port/include/ico_frame.h ICO_FRAME_K_MAX, 5 times the 4:3 width, aspect
+   20:3); 48:9 is 4 times. */
+#define ICO_ASPECT_MAX ICO_FRAME_ASPECT_MAX
 
 /* The window's mode.  FULLSCREEN is SDL's desktop fullscreen;
    BORDERLESS a frameless window over its display. */
@@ -115,6 +118,18 @@ enum {
 
 enum { ICO_FILTER_ORIGINAL = 0, ICO_FILTER_TRILINEAR = 1, ICO_FILTER_ANISOTROPIC = 2 };
 
+/* IcoVideoOptions.antiAlias: the same numbers as the renderer's
+   RdAntiAlias (port/render/rd.h), which the window copies across */
+enum {
+    ICO_AA_OFF = 0,
+    ICO_AA_SSAA2 = 1,
+    ICO_AA_SSAA4 = 2,
+    ICO_AA_MSAA2 = 3,
+    ICO_AA_MSAA4 = 4,
+    ICO_AA_MSAA8 = 5,
+    ICO_AA_COUNT = 6
+};
+
 typedef struct IcoVideoOptions {
     int resW, resH; /* resolution "WxH"; 0 x 0 with resScale 0: "window" */
     int resScale;   /* resolution "Nx": N (1..16); ICO_RES_AUTO: "auto"; 0 otherwise */
@@ -124,6 +139,7 @@ typedef struct IcoVideoOptions {
     int filter;     /* ICO_FILTER_* */
     int fullHeight; /* skip the reduction's vertical halving */
     int fullPixel;  /* the reduction draws the whole frame, with no black border */
+    int antiAlias;  /* ICO_AA_*, as written (ico_video_anti_alias: the one in force) */
     int framerate;  /* ICO_FRAMERATE_ORIGINAL, _UNCAPPED, or presents a second */
     /* the CRT filter: applied whatever the preset */
     int crt;           /* the filter on */
@@ -226,9 +242,18 @@ void ico_video_set_window(int w, int h);
 /* The presentation aspect (width / height) in force: the aspect option,
    whatever the preset, "auto" being the window's clamped to [4:3, ICO_ASPECT_MAX]. */
 float ico_video_aspect(void);
-/* How much wider than 4:3 the presentation is: ico_video_aspect() / (4/3),
-   at least 1 (GsBase.c gsbHostWideX). */
-float ico_video_wide_x(void);
+/* The native frame (port/include/ico_frame.h) for the aspect in force and
+   a frame height h: 512 wide at 4:3 exactly.  GsBase.c latches it at each
+   flip (gsFrame, with ScreenHeight). */
+void ico_video_frame(IcoFrame *out, int h);
+/* The aspect sweep (window_host.c, Shift+F12 in photo mode): the native
+   frame ico_video_frame makes is built for this aspect instead of the one in
+   force, until it is set to 0 again.  The next flip latches it
+   (GsBase.c gsbHostFrameLatch: rd_reset_scene at a new width), the paused
+   photo camera rebuilds the cull (+0x280) at that width in the same tick,
+   and clearing it brings the live width back the same way.  Only the frame
+   follows: the presentation (ico_video_aspect) is untouched. */
+void ico_video_frame_force_aspect(float aspect);
 /* The effect switches in force (issue 11), 1 or 0: plain functions the
    game's files declare extern (staticBlur.c, GsBase.c, ZFog.c), read at
    most once a frame. */
@@ -240,6 +265,15 @@ int ico_video_effect_fog(void);
 int ico_video_effect_cinematic_bars(void);
 /* [video] effects_depth, 1 or 0 */
 int ico_video_effects_depth(void);
+/* The anti-aliasing in force, ICO_AA_*: the anti_aliasing option, except
+   ICO_AA_OFF whenever the preset is Original (ico_video_preset) */
+int ico_video_anti_alias(void);
+/* Run-time change of the anti_aliasing option alone (as ico_video_set: the
+   window applies it at its next pump); out of range is ICO_AA_OFF */
+void ico_video_set_anti_alias(int aa);
+/* "off", "ssaa2", "ssaa4", "msaa2", "msaa4", "msaa8" (any case) */
+int ico_video_parse_anti_alias(const char *s, int *aa);
+const char *ico_video_anti_alias_name(int aa);
 /* The model pack switches in force, 1 or 0: [video] model_pack and
    dump_models (the dump also needs Developer mode, which the caller checks). */
 int ico_video_model_pack(void);
@@ -249,7 +283,7 @@ int ico_video_dump_models(void);
 int ico_video_framerate(void);
 /* 1 when the presenter blends pictures between the simulation's ticks (a
    framerate other than "original", as the window decides it), else 0.  The
-   game's cull (GsBase.c gsbHostWidenCull) keeps a margin past the screen's
+   game's cull (GsBase.c gsbHostCullMargin) keeps a margin past the screen's
    edges then, so a part that is just off screen at a tick is still recorded
    for the blended pictures that show it. */
 int ico_video_interpolate(void);
@@ -285,7 +319,8 @@ const char *ico_video_filter_name(int filter);
    ICO_VIDEO_CUSTOM. */
 int ico_video_preset(const IcoVideoOptions *o);
 /* The shortcut: writes the four rows of ORIGINAL or ENHANCED into o, the
-   other options untouched.  CUSTOM (or anything else) changes nothing. */
+   other options untouched (except ORIGINAL also sets antiAlias off).
+   CUSTOM (or anything else) changes nothing. */
 void ico_video_set_preset(IcoVideoOptions *o, int preset);
 /* "original", "enhanced" or "custom" */
 const char *ico_video_preset_name(int preset);

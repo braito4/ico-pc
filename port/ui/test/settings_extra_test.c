@@ -1468,6 +1468,193 @@ static void testResolutionCycle(void)
     CHECK(o.aspect == ICO_ASPECT_48_9, "Left from Auto is 48:9");
 }
 
+/* Display > Anti-aliasing ([video] anti_aliasing): a row on Display (the
+   rows that moved to Effects are no longer there), Off by default, stepping
+   only through the values the renderer's mask lists, saved as its name,
+   greyed and Off under the Original preset, with its note; both pages fit
+   with and without the game finished */
+static unsigned s_aaMask;
+
+static unsigned fakeAaMask(void)
+{
+    return s_aaMask;
+}
+
+static int rowDimmed(UiSettingsPage page, UiSettingsOpt opt)
+{
+    const int row = ui_settings_row_of(page, opt);
+    return row >= 0 && lt_ext_row_dim(row);
+}
+
+static void testAntiAlias(void)
+{
+    IcoVideoOptions o;
+    char p[1100];
+
+    ui_settings_set_aa_mask_query(fakeAaMask);
+    s_aaMask =
+        (1u << ICO_AA_OFF) | (1u << ICO_AA_SSAA2) | (1u << ICO_AA_SSAA4) | (1u << ICO_AA_MSAA4);
+
+    /* the pages */
+    for (int title = 1; title >= 0; title--) {
+        useConfig("version = 1\n[video]\npreset = \"enhanced\"\n");
+        stage_no = title ? 1 : 11;
+        const int mainL = enterMainKeep(title);
+        openPage(mainL, 0, UI_PAGE_DISPLAY);
+        const int row = ui_settings_row_of(UI_PAGE_DISPLAY, UI_OPT_ANTI_ALIAS);
+        CHECK(row >= 0 && !lt_ext_prop(row)->defaultMask && !lt_ext_prop(row)->masked,
+              "title %d: the Anti-aliasing row is on Display", title);
+        CHECK(row >= 0 && strcmp(lt_ext_row_text(row), "Anti-aliasing") == 0,
+              "title %d: its label \"%s\"", title, row >= 0 ? lt_ext_row_text(row) : "");
+        {
+            int l[16], op[16];
+            const int n = ui_settings_page_rows(UI_PAGE_DISPLAY, l, op, NULL, 16);
+            CHECK(n > 4 && op[2] == UI_OPT_ASPECT && op[3] == UI_OPT_ANTI_ALIAS &&
+                      op[4] == UI_OPT_WINDOW_MODE,
+                  "title %d: Anti-aliasing sits between Aspect ratio and Window mode", title);
+        }
+        CHECK(ui_settings_row_of(UI_PAGE_EFFECTS, UI_OPT_ANTI_ALIAS) < 0,
+              "title %d: not on Effects", title);
+        CHECK(ui_settings_row_of(UI_PAGE_DISPLAY, UI_OPT_FILTER) < 0 &&
+                  ui_settings_row_of(UI_PAGE_DISPLAY, UI_OPT_FULL_HEIGHT) < 0 &&
+                  ui_settings_row_of(UI_PAGE_DISPLAY, UI_OPT_BRIGHTNESS) < 0,
+              "title %d: Texture filtering, Full-height picture and Brightness left Display",
+              title);
+        CHECK(ui_settings_row_of(UI_PAGE_EFFECTS, UI_OPT_FILTER) >= 0 &&
+                  ui_settings_row_of(UI_PAGE_EFFECTS, UI_OPT_FULL_HEIGHT) >= 0 &&
+                  ui_settings_row_of(UI_PAGE_EFFECTS, UI_OPT_BRIGHTNESS) >= 0,
+              "title %d: they are on Effects", title);
+        for (int cleared = 0; cleared < 2; cleared++) {
+            gFlagGameClear = cleared;
+            frame(0);
+            checkPageFits(UI_PAGE_DISPLAY, cleared ? "Display (game finished)" : "Display");
+            press(0x10);
+            CHECK(settle(mainL, 60), "Display: back");
+            openPage(mainL, 1, UI_PAGE_EFFECTS);
+            checkPageFits(UI_PAGE_EFFECTS, cleared ? "Effects (game finished)" : "Effects");
+            press(0x10);
+            CHECK(settle(mainL, 60), "Effects: back");
+            openPage(mainL, 0, UI_PAGE_DISPLAY);
+        }
+        gFlagGameClear = 0;
+        press(0x10);
+        CHECK(settle(mainL, 60), "Display: back");
+    }
+
+    /* the note, on the cursor */
+    {
+        useConfig("version = 1\n[video]\npreset = \"enhanced\"\n");
+        const int mainL = enterMainKeep(1);
+        const int dispL = openPage(mainL, 0, UI_PAGE_DISPLAY);
+        const int note = noteStarting(UI_PAGE_DISPLAY, "Smooths jagged edges.");
+        CHECK(note >= 0 && strstr(lt_ext_row_text(note),
+                                  "Supersampling draws the picture larger and shrinks it") != NULL,
+              "the note text");
+        lt_ext_layout(dispL)->curItem = ui_settings_row_of(UI_PAGE_DISPLAY, UI_OPT_ANTI_ALIAS);
+        frame(0);
+        CHECK(note >= 0 && !lt_ext_prop(note)->masked, "the note shows on the cursor");
+        lt_ext_layout(dispL)->curItem = ui_settings_row_of(UI_PAGE_DISPLAY, UI_OPT_PRESET);
+        frame(0);
+        CHECK(note >= 0 && lt_ext_prop(note)->masked == 1, "the note hides elsewhere");
+        press(0x10);
+    }
+
+    /* Enhanced: Off by default; Right steps through the mask only */
+    useConfig("version = 1\n[video]\npreset = \"enhanced\"\n");
+    enterMainKeep(1);
+    CHECK(strcmp(ui_settings_value_text(UI_OPT_ANTI_ALIAS), "Off") == 0, "default: Off (%s)",
+          ui_settings_value_text(UI_OPT_ANTI_ALIAS));
+    CHECK(!rowDimmed(UI_PAGE_DISPLAY, UI_OPT_ANTI_ALIAS), "Enhanced: the row is not greyed");
+
+    static const struct {
+        int aa;
+        const char *text;
+        const char *name;
+    } kUp[] = {{ICO_AA_SSAA2, "2x supersampling", "ssaa2"},
+               {ICO_AA_SSAA4, "4x supersampling", "ssaa4"},
+               {ICO_AA_MSAA4, "MSAA 4x", "msaa4"},
+               {ICO_AA_OFF, "Off", "off"}};
+
+    for (unsigned i = 0; i < sizeof(kUp) / sizeof(kUp[0]); i++) {
+        ui_settings_step(UI_OPT_ANTI_ALIAS, 1);
+        ico_video_get(&o);
+        CHECK(o.antiAlias == kUp[i].aa && ico_video_anti_alias() == kUp[i].aa &&
+                  strcmp(ui_settings_value_text(UI_OPT_ANTI_ALIAS), kUp[i].text) == 0,
+              "Right, step %u: %s (%d, \"%s\")", i, kUp[i].name, o.antiAlias,
+              ui_settings_value_text(UI_OPT_ANTI_ALIAS));
+        CHECK(ui_settings_save() == 0, "save");
+        path(p, sizeof(p), "settings_test.toml");
+        IcoToml *t = ico_toml_load(p);
+        const char *s = t ? ico_toml_get(t, "video.anti_aliasing") : NULL;
+        CHECK(s != NULL && strcmp(s, kUp[i].name) == 0, "saved: video.anti_aliasing = \"%s\" (%s)",
+              kUp[i].name, s ? s : "(none)");
+        if (t != NULL) {
+            ico_toml_free(t);
+        }
+    }
+    /* Left from Off wraps to the last listed value, skipping the clear bits */
+    ui_settings_step(UI_OPT_ANTI_ALIAS, -1);
+    ico_video_get(&o);
+    CHECK(o.antiAlias == ICO_AA_MSAA4, "Left from Off is MSAA 4x (%d)", o.antiAlias);
+    ui_settings_step(UI_OPT_ANTI_ALIAS, -1);
+    ico_video_get(&o);
+    CHECK(o.antiAlias == ICO_AA_SSAA4, "Left from MSAA 4x is 4x supersampling (%d)", o.antiAlias);
+    /* a mask that lists everything: all six in order; MSAA 8x included */
+    s_aaMask = (1u << ICO_AA_COUNT) - 1;
+    for (int aa = ICO_AA_MSAA2; aa <= ICO_AA_MSAA8; aa++) {
+        ui_settings_step(UI_OPT_ANTI_ALIAS, 1);
+        ico_video_get(&o);
+        CHECK(o.antiAlias == aa, "full mask: Right gives %d (%d)", aa, o.antiAlias);
+    }
+    CHECK(strcmp(ui_settings_value_text(UI_OPT_ANTI_ALIAS), "MSAA 8x") == 0, "MSAA 8x reads so");
+    /* a mask with only the always-there values: MSAA from the file is stepped away */
+    s_aaMask = (1u << ICO_AA_OFF) | (1u << ICO_AA_SSAA2) | (1u << ICO_AA_SSAA4);
+    ui_settings_step(UI_OPT_ANTI_ALIAS, 1);
+    ico_video_get(&o);
+    CHECK(o.antiAlias == ICO_AA_OFF, "no MSAA listed: Right from 8x wraps to Off (%d)",
+          o.antiAlias);
+    ui_settings_step(UI_OPT_ANTI_ALIAS, -1);
+    ico_video_get(&o);
+    CHECK(o.antiAlias == ICO_AA_SSAA4, "no MSAA listed: Left from Off is 4x supersampling (%d)",
+          o.antiAlias);
+
+    /* the value from the file */
+    useConfig("version = 1\n[video]\npreset = \"enhanced\"\nanti_aliasing = \"msaa2\"\n");
+    enterMainKeep(1);
+    CHECK(strcmp(ui_settings_value_text(UI_OPT_ANTI_ALIAS), "MSAA 2x") == 0, "msaa2 from the file");
+
+    /* Original: Off, greyed, no step.  Loading preset "original" applies the
+       Original shortcut, which puts the stored option off too (options_test
+       test_video_anti_alias), so the stored ssaa2 is set at run time under
+       the Original rows: kept, off in force */
+    useConfig("version = 1\n[video]\npreset = \"original\"\n");
+    {
+        const int mainL = enterMainKeep(1);
+        ico_video_get(&o);
+        o.antiAlias = ICO_AA_SSAA2;
+        ico_video_set(&o);
+        const int dispL = openPage(mainL, 0, UI_PAGE_DISPLAY);
+        frame(0);
+        CHECK(strcmp(ui_settings_value_text(UI_OPT_ANTI_ALIAS), "Off") == 0,
+              "Original: reads Off (%s)", ui_settings_value_text(UI_OPT_ANTI_ALIAS));
+        CHECK(rowDimmed(UI_PAGE_DISPLAY, UI_OPT_ANTI_ALIAS), "Original: the row is greyed");
+        lt_ext_layout(dispL)->curItem = ui_settings_row_of(UI_PAGE_DISPLAY, UI_OPT_ANTI_ALIAS);
+        press(0x2000);
+        ico_video_get(&o);
+        CHECK(o.antiAlias == ICO_AA_SSAA2 && ico_video_anti_alias() == ICO_AA_OFF,
+              "Original: Right does not step (%d)", o.antiAlias);
+        ui_settings_step(UI_OPT_ANTI_ALIAS, 1);
+        ico_video_get(&o);
+        CHECK(o.antiAlias == ICO_AA_SSAA2, "Original: the step call does not change it");
+        /* the Preset to Enhanced frees it */
+        ui_settings_step(UI_OPT_PRESET, 1);
+        frame(0);
+        CHECK(!rowDimmed(UI_PAGE_DISPLAY, UI_OPT_ANTI_ALIAS), "Enhanced preset: not greyed");
+        press(0x10);
+    }
+    ui_settings_set_aa_mask_query(NULL);
+}
+
 /* Gameplay > East Reflector door fix ([gameplay] door_fix): a row from the title and
    the pause menu, Off by default; a step turns it on and sets the key, the
    saved file has it, its note shows on the cursor, and the page with the
@@ -1556,6 +1743,8 @@ int main(int argc, char **argv)
     testEscapeNewGame();
     /* Display > Resolution and Aspect ratio cycles */
     testResolutionCycle();
+    /* Display > Anti-aliasing, the Display/Effects split */
+    testAntiAlias();
     /* Gameplay > East Reflector door fix */
     testDoorFix();
     if (failures) {

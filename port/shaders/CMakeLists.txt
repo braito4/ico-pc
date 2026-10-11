@@ -19,6 +19,12 @@ ico_add_shader(blit_ps blit.hlsl blit_ps fragment)
 ico_add_shader(blit_depth_ps blit.hlsl blit_depth_ps fragment)
 # the shadow count box-reduced to the GS size (rd_replay.c doShadowResolve)
 ico_add_shader(box_reduce_ps blit.hlsl box_reduce_ps fragment)
+# supersampling: DISPLAY box-averaged to the present box (rd_present.c)
+ico_add_shader(aa_reduce_ps blit.hlsl aa_reduce_ps fragment)
+# MSAA: the multisampled scene depth resolved (largest sample) and the
+# single-sampled one spread over the samples (rd_replay.c, the MSAA epoch)
+ico_add_shader(depth_resolve_ps blit.hlsl depth_resolve_ps fragment)
+ico_add_shader(depth_upsample_ps blit.hlsl depth_upsample_ps fragment)
 # tests only, rd__camera_probe
 ico_add_shader(camera_probe_ps blit.hlsl camera_probe_ps fragment)
 ico_add_shader(blend_int_vs blend_int.hlsl blend_int_vs vertex)
@@ -27,6 +33,9 @@ ico_add_shader(blend_int_ps blend_int.hlsl blend_int_ps fragment)
 ico_add_shader(fog_lut_ps fog_lut.hlsl fog_lut_ps fragment)
 # the same, reading the depth from an R32_UINT copy of it (rd_fog_path.c)
 ico_add_shader(fog_lut_buffer_ps fog_lut.hlsl fog_lut_ps fragment DEFINES FOG_BUFFER=1)
+# the same per sample, reading the multisampled depth (MSAA with sample-rate
+# shading)
+ico_add_shader(fog_lut_ms_ps fog_lut.hlsl fog_lut_ps fragment DEFINES FOG_MS=1)
 # R8 coverage textures (the font atlas) behind the sprite vertex shaders
 ico_add_shader(font_ps font.hlsl font_ps fragment)
 # sheet text, coverage strips drawn in the menu sheets' style
@@ -76,6 +85,8 @@ endforeach()
 ico_add_shader(fog_lut_ps fog_lut.hlsl fog_lut_ps fragment DEFINES ICO_NO_DUAL=1 SUFFIX _nodual)
 ico_add_shader(fog_lut_buffer_ps fog_lut.hlsl fog_lut_ps fragment
                DEFINES FOG_BUFFER=1 ICO_NO_DUAL=1 SUFFIX _nodual)
+ico_add_shader(fog_lut_ms_ps fog_lut.hlsl fog_lut_ps fragment
+               DEFINES FOG_MS=1 ICO_NO_DUAL=1 SUFFIX _nodual)
 ico_add_shader(font_ps font.hlsl font_ps fragment DEFINES ICO_NO_DUAL=1 SUFFIX _nodual)
 ico_add_shader(font_sheet_ps font.hlsl font_sheet_ps fragment DEFINES ICO_NO_DUAL=1 SUFFIX _nodual)
 ico_add_shader(vu_ps vu_prelit.hlsl vu_ps fragment DEFINES ICO_NO_DUAL=1 SUFFIX _nodual)

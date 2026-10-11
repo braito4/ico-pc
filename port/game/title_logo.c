@@ -59,9 +59,9 @@ int ico_title_logo_skip(const char *model)
     return s_hidden && ico_title_logo_model(model);
 }
 
-int ico_title_stretch_model(const char *model)
+int ico_title_fullframe_model(const char *model)
 {
-    /* the title stage's models built to cover the 4:3 screen; keyed on the
+    /* the title stage's full-frame models: built to cover the 4:3 screen; keyed on the
        name alone: when a save loads, stage_no changes before the title's
        last frames are drawn, and a title_back squeezed back to its 4:3 width
        would uncover the sides of a wide picture for those frames */

@@ -191,7 +191,8 @@ static bool dx_create_rtv(DxTexture *t, DXGI_FORMAT fmt)
     D3D12_RENDER_TARGET_VIEW_DESC v;
     memset(&v, 0, sizeof(v));
     v.Format = fmt;
-    v.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+    v.ViewDimension =
+        t->samples > 1u ? D3D12_RTV_DIMENSION_TEXTURE2DMS : D3D12_RTV_DIMENSION_TEXTURE2D;
     ID3D12Device_CreateRenderTargetView(g_dx.device, t->res, &v,
                                         dx_cpu(g_dx.rtvCpu, g_dx.rtvInc, slot));
     t->rtv = slot + 1u;
@@ -208,7 +209,8 @@ static bool dx_create_dsv(DxTexture *t, const DxFormatMap *fm, bool readOnly)
     D3D12_DEPTH_STENCIL_VIEW_DESC v;
     memset(&v, 0, sizeof(v));
     v.Format = fm->dsv;
-    v.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+    v.ViewDimension =
+        t->samples > 1u ? D3D12_DSV_DIMENSION_TEXTURE2DMS : D3D12_DSV_DIMENSION_TEXTURE2D;
     if (readOnly) {
         v.Flags = D3D12_DSV_FLAG_READ_ONLY_DEPTH;
         if (fm->stencil) {
@@ -263,6 +265,16 @@ RhiTexture rhi_create_texture(const RhiTextureDesc *desc)
         return out;
     }
     uint32_t mips = desc->mipLevels ? desc->mipLevels : 1u;
+    /* multisampled: a count the device takes (RhiLimits.msaaCounts), one
+     * mip, an attachment */
+    const uint32_t samples = desc->samples > 1u ? desc->samples : 1u;
+    if (samples > 1u &&
+        ((g_dx.limits.msaaCounts & samples) == 0u || (samples & (samples - 1u)) != 0u ||
+         mips != 1u || !(desc->usage & (RHI_TEX_RENDER_TARGET | RHI_TEX_DEPTH_STENCIL)))) {
+        DX_LOG("rhi_create_texture: %u samples not taken", samples);
+        d3dp_pool_release(&g_dx.textures, id);
+        return out;
+    }
     D3D12_HEAP_PROPERTIES hp;
     memset(&hp, 0, sizeof(hp));
     hp.Type = D3D12_HEAP_TYPE_DEFAULT;
@@ -274,7 +286,7 @@ RhiTexture rhi_create_texture(const RhiTextureDesc *desc)
     rd.DepthOrArraySize = 1;
     rd.MipLevels = (UINT16)mips;
     rd.Format = fm->resource;
-    rd.SampleDesc.Count = 1;
+    rd.SampleDesc.Count = samples;
     rd.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
     if (desc->usage & RHI_TEX_RENDER_TARGET) {
         rd.Flags |= D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
@@ -298,6 +310,7 @@ RhiTexture rhi_create_texture(const RhiTextureDesc *desc)
     t->width = desc->width;
     t->height = desc->height;
     t->mips = mips;
+    t->samples = samples;
     t->usage = desc->usage;
     t->state = D3DP_STATE_COMMON;
     bool ok = true;

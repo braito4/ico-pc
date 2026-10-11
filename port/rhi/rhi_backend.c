@@ -385,6 +385,11 @@ void rhi_cmd_copy_texture_to_buffer(RhiCommandList cl, RhiTexture src, RhiViewAs
     be()->cmd_copy_texture_to_buffer(cl, src, aspect, region, dst, dstOffset, rowPitch);
 }
 
+void rhi_cmd_resolve_color(RhiCommandList cl, RhiTexture src, RhiTexture dst)
+{
+    be()->cmd_resolve_color(cl, src, dst);
+}
+
 void rhi_cmd_begin_label(RhiCommandList cl, const char *name)
 {
     be()->cmd_begin_label(cl, name);

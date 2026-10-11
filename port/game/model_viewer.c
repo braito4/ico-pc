@@ -816,7 +816,7 @@ static void drawBackdrop(void)
     GifRect r = {-400, -140, 800, 280};
     GifColor c = {BACKDROP_GREY, BACKDROP_GREY, BACKDROP_GREY + 2, 0x80};
 #ifdef ICO_RD
-    int space = rd_set_space_override(RD_SPACE_FULLSCREEN);
+    gif_FullFrameBegin();
     gif_HostDrawKey(&kTag, 0, 0);
 #else
     (void)kTag;
@@ -830,7 +830,7 @@ static void drawBackdrop(void)
     gif_EndPacket();
 #ifdef ICO_RD
     gif_HostDrawKey(0, 0, 0);
-    rd_set_space_override(space);
+    gif_FullFrameEnd();
 #endif
 }
 

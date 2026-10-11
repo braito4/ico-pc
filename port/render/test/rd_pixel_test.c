@@ -61,7 +61,10 @@
  *            never past MXL, level 0 when magnified or not mipmapped; a
  *            picture whose levels are reductions of its base keeps no GS
  *            levels and draws the bytes of its base alone under a TEX1
- *            that does not mipmap
+ *            that does not mipmap; and the PCSX2 oracle's forest light
+ *            shaft (TEX1 MMIN 5, MXL 2, K -110, Q 0.002873: LOD 1.568)
+ *            draws levels 1 and 2 blended, as PCSX2's software renderer
+ *            does, not the near-black base
  *   stq      a textured triangle strip with Q 1 to 0.25
  *            maps the texture perspective-correctly (U = f q1 / (q0 + f (q1 -
  *            q0)) at the fraction f across it), a strip with Q = 1 stays affine
@@ -343,7 +346,7 @@ static void testHalfOffset(void)
         RdScreenVtx v[2] = {
             vtx(ox + (10 + 20 * k) * 16, oy + 20 * 16 + 4, 0, c, 8.0f, 8.0f),
             vtx(ox + (20 + 20 * k) * 16, oy + 30 * 16 + 4, 0, c, 8.0f + 160.0f, 8.0f + 160.0f)};
-        rd_screen_prims(RD_PRIM_SPRITES, v, 2, kKind[k] == 2 ? RD_SPACE_FULLSCREEN : RD_SPACE_WORLD,
+        rd_screen_prims(RD_PRIM_SPRITES, v, 2, kKind[k] == 2 ? RD_SPACE_FULLFRAME : RD_SPACE_WORLD,
                         1, 0);
     }
     rd_end_frame(0);
@@ -1102,9 +1105,8 @@ static void gsLodWant(double lod, int mmin, int mxl, const int lv[3][3], int wan
  * level 0 at a LOD of 0 or below).  The same strips from a texture without
  * GS levels draw its base everywhere, byte for byte as with a TEX1 that
  * does not mipmap. */
-static void gsLodStrips(RdTex t, uint64_t tex1, int useTex1)
+static void gsLodStrips(RdTex t, uint64_t tex1, int useTex1, const double *qs, int nq)
 {
-    static const double qs[10] = {2.0, 0.9, 0.72, 0.69, 0.6, 0.5, 0.4, 0.33, 0.25, 0.125};
     static const uint8_t black[4] = {0, 0, 0, 0}, white[4] = {0x80, 0x80, 0x80, 0x80};
     rd_begin_frame();
     rd_select_list(11);
@@ -1121,7 +1123,7 @@ static void gsLodStrips(RdTex t, uint64_t tex1, int useTex1)
     }
     rd_texture(t, RD_TEXFN_MODULATE, RD_TCC_RGBA);
     const int32_t ox = (2048 - 128) * 16, oy = (2048 - 128) * 16;
-    for (int i = 0; i < 10; i++) {
+    for (int i = 0; i < nq; i++) {
         const float q = (float)qs[i];
         const int32_t y0 = (4 + 8 * i) * 16, y1 = (10 + 8 * i) * 16;
         /* S = T = 0.5 Q: the texture's centre at every pixel */
@@ -1197,7 +1199,7 @@ static void testGsLod(void)
     };
 
     for (size_t c = 0; c < sizeof(cases) / sizeof(cases[0]); c++) {
-        gsLodStrips(t, gsTex1(cases[c].mmin, cases[c].lcm, cases[c].l, cases[c].k), 1);
+        gsLodStrips(t, gsTex1(cases[c].mmin, cases[c].lcm, cases[c].l, cases[c].k), 1, qs, 10);
         uint32_t w, h;
         const uint8_t *img = readTarget(RD_TARGET_WORK1, &w, &h);
         if (!img) {
@@ -1222,6 +1224,35 @@ static void testGsLod(void)
             }
         }
     }
+    /* The PCSX2 oracle (software renderer, per-draw dump of the opening's
+       forest shot, PCSX2 draw 588 = the port's dump 432, list 5's first
+       fog1 light shaft): TEX1 LCM 0, MXL 2, MMAG linear, MMIN 5
+       (LINEAR_MIPMAP_LINEAR), L 0, K -110 (-6.875) and Q 0x3B3C4700
+       (0.002873) at every vertex, so the LOD is log2(1 / Q) - 6.875 = 1.568:
+       levels 1 and 2 blended 0.432 / 0.568.  The shaft's base level is
+       near black (mean 0.7, at most 4) and its levels 1 and 2 bright (mean
+       19.5 and 19.2, up to 80); PCSX2 adds up to +150 per channel on the
+       scene there (draws 588-604 take the forest from 55 to 86 mean), a
+       base-only draw adds nothing.  The strip must have the blend of the
+       two levels, not the base. */
+    {
+        static const double oq[1] = {0.0028729439};
+        gsLodStrips(t, gsTex1(5, 0, 0, -110), 1, oq, 1);
+        uint32_t ow, oh;
+        const uint8_t *oimg = readTarget(RD_TARGET_WORK1, &ow, &oh);
+        if (oimg) {
+            const double lod = gsLodRef(oq[0], 0, 0, -110);
+            int want[4];
+            gsLodWant(lod, 5, 2, lv, want);
+            CHECK(lod > 1.55 && lod < 1.59, "gs lod: the PCSX2 shaft's LOD is 1.568");
+            const uint8_t *p = oimg + ((size_t)7 * ow + 32) * 4;
+            if (abs((int)p[0] - want[0]) > 8 || abs((int)p[1] - want[1]) > 8 ||
+                abs((int)p[2] - want[2]) > 8) {
+                pixFail("gs lod: PCSX2 oracle, the fog1 shaft (K -110, Q 0.002873)", 32, 7, p,
+                        want);
+            }
+        }
+    }
     /* levels that are reductions of the base: no GS levels, and the bytes
        of the same strips from the base alone (rd_create_texture) under a
        TEX1 that does not mipmap */
@@ -1235,12 +1266,12 @@ static void testGsLod(void)
     RdTex one = rd_create_texture_src(8, 8, base, RD_TEXSRC_RGBA32, "gs lod one");
     static uint8_t ref[512 * 512 * 4];
     uint32_t w = 0, h = 0, w2 = 0, h2 = 0;
-    gsLodStrips(one, 0, 0);
+    gsLodStrips(one, 0, 0, qs, 10);
     const uint8_t *img = readTarget(RD_TARGET_WORK1, &w, &h);
     if (img) {
         memcpy(ref, img, (size_t)w * h * 4);
     }
-    gsLodStrips(red, gsTex1(5, 0, 0, 0), 1);
+    gsLodStrips(red, gsTex1(5, 0, 0, 0), 1, qs, 10);
     img = readTarget(RD_TARGET_WORK1, &w2, &h2);
     CHECK(img && w == w2 && h == h2 && memcmp(ref, img, (size_t)w * h * 4) == 0,
           "gs lod: a texture whose levels are reductions draws its base's bytes whatever TEX1 "

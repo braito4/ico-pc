@@ -313,18 +313,18 @@ int main(int argc, char **argv)
     }
     const uint32_t RT = RHI_TEX_RENDER_TARGET | RHI_TEX_COPY_SRC;
     RhiTexture A = rhi_create_texture(
-        &(RhiTextureDesc){W, H, 1, RHI_FMT_RGBA8_UNORM, RT | RHI_TEX_SAMPLED, "A"});
-    RhiTexture B = rhi_create_texture(&(RhiTextureDesc){W, H, 1, RHI_FMT_RGBA8_UNORM, RT, "B"});
-    RhiTexture C = rhi_create_texture(&(RhiTextureDesc){W, H, 1, RHI_FMT_RGBA8_UNORM, RT, "C"});
+        &(RhiTextureDesc){W, H, 1, RHI_FMT_RGBA8_UNORM, RT | RHI_TEX_SAMPLED, "A", 0});
+    RhiTexture B = rhi_create_texture(&(RhiTextureDesc){W, H, 1, RHI_FMT_RGBA8_UNORM, RT, "B", 0});
+    RhiTexture C = rhi_create_texture(&(RhiTextureDesc){W, H, 1, RHI_FMT_RGBA8_UNORM, RT, "C", 0});
     RhiTexture tex = rhi_create_texture(&(RhiTextureDesc){
-        2, 2, 1, RHI_FMT_RGBA8_UNORM, RHI_TEX_SAMPLED | RHI_TEX_COPY_DST, "tex2x2"});
-    RhiTexture usrc = rhi_create_texture(
-        &(RhiTextureDesc){4, 4, 1, RHI_FMT_RGBA8_UINT, RHI_TEX_SAMPLED | RHI_TEX_COPY_DST, "usrc"});
-    RhiTexture udst = rhi_create_texture(
-        &(RhiTextureDesc){4, 4, 1, RHI_FMT_RGBA8_UINT, RHI_TEX_SAMPLED | RHI_TEX_COPY_DST, "udst"});
+        2, 2, 1, RHI_FMT_RGBA8_UNORM, RHI_TEX_SAMPLED | RHI_TEX_COPY_DST, "tex2x2", 0});
+    RhiTexture usrc = rhi_create_texture(&(RhiTextureDesc){
+        4, 4, 1, RHI_FMT_RGBA8_UINT, RHI_TEX_SAMPLED | RHI_TEX_COPY_DST, "usrc", 0});
+    RhiTexture udst = rhi_create_texture(&(RhiTextureDesc){
+        4, 4, 1, RHI_FMT_RGBA8_UINT, RHI_TEX_SAMPLED | RHI_TEX_COPY_DST, "udst", 0});
     RhiTexture uout[3];
     for (int i = 0; i < 3; i++) {
-        uout[i] = rhi_create_texture(&(RhiTextureDesc){4, 4, 1, RHI_FMT_RGBA8_UINT, RT, "uout"});
+        uout[i] = rhi_create_texture(&(RhiTextureDesc){4, 4, 1, RHI_FMT_RGBA8_UINT, RT, "uout", 0});
     }
     RhiSampler smp = rhi_create_sampler(&(RhiSamplerDesc){RHI_FILTER_NEAREST, RHI_FILTER_NEAREST,
                                                           RHI_FILTER_NEAREST, RHI_WRAP_CLAMP,
@@ -342,7 +342,7 @@ int main(int argc, char **argv)
     fcb.target[1] = H;
     fcb.target[2] = 1.0f / W;
     fcb.target[3] = 1.0f / H;
-    fcb.space[0][0] = fcb.space[0][1] = fcb.space[1][0] = fcb.space[1][1] = 1.0f;
+    fcb.frame[0] = 1.0f; /* the region scale: a target that is not frame-wide */
     fcb.z[0] = 1.0f / 16777216.0f;
 
     enum {
