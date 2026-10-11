@@ -1,10 +1,6 @@
 name: iOS IPA
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-  workflow_dispatch:
   release:
     types: [published]
 
@@ -12,8 +8,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: ios-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name != 'release' }}
+  group: ios-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -56,29 +52,20 @@ jobs:
             cmake --build tools/toolchain/deps/dxc-build --target dxc --parallel 2
           fi
 
-      - name: Build unsigned IPA and checksum
+      - name: Build unsigned IPA for the release tag
         run: |
-          version_args=()
-          if [[ "$GITHUB_EVENT_NAME" == release ]]; then
-            version="${GITHUB_REF_NAME#v}"
-            [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
-            version_args=(-DICO_IOS_VERSION="$version")
-          fi
-          tools/package_ios.sh "${version_args[@]}" -DICO_IOS_BUILD="$((GITHUB_RUN_NUMBER + 3))"
-          cd dist
-          shasum -a 256 ico-pc-ios-unsigned.ipa > ico-pc-ios-unsigned.ipa.sha256
+          version="${GITHUB_REF_NAME#v}"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          tools/package_ios.sh -DICO_IOS_VERSION="$version" -DICO_IOS_BUILD="$((GITHUB_RUN_NUMBER + 3))"
 
       - uses: actions/upload-artifact@v4
         with:
           name: ico-pc-ios-${{ github.run_number }}
-          path: |
-            dist/ico-pc-ios-unsigned.ipa
-            dist/ico-pc-ios-unsigned.ipa.sha256
+          path: dist/ico-pc-ios-unsigned.ipa
           retention-days: 30
           if-no-files-found: error
 
   publish:
-    if: github.event_name == 'release'
     needs: build
     runs-on: ubuntu-24.04
     permissions:
@@ -88,11 +75,11 @@ jobs:
         with:
           name: ico-pc-ios-${{ github.run_number }}
           path: dist
-      - name: Attach IPA and checksum to the published release
+      - name: Attach IPA to the published release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           gh release upload "$RELEASE_TAG" \
-            dist/ico-pc-ios-unsigned.ipa dist/ico-pc-ios-unsigned.ipa.sha256 \
+            dist/ico-pc-ios-unsigned.ipa \
             --repo "$GITHUB_REPOSITORY"
