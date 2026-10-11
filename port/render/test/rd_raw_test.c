@@ -137,8 +137,8 @@ static int failures;
 
 /* ------------------------------------------------- what the files import */
 int ScreenWidth = W, ScreenHeight = H;
-/* GsBase.c's native frame: 4:3 (particleEffect.c's draw gate, darkVolume.c's
-   frame) */
+/* GsBase.c's native frame: 4:3 (darkVolume.c's frame; checkParticleGateWide
+   widens it to show particleEffect.c's gates do not follow it) */
 IcoFrame gsFrame = {W, H, W / 64, (float)W, 4.0f / 3.0f};
 float center_X = 2048.0f, center_Y = 2048.0f;
 float vsWidth = 640.0f, vsHeight = 448.0f;
@@ -643,6 +643,54 @@ static void checkParticleRecording(void)
               rd__alpha_register(s_ev[i].st.ds.blend) == 0x44 && s_ev[i].st.ds.pabe == 0;
     }
     CHECK(ok == 1, "enemy.c: gif_SetAlpha(1, 4, 128) then prim_DispParticle: ALPHA 0x44 (%d)", ok);
+}
+
+/* particleEffect.c's gates on a wide frame (gsFrame.w 1376, 32:9): both
+   at the GS window 0..4095, unscaled.  An effect whose origin lies at GS X
+   4448 (view x 6 at z 1: 2048 + 400 * 6) is past the window and neither
+   updated nor drawn, as on the PS2; a draw gate scaled by 512 / W put it
+   at 2941 and drew it frozen.  One at X 2848, beside the 4:3 picture
+   inside the window, is drawn. */
+static int recordedBatches(float x, float z)
+{
+    static const uint8_t bg[4] = {40, 40, 60, 0x80};
+    static float pos[4], quat[4] = {0, 0, 0, 1};
+    pos[0] = x;
+    pos[1] = 0.0f;
+    pos[2] = z;
+    pos[3] = 1.0f;
+    if (s_effect >= 0) {
+        DeleteParticleEffect(s_effect);
+    }
+    setPackage(0);
+    s_effect = SetParticleEffect(0, pos, quat);
+    for (int i = 0; i < 12; i++) {
+        ExecParticleEffects();
+    }
+    recordParticles(0, 0, bg);
+    collect();
+    int n = 0;
+    for (int i = 0; i < s_nev; i++) {
+        n += s_ev[i].cmd->type == RDC_PARTICLES;
+    }
+    return n;
+}
+
+static void checkParticleGateWide(void)
+{
+    const IcoFrame saved = gsFrame;
+    gsFrame.w = 1376;
+    gsFrame.fbw = (1376 + 63) / 64;
+    gsFrame.wExact = 1376.0f;
+    gsFrame.aspect = 32.0f / 9.0f;
+    const int past = recordedBatches(6.0f, 1.0f);
+    const int beside = recordedBatches(40.0f, 20.0f);
+    gsFrame = saved;
+    const int past43 = recordedBatches(6.0f, 1.0f);
+    CHECK(past == 0, "particles: an origin past the GS window at 32:9 is not drawn (%d batches)",
+          past);
+    CHECK(beside == 1, "particles: an origin beside the 4:3 picture at 32:9 is drawn (%d)", beside);
+    CHECK(past43 == 0, "particles: an origin past the GS window at 4:3 is not drawn (%d)", past43);
 }
 
 /* ------------------------------------------------------ the lightning */
@@ -1810,6 +1858,7 @@ int main(void)
     InitMatrixDrive();
     setup();
     checkParticleRecording();
+    checkParticleGateWide();
     checkLightningRecording();
     checkLineRecording();
     checkDarkRecording();

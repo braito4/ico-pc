@@ -14,8 +14,6 @@
 #include "DmaPacket.h"
 #include "windField.h"
 #include "particleEffect.h"
-/* PC port: the native frame (gsFrame, 512 wide at 4:3) */
-#include "GsBase.h"
 
 #ifdef ICO_RD
 
@@ -185,11 +183,17 @@ static void _setParticleEffect(PEPartRec *out, PEPackage *pkg, char *m, float k)
 }
 
 /* Project the effect's origin through the current camera matrix and report
-   whether the result falls outside the screen box.  PC port: w is a frame
-   width; the box is tested on x' = (x - 2048) * 512 / w + 2048, the native
-   window test (the box w pixels wide about the centre 2048); w == 512
-   skips the scaling and is exactly the PS2's test. */
-static inline int particleEffectOffScreen(PEGeo *geo, int w) /* derived name */
+   whether the result falls outside the screen box.  PC port: the box is the
+   GS's own coordinate window, 0..4095 on X and Y about the centre 2048 (a
+   guard band, not the picture: the 4:3 picture is 2048 -+ 256), so it is
+   the PS2's test at every aspect, unscaled.  Both gates (the update in
+   execParticleEffect and the draw in dispParticleEffect) use it, so an
+   effect is drawn exactly when it is updated: a draw gate scaled by
+   gsFrame.w / 512 drew an effect whose origin was past the GS window
+   (more than 2048 pixels off the centre) as its last update left it,
+   frozen.  The particles of an effect drawn near the window's edge are
+   cut by the VU program's own window, as on the PS2. */
+static inline int particleEffectOffScreen(PEGeo *geo) /* derived name */
 {
     float v[4];
 
@@ -198,9 +202,6 @@ static inline int particleEffectOffScreen(PEGeo *geo, int w) /* derived name */
         /* PC port: w is 0 for an origin on the camera plane (seen at
            stage 7, Main tick 115 of a start_stage boot) */
         sceVu0ScaleVectorXYZ(v, v, ps2_div(1.0f, v[3]));
-        if (w != ICO_FRAME_BASE_W) {
-            v[0] = (v[0] - 2048.0f) * (float)ICO_FRAME_BASE_W / (float)w + 2048.0f;
-        }
         if (v[2] < 0.0f || v[0] < 0.0f || 4095.0f < v[0] || v[1] < 0.0f || 4095.0f < v[1]) {
             return 1;
         }
@@ -350,12 +351,11 @@ static int execParticleEffect(PEGeo *self)
 
     d0 = (PEVtx *)self->prim->vtx;
     flags = 0;
-    /* PC port: the update keeps the PS2's 4:3 box (w = 512) whatever the
-       picture's width: skipping the update can end the effect (mode 1)
-       and the update draws from the shared _GetRandom, so it is game
-       logic, and an input trace must play the same at every aspect.  Only
-       the drawing (dispParticleEffect) widens. */
-    if (particleEffectOffScreen(self, ICO_FRAME_BASE_W)) {
+    /* PC port: the PS2's GS window whatever the picture's width (see
+       particleEffectOffScreen): skipping the update can end the effect
+       (mode 1) and the update draws from the shared _GetRandom, so it is
+       game logic, and an input trace plays the same at every aspect */
+    if (particleEffectOffScreen(self)) {
         return self->pkg->mode == 1;
     }
     GetMatrixFromQuaternionPos(m, self->quat, self->pos);
@@ -412,11 +412,9 @@ static void dispParticleEffect(PEGeo *geo)
     char *p;
     char *q;
 
-    /* PC port: drawn wherever the native frame can show the origin, the
-       box gsFrame.w / 512 times as wide (an effect past the 4:3 box's
-       sides is drawn as its last update left it; see execParticleEffect's
-       gate) */
-    if (particleEffectOffScreen(geo, gsFrame.w)) {
+    /* PC port: the update's gate, the PS2's GS window at every aspect
+       (particleEffectOffScreen), so an effect is never drawn frozen */
+    if (particleEffectOffScreen(geo)) {
         return;
     }
     dl_SetDLPriority(6);
