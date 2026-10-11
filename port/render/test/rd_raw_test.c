@@ -1207,11 +1207,19 @@ static void darkPixel(void *user, int x, int y, double z, int tie)
     s_cnt[i * 4 + 3] = v[2].rgba[3];
 }
 
+/* The GS's bilinear blend with its 4-bit fractions (common.hlsli
+ * gs_bilerp): across first, then down, each step truncated */
+static int gsBilerp(int a, int b, int c, int d, int fu, int fv)
+{
+    const int top = a + (((b - a) * fu) >> 4), bot = c + (((d - c) * fu) >> 4);
+    return top + (((bot - top) * fv) >> 4);
+}
+
 /* bilinear of the count at the composite's sample of pixel (x, y): texels
    x - 1 and x weighted 1/4 and 3/4 in each axis (UV 4 + 16 x in 12.4); the
    GS (and rd) expands TEXA (AEM: A = 0x80 where RGB is not 0) per texel
-   and floors the weighted sum (expandFirst); the sampler's order filters
-   RGB, rounds, and expands after */
+   and blends across then down, each step truncated (expandFirst,
+   gsBilerp); the sampler's order filters RGB, rounds, and expands after */
 static void compositeRef(int x, int y, int expandFirst, uint8_t out[4], const uint8_t *before)
 {
     static const int wq[2] = {4, 12}; /* 16ths */
@@ -1229,7 +1237,23 @@ static void compositeRef(int x, int y, int expandFirst, uint8_t out[4], const ui
     }
     int tex[4];
     for (int c = 0; c < 4; c++) {
-        tex[c] = expandFirst ? acc[c] >> 8 : (acc[c] + 128) >> 8;
+        tex[c] = (acc[c] + 128) >> 8;
+    }
+    if (expandFirst) {
+        int q[4][4];
+        for (int j = 0; j < 2; j++) {
+            for (int i = 0; i < 2; i++) {
+                const int tx = x - 1 + i < 0 ? 0 : x - 1 + i, ty = y - 1 + j < 0 ? 0 : y - 1 + j;
+                const uint8_t *t = &s_cnt[(ty * W + tx) * 4];
+                for (int c = 0; c < 3; c++) {
+                    q[j * 2 + i][c] = t[c];
+                }
+                q[j * 2 + i][3] = (t[0] | t[1] | t[2]) ? 0x80 : 0;
+            }
+        }
+        for (int c = 0; c < 4; c++) {
+            tex[c] = gsBilerp(q[0][c], q[1][c], q[2][c], q[3][c], wq[1], wq[1]);
+        }
     }
     if (!expandFirst) {
         tex[3] = (tex[0] | tex[1] | tex[2]) ? 0x80 : 0;

@@ -90,7 +90,9 @@
  *   --dump-textures DIR   writes every image texture of the dump to
  *                         DIR/tex-<id>-<w>x<h>.png as decoded (RGBA8, the
  *                         alpha byte as stored: GS 0x80 = 1.0; an R8
- *                         texture as grey, its byte in each channel)
+ *                         texture as grey, its byte in each channel), and
+ *                         a texture's GS levels (RdTexRec.gsChain) as
+ *                         tex-<id>-<w>x<h>-gslevel<N>.png
  *   --stats               prints the replay's counts from its performance
  *                         record (rd.h RdPerfRecord): draws, passes, bind
  *                         groups created (rd's uniform and texture groups
@@ -103,6 +105,15 @@
  *                         printed: the uploads, each list, each picture
  *                         effect (rd.h RD_PERF_POST_*, inside the lists'
  *                         times) and the present
+ *   --prev DUMP           (repeatable, oldest first) replays DUMP in the same
+ *                         context before <dump>, so the targets a frame
+ *                         reads back from the frame before (the motion
+ *                         blur's previous picture, FEED128) hold the run's
+ *                         pictures instead of zero; give the dumps of the
+ *                         ticks just before <dump>
+ *   --no-half             every TARGET command without the field's half
+ *                         pixel (RD_TARGET_HALF_Y): the frame as the flip
+ *                         of the other field draws it
  *   --no-aa1              replays with PRIM.AA1 off: every RDC_AA1 a NOP and
  *                         the start state's bit clear, the frame as the
  *                         renderer drew it before AA1 was decoded (a
@@ -500,8 +511,20 @@ static void dumpTextures(const char *dir)
                 printf("%s\n", path);
             }
             free(grey);
-        } else if (rd_write_png(path, t->pixels, t->w, t->h, t->w * 4, 0)) {
+        } else if (rd_write_png(path, t->pixels, t->w, t->h, t->w * 4, 1)) {
             printf("%s\n", path);
+        }
+        /* the GS levels (gsChain: levels 1.. as RGBA8, each half the one before) */
+        const uint8_t *lv = t->gsLevels > 1 ? t->gsChain : NULL;
+        uint32_t w = t->w, h = t->h;
+        for (uint32_t l = 1; lv && l < t->gsLevels; l++) {
+            w = w > 1 ? w / 2 : 1;
+            h = h > 1 ? h / 2 : 1;
+            snprintf(path, sizeof(path), "%s/tex-%u-%ux%u-gslevel%u.png", dir, id, t->w, t->h, l);
+            if (rd_write_png(path, lv, w, h, w * 4, 1)) {
+                printf("%s\n", path);
+            }
+            lv += (size_t)w * h * 4;
         }
     }
 }
@@ -684,6 +707,44 @@ static int nopCount;
 static bool noAa1, interpAny;
 static const char *interpPrev;
 static float interpT = 1.0f;
+/* --prev DUMP (repeatable, oldest first): frames replayed in this context
+ * before <dump>, so the retained targets (the motion blur's previous
+ * picture, FEED128, keep) hold what the game's run left there */
+static const char *prevDumps[16];
+static int prevCount;
+static bool noHalf;
+
+/* --no-half: every TARGET command without the field's half pixel
+   (RD_TARGET_HALF_Y), as a flip in the other field sends the frame */
+static void dropHalf(RdFrame *f)
+{
+    for (int l = 0; noHalf && l < RD_LIST_COUNT; l++) {
+        for (uint32_t c = 0; c < f->lists[l].count; c++) {
+            if (f->lists[l].cmds[c].type == RDC_TARGET) {
+                f->lists[l].cmds[c].b[0] &= (uint8_t)~RD_TARGET_HALF_Y;
+            }
+        }
+    }
+}
+
+/* replays the --prev dumps in order; false on a load failure */
+static bool replayPrev(void)
+{
+    for (int k = 0; k < prevCount; k++) {
+        RdFrame q;
+        memset(&q, 0, sizeof(q));
+        if (!rd__load_frame(prevDumps[k], &q)) {
+            fprintf(stderr, "%s: --prev load failed\n", prevDumps[k]);
+            return false;
+        }
+        dropHalf(&q);
+        const bool ok = rd__replay_frame(&q, (int)q.keep, false);
+        rhi_wait_frame();
+        printf("prev %s: frame %u replayed%s\n", prevDumps[k], q.number, ok ? "" : " (failed)");
+        rd__frame_free(&q);
+    }
+    return true;
+}
 
 /* Loads <dump> (and the --interp PREV) into the current context, applies
  * --nop and --no-aa1, and returns the frame to replay: <dump> itself, or the
@@ -709,6 +770,7 @@ static const RdFrame *prepareFrame(const char *dump, RdFrame *pf, RdFrame *f)
             }
         }
     }
+    dropHalf(f);
     if (noAa1) {
         f->startState.aa1 = 0;
         for (int l = 0; l < RD_LIST_COUNT; l++) {
@@ -759,7 +821,7 @@ int main(int argc, char **argv)
                 "[--aspect A] [--resolution WxH|Nx] [--full-height] [--full-pixel] [--filter F] "
                 "[--mirror] [--overlay-test] [--backend vulkan|d3d12] [--list] [--nop L:A[-B]] "
                 "[--mesh NAME] [--dump-textures DIR] [--no-aa1] [--stats] [--pass-dump DIR] "
-                "[--interp T PREV [--interp-any] [--no-reproject]]\n"
+                "[--prev DUMP]... [--no-half] [--interp T PREV [--interp-any] [--no-reproject]]\n"
                 "       [--no-device (with --list, --mesh or --dump-textures; <out.png> unused)]\n"
                 "       [--crt scanlines|consumer|trinitron|pvm|shadow [--crt-strength K]]\n"
                 "       [--aa off|ssaa2|ssaa4|msaa2|msaa4|msaa8 (with --enhanced)]\n",
@@ -851,6 +913,10 @@ int main(int argc, char **argv)
             interpAny = true;
         } else if (strcmp(argv[i], "--no-reproject") == 0) {
             rd__interp_set_reproject(false);
+        } else if (strcmp(argv[i], "--no-half") == 0) {
+            noHalf = true;
+        } else if (strcmp(argv[i], "--prev") == 0 && i + 1 < argc && prevCount < 16) {
+            prevDumps[prevCount++] = argv[++i];
         } else if (strcmp(argv[i], "--interp") == 0 && i + 2 < argc) {
             char *end = NULL;
             interpT = strtof(argv[++i], &end);
@@ -1008,6 +1074,10 @@ int main(int argc, char **argv)
     rd__set_not_implemented_fatal(false);
     if (overlay) {
         rd_set_present_overlay(overlayTest, NULL);
+    }
+    if (!noDevice && prevCount && !replayPrev()) {
+        rd_shutdown();
+        return 1;
     }
     RdFrame pf, f;
     const RdFrame *rf = prepareFrame(dump, &pf, &f);

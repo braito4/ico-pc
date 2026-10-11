@@ -968,6 +968,16 @@ typedef struct CpuT {
     uint32_t *z;
 } CpuT;
 
+/* The GS's bilinear blend with its 4-bit fractions (common.hlsli
+ * gs_bilerp): across first, then down, each step truncated (arithmetic
+ * shifts), as PCSX2's software renderer filters */
+static uint32_t gsBilerp(uint32_t a, uint32_t b, uint32_t c, uint32_t d, uint32_t fu, uint32_t fv)
+{
+    const int top = (int)a + ((((int)b - (int)a) * (int)fu) >> 4);
+    const int bot = (int)c + ((((int)d - (int)c) * (int)fu) >> 4);
+    return (uint32_t)(top + (((bot - top) * (int)fv) >> 4));
+}
+
 static CpuT s_cpu[RD_TARGET_COUNT];
 
 static uint8_t *s_old;
@@ -1182,9 +1192,7 @@ static void cpuSprite(const RdStateBlock *s, const RdPostRec *r)
                     texel(&t, ix, iy + 1, c);
                     texel(&t, ix + 1, iy + 1, e);
                     for (int ch = 0; ch < 4; ch++) {
-                        tx[ch] = (a[ch] * (16 - fu) * (16 - fv) + b[ch] * fu * (16 - fv) +
-                                  c[ch] * (16 - fu) * fv + e[ch] * fu * fv) >>
-                                 8;
+                        tx[ch] = gsBilerp(a[ch], b[ch], c[ch], e[ch], fu, fv);
                     }
                 } else {
                     texel(&t, u >> 4, v >> 4, tx);
@@ -1513,6 +1521,117 @@ static int runFrame(const char *what, int verbose)
     return compareAll(what, verbose);
 }
 
+/* ================================================ (p) the GS bilinear */
+
+/* Eight pixels of the opening's flare blur (forest, PAL frame_count 551,
+ * PCSX2 2.8.2 software renderer, per-draw dump: the WORK1 -> WORK0 step,
+ * HIGHLIGHT, vertex colour 139, 136, 132, UV 0.5 .. 255.5 over 256
+ * pixels): the four texels around each sample point, the GS's 4-bit
+ * fractions and the value PCSX2 wrote.  The GS blends across then down,
+ * each step truncated (gsBilerp): one weighted sum >> 8 is 1 or 2 above
+ * at every one of these (the last column), and over the 20 steps of the
+ * chain such pixels (about 5 % of each step) added up to ~15 % more glow
+ * than PCSX2.  Each pixel is drawn as a one-pixel sprite of the blur's
+ * kind from a 16 x 2 texture holding its texels; the GPU must equal both
+ * the CPU model and PCSX2's value. */
+static void checkBilerpPcsx2(void)
+{
+    static const struct {
+        uint8_t a, b, c, d, fu, fv, want[3], sum[3];
+    } kV[8] = {
+        {3, 71, 67, 119, 14, 15, {117, 114, 111}, {118, 115, 112}},
+        {71, 179, 119, 0, 14, 15, {24, 24, 23}, {26, 25, 24}},
+        {63, 43, 0, 19, 10, 15, {14, 13, 13}, {15, 14, 14}},
+        {43, 0, 131, 0, 10, 15, {49, 48, 47}, {51, 49, 48}},
+        {79, 0, 0, 23, 9, 15, {14, 13, 13}, {15, 14, 14}},
+        {215, 183, 71, 191, 9, 15, {153, 149, 145}, {154, 150, 146}},
+        {183, 39, 191, 215, 9, 15, {213, 209, 203}, {215, 210, 204}},
+        {39, 23, 215, 207, 9, 15, {215, 210, 204}, {216, 211, 205}},
+    };
+
+    static const uint32_t kCv[3] = {139, 136, 132};
+    uint8_t tex[16 * 2 * 4];
+    for (int k = 0; k < 8; k++) {
+        const uint8_t q[4] = {kV[k].a, kV[k].b, kV[k].c, kV[k].d};
+        for (int j = 0; j < 4; j++) {
+            uint8_t *p = &tex[((j >> 1) * 16 + 2 * k + (j & 1)) * 4];
+            p[0] = p[1] = p[2] = q[j];
+            p[3] = 0x80;
+        }
+        /* the formula first: PCSX2's value, and not the one-sum's */
+        for (int ch = 0; ch < 3; ch++) {
+            const uint32_t t = gsBilerp(kV[k].a, kV[k].b, kV[k].c, kV[k].d, kV[k].fu, kV[k].fv);
+            const uint32_t one = ((uint32_t)kV[k].a * (16u - kV[k].fu) * (16u - kV[k].fv) +
+                                  (uint32_t)kV[k].b * kV[k].fu * (16u - kV[k].fv) +
+                                  (uint32_t)kV[k].c * (16u - kV[k].fu) * kV[k].fv +
+                                  (uint32_t)kV[k].d * kV[k].fu * kV[k].fv) >>
+                                 8;
+            const uint32_t m = (t * kCv[ch]) >> 7, m1 = (one * kCv[ch]) >> 7;
+            CHECK(m == kV[k].want[ch] && m1 == kV[k].sum[ch],
+                  "(p) vector %d ch %d: two-step %u (PCSX2 %u), one sum %u (%u)", k, ch, m,
+                  kV[k].want[ch], m1, kV[k].sum[ch]);
+        }
+    }
+    RdTex t = rd_create_texture(16, 2, tex, RD_TEXA_80_80, "rd_blur_test bilerp");
+    clearAll();
+    dl_SetDLPriority(7);
+    const int gw = 256, gh = 128;
+    for (int k = 0; k < 8; k++) {
+        rd_set_target(rd_target(RD_TARGET_WORK0), (RdTarget){0}, (uint32_t)gw, (uint32_t)gh, 0);
+        rd_test_gs(0x30000);
+        rd_z_write(0);
+        rd_abe(0);
+        rd_fba(0);
+        rd_pabe(0);
+        rd_sampler_filter(RD_FILTER_LINEAR, RD_FILTER_LINEAR);
+        rd_sampler_wrap(RD_WRAP_CLAMP, RD_WRAP_CLAMP);
+        rd_texture(t, RD_TEXFN_MODULATE, RD_TCC_RGBA);
+        rd_gouraud(0);
+        RdPostParams p;
+        memset(&p, 0, sizeof(p));
+        /* pixel (8 k, 0); U - 8 = 32 k + fu: texel 2 k and fraction fu */
+        p.rect[0] = (float)(0x8000 - gw / 2 * 16 + 8 * k * 16);
+        p.rect[1] = (float)(0x8000 - gh / 2 * 16);
+        p.rect[2] = p.rect[0] + 16.0f;
+        p.rect[3] = p.rect[1] + 16.0f;
+        p.uv[0] = (float)(32 * k + 8 + kV[k].fu);
+        p.uv[1] = (float)(8 + kV[k].fv);
+        p.uv[2] = p.uv[0] + 16.0f;
+        p.uv[3] = p.uv[1] + 16.0f;
+        p.rgba[0] = (uint8_t)kCv[0];
+        p.rgba[1] = (uint8_t)kCv[1];
+        p.rgba[2] = (uint8_t)kCv[2];
+        p.rgba[3] = 0;
+        p.scalar[0] = 16.0f;
+        p.scalar[1] = 2.0f;
+        p.scalar[2] = 1.0f;
+        rd_post(RD_POST_FLARE, &p);
+    }
+    runFrame("(p) PCSX2 bilinear", 1);
+    uint32_t w = 0, h = 0;
+    uint8_t *px = malloc((size_t)gw * gh * 4 * 4);
+    rhi_wait_frame();
+    if (!px || !rd__read_target(rd_target(RD_TARGET_WORK0), px, (size_t)gw * gh * 4 * 4, &w, &h)) {
+        CHECK(0, "(p) read WORK0");
+    } else {
+        int bad = 0;
+        for (int k = 0; k < 8; k++) {
+            const uint8_t *q = px + (size_t)(8 * k) * 4;
+            for (int ch = 0; ch < 3; ch++) {
+                if (q[ch] != kV[k].want[ch]) {
+                    printf("  (p) vector %d ch %d: GPU %u, PCSX2 %u\n", k, ch, q[ch],
+                           kV[k].want[ch]);
+                    bad++;
+                }
+            }
+        }
+        CHECK(bad == 0, "(p) %d channels of the eight pixels are not PCSX2's", bad);
+        printf("  (p) the GS bilinear: eight PCSX2 pixels %s\n", bad ? "differ" : "equal");
+    }
+    free(px);
+    rd_destroy_texture(t);
+}
+
 /* =================================================== (e) one frame each */
 
 static void checkEffects(void)
@@ -1617,8 +1736,9 @@ static void checkMotionBlur(void)
     CHECK(blurred > W * H, "(m) the motion blur changed %d channels of the last frame", blurred);
     /* the model's reduction against the GS formula written out: DISPLAY
      * (x, y) inside the crop is the bilinear of SCENE texels x, x + 1
-     * (4-bit weights 12, 4) and rows 2y, 2y + 1 (8, 8), the sum >> 8, then
-     * MODULATE by the tint; black outside (the GPU equals the model, above) */
+     * (4-bit fraction 4) and rows 2y, 2y + 1 (fraction 8), across then
+     * down, each step truncated (gsBilerp), then MODULATE by the tint;
+     * black outside (the GPU equals the model, above) */
     {
         static const uint32_t kTint[4] = {0x80, 0x78, 0x64, 0x80};
         const CpuT *sc = &s_cpu[RD_TARGET_SCENE], *dp = &s_cpu[RD_TARGET_DISPLAY];
@@ -1631,9 +1751,7 @@ static void checkMotionBlur(void)
                     if (inside) {
                         const uint8_t *r0 = &sc->c[((size_t)(2 * py) * W + px) * 4 + k];
                         const uint8_t *r1 = r0 + (size_t)W * 4;
-                        const uint32_t t = (12u * 8u * r0[0] + 4u * 8u * r0[4] + 12u * 8u * r1[0] +
-                                            4u * 8u * r1[4]) >>
-                                           8;
+                        const uint32_t t = gsBilerp(r0[0], r0[4], r1[0], r1[4], 4u, 8u);
                         want = (t * kTint[k]) >> 7;
                         want = want > 255 ? 255 : want;
                     }
@@ -2825,6 +2943,7 @@ int main(void)
     makeImage(1, 0);
     s_imgTex = rd_create_texture(W, H, s_img, RD_TEXA_80_80, "rd_blur_test image");
 
+    checkBilerpPcsx2();
     checkEffects();
     checkDump();
     checkMotionBlur();

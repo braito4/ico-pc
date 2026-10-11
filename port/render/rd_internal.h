@@ -870,6 +870,10 @@ int rd__stq_pass(RdDrawPass *dp);
  * draws whose bilinear edges depend on TEXA coming before the filter; the
  * planners give them sprite_texa_ps / vu_texa_ps. */
 int rd__texa_per_texel(const RdStateBlock *s);
+/* Whether a draw under this state takes the TEXA entries' integer filter
+ * because it samples GS levels at the GS's LOD in the Original preset
+ * (rd_pipeline.c); rd__texa_per_texel includes it. */
+int rd__gs_filter_int(const RdStateBlock *s);
 RdPipeKeyInt rd__post_key(RdVsId vs, RdFsId fs, RhiFormat colorFmt);
 /* The present's box blit with the effects depth: blit_vs and
  * blit_depth_ps into colorFmt (the headless output's RGBA8, the swapchain's

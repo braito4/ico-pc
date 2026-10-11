@@ -599,20 +599,21 @@ static RdSettings outputSettings(uint32_t w, uint32_t h)
 static bool s_llvmpipe;
 
 /* rd_present_test.c GOLD_PRESENT: the rich frame's 960 x 720 present */
-#define GOLD_OFF 0xedb088b74a237351ull
+#define GOLD_OFF 0x9089548e05b4f69eull
 
 /* The presents of the rich frame through each mode (llvmpipe, LLVM 19.1.7,
  * this file's frame; the phosphors per output pixel, the leak and the
  * per-triad gain; the flat face counted by column edges, which moves PVM's
  * columns on a stripe's edge at 1920 x 1440; the highlights: the glow
  * mixed in, the gains' fade, the eased strength, the shoulder):
- * [mode - 1][0] 960 x 720, [1] 1920 x 1440 */
+ * [mode - 1][0] 960 x 720, [1] 1920 x 1440; recorded again for the GS
+ * bilinear as PCSX2 filters (gs_bilerp: the reduction's DISPLAY changed) */
 static const uint64_t kGold[RD_CRT_MODE_COUNT - 1][2] = {
-    {0xb63d6f980571913bull, 0x06ebfa2d69b427ceull}, /* scanlines */
-    {0x1bec04fe55e213f3ull, 0x2baabca46892a927ull}, /* consumer */
-    {0x0505b8a12628d29cull, 0x7e1f92155254bf67ull}, /* trinitron */
-    {0x720c638c2a77c2cbull, 0x1a601ddd36dd2326ull}, /* pvm */
-    {0x06baa48527d7aa72ull, 0x8bc4521184dc4de6ull}, /* shadow */
+    {0x3fe07f0f8ee07719ull, 0x40b965bc9c07ed48ull}, /* scanlines */
+    {0x6ed5d89b6db79b69ull, 0xfb155a427b37158dull}, /* consumer */
+    {0x6a621fbc9e86b891ull, 0x839c2f37bbd43b15ull}, /* trinitron */
+    {0xd90eb34208079b34ull, 0x8f6664aef9c91ceeull}, /* pvm */
+    {0xfa878669b0bacab0ull, 0x44a618ae9e1fa647ull}, /* shadow */
 };
 
 static double boxLuma(uint32_t w, uint32_t h)

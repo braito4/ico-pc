@@ -319,9 +319,32 @@ int rd__plan_screen_draw_ex(const RdStateBlock *s, uint8_t prim, int aa1, uint8_
     return 2;
 }
 
+/* A linear-filtered texture with GS levels drawn at the GS's level
+ * (DF_GS_LOD) in the Original preset: the four-tap integer filter of the
+ * TEXA entries (gs_texa_texture_lod: the GS's 4-bit fractions, gs_bilerp,
+ * the two levels blended by the LOD's fraction) instead of the sampler's
+ * float filter, which rounds where the GS truncates.  PCSX2's per-draw
+ * dumps of the opening's mist (fog1, list 5) had the sampler's version
+ * about 5 % brighter (forest: +19.5 against +18.6 levels). */
+int rd__gs_filter_int(const RdStateBlock *s)
+{
+    const RdDrawState *d = &s->ds;
+    if (g_rd.settings.preset != RD_PRESET_ORIGINAL || !d->texEnabled ||
+        !rd_tex1_mipmapped(s->tex1Lod) ||
+        (d->magFilter != RD_FILTER_LINEAR && d->minFilter != RD_FILTER_LINEAR)) {
+        return 0;
+    }
+    const RdTexRec *tr = rd__tex_rec(s->tex);
+    return tr && tr->kind == RD_TEXKIND_IMAGE && !tr->replacement &&
+           ((tr->gsLevels > 1 && tr->gsChain) || tr->mipLevels > 1);
+}
+
 int rd__texa_per_texel(const RdStateBlock *s)
 {
     const RdDrawState *d = &s->ds;
+    if (rd__gs_filter_int(s)) {
+        return 1;
+    }
     if (!d->texEnabled || d->texa == RD_TEXA_80_80) {
         return 0; /* TEXA 80/80 gives every texel alpha 0x80: no order to keep */
     }

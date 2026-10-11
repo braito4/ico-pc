@@ -2273,9 +2273,19 @@ static void replacementUv(uint32_t tex, DrawSetup *ds)
 static int drawGsLevels(const Replay *r, const DrawSetup *ds)
 {
     const RdTexRec *t = ds->textured && r->st.ds.texEnabled ? rd__tex_rec(r->st.tex) : NULL;
-    if (!t || t->kind != RD_TEXKIND_IMAGE || t->replacement || t->gsLevels < 2 ||
-        ds->tex.id != t->rhi.id || t->mipLevels < 2) {
+    if (!t || t->kind != RD_TEXKIND_IMAGE || t->replacement || ds->tex.id != t->rhi.id ||
+        t->mipLevels < 2) {
         return 0;
+    }
+    if (t->gsLevels < 2) {
+        /* the Original preset: a texture whose TIM2 levels are reductions of
+         * its base (RdTexRec.gsLevels 0) at the GS's level too, over the
+         * chain built from the base (texLevels).  PCSX2 draws the title's
+         * castle (TEX1 MXL 1 to 3, K -10.3 to -11.9) at levels 1 to 3, where
+         * level 0 had every brick sharp */
+        return g_rd.settings.preset == RD_PRESET_ORIGINAL && rd_tex1_mipmapped(r->st.tex1Lod)
+                   ? t->mipLevels
+                   : 0;
     }
     return t->mipLevels < t->gsLevels ? t->mipLevels : t->gsLevels;
 }
@@ -2443,8 +2453,10 @@ static void fillDrawCB(const Replay *r, const RdDrawPass *dp, const DrawSetup *d
         }
     }
     cb->mode[1] = r->st.ds.texa | (ds->tfmt << 8);
-    if (dp->key.fs == RD_FS_SPRITE_TEXA || dp->key.fs == RD_FS_VU_TEXA) {
-        /* the sampler state the TEXA shaders' four-tap filter reproduces;
+    if (dp->key.fs == RD_FS_SPRITE_TEXA || dp->key.fs == RD_FS_VU_TEXA ||
+        (dp->key.fs == RD_FS_SPRITE_STQ && rd__gs_filter_int(&r->st))) {
+        /* the sampler state the TEXA shaders' four-tap filter reproduces
+         * (and sprite_stq_ps's, for GS levels: rd__gs_filter_int);
          * minified pixels of a texture texSampler upgrades (the Enhanced
          * trilinear or anisotropic filter) keep the sampler */
         const RdDrawState *d = &r->st.ds;
@@ -4794,8 +4806,9 @@ static void doBlurSprite(Replay *r, const RdFrame *f, const RdCmd *c)
 
 /* ----------------------------------------------------------------- frame */
 
-/* The levels a game texture gets: the full chain with the
- * Enhanced filter on and power-of-two sides, else 1 (Original). */
+/* The levels a game texture gets: the full chain with power-of-two sides
+ * under the Enhanced filter or in the Original preset (where only the draws
+ * whose TEX1 mipmaps reach past level 0: drawGsLevels), else 1. */
 static uint8_t texLevels(const RdTexRec *t)
 {
     if (t->replacement) {
@@ -4804,8 +4817,9 @@ static uint8_t texLevels(const RdTexRec *t)
     if (t->gsLevels > 1 && t->gsChain) {
         return t->gsLevels; /* the TIM2's own levels, whatever the filter */
     }
-    if (!g_rd.filterUpgrade || rd__texel_is_coverage(t->format) || t->w < 2 || t->h < 2 ||
-        (t->w & (t->w - 1)) || (t->h & (t->h - 1))) {
+    if ((!g_rd.filterUpgrade && g_rd.settings.preset != RD_PRESET_ORIGINAL) ||
+        rd__texel_is_coverage(t->format) || t->w < 2 || t->h < 2 || (t->w & (t->w - 1)) ||
+        (t->h & (t->h - 1))) {
         return 1;
     }
     uint8_t n = 1;

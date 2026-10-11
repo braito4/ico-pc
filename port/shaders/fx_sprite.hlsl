@@ -133,8 +133,7 @@ float4 fx_sprite_ps(float4 pos : SV_Position) : SV_Target0
             const uint4 b = fx_texel(i0 + int2(1, 0), flags);
             const uint4 c = fx_texel(i0 + int2(0, 1), flags);
             const uint4 d = fx_texel(i0 + int2(1, 1), flags);
-            t = (a * ((16u - fu) * (16u - fv)) + b * (fu * (16u - fv)) + c * ((16u - fu) * fv) +
-                 d * (fu * fv)) >> 8;
+            t = gs_bilerp(a, b, c, d, fu, fv);
         } else {
             t = fx_texel(int2(su >> 4, sv >> 4), flags);
         }

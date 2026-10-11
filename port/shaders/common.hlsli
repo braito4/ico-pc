@@ -161,15 +161,33 @@ uint4 gs_texa_expand(uint4 t, uint mode, uint fmt)
     return uint4(t.rgb, gs_texa_alpha(t.r, t.g, t.b, t.a, mode, fmt));
 }
 
+// The GS's bilinear blend of the four texels around a sample point with
+// its 4-bit fractions fu, fv: across first, each step truncated,
+//   top = a + (((b - a) fu) >> 4), bottom = c + (((d - c) fu) >> 4),
+//   t = top + (((bottom - top) fv) >> 4)
+// (arithmetic shifts: a negative step floors).  PCSX2's software renderer
+// filters so; its per-draw dumps of the opening's blur chain (staticBlur,
+// 20 sprite steps and the eye blur) match this to the bit, where one
+// weighted sum >> 8 is a level above on ~5 % of the pixels of each step
+// and the 20 steps add up to ~15 % more glow (rd_blur_test
+// testBilerpPcsx2).
+uint4 gs_bilerp(uint4 a, uint4 b, uint4 c, uint4 d, uint fu, uint fv)
+{
+    const int4 ia = int4(a), ib = int4(b), ic = int4(c), id = int4(d);
+    const int4 top = ia + (((ib - ia) * int(fu)) >> 4);
+    const int4 bot = ic + (((id - ic) * int(fu)) >> 4);
+    return uint4(top + (((bot - top) * int(fv)) >> 4));
+}
+
 // TEXA before filtering (sprite_texa_ps, vu_texa_ps): the texel of a
 // PSMCT24 or PSMCT16 texture (or one with a 24- or 16-bit CLUT) under TEXA
 // with AEM, filtered as the GS filters it.
 // The GS expands TEXA per texel and then filters; the sampler would filter
 // RGB and the A bit first, so where texels of different alpha meet (AEM's
 // black, 7F/81's two A values) a bilinear edge differs. Here each of the
-// four texels around the sample point is loaded, expanded, and weighted
+// four texels around the sample point is loaded, expanded, and blended
 // with the GS's 4-bit fractions (the UV rounded to 12.4 texels, u - 0.5,
-// floor of the weighted sum >> 8), as fx_sprite_ps does. Addressing is the
+// gs_bilerp), as fx_sprite_ps does. Addressing is the
 // sampler's: REPEAT or CLAMP at t1's own size. MAG or MIN by the
 // footprint (rho > 1 texel: minified), as the sampler picks it. uvn is the
 // normalised UV; flags g_mode.x.
@@ -207,8 +225,7 @@ uint4 gs_texa_texture(Texture2D<float4> tex, SamplerState smp, float2 uvn, uint 
     const uint4 b = gs_texa_load(tex, i0 + int2(1, 0), size, flags);
     const uint4 c = gs_texa_load(tex, i0 + int2(0, 1), size, flags);
     const uint4 d = gs_texa_load(tex, i0 + int2(1, 1), size, flags);
-    return (a * ((16u - fu) * (16u - fv)) + b * (fu * (16u - fv)) + c * ((16u - fu) * fv) +
-            d * (fu * fv)) >> 8;
+    return gs_bilerp(a, b, c, d, fu, fv);
 }
 
 // ------------------------------------------------------- GS mipmapping
@@ -294,8 +311,7 @@ uint4 gs_texa_level(Texture2D<float4> tex, float2 uvn, uint lv, bool filtered, u
     const uint4 b = gs_texa_load_lv(tex, i0 + int2(1, 0), size, lv, flags);
     const uint4 c = gs_texa_load_lv(tex, i0 + int2(0, 1), size, lv, flags);
     const uint4 d = gs_texa_load_lv(tex, i0 + int2(1, 1), size, lv, flags);
-    return (a * ((16u - fu) * (16u - fv)) + b * (fu * (16u - fv)) + c * ((16u - fu) * fv) +
-            d * (fu * fv)) >> 8;
+    return gs_bilerp(a, b, c, d, fu, fv);
 }
 
 // gs_texa_texture with DF_GS_LOD: the level (or the two levels, blended by

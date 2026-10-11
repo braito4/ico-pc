@@ -851,11 +851,19 @@ static void texaTexel(const uint8_t *tex, int n, int x, int y, uint32_t mode, ui
     o[3] = gs_texa_alpha(t[0], t[1], t[2], t[3], mode, TEXFMT_RGBA16);
 }
 
+/* The GS's bilinear blend with its 4-bit fractions (common.hlsli
+ * gs_bilerp): across first, then down, each step truncated */
+static int gsBilerp(int a, int b, int c, int d, int fu, int fv)
+{
+    const int top = a + (((b - a) * fu) >> 4), bot = c + (((d - c) * fu) >> 4);
+    return top + (((bot - top) * fv) >> 4);
+}
+
 /* An RGBA16 texture whose texels mix A = 0 and A = 1 and
  * black ones (AEM), drawn magnified 4x (UV 8 + 4 x in 12.4, the 4-bit
  * fractions 0, 4, 8 and 12) under TEXA 7F/81+AEM, MODULATE by 0x80 with
  * TCC RGBA: every pixel is the GS order (TEXA per texel, then the 4-bit
- * bilinear, floor of the sum >> 8), 0 LSB, through sprite_texa_ps; the
+ * bilinear, across then down, gsBilerp), 0 LSB, through sprite_texa_ps; the
  * same sprite with nearest filtering (UV 10 + 4 x, off the texel edges) is
  * the expanded texel under it, 0 LSB,
  * through sprite_ps.  The planner gives sprite_texa_ps only to a
@@ -943,9 +951,8 @@ static void testTexa(void)
                 texaTexel(tex, N, i0 + 1, j0 + 1, TEXA_7F_81_AEM, d);
                 int want[4], late[4];
                 for (int k = 0; k < 4; k++) {
-                    want[k] = (int)((a[k] * (16 - fu) * (16 - fv) + b[k] * fu * (16 - fv) +
-                                     c[k] * (16 - fu) * fv + d[k] * fu * fv) >>
-                                    8);
+                    want[k] =
+                        gsBilerp((int)a[k], (int)b[k], (int)c[k], (int)d[k], (int)fu, (int)fv);
                     want[k] = (int)gs_tfx_mod((uint32_t)want[k], 0x80);
                 }
                 /* the order sprite_ps keeps: RGB and the A bit filtered, TEXA after */
@@ -1090,9 +1097,12 @@ static void gsLodWant(double lod, int mmin, int mxl, const int lv[3][3], int wan
         b = a < mxl ? a + 1 : a;
         f = s - a;
     }
+    /* the two levels blended by the LOD's fraction in 256ths, truncated
+       (gs_texa_texture_lod) */
+    const int f8 = (int)floor(f * 256.0);
     for (int i = 0; i < 3; i++) {
-        c[i] = lv[a][i] * (1.0 - f) + lv[b][i] * f;
-        want[i] = (int)floor(c[i] + 0.5);
+        c[i] = (double)((lv[a][i] * (256 - f8) + lv[b][i] * f8) >> 8);
+        want[i] = (int)c[i];
     }
     want[3] = 0x80;
 }
@@ -1205,16 +1215,18 @@ static void testGsLod(void)
         if (!img) {
             continue;
         }
-        const int linear = cases[c].mmin == 3 || cases[c].mmin == 5;
         for (int i = 0; i < 10; i++) {
             const double lod = gsLodRef(qs[i], cases[c].lcm, cases[c].l, cases[c].k);
             int want[4];
             gsLodWant(lod, cases[c].mmin, 2, lv, want);
             const int x = 32, y = 7 + 8 * i;
             const uint8_t *p = img + ((size_t)y * w + (size_t)x) * 4;
-            /* the device's blend between levels has as few as 4 bits
+            /* the Original preset filters GS levels as the GS does
+               (rd__gs_filter_int: the two levels blended by the LOD's
+               fraction in 256ths, truncated), 1 LSB from this float model;
+               the device's own blend between levels had as few as 4 bits
                (Vulkan's mipmapPrecisionBits): 240 / 32 */
-            const int tol = linear ? 8 : 1;
+            const int tol = 1;
             if (abs((int)p[0] - want[0]) > tol || abs((int)p[1] - want[1]) > tol ||
                 abs((int)p[2] - want[2]) > tol) {
                 char what[96];
@@ -1246,16 +1258,19 @@ static void testGsLod(void)
             gsLodWant(lod, 5, 2, lv, want);
             CHECK(lod > 1.55 && lod < 1.59, "gs lod: the PCSX2 shaft's LOD is 1.568");
             const uint8_t *p = oimg + ((size_t)7 * ow + 32) * 4;
-            if (abs((int)p[0] - want[0]) > 8 || abs((int)p[1] - want[1]) > 8 ||
-                abs((int)p[2] - want[2]) > 8) {
+            if (abs((int)p[0] - want[0]) > 1 || abs((int)p[1] - want[1]) > 1 ||
+                abs((int)p[2] - want[2]) > 1) {
                 pixFail("gs lod: PCSX2 oracle, the fog1 shaft (K -110, Q 0.002873)", 32, 7, p,
                         want);
             }
         }
     }
-    /* levels that are reductions of the base: no GS levels, and the bytes
-       of the same strips from the base alone (rd_create_texture) under a
-       TEX1 that does not mipmap */
+    /* levels that are reductions of the base: no GS levels kept; under a
+       TEX1 that mipmaps the Original preset draws them at the GS's level
+       too, over the chain built from the base (PCSX2 draws the title's
+       castle at levels 1 to 3): the magnified strip (Q 2, LOD -1) is the
+       base's bytes as under a TEX1 that does not mipmap, the strips at a
+       LOD of 1 or more the checker's box average, 120 */
     RdTex red = gsLodStore(9002, reduced, "gs lod reduced");
     CHECK(rd__tex_rec(red.id) && rd__tex_rec(red.id)->gsLevels == 0,
           "gs lod: reductions of the base keep no GS levels");
@@ -1273,9 +1288,23 @@ static void testGsLod(void)
     }
     gsLodStrips(red, gsTex1(5, 0, 0, 0), 1, qs, 10);
     img = readTarget(RD_TARGET_WORK1, &w2, &h2);
-    CHECK(img && w == w2 && h == h2 && memcmp(ref, img, (size_t)w * h * 4) == 0,
-          "gs lod: a texture whose levels are reductions draws its base's bytes whatever TEX1 "
-          "says");
+    if (img && w == w2 && h == h2) {
+        int bad = 0;
+        for (int i = 0; i < 10; i++) {
+            const int y = 7 + 8 * i;
+            const uint8_t *p = img + ((size_t)y * w + 32) * 4;
+            const uint8_t *q = ref + ((size_t)y * w + 32) * 4;
+            if (qs[i] >= 1.0) {
+                bad += memcmp(p, q, 4) != 0;
+            } else if (qs[i] <= 0.5) {
+                bad += abs((int)p[0] - 120) > 1 || p[1] != 0 || p[2] != 0;
+            }
+        }
+        CHECK(bad == 0,
+              "gs lod: reductions of the base at the GS's level (%d of the strips differ)", bad);
+    } else {
+        CHECK(0, "gs lod: read the reductions' strips");
+    }
     rd_destroy_texture(one);
     rdtex_drop(9001);
     rdtex_drop(9002);
@@ -2150,15 +2179,15 @@ static void testReduction(const char *dir)
             const int inside = px >= 2 && px <= 509 && py >= 8 && py <= 247;
             if (inside) {
                 /* GS sample point (px, py): u = px + 0.75, v = 2py + 1 (texels);
-                 * the GS bilinear between texels px, px+1 (4-bit weights 12
-                 * and 4) and rows 2py, 2py+1 (8 and 8), the sum >> 8 */
+                 * the GS bilinear between texels px, px+1 (fraction 4) and
+                 * rows 2py, 2py+1 (fraction 8), across then down (gsBilerp) */
                 for (int k = 0; k < 4; k++) {
                     const int x0 = px, x1 = px + 1, y0 = 2 * py, y1 = 2 * py + 1;
-                    const int v = 12 * 8 * scene[((size_t)y0 * 512 + x0) * 4 + k] +
-                                  4 * 8 * scene[((size_t)y0 * 512 + x1) * 4 + k] +
-                                  12 * 8 * scene[((size_t)y1 * 512 + x0) * 4 + k] +
-                                  4 * 8 * scene[((size_t)y1 * 512 + x1) * 4 + k];
-                    want[k] = (int)gs_tfx_mod((uint32_t)(v >> 8), k < 3 ? tint[k] : 0x80);
+                    const int v = gsBilerp(scene[((size_t)y0 * 512 + x0) * 4 + k],
+                                           scene[((size_t)y0 * 512 + x1) * 4 + k],
+                                           scene[((size_t)y1 * 512 + x0) * 4 + k],
+                                           scene[((size_t)y1 * 512 + x1) * 4 + k], 4, 8);
+                    want[k] = (int)gs_tfx_mod((uint32_t)v, k < 3 ? tint[k] : 0x80);
                 }
             }
             int bad = 0;

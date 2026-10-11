@@ -677,10 +677,12 @@ static RdSettings originalSettings(void)
  * bilinear instead of the hardware's, at most 1 LSB apart; rd_pixel_test
  * checks it exactly), so DISPLAY and the present are the values of a build
  * with that change (0xde837c63a5e63c88, 0xbc970416f934e0c1 without it) and
- * SCENE is still the value from before the display options. */
-#define GOLD_DISPLAY 0x212c1c733f4ba8a1ull
+ * SCENE is still the value from before the display options.  The GS
+ * bilinear then became PCSX2's two-step lerp (common.hlsli gs_bilerp; the
+ * one weighted sum gave 0x212c1c733f4ba8a1, 0xedb088b74a237351). */
+#define GOLD_DISPLAY 0xe6242f6ac3b7ad9cull
 #define GOLD_SCENE 0x8da6e2ca4577cdacull
-#define GOLD_PRESENT 0xedb088b74a237351ull
+#define GOLD_PRESENT 0x9089548e05b4f69eull
 #ifdef RD_PRESENT_BASELINE
 
 /* built against the renderer from before the display options: prints the

@@ -123,8 +123,16 @@ uint4 sprite_colour(float4 pos, float4 vcol, float2 uv, float q)
     }
     uint4 col = uint4(floor(vcol + 0.5));
     if ((g_mode.x & DF_TEXTURED) != 0u) {
-        uint4 t = uint4(floor(gs_sample(g_texture, g_sampler, uv, q) * 255.0 + 0.5));
-        t = gs_texa_expand(t, g_mode.y & 0xFFu, g_mode.y >> 8);
+        uint4 t;
+        if ((g_mode.x & DF_GS_LOD) != 0u &&
+            (g_mode.x & (DF_TEXA_MAG_LINEAR | DF_TEXA_MIN_LINEAR)) != 0u) {
+            // GS levels in the Original preset (rd_pipeline.c
+            // rd__gs_filter_int): the GS's integer filter at its LOD
+            t = gs_texa_texture_lod(g_texture, uv, q, g_mode.x);
+        } else {
+            t = uint4(floor(gs_sample(g_texture, g_sampler, uv, q) * 255.0 + 0.5));
+            t = gs_texa_expand(t, g_mode.y & 0xFFu, g_mode.y >> 8);
+        }
         col = gs_texture_function(t, col, g_mode.x);
     }
     return col;

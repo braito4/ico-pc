@@ -29,7 +29,7 @@ void ico_host_shutdown(void);
 /* Adds an end-of-run step: atexit on the desktop, run by
    ico_host_shutdown on Android (main_host.c). */
 void ico_host_at_shutdown(void (*fn)(void));
-/* One simulated vsync (field parity alternating from 0), then the threads
+/* One simulated vsync (field parity alternating from 1: host_loop.c), then the threads
    to quiescence. */
 void ico_host_step(void);
 /* Vsyncs simulated so far. */

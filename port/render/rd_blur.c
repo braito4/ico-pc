@@ -16,8 +16,10 @@
  *   UV        U(X) = u0 + (X - x0) (u1 - u0) / (x1 - x0), integers, 12.4
  *   texel     TEX1.MMAG (the sprites' LOD is TEX1.K = 0, so MMAG applies):
  *             nearest = texel (U >> 4, V >> 4); linear = the four texels
- *             around (U - 8, V - 8) weighted by the 4-bit fractions,
- *             sum >> 8; each texel wrapped by CLAMP on the TEX0 size, then
+ *             around (U - 8, V - 8) blended by the 4-bit fractions across
+ *             then down, each step truncated (common.hlsli gs_bilerp, as
+ *             PCSX2's per-draw dumps have it); each texel wrapped by CLAMP
+ *             on the TEX0 size, then
  *             clamped to the backing target, then expanded by TEXA (RGB24
  *             and RGBA16 sources) before filtering
  *   TFX       MODULATE, DECAL, HIGHLIGHT (RGB + Af, A = At + Af with TCC),
