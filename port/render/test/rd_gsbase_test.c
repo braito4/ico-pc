@@ -12,9 +12,9 @@
  *   keep     an fbKeep frame keeps the head copy in list 11 (list 0's is
  *            NOPed), a full frame the copy in list 0 (list 11's is NOPed);
  *            the reduction tint is 128 in a keep frame
- *   parity   the half offset follows GS_CSR.FIELD two flips late: constant
- *            when the field is the same at every flip (frame step 2), one
- *            per buffer when it alternates per flip
+ *   parity   no half offset on any flip: the frame head's TARGET offset is
+ *            RD_TARGET_OFFSET alone whether GS_CSR.FIELD is 0, 1 or
+ *            alternating per flip, and through gsb_ResetGSSystem
  *   leak     the post passes leave their state: fade -> ALPHA 0x44, ABE,
  *            PABE 0; keep -> TEXA 80/80, DISPLAY bound
  *   mask     FBMSK's extent: FRAME.FBMSK masked in list 10 holds
@@ -57,7 +57,8 @@
  *            C products and sceVu0RotTransPers through matrixptr+0x100
  *            (GS window X/Y within 1/16 pixel)
  *   depth    depth-tested UI Z above 2^24 on SCENE (PSMZ32 scale)
- *   half     a frame with the half offset samples between rows
+ *   half     a frame flipped on field 0 samples each row's own texel (no
+ *            half offset)
  *   clear    SCENE cleared to the flip's BG colour
  *   decoder  GifPacket.c at the native widths: FRAME / XYOFFSET / SCISSOR past 2047, full-frame
  *            UV sprites past 1024 texels, XYZ2_HI, the scaled work-buffer classes
@@ -558,31 +559,44 @@ static void checkKeep(void)
     tick(); /* a full frame again */
 }
 
+/* the frame head's SCENE target: RD_TARGET_OFFSET alone (1), never with
+   RD_TARGET_HALF_Y (3, the half-pixel marker of the PCSX2 dump pairing) */
+static int headOffsetOf(const RdFrame *f)
+{
+    const RdCmd *t = firstOf(f, 0, RDC_TARGET);
+    return t ? t->b[0] : -1;
+}
+
 static void checkParity(void)
 {
-    int got[8];
+    /* GS_CSR.FIELD constant 0 (the host loop's flips with the frame step 2
+       from field 0), alternating per flip (a skipped flip), constant 1, and
+       through gsb_ResetGSSystem: no half offset on any flip */
+    int bad = 0, first = -1;
     setField(0);
-    gsb_Init(&db); /* both draw environments without the half offset */
-    for (int i = 0; i < 4; i++) {
+    gsb_Init(&db);
+    for (int i = 0; i < 16; i++) {
+        if (i >= 4 && i < 12) {
+            setField(i & 1);
+        } else if (i >= 12) {
+            setField(1);
+        }
+        if (i == 8) {
+            gsb_ResetGSSystem();
+        }
         tick();
-        got[i] = halfOf(rd__last_frame(), 0);
+        const int o = headOffsetOf(rd__last_frame());
+        if (o != RD_TARGET_OFFSET && bad++ == 0) {
+            first = i;
+        }
     }
-    CHECK(got[0] == 0 && got[1] == 0 && got[2] == 1 && got[3] == 1,
-          "parity: constant field 0 -> half offset from the third flip on (%d %d %d %d)", got[0],
-          got[1], got[2], got[3]);
-    for (int i = 0; i < 4; i++) {
-        setField(i & 1 ? 0 : 1);
-        tick();
-        got[4 + i] = halfOf(rd__last_frame(), 0);
-    }
-    CHECK(got[4] == 1 && got[5] == 1 && got[6] == 0 && got[7] == 1,
-          "parity: a field alternating per flip -> one parity per buffer (%d %d %d %d)", got[4],
-          got[5], got[6], got[7]);
-    setField(1); /* field 1: no half offset, for the pixel checks */
+    CHECK(bad == 0,
+          "parity: the frame head's TARGET offset is %d (no half pixel) on every flip at either "
+          "field (%d flips differ, the first %d)",
+          RD_TARGET_OFFSET, bad, first);
+    setField(0);
     tick();
-    tick();
-    tick();
-    CHECK(halfOf(rd__last_frame(), 0) == 0, "parity: field 1 -> no half offset");
+    CHECK(halfOf(rd__last_frame(), 0) == 0, "parity: field 0 -> no half offset");
 }
 
 static void checkLeak(void)
@@ -1357,23 +1371,21 @@ static void checkDepthAndClear(void)
 
 static void checkHalf(RdTex rows)
 {
-    /* field 0 for three flips: the third frame closes with the half offset */
+    /* field 0 for three flips (the PS2's half-offset case): the frame still
+       closes without the half offset, and every row samples its own texel */
     setField(0);
     for (int i = 0; i < 3; i++) {
         drawScene(rows, RD_FILTER_LINEAR);
         tick();
     }
-    CHECK(halfOf(rd__last_frame(), 0) == 1, "half: the frame carried the half offset");
+    CHECK(halfOf(rd__last_frame(), 0) == 0, "half: field 0, the frame has no half offset");
     uint32_t w, h;
     const uint8_t *s = readTarget(RD_TARGET_SCENE, &w, &h);
     if (s) {
-        /* rows y and y+1 averaged (G = 4y within each 64-row period) */
+        /* G = 4y within each 64-row period, not rows y and y+1 averaged */
         int bad = 0;
-        for (int y = 0; y < H - 1; y++) {
-            if (y % 64 == 63) {
-                continue;
-            }
-            const int want = ((y % 64) * 4 + ((y + 1) % 64) * 4) / 2;
+        for (int y = 0; y < H; y++) {
+            const int want = (y % 64) * 4;
             const int got = s[(y * W + 100) * 4 + 1];
             if (abs(got - want) > 1 && bad++ < 4) {
                 printf("FAIL half: row %d G %d, expected %d\n", y, got, want);

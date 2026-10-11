@@ -32,16 +32,11 @@ void ico_credits_engine_install(void);
 
 static unsigned int vsyncs;
 
-/* GS_CSR.FIELD of the next vsync.  The phase is the one the PS2 game sees
-   at its flips: gsb_UpdateGSSystem flips every second vsync and asks for
-   the half-pixel offset (sceGsSetHalfOffset) when FIELD reads 0.  PCSX2
-   2.8.2 runs the PAL opening with FIELD 1 at every flip: its per-draw GS
-   dumps of eleven shots (frame_count 552 to 2376) have XYOFFSET.y 1792.0
-   on every SCENE draw, never 1792.5.  Starting at 0 put the port's flips on
-   FIELD 0, so every frame drew its geometry half a pixel lower than the PS2
-   (the forest's geometry lists differed from PCSX2's by mean |d| 3.5 on
-   33 % of the pixels; without the half pixel 1.3 on 11 %). */
-static int field = 1;
+/* GS_CSR.FIELD of the next vsync, alternating from 0 (the vblank
+   handler's odd_even, the movie's field pacing).  The flip's half-pixel
+   decision does not read it: a progressive display never applies the
+   interlace half pixel (GsBase.c, gsbHostField). */
+static int field;
 
 static IcoStepProfile profile;
 

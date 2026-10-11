@@ -1141,12 +1141,18 @@ static void gsbHostResetHalf(void)
     gsbHostHalf[0] = gsbHostHalf[1] = 0;
 }
 
-/* the field bit the PS2 reads from GS_CSR (bit 13): the host loop
-   (port/platform/host_loop.c) alternates it every vsync.  odd_even keeps
-   its host value 0; only the renderer reads this. */
+/* the field the flip's half offset is decided by: 1, no half pixel, on
+   every flip.  A progressive display never applies the interlace half
+   pixel, and PCSX2 2.8.2 flips on FIELD 1 throughout (XYOFFSET.y 1792.0 on
+   every SCENE draw of its per-draw dumps of eleven opening shots, never
+   1792.5).  GS_CSR.FIELD itself keeps the host loop's cadence
+   (port/platform/host_loop.c: alternating per vsync from 0, read by the
+   vblank handler and the movie's field pacing); reading it here put the
+   half pixel on every frame whose flips fell on FIELD 0.  odd_even keeps
+   its host value 0. */
 static int gsbHostField(void)
 {
-    return (int)((*GS_CSR >> 13) & 1);
+    return 1;
 }
 
 static void gsbHostFrameHead(void)
