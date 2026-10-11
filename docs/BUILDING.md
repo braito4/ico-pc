@@ -235,9 +235,11 @@ pauses audio/rendering while in the background. iOS uses the existing mobile
 defaults: a 60 FPS cap and adaptive resolution for the Enhanced preset.
 Selecting a fixed resolution such as 2× keeps that resolution; choose
 Auto to let the existing GPU-cost controller lower it when necessary.
-At 2× the scene contains roughly four times the pixels of 1×. For a
-performance report, enable `[dev] perf_log = true` in `ico-pc.ini` and
-include `logs/ico-pc-perf.csv` along with the normal log.
+At 2× the scene contains roughly four times the pixels of 1×. iOS builds
+disable benchmark CSV output and detailed performance logging; internal
+frame timings remain available for automatic resolution. For a problem
+report, include the normal log, device and iOS versions, app build, and
+graphics settings. Settings are stored in `config.toml`.
 
 The wrapper uses SDL's UIKit entry point and a guarded 32 MB coroutine
 stack on the main thread. Shared game angle conversions explicitly go
