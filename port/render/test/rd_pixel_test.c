@@ -2682,7 +2682,8 @@ static void testNoDual(void)
  * mode the device has (rd_dst_read.c) each cell is PCSX2's rt1 pixel to
  * the bit, alpha 4; under the fixed-function blend it is within 1 and the
  * cells that round up are counted (the bias the exact blend removes: the
- * pass mean +5.51 +5.22 +5.19 against PCSX2's +4.98 +4.77 +4.68). */
+ * port measured the pass at +5.50 +5.36 +4.74 against PCSX2's +4.98 +4.77
+ * +4.68). */
 static const struct {
     uint8_t dst[3], pcsx2[3];
 } kTint[8] = {

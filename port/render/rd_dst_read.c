@@ -16,10 +16,12 @@
  * after the fog, fades, bars) that is one level above the GS on about half
  * the channels.  Measured on the forest's tint sprite (PCSX2 2.8.2 software
  * renderer, godrays oracle state 552, GS draw 480: RGBA 223 219 205 4, ALPHA
- * 0x44): the floor formula gives every one of PCSX2's 262144 pixels, the
- * blender's rounding is one level up on 50.0 % of the channels (pass mean
- * +5.51 +5.22 +5.19 against PCSX2's +4.98 +4.77 +4.68), and over a frame the
- * error only ever adds: the port ended 0.4 to 6.4 % brighter than PCSX2,
+ * 0x44): the floor formula gives every one of PCSX2's 262144 pixels (its
+ * rt0 and rt1 dumps); round to nearest on the same rt0 is one level up on
+ * 50.0 % of the channels (pass mean +5.51 +5.22 +5.19 against PCSX2's
+ * +4.98 +4.77 +4.68), the port measured +5.50 +5.36 +4.74 (its blender is
+ * not exactly round-to-nearest either), and over a frame the error only
+ * ever adds: the port ended 0.4 to 6.4 % brighter than PCSX2,
  * worst in dark scenes (build-host/tmp/pcsx2cmp/godrays/STATUS.md,
  * "Open (not fixed): LERP blend rounding").
  *
@@ -55,7 +57,7 @@
  *                    no colour attachment then (D3D12 cannot hold one
  *                    resource as RTV and UAV), so a blended draw runs in a
  *                    pass of its own kind ("storage pass": the depth
- *                    attached, no colour; rd_replay.c passMode).  Draws
+ *                    attached, no colour; rd_replay.c dstPassMode).  Draws
  *                    group: the dumps switch between blended and other
  *                    draws 5 to 15 times a frame, so 10 to 30 extra passes
  *                    and barrier pairs.  The shader writes, so the depth
@@ -98,10 +100,13 @@
  *                             (the gpuinfo device tables did not load):
  *                             the start-up log says what was found.
  *   Vulkan, Android           the attachment read on drivers with the
- *                             ARM or EXT extension and local read (Mali,
- *                             Turnip); else fixed-function.
- *   D3D12                     ROV (ROVsSupported, feature level 11_1+
- *                             hardware generally) -> storage; WARP has it.
+ *                             ARM or EXT extension and local read (Turnip
+ *                             per Mesa; Arm's Mali driver where it exposes
+ *                             both, not verified here); else
+ *                             fixed-function.
+ *   D3D12                     ROV (ROVsSupported: required at feature
+ *                             level 12_1, which WARP reports; optional
+ *                             below it) -> storage.
  *   anything else             fixed-function, as before (logged
  *                             "fixed-function (rounds up)").
  *
