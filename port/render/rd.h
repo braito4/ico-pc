@@ -585,8 +585,8 @@ bool rd_last_present_info(RdPresentInfo *out);
 /* DISPLAY's colour (RGBA, as stored) at RD_DISPLAY_PROBE_POINTS points: the
  * centre, then the centres of the top-left, top-right, bottom-left and
  * bottom-right quarters.  Five single-texel copies and a readback that
- * waits for the GPU: for a diagnostic over a few frames, never per frame
- * in play.  False without a device or DISPLAY. */
+ * waits for the GPU: for tests (rd_boot_present_test), never per present
+ * in a window.  False without a device or DISPLAY. */
 #define RD_DISPLAY_PROBE_POINTS 5
 bool rd_display_probe(uint8_t rgba[RD_DISPLAY_PROBE_POINTS][4]);
 

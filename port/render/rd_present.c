@@ -273,7 +273,28 @@ bool rd__apply_display(void)
      * (rd__present_record).  Not under the CRT filter, which shows the
      * PS2's pixels at 1x */
     const int aaMode = rd__aa_mode();
-    const float ssaa = rd__crt_on() ? 1.0f : (float)rd__aa_ssaa_factor(aaMode);
+    const float ssaaAsked = rd__crt_on() ? 1.0f : (float)rd__aa_ssaa_factor(aaMode);
+    float ssaa = ssaaAsked;
+    float perPx = 0.0f; /* the Resolution row's texels an output pixel, 0 unknown */
+    if (ssaa > 1.0f && st->outputWidth && st->outputHeight) {
+        /* only as much as the picture lacks: a scene that already has
+         * the factor's texels an output pixel both ways is supersampled
+         * as it stands (8x at 48:9 on a 3840x2160 display is over 4 texels
+         * a pixel each way).  The rule: t = the smaller of the two axes'
+         * texels an output pixel (across: the frame's exact width of w over
+         * the box's width; down: DISPLAY's rows, h or h / 2 at half
+         * height, over the box's height); the factor applied is
+         * ceil(factor / t), at least 1 and at most the factor */
+        RhiRect b;
+        rd__present_box(st->outputWidth, st->outputHeight, aspect, &b);
+        const float tx = w * (wexactFor(aspect) / gw) / (float)b.w;
+        const float ty = (st->fullHeightScene ? h : h * 0.5f) / (float)b.h;
+        perPx = tx < ty ? tx : ty;
+        if (perPx > 0.0f) {
+            const float need = ceilf(ssaa / perPx - 1e-4f);
+            ssaa = need < 1.0f ? 1.0f : (need > ssaa ? ssaa : need);
+        }
+    }
     if (ssaa > 1.0f) {
         w *= ssaa;
         h *= ssaa;
@@ -323,10 +344,19 @@ bool rd__apply_display(void)
      * settingsPending) and at init, never per frame */
     if (changed || aspect != g_rd.outAspect || filter != g_rd.filterUpgrade ||
         vs != g_rd.vsyncApplied) {
-        rd__log("display: scene %gx%g%s, work %g, aspect %.3f, filter %u, %s height, vsync %s%s",
+        char ssaaNote[96] = "";
+        if (ssaaAsked > 1.0f && ssaa > 1.0f && ssaa < ssaaAsked) {
+            snprintf(ssaaNote, sizeof(ssaaNote),
+                     " (at %gx: the resolution has %.2f texels an output pixel)", (double)ssaa,
+                     (double)perPx);
+        } else if (ssaaAsked > 1.0f && !(ssaa > 1.0f)) {
+            snprintf(ssaaNote, sizeof(ssaaNote),
+                     " (skipped: the resolution has %.2f texels an output pixel)", (double)perPx);
+        }
+        rd__log("display: scene %gx%g%s, work %g, aspect %.3f, filter %u, %s height, vsync %s%s%s",
                 (double)sx, (double)sy, crtLock ? " (CRT: 1x)" : "", (double)work, (double)aspect,
                 (unsigned)filter, full ? "full" : "half", st->vsync ? "on" : "off",
-                aaMode == RD_AA_OFF ? "" : rd__aa_label(aaMode));
+                aaMode == RD_AA_OFF ? "" : rd__aa_label(aaMode), ssaaNote);
     }
     if (changed) {
         g_rd.sceneReqSx = sx;

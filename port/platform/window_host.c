@@ -2098,9 +2098,11 @@ static void pace_log(Uint64 now)
    and this names any present that was not.  For game frames BOOT_LOG_FIRST
    to BOOT_LOG_LAST, and the first BOOT_LOG_AFTER_FULL after the first frame
    that is not a keep frame: the frame, its keep flag, the fade it recorded
-   (1 + alpha), its snap, the present's alpha, DISPLAY at its centre and
-   its quarters' centres (a readback, so only in that window; never again
-   once past it) and "first" on a tick's first present. */
+   (1 + alpha), its snap, the present's alpha and "first" on a tick's first
+   present.  No pixels: a readback here waited for the GPU on every present
+   of the window (about a frame's GPU time each at high resolutions, the
+   sign's fade-in presented unevenly); rd_boot_present_test probes DISPLAY
+   (rd_display_probe) where the pixels are checked. */
 #define BOOT_LOG_FIRST 100u
 #define BOOT_LOG_LAST 130u
 #define BOOT_LOG_AFTER_FULL 12u
@@ -2113,9 +2115,6 @@ static struct {
 static void boot_log(float alpha)
 {
     RdPresentInfo pi;
-    uint8_t px[RD_DISPLAY_PROBE_POINTS][4];
-    char pts[RD_DISPLAY_PROBE_POINTS * 20] = "";
-    size_t n = 0;
 
     if (s_bootLog.done || !rd_last_present_info(&pi)) {
         return;
@@ -2133,18 +2132,8 @@ static void boot_log(float alpha)
         }
         return;
     }
-    if (rd_display_probe(px)) {
-        for (int k = 0; k < RD_DISPLAY_PROBE_POINTS && n < sizeof(pts); k++) {
-            const int w =
-                snprintf(pts + n, sizeof(pts) - n, " (%u,%u,%u)", px[k][0], px[k][1], px[k][2]);
-
-            n += w > 0 ? (size_t)w : 0;
-        }
-    } else {
-        snprintf(pts, sizeof(pts), " unread");
-    }
-    fprintf(stderr, "boot: frame %u keep %u fade %u snap %u t %.3f display%s%s\n", pi.frame,
-            pi.keep, pi.fade, pi.snap, (double)alpha, pts, pi.firstOfTick ? " first" : "");
+    fprintf(stderr, "boot: frame %u keep %u fade %u snap %u t %.3f%s\n", pi.frame, pi.keep, pi.fade,
+            pi.snap, (double)alpha, pi.firstOfTick ? " first" : "");
 }
 
 /* The pacer more than RESYNC_NS behind: the lag is dropped (counted) */
@@ -2272,7 +2261,7 @@ static void pace(int hz)
     if (!rd_interpolation_active()) {
         /* framerate "original": rd_end_frame presented the frame once; the
            picture is held until the next.  That present's start-up log line
-           (the frame whole: t 1), its readback inside the wait */
+           (the frame whole: t 1) */
         if (newFrame) {
             boot_log(1.0f);
         }
@@ -2373,7 +2362,7 @@ static void pace(int hz)
                a present is slower with an effects program loaded */
             s_pres.paceSlow = pace_slow_present(&s_pres.paceHist, s_pres.cost, refresh, period,
                                                 rhi_injector_name() != NULL);
-            /* after the cost: the start-up log's readback is not the present's */
+            /* the start-up log line, after the cost */
             boot_log(a);
         }
         if (!ok) {

@@ -1274,6 +1274,42 @@ static void checkScales(void)
     CHECK(g_rd.gsW == 2048 && near(g_rd.sceneSx * 2048.0f, 5760.0f) &&
               near(g_rd.sceneSy * 512.0f, 1080.0f),
           "scales: 48:9 in 5760x1080 renders 5760x1080 (frame %u)", g_rd.gsW);
+    /* supersampling only as far as the picture lacks it: 8x at 48:9 into a
+     * 3840x720 box already has 4.27 texels an output pixel across (5.69
+     * down at full height), so SSAA2 leaves the scale at 8x; 1x there has
+     * 0.53 across, so SSAA2 applies whole (ceil(2 / 0.53) = 4, at most 2) */
+    {
+        const RdSettings before = s;
+        float lim = g_rd.hasDevice ? (float)rhi_limits()->maxRenderTargetSize : 16384.0f;
+        if (g_rd.hasDevice && rhi_limits()->tiler && lim > 4096.0f) {
+            lim = 4096.0f;
+        }
+        s.outputWidth = 3840;
+        s.outputHeight = 720;
+        s.fullHeightScene = 1;
+        s.antiAlias = RD_AA_SSAA2;
+        s.sceneScale = 8.0f;
+        applyWith(&s);
+        const float want8 = 2048.0f * 8.0f <= lim ? 8.0f : lim / 2048.0f;
+        CHECK(g_rd.ssaa == 1.0f && near(g_rd.sceneSx, want8) && near(g_rd.sceneSy, want8),
+              "scales: 8x + SSAA2 at 48:9 in a 3840x720 box stays %gx (%g, %g, ssaa %g)",
+              (double)want8, g_rd.sceneSx, g_rd.sceneSy, (double)g_rd.ssaa);
+        s.sceneScale = 1.0f;
+        applyWith(&s);
+        CHECK(g_rd.ssaa == 2.0f && g_rd.sceneSx == 2.0f && g_rd.sceneSy == 2.0f,
+              "scales: 1x + SSAA2 at 48:9 in a 3840x720 box is 2x (%g, %g, ssaa %g)", g_rd.sceneSx,
+              g_rd.sceneSy, (double)g_rd.ssaa);
+        /* 4x there has 2.13 across: SSAA4 applies as 2 (ceil(4 / 2.13)) */
+        s.sceneScale = 4.0f;
+        s.antiAlias = RD_AA_SSAA4;
+        applyWith(&s);
+        const float want4 = 2048.0f * 8.0f <= lim ? 8.0f : lim / 2048.0f;
+        CHECK(g_rd.ssaa == 2.0f && near(g_rd.sceneSx, want4),
+              "scales: 4x + SSAA4 at 48:9 in a 3840x720 box is 8x (%g, ssaa %g)", g_rd.sceneSx,
+              (double)g_rd.ssaa);
+        s = before;
+        applyWith(&s);
+    }
     s.aspect = 10.0f;
     applyWith(&s);
     CHECK(g_rd.outAspect == ICO_FRAME_ASPECT_MAX, "scales: the aspect is held to the maximum");
