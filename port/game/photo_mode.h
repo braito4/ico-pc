@@ -157,7 +157,7 @@ void ico_photo_mouse_look(float yawDeg, float pitchDeg);
 /* The ticks a second ico_photo_update assumes (25: PAL's frame step 2). */
 void ico_photo_set_tick_hz(int hz);
 /* The camera override for the game camera game: its view orbited (orbit)
-   or moved and turned (free), and its proj43 narrowed or widened about the
+   or moved and turned (free), and its proj narrowed or widened about the
    picture's centre (zoom also scaled);
    the other fields game's.  With nothing moved, *out is *game exactly.
    ico_photo_update shortens each tick's step to 250 units of the eye and
@@ -176,7 +176,7 @@ int ico_photo_set_game(const RdCamera *game);
    camera's (ico_photo_set_game's, else the last ico_photo_camera's)
    narrowed by the zoom, 2 atan(tan(fov / 2) / zoom); 0 before any. */
 float ico_photo_fov_now(void);
-/* The vertical field of view out shows, degrees, from its proj43. */
+/* The vertical field of view out shows, degrees, from its proj. */
 float ico_photo_fov_deg(const RdCamera *cam);
 /* 1 once for each capture asked for (Cross) since the last call. */
 int ico_photo_take_capture(void);

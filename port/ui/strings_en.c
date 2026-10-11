@@ -489,4 +489,16 @@ const char *const ui_strings_en[UI_STR_COUNT] = {
     [UI_STR_VAL_RANGE_NORMAL] = "Normal",
     [UI_STR_VAL_RANGE_FULL] = "Full",
     [UI_STR_VAL_INSTANT] = "Instant",
+    [UI_STR_OPT_DOOR_FIX] = "East Reflector door fix",
+    [UI_STR_OPT_DOOR_FIX_NOTE] =
+        "Holding hands, Ico and Yorda no longer come straight back out of a doorway.",
+    [UI_STR_OPT_AA] = "Anti-aliasing",
+    [UI_STR_OPT_AA_NOTE] =
+        "Smooths jagged edges. Supersampling draws the picture larger and shrinks it; MSAA smooths the edges of shapes.",
+    [UI_STR_AA_OFF] = "Off",
+    [UI_STR_AA_SSAA2] = "2x supersampling",
+    [UI_STR_AA_SSAA4] = "4x supersampling",
+    [UI_STR_AA_MSAA2] = "MSAA 2x",
+    [UI_STR_AA_MSAA4] = "MSAA 4x",
+    [UI_STR_AA_MSAA8] = "MSAA 8x",
 };

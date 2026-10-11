@@ -286,6 +286,7 @@ static bool vkr_create_instance(const RhiDeviceDesc *desc)
     if (debug) {
         if (vkr_has_layer("VK_LAYER_KHRONOS_validation")) {
             layers[layerCount++] = "VK_LAYER_KHRONOS_validation";
+            g_vkr.validationOn = true;
         } else {
             VKR_LOG("debugLayers: VK_LAYER_KHRONOS_validation not installed; continuing without");
         }
@@ -606,6 +607,31 @@ static bool vkr_pick_device(void)
     vkGetPhysicalDeviceProperties(g_vkr.phys, &g_vkr.props);
     vkr_fake_limits();
     vkGetPhysicalDeviceMemoryProperties(g_vkr.phys, &g_vkr.memProps);
+    /* issue 58: the heaps, and the one uploads (the renderer's ring, texture
+       pack uploads) come from: a device-local, host-visible type first
+       (vkr_allocate), which without resizable BAR is a window of about
+       256 MB that every upload buffer shares */
+    for (uint32_t i = 0; i < g_vkr.memProps.memoryHeapCount; i++) {
+        const VkMemoryHeap *mh = &g_vkr.memProps.memoryHeaps[i];
+        VKR_LOG("memory heap %u: %llu MB%s", i, (unsigned long long)(mh->size >> 20),
+                (mh->flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) ? ", device-local" : "");
+    }
+    {
+        const VkMemoryPropertyFlags up = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                         VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
+                                         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+        uint32_t i = 0;
+        while (i < g_vkr.memProps.memoryTypeCount &&
+               (g_vkr.memProps.memoryTypes[i].propertyFlags & up) != up) {
+            i++;
+        }
+        if (i < g_vkr.memProps.memoryTypeCount) {
+            VKR_LOG("uploads prefer memory heap %u (device-local and host-visible)",
+                    g_vkr.memProps.memoryTypes[i].heapIndex);
+        } else {
+            VKR_LOG("uploads use host memory (no device-local, host-visible type)");
+        }
+    }
     snprintf(g_vkr.adapterName, sizeof(g_vkr.adapterName), "%s", g_vkr.props.deviceName);
     bool fake = false;
     g_vkr.dsFormat = vkr_choose_depth_stencil(g_vkr.phys, &fake);
@@ -619,11 +645,54 @@ static bool vkr_pick_device(void)
     return true;
 }
 
+/* The sample counts every multisampled target the renderer makes takes
+ * (RhiLimits.msaaCounts): the framebuffer and sampled-image limits, and the
+ * image format queries of the colour formats (RGBA8 UNORM and UINT) and the
+ * scene's depth-stencil, each as an attachment that is sampled and copied
+ * from (resolves read it as a transfer source) */
+static uint32_t vkr_msaa_counts(void)
+{
+    const VkPhysicalDeviceLimits *l = &g_vkr.props.limits;
+    uint32_t counts =
+        (uint32_t)(l->framebufferColorSampleCounts & l->framebufferDepthSampleCounts &
+                   l->framebufferStencilSampleCounts & l->sampledImageColorSampleCounts &
+                   l->sampledImageIntegerSampleCounts & l->sampledImageDepthSampleCounts);
+
+    const struct {
+        VkFormat f;
+        VkImageUsageFlags u;
+    } q[3] = {
+        {VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                                       VK_IMAGE_USAGE_SAMPLED_BIT |
+                                       VK_IMAGE_USAGE_TRANSFER_SRC_BIT},
+        {VK_FORMAT_R8G8B8A8_UINT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                                      VK_IMAGE_USAGE_TRANSFER_SRC_BIT},
+        {g_vkr.dsFormat, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                             VK_IMAGE_USAGE_TRANSFER_SRC_BIT},
+    };
+
+    for (int i = 0; i < 3; i++) {
+        VkImageFormatProperties ip;
+        if (vkGetPhysicalDeviceImageFormatProperties(g_vkr.phys, q[i].f, VK_IMAGE_TYPE_2D,
+                                                     VK_IMAGE_TILING_OPTIMAL, q[i].u, 0,
+                                                     &ip) != VK_SUCCESS) {
+            return 1u;
+        }
+        counts &= (uint32_t)ip.sampleCounts;
+    }
+    /* the renderer's counts: 2, 4, 8 */
+    counts &= (uint32_t)(VK_SAMPLE_COUNT_1_BIT | VK_SAMPLE_COUNT_2_BIT | VK_SAMPLE_COUNT_4_BIT |
+                         VK_SAMPLE_COUNT_8_BIT);
+    VKR_LOG("multisampling: sample counts 0x%x%s", counts | 1u,
+            (counts & ~1u) != 0u ? "" : " (single sampling only)");
+    return counts | 1u;
+}
+
 static bool vkr_create_device(void)
 {
     bool core13 = g_vkr.props.apiVersion >= VK_API_VERSION_1_3;
     g_vkr.apiVersion = g_vkr.props.apiVersion;
-    const char *exts[4];
+    const char *exts[8];
     uint32_t extCount = 0;
     if (g_vkr.surface) {
         exts[extCount++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
@@ -648,6 +717,14 @@ static bool vkr_create_device(void)
         VKR_LOG("no dualSrcBlend%s: blending takes the two-pass fallback",
                 avail.dualSrcBlend == VK_TRUE ? " (ICO_VK_FAKE_NO_DUAL)" : "");
     }
+    /* multisampling: a fragment shader reading SV_SampleIndex (the per-sample
+     * fog) needs sampleRateShading; ICO_VK_FAKE_NO_MSAA=1 reports single
+     * sampling only (tests) */
+    {
+        const char *noMs = getenv("ICO_VK_FAKE_NO_MSAA");
+        g_vkr.sampleRate = avail.sampleRateShading == VK_TRUE;
+        g_vkr.msaaCounts = noMs && noMs[0] && noMs[0] != '0' ? 1u : vkr_msaa_counts();
+    }
     /* texture packs: BC1/2/3/7 come with textureCompressionBC (every
      * desktop GPU, the Deck, lavapipe); the formats' sampled and copy
      * features are checked too, so bcTextures promises what it says */
@@ -661,10 +738,121 @@ static bool vkr_create_device(void)
         g_vkr.bc = (fp.optimalTilingFeatures & need) == need;
     }
 
+    /* the destination read (RhiLimits.fragmentInterlock,
+     * rasterOrderAttachment; rd's exact GS blend, port/render/rd_dst_read.c):
+     *   interlock    VK_EXT_fragment_shader_interlock's
+     *                fragmentShaderPixelInterlock, fragmentStoresAndAtomics
+     *                and RGBA8_UNORM storage images (a required format);
+     *   rasterOrder  rasterizationOrderColorAttachmentAccess
+     *                (VK_EXT_ or VK_ARM_rasterization_order_attachment_access,
+     *                the same structure) and VK_KHR_dynamic_rendering_local_read
+     *                (input attachments under dynamic rendering).
+     * ICO_VK_FAKE_NO_DST=1 leaves both off, as on a device without them. */
+    VkPhysicalDeviceFragmentShaderInterlockFeaturesEXT qInterlock = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADER_INTERLOCK_FEATURES_EXT};
+    VkPhysicalDeviceRasterizationOrderAttachmentAccessFeaturesEXT qOrder = {
+        .sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RASTERIZATION_ORDER_ATTACHMENT_ACCESS_FEATURES_EXT};
+    VkPhysicalDeviceDynamicRenderingLocalReadFeaturesKHR qLocal = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_LOCAL_READ_FEATURES_KHR};
+    {
+        const char *noDst = getenv("ICO_VK_FAKE_NO_DST");
+        const bool fake = noDst && noDst[0] && noDst[0] != '0';
+        const bool extInterlock =
+            vkr_device_has_ext(g_vkr.phys, VK_EXT_FRAGMENT_SHADER_INTERLOCK_EXTENSION_NAME);
+        const bool extOrder = vkr_device_has_ext(
+            g_vkr.phys, VK_EXT_RASTERIZATION_ORDER_ATTACHMENT_ACCESS_EXTENSION_NAME);
+        const bool extOrderArm =
+            !extOrder &&
+            vkr_device_has_ext(g_vkr.phys,
+                               VK_ARM_RASTERIZATION_ORDER_ATTACHMENT_ACCESS_EXTENSION_NAME);
+        const bool extLocal =
+            vkr_device_has_ext(g_vkr.phys, VK_KHR_DYNAMIC_RENDERING_LOCAL_READ_EXTENSION_NAME);
+        void *chain = NULL;
+        if (extInterlock) {
+            qInterlock.pNext = chain;
+            chain = &qInterlock;
+        }
+        if (extOrder || extOrderArm) {
+            qOrder.pNext = chain;
+            chain = &qOrder;
+        }
+        if (extLocal) {
+            qLocal.pNext = chain;
+            chain = &qLocal;
+        }
+        if (chain) {
+            VkPhysicalDeviceFeatures2 q = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+                                           .pNext = chain};
+            vkGetPhysicalDeviceFeatures2(g_vkr.phys, &q);
+        }
+        g_vkr.interlock = !fake && extInterlock && qInterlock.fragmentShaderPixelInterlock &&
+                          avail.fragmentStoresAndAtomics == VK_TRUE &&
+                          vkr_format_ok(g_vkr.phys, VK_FORMAT_R8G8B8A8_UNORM,
+                                        VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT);
+        g_vkr.rasterOrder = !fake && (extOrder || extOrderArm) &&
+                            qOrder.rasterizationOrderColorAttachmentAccess && extLocal &&
+                            qLocal.dynamicRenderingLocalRead;
+        /* local read for the attachment read, and with the interlock for
+         * the barriers a pass may record between draws (vk_cmd.c
+         * vkr_dst_order) */
+        g_vkr.localRead =
+            extLocal && qLocal.dynamicRenderingLocalRead && (g_vkr.rasterOrder || g_vkr.interlock);
+        /* the interlock and the rasterization-order access order a
+         * destination read after the pass's earlier draws, so no barrier
+         * is needed between them; the validation layer's synchronisation
+         * checks model neither, so under it (and with
+         * ICO_VK_STORAGE_BARRIERS=1) vkr_dst_order puts a by-region barrier
+         * before such a draw */
+        {
+            const char *sb = getenv("ICO_VK_STORAGE_BARRIERS");
+            g_vkr.storageBarriers =
+                g_vkr.localRead && (g_vkr.validationOn || (sb && sb[0] && sb[0] != '0'));
+        }
+        VKR_LOG("destination read: interlock %s, rasterization-order attachment read %s%s",
+                g_vkr.interlock ? "yes" : "no", g_vkr.rasterOrder ? "yes" : "no",
+                fake ? " (ICO_VK_FAKE_NO_DST)" : "");
+        /* only what is used is enabled; the queries' structures become the
+         * enables, everything else in them off */
+        memset(&qInterlock, 0, sizeof(qInterlock));
+        qInterlock.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADER_INTERLOCK_FEATURES_EXT;
+        qInterlock.fragmentShaderPixelInterlock = VK_TRUE;
+        memset(&qOrder, 0, sizeof(qOrder));
+        qOrder.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RASTERIZATION_ORDER_ATTACHMENT_ACCESS_FEATURES_EXT;
+        qOrder.rasterizationOrderColorAttachmentAccess = VK_TRUE;
+        memset(&qLocal, 0, sizeof(qLocal));
+        qLocal.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_LOCAL_READ_FEATURES_KHR;
+        qLocal.dynamicRenderingLocalRead = VK_TRUE;
+        if (g_vkr.interlock) {
+            exts[extCount++] = VK_EXT_FRAGMENT_SHADER_INTERLOCK_EXTENSION_NAME;
+        }
+        if (g_vkr.rasterOrder) {
+            exts[extCount++] = extOrder
+                                   ? VK_EXT_RASTERIZATION_ORDER_ATTACHMENT_ACCESS_EXTENSION_NAME
+                                   : VK_ARM_RASTERIZATION_ORDER_ATTACHMENT_ACCESS_EXTENSION_NAME;
+        }
+        if (g_vkr.localRead) {
+            exts[extCount++] = VK_KHR_DYNAMIC_RENDERING_LOCAL_READ_EXTENSION_NAME;
+        }
+    }
+
     VkPhysicalDeviceDynamicRenderingFeatures dyn = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES,
         .dynamicRendering = VK_TRUE,
     };
+    if (g_vkr.interlock) {
+        qInterlock.pNext = dyn.pNext;
+        dyn.pNext = &qInterlock;
+    }
+    if (g_vkr.rasterOrder) {
+        qOrder.pNext = dyn.pNext;
+        dyn.pNext = &qOrder;
+    }
+    if (g_vkr.localRead) {
+        qLocal.pNext = dyn.pNext;
+        dyn.pNext = &qLocal;
+    }
     VkPhysicalDeviceVulkan12Features f12 = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
         .pNext = &dyn,
@@ -678,6 +866,10 @@ static bool vkr_create_device(void)
                 .dualSrcBlend = g_vkr.dualSrcBlend ? VK_TRUE : VK_FALSE,
                 .samplerAnisotropy = g_vkr.anisotropy ? VK_TRUE : VK_FALSE,
                 .textureCompressionBC = g_vkr.bc ? VK_TRUE : VK_FALSE,
+                .sampleRateShading = g_vkr.sampleRate ? VK_TRUE : VK_FALSE,
+                /* a fragment shader storing to an image (the interlock's
+                 * destination read) */
+                .fragmentStoresAndAtomics = g_vkr.interlock ? VK_TRUE : VK_FALSE,
             },
     };
 #ifdef ICO_RHI_MOLTENVK
@@ -822,6 +1014,13 @@ static void vkr_fill_limits(void)
     o->maxStorageRange = l->maxStorageBufferRange;
     /* texture packs: the BC formats (vkr_create_device enabled the feature) */
     o->bcTextures = g_vkr.bc;
+    /* multisampling (vkr_msaa_counts, at device creation) */
+    o->msaaCounts = g_vkr.msaaCounts | 1u;
+    o->sampleRateShading = g_vkr.sampleRate;
+    /* the destination read (vkr_create_device) */
+    o->fragmentInterlock = g_vkr.interlock;
+    o->rov = false;
+    o->rasterOrderAttachment = g_vkr.rasterOrder;
     /* ICO_VK_FAKE_LIMITS=min: the limits the renderer reads at the values
      * every Vulkan device is required to meet (the specification's Required
      * Limits table), where phone GPUs sit while desktop ones and lavapipe are

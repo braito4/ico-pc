@@ -32,7 +32,8 @@ void rhi_test_log(const char *fmt, ...)
 /* The eight cells, the RGBA8_UINT target, R8 copies, a copied device
  * vertex buffer and depth readback, over three frames, then (texture
  * packs) BC1 and BC3 textures with levels under one block, when the
- * device has BC (RhiLimits.bcTextures).  Returns 0 (all
+ * device has BC (RhiLimits.bcTextures), multisampling, and the
+ * destination read of each kind the device reports (RhiDstRead).  Returns 0 (all
  * passed), 1 (a mismatch or error) or 77 (no device, or accept said no). */
 int rhi_test_run_cells(const RhiTestConfig *cfg);
 

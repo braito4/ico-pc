@@ -7,11 +7,17 @@
  * Without a device:
  *   options   [video] keys from a config.toml, the defaults, the parsers,
  *             "auto", run-time set, save
- *   wide      gsb_SetVSMatrix / gsb_MakeCommonMatrix with aspect 16:9:
- *             +0x80, +0xC0 and +0x100 byte-identical to 4:3 (so
- *             IsPointIsInScreen and the screen tests are unchanged), +0x240
- *             x scale divided by 4/3 and +0x280 following it; the renderer's
- *             g_proj / g_viewProj x row compressed about 2048
+ *   wide      gsb_SetVSMatrix / gsb_MakeCommonMatrix with aspect 16:9 (the
+ *             native frame 688 wide): +0x80, +0xC0 and +0x100 byte-identical
+ *             to 4:3 (so IsPointIsInScreen and the screen tests are
+ *             unchanged), +0x240 x scale the native one (688 / 512 narrower)
+ *             and +0x280 following it, the frame's camera the 4:3 one but
+ *             for its aspect; the renderer's g_proj / g_viewProj the
+ *             camera's at 16:9 too (byte-identical to 4:3: nothing
+ *             compressed), g_clip.w the camera's aspect; the present's
+ *             exact width (512 on a 512 frame, 384 aspect held to the
+ *             frame's width on a wider one); shader_consts.h's frame
+ *             constants are ico_frame.h's
  *   scales    rd__apply_display: the Original rows 1, the options under the
  *             Original flag, its zero-size fallback; 2x, WxH, the window's
  *             box, the 4K cap, the work buffers' scale, full height
@@ -30,11 +36,13 @@
  *   scale2    the same frame at 2x: every 2 x 2 block of SCENE uniform and
  *             equal to the 1x pixel (nearest-only content, 0 LSB), DISPLAY's
  *             block averages within 2 LSB of 1x (bilinear reduction)
- *   wide169   16:9 at 1x: a UI sprite lands in the centred 4:3 box, the
- *             letterbox bars and a full-width fill stretch over the whole
- *             width (58 lines), the present fills a 16:9 output; a UI
- *             band one pixel short at each side (the menus' bars) stretches,
- *             one two pixels short stays boxed
+ *   wide169   16:9 at 1x on the native frame (688 x 512, square texels): a
+ *             UI sprite of the 4:3 columns at its GS X in the centre, a
+ *             world sprite there not squeezed or stretched, a
+ *             full-screen-tagged one the same, a frame-wide fill and the
+ *             letterbox bars over all 688 columns; the present fills a
+ *             16:9 output with the frame's exact width, the 2.67 columns a
+ *             side past it cropped (the reduction's border with them)
  *   present info  with interpolation off, rd_last_present_info names the
  *             frame rd_end_frame presented
  *   full pixel  the reduction draws the whole frame: the box's edges show
@@ -627,6 +635,9 @@ static void recordRichFrame(RdTex t, int reduce)
 
 typedef struct FrameHashes {
     uint64_t display, scene, present;
+    /* the RdBlendExact the frame was drawn with (rd_dst_read.c): the
+     * recorded hashes below are the fixed-function blend's (0) */
+    int exact;
 } FrameHashes;
 
 /* rd_init with s, the rich frame, the three hashes; false without a device */
@@ -644,6 +655,7 @@ static bool richFrame(const RdSettings *s, FrameHashes *h)
     h->scene = p ? fnv(p, (size_t)w * hh * 4) : 0;
     static uint8_t out[960 * 720 * 4];
     h->present = rd__read_present(out, sizeof(out), &w, &hh) ? fnv(out, sizeof(out)) : 0;
+    h->exact = (int)rd_blend_exact();
     rd_destroy_texture(t);
     rd_shutdown();
     return true;
@@ -669,10 +681,19 @@ static RdSettings originalSettings(void)
  * bilinear instead of the hardware's, at most 1 LSB apart; rd_pixel_test
  * checks it exactly), so DISPLAY and the present are the values of a build
  * with that change (0xde837c63a5e63c88, 0xbc970416f934e0c1 without it) and
- * SCENE is still the value from before the display options. */
-#define GOLD_DISPLAY 0x212c1c733f4ba8a1ull
+ * SCENE is still the value from before the display options.  The GS
+ * bilinear then became PCSX2's two-step lerp (common.hlsli gs_bilerp; the
+ * one weighted sum gave 0x212c1c733f4ba8a1, 0xedb088b74a237351). */
+#define GOLD_DISPLAY 0xe6242f6ac3b7ad9cull
 #define GOLD_SCENE 0x8da6e2ca4577cdacull
-#define GOLD_PRESENT 0xedb088b74a237351ull
+#define GOLD_PRESENT 0x9089548e05b4f69eull
+/* The same frame under the exact GS blend's attachment read (rd_dst_read.c;
+ * llvmpipe, LLVM 19.1.7, Mesa 25.0.7): the fade, the letterbox and the
+ * brightness are LERPs into DISPLAY computed in the shader.  The values
+ * above stay the fixed-function blend's (rd_present_fixed). */
+#define GOLD_DISPLAY_EXACT 0x7174f748fabd9253ull
+#define GOLD_SCENE_EXACT 0x0f982728fcb9118cull
+#define GOLD_PRESENT_EXACT 0xea894ace64f1d717ull
 #ifdef RD_PRESENT_BASELINE
 
 /* built against the renderer from before the display options: prints the
@@ -722,6 +743,14 @@ static int near(float a, float b)
     return fabsf(a - b) <= 1e-5f * (fabsf(b) > 1.0f ? fabsf(b) : 1.0f);
 }
 
+/* the native frame's width for the options in force (ico_video_frame) */
+static int frameW(void)
+{
+    IcoFrame f;
+    ico_video_frame(&f, 448);
+    return f.w;
+}
+
 static void checkOptions(const char *dir)
 {
     char toml[1024], ini[1024];
@@ -739,7 +768,7 @@ static void checkOptions(const char *dir)
               o.resH == 0 && o.resScale == 1 && o.windowMode == ICO_WINDOW_WINDOWED &&
               o.vsync == 1 && o.filter == ICO_FILTER_ORIGINAL && o.fullHeight == 0,
           "options: defaults (the Original rows)");
-    CHECK(ico_video_wide_x() == 1.0f && ico_video_aspect() == 4.0f / 3.0f, "options: default 4:3");
+    CHECK(frameW() == 512 && ico_video_aspect() == 4.0f / 3.0f, "options: default 4:3");
 
     /* every key: "enhanced" takes the rows as written; 1920x1440 is none of
        the two presets' */
@@ -753,7 +782,7 @@ static void checkOptions(const char *dir)
               o.aspect == ICO_ASPECT_16_9 && o.windowMode == ICO_WINDOW_FULLSCREEN &&
               o.vsync == 0 && o.filter == ICO_FILTER_ANISOTROPIC && o.fullHeight == 1,
           "options: every key read, Custom");
-    CHECK(near(ico_video_wide_x(), 4.0f / 3.0f), "options: 16:9 widens by 4/3");
+    CHECK(frameW() == 688, "options: 16:9 is 688 wide");
 
     /* window_mode, and the older fullscreen bool when it is absent */
     writeFile(toml, "version = 1\n[video]\nwindow_mode = \"borderless\"\n");
@@ -806,13 +835,13 @@ static void checkOptions(const char *dir)
               o.resH == 0 && o.aspect == ICO_ASPECT_4_3 && o.filter == ICO_FILTER_ORIGINAL &&
               o.fullHeight == 0 && o.windowMode == ICO_WINDOW_FULLSCREEN && o.vsync == 0,
           "options: the Original shortcut is 1x, 4:3, original, half, the rest kept");
-    CHECK(ico_video_wide_x() == 1.0f, "options: Original is 4:3");
+    CHECK(frameW() == 512, "options: Original is 4:3");
     /* the aspect applies whatever the preset */
     p.aspect = ICO_ASPECT_16_9;
     ico_video_set(&p);
     ico_video_get(&o);
-    CHECK(near(ico_video_wide_x(), 4.0f / 3.0f) && ico_video_preset(&o) == ICO_VIDEO_CUSTOM,
-          "options: 16:9 alone widens by 4/3 and reads Custom");
+    CHECK(frameW() == 688 && ico_video_preset(&o) == ICO_VIDEO_CUSTOM,
+          "options: 16:9 alone is 688 wide and reads Custom");
     /* the Enhanced shortcut */
     ico_video_set_preset(&p, ICO_VIDEO_ENHANCED);
     ico_video_set(&p);
@@ -832,35 +861,32 @@ static void checkOptions(const char *dir)
           "options: the preset names");
     p.aspect = ICO_ASPECT_16_10;
     ico_video_set(&p);
-    CHECK(near(ico_video_wide_x(), 1.2f), "options: 16:10 widens by 1.2");
+    CHECK(frameW() == 624, "options: 16:10 is 624 wide");
     p.aspect = ICO_ASPECT_21_9;
     ico_video_set(&p);
-    CHECK(near(ico_video_aspect(), 64.0f / 27.0f) && near(ico_video_wide_x(), 16.0f / 9.0f),
-          "options: 21:9 widens by 16/9");
+    CHECK(near(ico_video_aspect(), 64.0f / 27.0f) && frameW() == 912, "options: 21:9 is 912 wide");
     p.aspect = ICO_ASPECT_32_9;
     ico_video_set(&p);
-    CHECK(near(ico_video_aspect(), 32.0f / 9.0f) && near(ico_video_wide_x(), 8.0f / 3.0f),
-          "options: 32:9 widens by 8/3");
+    CHECK(near(ico_video_aspect(), 32.0f / 9.0f) && frameW() == 1376, "options: 32:9 is 1376 wide");
     p.aspect = ICO_ASPECT_48_9;
     ico_video_set(&p);
-    CHECK(near(ico_video_aspect(), 48.0f / 9.0f) && near(ico_video_wide_x(), 4.0f),
-          "options: 48:9 widens by 4");
+    CHECK(near(ico_video_aspect(), 48.0f / 9.0f) && frameW() == 2048, "options: 48:9 is 2048 wide");
     p.aspect = ICO_ASPECT_AUTO;
     ico_video_set(&p);
     ico_video_set_window(0, 0);
-    CHECK(ico_video_wide_x() == 1.0f, "options: auto without a window is 4:3");
+    CHECK(frameW() == 512, "options: auto without a window is 4:3");
     ico_video_set_window(1920, 1080);
     CHECK(near(ico_video_aspect(), 16.0f / 9.0f), "options: auto in 1920x1080");
     ico_video_set_window(3440, 1440);
     CHECK(near(ico_video_aspect(), 3440.0f / 1440.0f), "options: auto passes 3440x1440 through");
     ico_video_set_window(5760, 1080);
     CHECK(near(ico_video_aspect(), 48.0f / 9.0f), "options: auto passes 5760x1080 (48:9) through");
-    CHECK(near(ico_video_wide_x(), 4.0f), "options: auto at 48:9 widens by 4");
+    CHECK(frameW() == 2048, "options: auto at 48:9 is 2048 wide");
     ico_video_set_window(9600, 1080);
-    CHECK(ico_video_aspect() == ICO_ASPECT_MAX && near(ico_video_wide_x(), ICO_WIDE_X_MAX),
+    CHECK(ico_video_aspect() == ICO_ASPECT_MAX && frameW() == ICO_FRAME_W_MAX,
           "options: auto clamps at the maximum (20:3), 9600x1080");
-    /* the renderer's mirror of the maximum (rd_internal.h) */
-    CHECK(RD_ASPECT_MAX == ICO_ASPECT_MAX, "options: RD_ASPECT_MAX equals ICO_ASPECT_MAX");
+    /* the options' maximum is the native frame's */
+    CHECK(ICO_FRAME_ASPECT_MAX == ICO_ASPECT_MAX, "options: ICO_ASPECT_MAX is the frame's");
     ico_video_set_window(1280, 1024);
     CHECK(ico_video_aspect() == 4.0f / 3.0f, "options: auto clamps at 4:3");
     ico_video_set_window(2400, 1080);
@@ -877,7 +903,7 @@ static void checkOptions(const char *dir)
     ico_video_reload();
     ico_video_get(&o);
     CHECK(ico_video_preset(&o) == ICO_VIDEO_ORIGINAL && o.resScale == 1 &&
-              o.aspect == ICO_ASPECT_4_3 && ico_video_wide_x() == 1.0f,
+              o.aspect == ICO_ASPECT_4_3 && frameW() == 512,
           "options: an old \"original\" with rows is Original");
     writeFile(toml, "version = 1\n[video]\nresolution = \"2x\"\ntexture_filter = \"trilinear\"\n");
     ico_config_reset(toml, ini);
@@ -906,7 +932,7 @@ static void checkOptions(const char *dir)
     ico_video_get(&o);
     CHECK(ico_video_preset(&o) == ICO_VIDEO_CUSTOM && o.resScale == 0 && o.resW == 0 &&
               o.aspect == ICO_ASPECT_4_3 && o.filter == ICO_FILTER_ORIGINAL && o.fullHeight == 0 &&
-              ico_video_wide_x() == 1.0f,
+              frameW() == 512,
           "options: an old \"enhanced\" alone is Custom (window, 4:3, original, half)");
     writeFile(toml, "version = 1\n[video]\npreset = \"enhanced\"\nresolution = \"window\"\n"
                     "aspect = \"auto\"\ntexture_filter = \"anisotropic\"\nfull_height = true\n");
@@ -922,7 +948,7 @@ static void checkOptions(const char *dir)
     ico_video_get(&o);
     CHECK(ico_video_preset(&o) == ICO_VIDEO_CUSTOM && o.resScale == 3 &&
               o.aspect == ICO_ASPECT_16_10 && o.filter == ICO_FILTER_TRILINEAR &&
-              o.fullHeight == 1 && near(ico_video_wide_x(), 1.2f),
+              o.fullHeight == 1 && frameW() == 624,
           "options: \"custom\" takes the rows as written");
 
     /* parsers */
@@ -1052,17 +1078,20 @@ static void checkWide(void)
     Mats a, b;
     memset(&a, 0, sizeof(a));
     memset(&b, 0, sizeof(b));
+    ico_video_frame(&gsFrame, ScreenHeight); /* what the flip latches */
     cameraMats(&a);
     o.aspect = ICO_ASPECT_16_9;
     ico_video_set(&o);
+    ico_video_frame(&gsFrame, ScreenHeight);
+    CHECK(gsFrame.w == 688, "wide: the native frame 688 wide (%d)", gsFrame.w);
     cameraMats(&b);
     rd_discard_frame();
-    const float k = 4.0f / 3.0f;
+    const float k = 688.0f / 512.0f;
     CHECK(memcmp(a.m80, b.m80, 64) == 0, "wide: +0x80 (the view) byte-identical");
     CHECK(memcmp(a.mC0, b.mC0, 64) == 0, "wide: +0xC0 (the 4:3 screen matrix) byte-identical");
     CHECK(memcmp(a.m100, b.m100, 64) == 0, "wide: +0x100 (screen x view) byte-identical");
     CHECK(near(b.m240[0], a.m240[0] / k) && memcmp(&a.m240[1], &b.m240[1], 60) == 0,
-          "wide: +0x240 x scale divided by 4/3, the rest identical (%g -> %g)", a.m240[0],
+          "wide: +0x240 x scale 688 / 512 narrower, the rest identical (%g -> %g)", a.m240[0],
           b.m240[0]);
     int scaled = 0, bad = 0;
     for (int i = 0; i < 16; i++) {
@@ -1079,30 +1108,26 @@ static void checkWide(void)
           "wide: +0x280 is +0x240 x +0x80 with the narrower x (%d "
           "scaled, %d other)",
           scaled, bad);
-    CHECK(memcmp(&a.cam, &b.cam, sizeof(a.cam)) == 0,
-          "wide: the frame camera (proj43 = +0xC0) unchanged");
+    RdCamera bAs43 = b.cam;
+    bAs43.aspect = 4.0f / 3.0f;
+    CHECK(memcmp(&a.cam, &bAs43, sizeof(a.cam)) == 0 && a.cam.aspect == 4.0f / 3.0f &&
+              b.cam.aspect == 16.0f / 9.0f,
+          "wide: the frame camera (proj = +0xC0) unchanged but for the aspect (%g, %g)",
+          (double)a.cam.aspect, (double)b.cam.aspect);
     ico_video_defaults(&o);
     ico_video_set(&o);
+    ico_video_frame(&gsFrame, ScreenHeight);
 
-    /* the renderer's projection: x row compressed about 2048 */
+    /* the renderer's projection: the camera's own at every aspect (the
+     * native frame: nothing compressed), so a world point's GS X is the
+     * same at 4:3 and 16:9 */
     IcoFrameCB n, w;
-    const float saved = g_rd.wideX;
-    g_rd.wideX = 1.0f;
     rd__fill_camera_cb(&n, &a.cam);
-    g_rd.wideX = 0.75f;
-    rd__fill_camera_cb(&w, &a.cam);
-    g_rd.wideX = saved;
-    int ok = 1;
-    for (int c = 0; c < 4; c++) {
-        const float want = 0.75f * n.proj[c * 4] + 0.25f * 2048.0f * n.proj[c * 4 + 3];
-        ok &= near(w.proj[c * 4], want);
-        for (int r = 1; r < 4; r++) {
-            ok &= w.proj[c * 4 + r] == n.proj[c * 4 + r];
-        }
-    }
-    CHECK(ok, "wide: g_proj's x row = 0.75 x + 0.25 * 2048 w, other rows unchanged");
-    CHECK(memcmp(n.proj, a.cam.proj43, 64) == 0, "wide: g_proj = proj43 at 4:3");
-    /* a point: GS X moves towards 2048 by the factor, Y stays */
+    rd__fill_camera_cb(&w, &b.cam);
+    CHECK(memcmp(n.proj, a.cam.proj, 64) == 0 && memcmp(w.proj, b.cam.proj, 64) == 0,
+          "wide: g_proj = the camera's proj at 4:3 and 16:9");
+    CHECK(memcmp(n.proj, w.proj, 64) == 0 && memcmp(n.viewProj, w.viewProj, 64) == 0,
+          "wide: g_proj and g_viewProj byte-identical at 16:9 (no x compression)");
     const float p[4] = {100.0f, -50.0f, 800.0f, 1.0f};
     float hn[4] = {0}, hw[4] = {0};
     for (int r = 0; r < 4; r++) {
@@ -1112,10 +1137,45 @@ static void checkWide(void)
         }
     }
     const float xn = hn[0] / hn[3], xw = hw[0] / hw[3];
-    CHECK(fabsf((xw - 2048.0f) - 0.75f * (xn - 2048.0f)) < 1e-2f &&
-              fabsf(hw[1] / hw[3] - hn[1] / hn[3]) < 1e-3f,
-          "wide: a point's GS X %.3f -> %.3f about 2048, Y kept", xn, xw);
-    CHECK(near(w.clip[3], 16.0f / 9.0f), "wide: g_clip.w the aspect");
+    CHECK(xn == xw && hn[1] / hn[3] == hw[1] / hw[3],
+          "wide: a point's GS X %.3f at 4:3 and %.3f at 16:9", xn, xw);
+    IcoFrameCB bw;
+    rd__fill_camera_cb(&bw, &b.cam);
+    CHECK(n.clip[3] == 4.0f / 3.0f && bw.clip[3] == 16.0f / 9.0f,
+          "wide: g_clip.w the camera's aspect (%g, %g)", (double)n.clip[3], (double)bw.clip[3]);
+    /* the present's exact width: 512 exactly on a 512-wide frame whatever
+     * the aspect (the integer 4:3 box, no crop), the replayed frame's own or
+     * else 384 times the frame camera's aspect on a wider one (the box 16:9, (688 - 682.67) / 2
+     * columns cropped a side), never past the frame */
+    {
+        const uint32_t keepW = g_rd.gsW;
+        const float keepA = g_rd.frameAspect, keepE = g_rd.frameWExact;
+        g_rd.frameWExact = 0.0f; /* no frame head replayed: the camera's aspect */
+        g_rd.gsW = 512;
+        g_rd.frameAspect = 16.0f / 9.0f;
+        CHECK(rd__frame_wexact() == 512.0f, "wide: a 512 frame shows 512 columns (%g)",
+              (double)rd__frame_wexact());
+        g_rd.gsW = 688;
+        CHECK(near(rd__frame_wexact(), 384.0f * 16.0f / 9.0f),
+              "wide: a 688 frame at 16:9 shows 682.67 columns (%g)", (double)rd__frame_wexact());
+        g_rd.frameAspect = 48.0f / 9.0f;
+        CHECK(rd__frame_wexact() == 688.0f, "wide: never past the frame's width (%g)",
+              (double)rd__frame_wexact());
+        /* a replayed frame's own exact width (RdFrame.wExact) wins */
+        g_rd.frameWExact = 683.0f;
+        CHECK(rd__frame_wexact() == 683.0f, "wide: the frame head's exact width (%g)",
+              (double)rd__frame_wexact());
+        g_rd.gsW = 512;
+        CHECK(rd__frame_wexact() == 512.0f, "wide: still 512 on a 512 frame (%g)",
+              (double)rd__frame_wexact());
+        g_rd.gsW = keepW;
+        g_rd.frameAspect = keepA;
+        g_rd.frameWExact = keepE;
+    }
+    /* the shaders' copy of the frame constants */
+    _Static_assert(ICO_SH_FRAME_BASE_W == ICO_FRAME_BASE_W, "shader_consts.h ICO_SH_FRAME_BASE_W");
+    _Static_assert(ICO_SH_FRAME_K_MAX == ICO_FRAME_K_MAX, "shader_consts.h ICO_SH_FRAME_K_MAX");
+    _Static_assert(ICO_SH_FRAME_W_MAX == ICO_FRAME_W_MAX, "shader_consts.h ICO_SH_FRAME_W_MAX");
 }
 
 /* -------------------------------------------------------------- scales */
@@ -1126,23 +1186,34 @@ static void applyWith(const RdSettings *s)
     rd__apply_display();
 }
 
+/* the native frame for an aspect, as the flip latches it (rd_reset_scene
+   sets the scene size; the targets are not remade here) */
+static void frameFor(float aspect)
+{
+    g_rd.gsW = (uint32_t)ico_frame_width_for(aspect);
+}
+
 static void checkScales(void)
 {
     const RdSettings saved = g_rd.settings;
+    const uint32_t savedW = g_rd.gsW;
     RdSettings s = originalSettings();
+    frameFor(4.0f / 3.0f);
     applyWith(&s);
     CHECK(g_rd.sceneSx == 1.0f && g_rd.sceneSy == 1.0f && g_rd.workScale == 1.0f &&
-              g_rd.wideX == 1.0f && g_rd.outAspect == 4.0f / 3.0f && !g_rd.fullHeight &&
-              !g_rd.filterUpgrade,
+              g_rd.outAspect == 4.0f / 3.0f && !g_rd.fullHeight && !g_rd.filterUpgrade,
           "scales: the Original rows are 1");
-    /* the options apply under the Original flag too */
+    /* the options apply under the Original flag too; at 16:9 the frame is
+     * 688 GS pixels wide, and the scale is the resolution's alone, the same
+     * both ways */
     s.sceneScale = 3.0f;
     s.aspect = 16.0f / 9.0f;
+    frameFor(s.aspect);
     applyWith(&s);
-    CHECK(g_rd.sceneSx == 4.0f && g_rd.sceneSy == 3.0f && g_rd.workScale == 2.0f &&
-              near(g_rd.wideX, 0.75f) && near(g_rd.outAspect, 16.0f / 9.0f),
-          "scales: 3x at 16:9 under the Original flag (%g, %g, work %g, wide %g)", g_rd.sceneSx,
-          g_rd.sceneSy, g_rd.workScale, g_rd.wideX);
+    CHECK(g_rd.gsW == 688 && g_rd.sceneSx == 3.0f && g_rd.sceneSy == 3.0f &&
+              g_rd.workScale == 2.0f && near(g_rd.outAspect, 16.0f / 9.0f),
+          "scales: 3x at 16:9 under the Original flag (%g, %g, work %g; frame %u)", g_rd.sceneSx,
+          g_rd.sceneSy, g_rd.workScale, g_rd.gsW);
     {
         RhiRect b;
         rd__present_box(1920, 1080, g_rd.outAspect, &b);
@@ -1153,6 +1224,7 @@ static void checkScales(void)
        flag (a zeroed RdSettings), the output's box only under Enhanced */
     s.sceneScale = 0.0f;
     s.aspect = 4.0f / 3.0f;
+    frameFor(s.aspect);
     s.outputWidth = 1920;
     s.outputHeight = 1080;
     applyWith(&s);
@@ -1164,25 +1236,35 @@ static void checkScales(void)
     s.aspect = 4.0f / 3.0f;
     s.sceneScale = 2.0f;
     applyWith(&s);
-    CHECK(g_rd.sceneSx == 2.0f && g_rd.sceneSy == 2.0f && g_rd.workScale == 2.0f &&
-              g_rd.wideX == 1.0f,
+    CHECK(g_rd.sceneSx == 2.0f && g_rd.sceneSy == 2.0f && g_rd.workScale == 2.0f,
           "scales: 2x at 4:3 (%g, %g, work %g)", g_rd.sceneSx, g_rd.sceneSy, g_rd.workScale);
     s.aspect = 16.0f / 9.0f;
+    frameFor(s.aspect);
     applyWith(&s);
-    CHECK(near(g_rd.sceneSx, 8.0f / 3.0f) && g_rd.sceneSy == 2.0f && near(g_rd.wideX, 0.75f),
-          "scales: 2x at 16:9 widens the texture (%g)", g_rd.sceneSx);
+    CHECK(g_rd.sceneSx == 2.0f && g_rd.sceneSy == 2.0f,
+          "scales: 2x at 16:9 is 2x both ways: the frame is wider, not its pixels (%g, %g)",
+          g_rd.sceneSx, g_rd.sceneSy);
+    s.aspect = 4.0f / 3.0f;
+    frameFor(s.aspect);
     s.sceneScale = 0.0f;
     s.sceneWidth = 1920;
     s.sceneHeight = 1440;
     applyWith(&s);
     CHECK(g_rd.sceneSx == 3.75f && g_rd.sceneSy == 2.8125f && g_rd.workScale == 2.0f,
           "scales: 1920x1440");
+    /* the window's box at 16:9: one texel an output pixel over the frame's
+     * exact width (682.67 of 688 columns), the PS2's pixel shape kept */
     s.sceneWidth = s.sceneHeight = 0;
     s.outputWidth = 1920;
     s.outputHeight = 1080;
+    s.aspect = 16.0f / 9.0f;
+    frameFor(s.aspect);
     applyWith(&s);
-    CHECK(g_rd.sceneSx == 3.75f && near(g_rd.sceneSy, 1080.0f / 512.0f),
-          "scales: the window's 16:9 box");
+    CHECK(near(g_rd.sceneSx, 1920.0f / (384.0f * 16.0f / 9.0f)) &&
+              near(g_rd.sceneSy, 1080.0f / 512.0f),
+          "scales: the window's 16:9 box (%g, %g)", g_rd.sceneSx, g_rd.sceneSy);
+    s.aspect = 4.0f / 3.0f;
+    frameFor(s.aspect);
     s.sceneWidth = 7680;
     s.sceneHeight = 4320;
     applyWith(&s);
@@ -1194,21 +1276,61 @@ static void checkScales(void)
     CHECK(near(g_rd.sceneSx * 512.0f, 16384.0f) && near(g_rd.sceneSy * 512.0f, 12288.0f),
           "scales: capped at the texture limit, shape kept (%g x %g)",
           (double)(g_rd.sceneSx * 512.0f), (double)(g_rd.sceneSy * 512.0f));
-    /* 48:9 in a 5760x1080 window with Window resolution: the box itself */
+    /* 48:9 in a 5760x1080 window with Window resolution: the box itself over
+     * the 2048-wide frame */
     s.sceneWidth = s.sceneHeight = 0;
     s.outputWidth = 5760;
     s.outputHeight = 1080;
     s.aspect = 48.0f / 9.0f;
+    frameFor(s.aspect);
     applyWith(&s);
-    CHECK(near(g_rd.sceneSx * 512.0f, 5760.0f) && near(g_rd.sceneSy * 512.0f, 1080.0f),
-          "scales: 48:9 in 5760x1080 renders 5760x1080");
+    CHECK(g_rd.gsW == 2048 && near(g_rd.sceneSx * 2048.0f, 5760.0f) &&
+              near(g_rd.sceneSy * 512.0f, 1080.0f),
+          "scales: 48:9 in 5760x1080 renders 5760x1080 (frame %u)", g_rd.gsW);
+    /* supersampling only as far as the picture lacks it: 8x at 48:9 into a
+     * 3840x720 box already has 4.27 texels an output pixel across (5.69
+     * down at full height), so SSAA2 leaves the scale at 8x; 1x there has
+     * 0.53 across, so SSAA2 applies whole (ceil(2 / 0.53) = 4, at most 2) */
+    {
+        const RdSettings before = s;
+        float lim = g_rd.hasDevice ? (float)rhi_limits()->maxRenderTargetSize : 16384.0f;
+        if (g_rd.hasDevice && rhi_limits()->tiler && lim > 4096.0f) {
+            lim = 4096.0f;
+        }
+        s.outputWidth = 3840;
+        s.outputHeight = 720;
+        s.fullHeightScene = 1;
+        s.antiAlias = RD_AA_SSAA2;
+        s.sceneScale = 8.0f;
+        applyWith(&s);
+        const float want8 = 2048.0f * 8.0f <= lim ? 8.0f : lim / 2048.0f;
+        CHECK(g_rd.ssaa == 1.0f && near(g_rd.sceneSx, want8) && near(g_rd.sceneSy, want8),
+              "scales: 8x + SSAA2 at 48:9 in a 3840x720 box stays %gx (%g, %g, ssaa %g)",
+              (double)want8, g_rd.sceneSx, g_rd.sceneSy, (double)g_rd.ssaa);
+        s.sceneScale = 1.0f;
+        applyWith(&s);
+        CHECK(g_rd.ssaa == 2.0f && g_rd.sceneSx == 2.0f && g_rd.sceneSy == 2.0f,
+              "scales: 1x + SSAA2 at 48:9 in a 3840x720 box is 2x (%g, %g, ssaa %g)", g_rd.sceneSx,
+              g_rd.sceneSy, (double)g_rd.ssaa);
+        /* 4x there has 2.13 across: SSAA4 applies as 2 (ceil(4 / 2.13)) */
+        s.sceneScale = 4.0f;
+        s.antiAlias = RD_AA_SSAA4;
+        applyWith(&s);
+        const float want4 = 2048.0f * 8.0f <= lim ? 8.0f : lim / 2048.0f;
+        CHECK(g_rd.ssaa == 2.0f && near(g_rd.sceneSx, want4),
+              "scales: 4x + SSAA4 at 48:9 in a 3840x720 box is 8x (%g, ssaa %g)", g_rd.sceneSx,
+              (double)g_rd.ssaa);
+        s = before;
+        applyWith(&s);
+    }
     s.aspect = 10.0f;
     applyWith(&s);
-    CHECK(g_rd.outAspect == RD_ASPECT_MAX, "scales: the aspect is held to the maximum");
+    CHECK(g_rd.outAspect == ICO_FRAME_ASPECT_MAX, "scales: the aspect is held to the maximum");
     s.sceneWidth = s.sceneHeight = 0;
     s.outputWidth = 320;
     s.outputHeight = 240;
     s.aspect = 4.0f / 3.0f;
+    frameFor(s.aspect);
     s.fullHeightScene = 1;
     applyWith(&s);
     CHECK(g_rd.sceneSx == 1.0f && g_rd.sceneSy == 1.0f && g_rd.fullHeight,
@@ -1219,22 +1341,69 @@ static void checkScales(void)
     t.w = 512;
     t.h = 256;
     rd__target_scale_of(&t, RD_TARGET_DISPLAY);
-    CHECK(t.tw == 512 && t.th == 512 && t.sy == 2.0f && !t.wide,
+    CHECK(t.tw == 512 && t.th == 512 && t.sy == 2.0f,
           "scales: full height doubles DISPLAY's texture (%ux%u)", t.tw, t.th);
     s.fullHeightScene = 0;
     s.sceneScale = 2.0f;
     applyWith(&s);
     t.w = t.h = 512;
     rd__target_scale_of(&t, -1);
-    CHECK(t.tw == 1024 && t.th == 1024 && t.wide, "scales: a scene-sized temporary target");
+    CHECK(t.tw == 1024 && t.th == 1024, "scales: a scene-sized temporary target");
     t.w = t.h = 256;
     rd__target_scale_of(&t, -1);
-    CHECK(t.tw == 256 && t.sx == 1.0f && !t.wide, "scales: other temporary targets stay");
+    CHECK(t.tw == 256 && t.sx == 1.0f, "scales: other temporary targets stay");
     t.w = t.h = 128;
     rd__target_scale_of(&t, RD_TARGET_FEED128);
-    CHECK(t.tw == 256 && t.th == 256 && !t.wide, "scales: the work buffers by the work scale");
+    CHECK(t.tw == 256 && t.th == 256, "scales: the work buffers by the work scale");
+    /* at 16:9 2x: a block the game sizes as the frame (688 x 512) is
+     * scene-class, 2x both ways; a 256 x 256 reflection block is drawn at
+     * its own size, whatever the aspect (no widening) */
+    s.aspect = 16.0f / 9.0f;
+    frameFor(s.aspect);
+    applyWith(&s);
+    t.w = 688;
+    t.h = 512;
+    t.withDepth = 1;
+    rd__target_scale_of(&t, -1);
+    CHECK(t.tw == 1376 && t.th == 1024 && t.sx == t.sy,
+          "scales: a frame-sized block at 16:9 2x is %ux%u", t.tw, t.th);
+    t.w = t.h = 256;
+    rd__target_scale_of(&t, -1);
+    CHECK(t.tw == 256 && t.th == 256 && t.sx == 1.0f && t.sy == 1.0f,
+          "scales: a 256 x 256 block at 16:9 stays 256 texels across (%u)", t.tw);
+    g_rd.gsW = savedW;
     g_rd.settings = saved;
     rd__apply_display();
+}
+
+/* rd_ui_box_of: the 2D layer's centred 4:3 box inside the presentation box
+ * (the pointer's mapping, the deferred text's box, the movie's box) */
+static void checkUiBox(void)
+{
+    static const struct {
+        RdRect in, want;
+        const char *name;
+    } cases[] = {
+        {{0, 0, 960, 720}, {0, 0, 960, 720}, "4:3 in 4:3"},
+        {{240, 0, 1440, 1080}, {240, 0, 1440, 1080}, "the 4:3 box of 16:9 output is its own"},
+        {{0, 0, 1920, 1080}, {240, 0, 1440, 1080}, "16:9: the pillar"},
+        {{0, 0, 3840, 720}, {1440, 0, 960, 720}, "48:9: the pillar"},
+        {{100, 50, 1600, 900}, {300, 50, 1200, 900}, "an offset 16:9 box"},
+        {{0, 152, 1280, 720}, {160, 152, 960, 720}, "16:9 letterboxed in 5:4"},
+        {{0, 0, 500, 500}, {0, 0, 500, 500}, "a box narrower than 4:3 is kept whole"},
+    };
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        const RdRect u = rd_ui_box_of(&cases[i].in);
+        CHECK(u.x == cases[i].want.x && u.y == cases[i].want.y && u.w == cases[i].want.w &&
+                  u.h == cases[i].want.h,
+              "ui box %s: %d,%d %ux%u, want %d,%d %ux%u", cases[i].name, u.x, u.y, u.w, u.h,
+              cases[i].want.x, cases[i].want.y, cases[i].want.w, cases[i].want.h);
+    }
+    /* the movie's box is the same rectangle for an output: 4:3 pillar of 16:9 */
+    RhiRect b;
+    rd__ui_box(1920, 1080, &b);
+    CHECK(b.x == 240 && b.y == 0 && b.w == 1440 && b.h == 1080, "ui box: rd__ui_box 1920x1080");
 }
 
 static void checkBoxes(void)
@@ -1363,7 +1532,15 @@ static void checkOriginal(void)
     printf("  original: display %016llx scene %016llx present %016llx\n",
            (unsigned long long)h.display, (unsigned long long)h.scene,
            (unsigned long long)h.present);
-    if (s_llvmpipe) {
+    if (s_llvmpipe && h.exact == RD_BLEND_EXACT_ATTACHMENT) {
+        CHECK(h.display == GOLD_DISPLAY_EXACT && h.scene == GOLD_SCENE_EXACT &&
+                  h.present == GOLD_PRESENT_EXACT,
+              "original: the recorded bytes of the exact blend (attachment read)");
+    } else if (s_llvmpipe && h.exact) {
+        /* the storage path is not recorded (llvmpipe has no interlock) */
+        printf("  original: the exact blend (%s): no recorded hashes\n",
+               rd__blend_exact_name(h.exact));
+    } else if (s_llvmpipe) {
         CHECK(h.display == GOLD_DISPLAY && h.scene == GOLD_SCENE && h.present == GOLD_PRESENT,
               "original: the recorded bytes (the PS2 picture as before the display options)");
     } else {
@@ -1473,6 +1650,150 @@ static void checkScale2(void)
           rhi_vk_validation_error_count());
     rd_destroy_texture(t);
     rd_shutdown();
+}
+
+/* Supersampling (RdSettings.antiAlias): the CPU's model of aa_reduce_ps,
+ * the mean over each box pixel's footprint on a 1/16-texel grid rounded half
+ * up, (sum + area / 2) / area, over src (sw x sh RGBA8) into dst (bw x bh) */
+static void cpuReduce(const uint8_t *src, uint32_t sw, uint32_t sh, uint8_t *dst, uint32_t bw,
+                      uint32_t bh)
+{
+    const uint32_t ax = sw * 16u / bw, bx = sw * 16u % bw;
+    const uint32_t ay = sh * 16u / bh, by = sh * 16u % bh;
+    for (uint32_t py = 0; py < bh; py++) {
+        const uint32_t ly = py * ay + py * by / bh, hy = (py + 1) * ay + (py + 1) * by / bh;
+        for (uint32_t px = 0; px < bw; px++) {
+            const uint32_t lx = px * ax + px * bx / bw, hx = (px + 1) * ax + (px + 1) * bx / bw;
+            uint32_t sum[4] = {0, 0, 0, 0};
+            for (uint32_t y = ly >> 4; y < ((hy + 15) >> 4) && y < sh; y++) {
+                const uint32_t wy =
+                    (hy < (y + 1) * 16 ? hy : (y + 1) * 16) - (ly > y * 16 ? ly : y * 16);
+                uint32_t row[4] = {0, 0, 0, 0};
+                for (uint32_t x = lx >> 4; x < ((hx + 15) >> 4) && x < sw; x++) {
+                    const uint32_t wx =
+                        (hx < (x + 1) * 16 ? hx : (x + 1) * 16) - (lx > x * 16 ? lx : x * 16);
+                    for (int k = 0; k < 4; k++) {
+                        row[k] += src[((size_t)y * sw + x) * 4 + k] * wx;
+                    }
+                }
+                for (int k = 0; k < 4; k++) {
+                    sum[k] += row[k] * wy;
+                }
+            }
+            const uint32_t area = (hx - lx) * (hy - ly);
+            for (int k = 0; k < 4; k++) {
+                dst[((size_t)py * bw + px) * 4 + k] = (uint8_t)((sum[k] + area / 2) / area);
+            }
+        }
+    }
+}
+
+static uint8_t s_ssaaDisp[2048 * 2048 * 4], s_ssaaRef[1280 * 960 * 4], s_ssaaOut[1280 * 960 * 4];
+
+/* the rich frame at Enhanced, full height, 4:3 into outW x outH with the
+ * anti-aliasing aa and scene scale scale: DISPLAY (into s_ssaaDisp when
+ * disp), the present (into s_ssaaOut) and its box */
+static bool ssaaRun(int aa, float scale, uint32_t outW, uint32_t outH, int disp, uint32_t *dw,
+                    uint32_t *dh, RhiRect *box)
+{
+    RdSettings s = originalSettings();
+    s.preset = RD_PRESET_ENHANCED;
+    s.sceneScale = scale;
+    s.fullHeightScene = 1;
+    s.outputWidth = outW;
+    s.outputHeight = outH;
+    s.antiAlias = (uint8_t)aa;
+    if (!rd_init(512, 512, &s, NULL)) {
+        return false;
+    }
+    RdTex t = rd_create_texture(512, 512, s_scene, RD_TEXA_80_80, "scene");
+    recordRichFrame(t, 1);
+    bool ok = true;
+    uint32_t w = 0, h = 0;
+    uint8_t *p = readTarget(RD_TARGET_DISPLAY, &w, &h);
+    ok = p != NULL && (size_t)w * h * 4 <= sizeof(s_ssaaDisp);
+    if (ok && disp) {
+        memcpy(s_ssaaDisp, p, (size_t)w * h * 4);
+    }
+    *dw = w;
+    *dh = h;
+    uint32_t ow = 0, oh = 0, bw = 0, bh = 0;
+    ok = ok && rd__read_present(s_ssaaOut, sizeof(s_ssaaOut), &ow, &oh) && ow == outW &&
+         oh == outH && rd__last_present_box(&bw, &bh, box);
+    rd_destroy_texture(t);
+    rd_shutdown();
+    return ok;
+}
+
+/* SSAA2 (and SSAA4) at 4:3 Enhanced: the scene is the 2x (4x) render (DISPLAY
+ * byte for byte the run at that scale without anti-aliasing), and the
+ * present inside the box is DISPLAY box-reduced on the CPU, byte for byte
+ * (the rounding: half up of the exact mean on the 1/16-texel grid).  And
+ * under the Original preset the setting is off: the PS2 frame unchanged. */
+static void checkSsaa(void)
+{
+    makeNoiseScene();
+
+    static const struct {
+        int aa;
+        float scale;
+        uint32_t outW, outH;
+    } cases[] = {
+        {RD_AA_SSAA2, 2.0f, 640, 480},  /* 1024 texels into 640: 1.6 a pixel */
+        {RD_AA_SSAA2, 2.0f, 512, 384},  /* exactly 2 across */
+        {RD_AA_SSAA4, 4.0f, 1280, 960}, /* 2048 into 1280 */
+    };
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        uint32_t w1 = 0, h1 = 0, w2 = 0, h2 = 0;
+        RhiRect box, box2;
+        /* the scale without anti-aliasing: its DISPLAY */
+        if (!ssaaRun(RD_AA_OFF, cases[i].scale, cases[i].outW, cases[i].outH, 1, &w1, &h1, &box2)) {
+            CHECK(0, "ssaa %zu: the %gx run", i, (double)cases[i].scale);
+            continue;
+        }
+        /* 1x with supersampling */
+        if (!ssaaRun(cases[i].aa, 1.0f, cases[i].outW, cases[i].outH, 0, &w2, &h2, &box)) {
+            CHECK(0, "ssaa %zu: the supersampled run", i);
+            continue;
+        }
+        CHECK(w1 == w2 && h1 == h2 && w2 == 512u * (uint32_t)cases[i].scale,
+              "ssaa %zu: DISPLAY %ux%u, the %gx run's %ux%u", i, w2, h2, (double)cases[i].scale, w1,
+              h1);
+        CHECK(box.w == box2.w && box.h == box2.h && box.w > 0 && box.h > 0,
+              "ssaa %zu: the same box", i);
+        if (w1 != w2 || h1 != h2 || box.w == 0 || box.h == 0 ||
+            box.w * 4u * box.h > sizeof(s_ssaaRef)) {
+            continue;
+        }
+        cpuReduce(s_ssaaDisp, w1, h1, s_ssaaRef, box.w, box.h);
+        int bad = 0, worst = 0;
+        for (uint32_t y = 0; y < box.h; y++) {
+            for (uint32_t x = 0; x < box.w; x++) {
+                const uint8_t *g = &s_ssaaOut[(((size_t)(box.y + (int32_t)y)) * cases[i].outW +
+                                               (size_t)box.x + x) *
+                                              4];
+                const uint8_t *c = &s_ssaaRef[((size_t)y * box.w + x) * 4];
+                for (int k = 0; k < 3; k++) {
+                    const int e = abs((int)g[k] - (int)c[k]);
+                    worst = e > worst ? e : worst;
+                    bad += e != 0;
+                }
+            }
+        }
+        printf("  ssaa %zu: %ux%u -> box %ux%u, %d bytes differ, worst %d\n", i, w1, h1, box.w,
+               box.h, bad, worst);
+        CHECK(bad == 0, "ssaa %zu: the present is DISPLAY box-reduced, byte for byte", i);
+    }
+    /* the Original preset keeps it off */
+    RdSettings s = originalSettings();
+    s.antiAlias = RD_AA_SSAA2;
+    FrameHashes h;
+    if (s_presentOriginal && richFrame(&s, &h)) {
+        CHECK(h.present == s_presentOriginal, "ssaa: under the Original preset nothing changes");
+    }
+    CHECK(rhi_vk_validation_error_count() == 0, "ssaa: %u validation errors",
+          rhi_vk_validation_error_count());
 }
 
 /* The scene cap follows the device's texture limit (4096 under
@@ -1592,27 +1913,36 @@ static void checkWide169(void)
     s.sceneScale = 1.0f;
     s.outputWidth = 960;
     s.outputHeight = 540;
-    if (!rd_init(512, 512, &s, NULL)) {
+    /* the native frame at 16:9: 688 GS pixels across, the origin 2048 - 344,
+     * the 4:3 columns 88..599 */
+    const uint32_t FW = (uint32_t)ico_frame_width_for(16.0f / 9.0f);
+    CHECK(FW == 688, "wide169: the frame is 688 wide (%u)", FW);
+    if (!rd_init(FW, 512, &s, NULL)) {
         return;
     }
     static const uint8_t black[4] = {0, 0, 0, 0x80}, white[4] = {255, 255, 255, 0x80},
-                         red[4] = {255, 0, 0, 0x80};
+                         red[4] = {255, 0, 0, 0x80}, green[4] = {0, 255, 0, 0x80};
     rd_begin_frame();
     rd_select_list(0);
     rd_clear_target(rd_target(RD_TARGET_SCENE), black, 1, 0);
-    rd_set_target(rd_target(RD_TARGET_SCENE), rd_target(RD_TARGET_SCENE), 512, 512, 1);
+    rd_set_target(rd_target(RD_TARGET_SCENE), rd_target(RD_TARGET_SCENE), FW, 512, 1);
     opaque2D();
     rd_texture_off();
-    /* a UI item: GS 128..384 x 100..200 */
+    /* a UI item in the 640 grid's 4:3 columns: GS 128..384 of them x 100..200 */
     sprite(RD_SPACE_UI, 128 * 16, 100 * 16, 384 * 16, 200 * 16, white, 0, 0, 0, 0);
-    /* a full-width fill the game tags WORLD: rows 300..310 */
-    sprite(RD_SPACE_WORLD, 0, 300 * 16, 512 * 16, 310 * 16, red, 0, 0, 0, 0);
-    /* the pause menu's band as the layout draws it, UI space, GS x
-     * 0.25 .. 511.44 (pixels 1..511): rows 320..330 */
-    sprite(RD_SPACE_UI, 4, 320 * 16, 511 * 16 + 7, 330 * 16, red, 0, 0, 0, 0);
-    /* a UI band two pixels short at the left (pixels 2..511): rows 340..350,
-     * stays in the 4:3 box */
-    sprite(RD_SPACE_UI, 2 * 16, 340 * 16, 512 * 16, 350 * 16, red, 0, 0, 0, 0);
+    /* a WORLD sprite over the 4:3 columns 0..512: rows 280..290 */
+    sprite(RD_SPACE_WORLD, 0, 280 * 16, 512 * 16, 290 * 16, green, 0, 0, 0, 0);
+    /* a full-screen-tagged sprite over the 4:3 columns: rows 340..350 */
+    sprite(RD_SPACE_FULLFRAME, 0, 340 * 16, 512 * 16, 350 * 16, green, 0, 0, 0, 0);
+    /* a fill the game draws at the frame's width (GS 1704..2392) under the
+     * full-frame tag (gif_FullFrameBegin's scope): rows 300..310 */
+    {
+        const int32_t x0 = (2048 - (int32_t)FW / 2) * 16, x1 = (2048 + (int32_t)FW / 2) * 16;
+        const int32_t o = (2048 - 256) * 16;
+        RdScreenVtx v[2] = {vtx(x0, o + 300 * 16, 0, red, 0.0f, 0.0f),
+                            vtx(x1, o + 310 * 16, 0, red, 0.0f, 0.0f)};
+        rd_screen_prims(RD_PRIM_SPRITES, v, 2, RD_SPACE_FULLFRAME, 1, 0);
+    }
     /* the letterbox at full strength */
     rd_select_list(11);
     RdPostParams pp;
@@ -1626,53 +1956,63 @@ static void checkWide169(void)
     rd_end_frame(0);
     uint32_t w, h;
     uint8_t *p = readTarget(RD_TARGET_SCENE, &w, &h);
-    CHECK(p && w == 683 && h == 512, "wide169: SCENE is 683x512 (%ux%u)", w, h);
-    if (p && w == 683 && h == 512) {
-#define PX(x, y) (&p[((y) * 683 + (x)) * 4])
-        /* the 4:3 box is 512 wide (75%) from 85.3: GS 128..384 -> 213.3..469.6 */
+    CHECK(p && w == FW && h == 512, "wide169: SCENE is 688x512, square texels (%ux%u)", w, h);
+    {
+        /* rd_ui_box: the 4:3 pillar of the 960 x 540 output's 16:9 box */
+        const RdRect u = rd_ui_box();
+        CHECK(u.x == 120 && u.y == 0 && u.w == 720 && u.h == 540,
+              "wide169: rd_ui_box is the 720 x 540 pillar (%d,%d %ux%u)", u.x, u.y, u.w, u.h);
+    }
+    if (p && w == FW && h == 512) {
+#define PX(x, y) (&p[((y) * (int)FW + (x)) * 4])
+        /* the UI sprite at its GS X: 4:3 columns 128..383 are texels 216..471 */
         int ok = 1;
-        for (int x = 0; x < 683; x++) {
-            const int in = x >= 214 && x <= 468, out = x <= 212 || x >= 470;
-            if (in) {
-                ok &= PX(x, 150)[0] == 255 && PX(x, 150)[1] == 255;
-            } else if (out) {
-                ok &= PX(x, 150)[0] == 0;
-            }
+        for (int x = 0; x < (int)FW; x++) {
+            const int in = x >= 216 && x <= 471;
+            ok &= in ? PX(x, 150)[0] == 255 && PX(x, 150)[1] == 255 : PX(x, 150)[0] == 0;
         }
-        CHECK(ok, "wide169: the UI sprite in the centred 4:3 box (texels 214..468)");
+        CHECK(ok, "wide169: the UI sprite at its GS X in the centre (texels 216..471)");
+        /* the world sprite where the game put it: not squeezed, not stretched */
         ok = 1;
-        for (int x = 0; x < 683; x++) {
+        for (int x = 0; x < (int)FW; x++) {
+            const int in = x >= 88 && x <= 599;
+            ok &= in ? PX(x, 285)[1] == 255 : PX(x, 285)[1] == 0;
+        }
+        CHECK(ok, "wide169: a world sprite over the 4:3 columns covers texels 88..599 only");
+        /* the full-frame tag changes no transform: a 512-wide sprite under it
+           covers the 4:3 columns, as the untagged world one does */
+        ok = 1;
+        for (int x = 0; x < (int)FW; x++) {
+            ok &= PX(x, 345)[1] == PX(x, 285)[1];
+        }
+        CHECK(ok, "wide169: a full-frame-tagged 512-wide sprite is drawn as the world one");
+        ok = 1;
+        for (int x = 0; x < (int)FW; x++) {
             ok &= PX(x, 305)[0] == 255 && PX(x, 305)[1] == 0;
         }
-        CHECK(ok, "wide169: the full-width WORLD fill stretches over the 16:9 width");
-        /* the band one pixel short at each side: stretched (GS pixels
-         * 1..511 at 683/512 texels each: texels 2..681 at least) */
-        ok = 1;
-        for (int x = 2; x < 682; x++) {
-            ok &= PX(x, 325)[0] == 255;
-        }
-        CHECK(ok, "wide169: the layout's screen band (pixels 1..511) spans the 16:9 width");
-        /* the band two pixels short: boxed, GS 2..511 -> texels 87..597 */
-        ok = PX(80, 345)[0] == 0 && PX(90, 345)[0] == 255 && PX(595, 345)[0] == 255 &&
-             PX(600, 345)[0] == 0;
-        CHECK(ok, "wide169: a UI band two pixels short stays in the 4:3 box");
+        CHECK(ok, "wide169: a full-frame-tagged frame-wide fill covers all 688 columns");
         /* letterbox: 58 lines top and bottom over the whole width, black */
         ok = 1;
-        for (int x = 0; x < 683; x += 1) {
+        for (int x = 0; x < (int)FW; x += 1) {
             ok &= PX(x, 0)[0] == 0 && PX(x, 57)[0] == 0 && PX(x, 454)[0] == 0 && PX(x, 511)[0] == 0;
         }
-        CHECK(ok, "wide169: the bars span the width");
+        CHECK(ok, "wide169: the bars span the frame's width");
         CHECK(PX(300, 150)[0] == 255 && PX(5, 305)[0] == 255 && PX(300, 58)[0] == 0,
               "wide169: below the top bar the scene shows");
 #undef PX
     }
-    /* the present: 16:9 fills the 960 x 540 output (no pillars) */
+    /* the present: the frame's exact width (682.67 of 688 columns) fills the
+     * 960 x 540 output; the (688 - 682.67) / 2 columns cropped at each side
+     * take the reduction's 2-column black border with them, so the fill
+     * reaches the output's first and last columns */
     static uint8_t out[960 * 540 * 4];
     uint32_t ow = 0, oh = 0;
     if (rd__read_present(out, sizeof(out), &ow, &oh) && ow == 960 && oh == 540) {
-        /* 12 output pixels in: past the reduction's 2-pixel border crop */
-        const uint8_t *q = &out[(305 * 540 / 512 * 960 + 12) * 4];
-        CHECK(q[0] > 200, "wide169: the fill reaches the output's left edge (%u)", q[0]);
+        const uint8_t *q0 = &out[(305 * 540 / 512 * 960 + 0) * 4];
+        const uint8_t *q1 = &out[(305 * 540 / 512 * 960 + 959) * 4];
+        CHECK(q0[0] > 200 && q1[0] > 200,
+              "wide169: the fill reaches the output's edges, the border cropped (%u, %u)", q0[0],
+              q1[0]);
     } else {
         CHECK(0, "wide169: present readback");
     }
@@ -1701,7 +2041,8 @@ static bool fullPixelRun(float aspect, uint32_t w, uint32_t h, int full, int ful
     if (scale > 1.0f) {
         s.sceneScale = scale; /* a scaled target: the reduction's hardware sprite */
     }
-    if (!rd_init(512, 512, &s, NULL)) {
+    /* the native frame for the aspect (688 at 16:9) */
+    if (!rd_init((uint32_t)ico_frame_width_for(aspect), 512, &s, NULL)) {
         return false;
     }
     static const uint8_t red[4] = {255, 0, 0, 0x80};
@@ -1740,10 +2081,17 @@ static void checkFullPixelCase(const char *name, float aspect, uint32_t w, uint3
 #define BLACK(q) ((q)[0] < 8 && (q)[1] < 8 && (q)[2] < 8)
     const uint32_t cx = w / 2, cy = h / 2;
     /* off: the reduction's border at the box edge (2 of 512 columns, 8 of
-     * DISPLAY's 256 rows), red inside */
-    CHECK(BLACK(PXO(off, x0, cy)) && BLACK(PXO(off, x0 + 1, cy)) && BLACK(PXO(off, x1, cy)) &&
-              BLACK(PXO(off, x1 - 1, cy)),
-          "%s: off: the side columns are black", name);
+     * DISPLAY's 256 rows), red inside.  Wider than 4:3 the frame's columns
+     * past its exact width are cropped (2.67 a side at 16:9), which takes
+     * the 2-column border out of the box: the sides show the picture */
+    if (aspect > 4.0f / 3.0f + 0.01f) {
+        CHECK(RED(PXO(off, x0, cy)) && RED(PXO(off, x1, cy)),
+              "%s: off: the crop leaves the side border out", name);
+    } else {
+        CHECK(BLACK(PXO(off, x0, cy)) && BLACK(PXO(off, x0 + 1, cy)) && BLACK(PXO(off, x1, cy)) &&
+                  BLACK(PXO(off, x1 - 1, cy)),
+              "%s: off: the side columns are black", name);
+    }
     CHECK(BLACK(PXO(off, cx, y0)) && BLACK(PXO(off, cx, y0 + 3)) && BLACK(PXO(off, cx, y1)) &&
               BLACK(PXO(off, cx, y1 - 3)),
           "%s: off: the top and bottom rows are black", name);
@@ -1901,7 +2249,8 @@ static void checkFullPixelSharp(uint32_t w, uint32_t h)
  * matters), fullHeight doubles the rows, mirror flips the UI sprite.
  * bandTest 0: a blue column 0 and a blue row 0 in the scene.  1: a black
  * band, GS 1..511 across and the middle half of the rows, as the pause
- * menu's bars are drawn. */
+ * menu's bars are drawn (full-frame tagged: the game draws them in
+ * gif_FullFrameBegin's scope).  2: the same band UI-tagged. */
 static uint8_t *clampRun(int full, float scale, int fullHeight, int mirror, int bandTest,
                          uint32_t *w, uint32_t *h)
 {
@@ -1925,7 +2274,8 @@ static uint8_t *clampRun(int full, float scale, int fullHeight, int mirror, int 
     opaque2D();
     rd_texture_off();
     if (bandTest) {
-        sprite(RD_SPACE_UI, 4, 128 * 16, 511 * 16 + 7, 384 * 16, black, 0, 0, 0, 0);
+        sprite(bandTest == 2 ? RD_SPACE_UI : RD_SPACE_FULLFRAME, 4, 128 * 16, 511 * 16 + 7,
+               384 * 16, black, 0, 0, 0, 0);
     } else {
         sprite(RD_SPACE_WORLD, 0, 0, 16, 512 * 16, blue, 0, 0, 0, 0);
         sprite(RD_SPACE_WORLD, 0, 0, 512 * 16, 16, blue, 0, 0, 0, 0);
@@ -2070,10 +2420,12 @@ static void checkFullPixelClamp(void)
 }
 
 /* the layout's full-width bands (the pause and End Game bars, GS pixels 1
- * to 511 of 512) reach the frame's edge with the option on: the strip it
- * shows beside the bar is the bar, not a column of the scene under it.
- * Rows outside the band keep the scene's red at the edge, and with the
- * option off the border stays black as it was. */
+ * to 511 of 512, full-frame tagged) reach the frame's edge with the option
+ * on: the strip it shows beside the bar is the bar, not a column of the
+ * scene under it.  Rows outside the band keep the scene's red at the edge,
+ * and with the option off the border stays black as it was.  The same band
+ * UI-tagged is not extended: the tag is the rule, nothing is detected from
+ * the pixels. */
 static void checkFullPixelBands(void)
 {
     static const struct {
@@ -2110,6 +2462,15 @@ static void checkFullPixelBands(void)
 #undef PX
         }
     }
+    uint32_t w = 0, h = 0;
+    uint8_t *p = clampRun(1, 1.0f, 0, 0, 2, &w, &h);
+    if (!p) {
+        CHECK(0, "full pixel bands UI-tagged: DISPLAY readback (%ux%u)", w, h);
+        return;
+    }
+    const uint8_t *l = &p[((size_t)(h / 2) * w) * 4], *m = &p[((size_t)(h / 2) * w + w / 2) * 4];
+    CHECK(m[0] < 8 && !(l[0] < 8 && l[1] < 8 && l[2] < 8),
+          "full pixel bands: a UI-tagged band is not extended (edge %u %u %u)", l[0], l[1], l[2]);
 }
 
 /* with interpolation off rd_end_frame presents each frame once, and
@@ -2517,7 +2878,9 @@ static void checkOverlay(uint64_t presentNoOverlay)
         CHECK(h.present == presentNoOverlay,
               "overlay: without a callback the present hashes %016llx, not %016llx",
               (unsigned long long)h.present, (unsigned long long)presentNoOverlay);
-        CHECK(!s_llvmpipe || h.present == GOLD_PRESENT,
+        CHECK(!s_llvmpipe ||
+                  (h.exact == RD_BLEND_EXACT_ATTACHMENT ? h.present == GOLD_PRESENT_EXACT
+                                                        : h.exact || h.present == GOLD_PRESENT),
               "overlay: without a callback the present is the recorded one");
     }
 }
@@ -3317,6 +3680,7 @@ int main(int argc, char **argv)
     const char *dir = argc > 1 ? argv[1] : ".";
     checkOptions(dir);
     checkBoxes();
+    checkUiBox();
     checkCoverage();
     RdSettings st = originalSettings();
     st.outputWidth = st.outputHeight = 0;
@@ -3341,6 +3705,7 @@ int main(int argc, char **argv)
     rd_shutdown();
     checkOriginal();
     checkScale2();
+    checkSsaa();
     checkSceneLimit();
     checkWide169();
     checkPresentInfo();

@@ -202,6 +202,7 @@ void MakeCameraMatrix(CameraSet2 *cs)
     MakeMatrixFromCameraSet2(mat, cs);
     MatrixDrive_PushMatrix();
     CopyMatrix(MatrixDrive_GetMatrix(), mat);
+    /* PC port: SCALE, the full-screen projection (GsBase.c) */
     gsb_SetVSMatrix(ScreenWidth, ScreenHeight,
                     GetTableCos((short)(int)(cs->fov * 32768.0f / 180.0f)) * 1024.0f /
                         GetTableSin((short)(int)(cs->fov * 32768.0f / 180.0f)));
@@ -673,7 +674,7 @@ void SetCameraMatrix(GObj *self)
         } else {
             cameraFov = atan2f(1024.0f / zoom, 1.0f) * 180.0f / 3.14159265f;
         }
-        gsb_SetVSMatrix(ScreenWidth, ScreenHeight, cameraZoom);
+        gsb_SetVSMatrix(ScreenWidth, ScreenHeight, cameraZoom); /* SCALE */
         sceVu0CopyMatrix(matrixptr + 0x80, m);
         gsb_MakeCommonMatrix();
         break;

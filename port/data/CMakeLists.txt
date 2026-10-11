@@ -54,7 +54,7 @@ target_include_directories(ico_libchdr PUBLIC "${_chdr}/include")
 target_compile_definitions(ico_libchdr PRIVATE MINIZ_NO_ARCHIVE_APIS MINIZ_NO_DEFLATE_APIS
                                                MINIZ_NO_STDIO MINIZ_NO_TIME)
 target_compile_options(ico_libchdr PRIVATE
-    "SHELL:-include ${CMAKE_CURRENT_SOURCE_DIR}/chdr_miniz_names.h")
+    "SHELL:-include \"${CMAKE_CURRENT_SOURCE_DIR}/chdr_miniz_names.h\"")
 # third-party code: its own warnings are not ours to fix
 target_compile_options(ico_libchdr PRIVATE -w)
 set_target_properties(ico_libchdr PROPERTIES POSITION_INDEPENDENT_CODE ON)

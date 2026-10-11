@@ -33,7 +33,7 @@ Texture2D<float4> g_atlas : register(t1, space2);
 SamplerState g_sampler : register(s1, space2);
 Texture2D<float> g_dateSnap : register(t2, space2);
 
-DualOut font_ps(SpriteVSOut i)
+GS_PS_ATTR GS_PS_OUT font_ps(SpriteVSOut i)
 {
     if ((g_mode.x & DF_DATE) != 0u) {
         if (gs_date_discard(g_mode.x, g_dateSnap.Load(int3(int2(i.pos.xy), 0)))) {
@@ -48,7 +48,7 @@ DualOut font_ps(SpriteVSOut i)
     if (gs_alpha_discard(g_mode.z, g_mode.w, col.a)) {
         discard;
     }
-    return gs_dual_out(col, g_mode.x, g_blend.y);
+    GS_RETURN(col, i.pos);
 }
 
 // The coverage bytes of the 2x2 texels at q (x), q + (1, 0) (y),
@@ -131,7 +131,7 @@ void sheet_scaled(int2 p0, int2 size, uint4 style, uint dither, uint s, out floa
     }
 }
 
-DualOut font_sheet_ps(SpriteVSOut i)
+GS_PS_ATTR GS_PS_OUT font_sheet_ps(SpriteVSOut i)
 {
     if ((g_mode.x & DF_DATE) != 0u) {
         if (gs_date_discard(g_mode.x, g_dateSnap.Load(int3(int2(i.pos.xy), 0)))) {
@@ -203,5 +203,5 @@ DualOut font_sheet_ps(SpriteVSOut i)
     if (gs_alpha_discard(g_mode.z, g_mode.w, col.a)) {
         discard;
     }
-    return gs_dual_out(col, g_mode.x, g_blend.y);
+    GS_RETURN(col, i.pos);
 }

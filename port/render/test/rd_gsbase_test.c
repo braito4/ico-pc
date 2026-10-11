@@ -12,9 +12,9 @@
  *   keep     an fbKeep frame keeps the head copy in list 11 (list 0's is
  *            NOPed), a full frame the copy in list 0 (list 11's is NOPed);
  *            the reduction tint is 128 in a keep frame
- *   parity   the half offset follows GS_CSR.FIELD two flips late: constant
- *            when the field is the same at every flip (frame step 2), one
- *            per buffer when it alternates per flip
+ *   parity   no half offset on any flip: the frame head's TARGET offset is
+ *            RD_TARGET_OFFSET alone whether GS_CSR.FIELD is 0, 1 or
+ *            alternating per flip, and through gsb_ResetGSSystem
  *   leak     the post passes leave their state: fade -> ALPHA 0x44, ABE,
  *            PABE 0; keep -> TEXA 80/80, DISPLAY bound
  *   mask     FBMSK's extent: FRAME.FBMSK masked in list 10 holds
@@ -32,22 +32,36 @@
  *            zoom k the projection is gsb_SetVSMatrix at d k bit for bit and
  *            ico_photo_camera's within 1e-5, ico_photo_fov_now within
  *            1e-3 degrees; leaving puts everything back with a camera cut;
- *            after a puddle pass enter rebuilds +0x240; 16:9 widens the photo
- *            camera's +0x240; a stage change or the game running again drops
- *            the save
- *   cull     gsbHostWidenCull: with the Original framerate at 4:3 +0x240 and
- *            the 500 unit pair's +0x680 are as gsb_SetVSMatrixSub made them;
- *            with pictures blended between ticks both scales are divided by
- *            1.12 (and x by 4/3 more at 16:9); at 16:9 with the Original
- *            framerate x alone by 4/3, y untouched; the matrices that place
- *            anything never change
+ *            after a puddle pass enter rebuilds +0x240; at 16:9 (the native
+ *            frame 688 wide, latched at a flip) the photo camera's +0x240 is
+ *            the native one, the frame's camera carries the aspect 16:9, and
+ *            leave puts the 16:9 matrices back; a stage change or the game
+ *            running again drops the save
+ *   cull     the native width (gsb_SetVSMatrixSub's window half-width
+ *            gsFrame.w / 2) and gsbHostCullMargin: with the Original
+ *            framerate at 4:3 +0x240 and the 500 unit pair's +0x680 are as
+ *            gsb_SetVSMatrixSub made them; with pictures blended between
+ *            ticks both scales are divided by 1.12; at 16:9 (W = 688) x is
+ *            the native one, 688 / 512 narrower (and by 1.12 more when
+ *            blended), y untouched; the frame's camera carries the aspect;
+ *            the matrices that place anything never change
+ *   strips   GifPacket.c's CPU strips at 512, 688 and 2560: isInScreen's
+ *            PS2 compares (0 .. 0xFFF0) at every width; a triangle reaching
+ *            the camera's picture with a vertex past them dropped at every
+ *            width; one wholly beside the picture with a vertex past even
+ *            the old scaled window drawn on the wide frames (XYZ2_HI) and
+ *            dropped at 512 as the PS2; one with a vertex behind the eye
+ *            dropped
  * On a Vulkan device (exit 77 without one, after the recording checks):
  *   camera   rd__camera_probe (FrameCB through camera_probe_ps) against the
  *            C products and sceVu0RotTransPers through matrixptr+0x100
  *            (GS window X/Y within 1/16 pixel)
  *   depth    depth-tested UI Z above 2^24 on SCENE (PSMZ32 scale)
- *   half     a frame with the half offset samples between rows
+ *   half     a frame flipped on field 0 samples each row's own texel (no
+ *            half offset)
  *   clear    SCENE cleared to the flip's BG colour
+ *   decoder  GifPacket.c at the native widths: FRAME / XYOFFSET / SCISSOR past 2047, full-frame
+ *            UV sprites past 1024 texels, XYZ2_HI, the scaled work-buffer classes
  *   posts    keep, fade, brightness, anti-alias (each level alone within
  *            1 LSB, both 2), film noise and letterbox against CPU
  *            references of the GS within 1 LSB
@@ -545,31 +559,44 @@ static void checkKeep(void)
     tick(); /* a full frame again */
 }
 
+/* the frame head's SCENE target: RD_TARGET_OFFSET alone (1), never with
+   RD_TARGET_HALF_Y (3, the half-pixel marker of the PCSX2 dump pairing) */
+static int headOffsetOf(const RdFrame *f)
+{
+    const RdCmd *t = firstOf(f, 0, RDC_TARGET);
+    return t ? t->b[0] : -1;
+}
+
 static void checkParity(void)
 {
-    int got[8];
+    /* GS_CSR.FIELD constant 0 (the host loop's flips with the frame step 2
+       from field 0), alternating per flip (a skipped flip), constant 1, and
+       through gsb_ResetGSSystem: no half offset on any flip */
+    int bad = 0, first = -1;
     setField(0);
-    gsb_Init(&db); /* both draw environments without the half offset */
-    for (int i = 0; i < 4; i++) {
+    gsb_Init(&db);
+    for (int i = 0; i < 16; i++) {
+        if (i >= 4 && i < 12) {
+            setField(i & 1);
+        } else if (i >= 12) {
+            setField(1);
+        }
+        if (i == 8) {
+            gsb_ResetGSSystem();
+        }
         tick();
-        got[i] = halfOf(rd__last_frame(), 0);
+        const int o = headOffsetOf(rd__last_frame());
+        if (o != RD_TARGET_OFFSET && bad++ == 0) {
+            first = i;
+        }
     }
-    CHECK(got[0] == 0 && got[1] == 0 && got[2] == 1 && got[3] == 1,
-          "parity: constant field 0 -> half offset from the third flip on (%d %d %d %d)", got[0],
-          got[1], got[2], got[3]);
-    for (int i = 0; i < 4; i++) {
-        setField(i & 1 ? 0 : 1);
-        tick();
-        got[4 + i] = halfOf(rd__last_frame(), 0);
-    }
-    CHECK(got[4] == 1 && got[5] == 1 && got[6] == 0 && got[7] == 1,
-          "parity: a field alternating per flip -> one parity per buffer (%d %d %d %d)", got[4],
-          got[5], got[6], got[7]);
-    setField(1); /* field 1: no half offset, for the pixel checks */
+    CHECK(bad == 0,
+          "parity: the frame head's TARGET offset is %d (no half pixel) on every flip at either "
+          "field (%d flips differ, the first %d)",
+          RD_TARGET_OFFSET, bad, first);
+    setField(0);
     tick();
-    tick();
-    tick();
-    CHECK(halfOf(rd__last_frame(), 0) == 0, "parity: field 1 -> no half offset");
+    CHECK(halfOf(rd__last_frame(), 0) == 0, "parity: field 0 -> no half offset");
 }
 
 static void checkLeak(void)
@@ -635,8 +662,8 @@ static void checkVu(void)
     CHECK(f && f->hasCamera, "vu: the frame has a camera");
     if (f) {
         CHECK(memcmp(f->camera.view, s_view, 64) == 0, "vu: camera view = +0x80");
-        CHECK(memcmp(f->camera.proj43, matrixptr + 0xC0, 64) == 0, "vu: camera proj43 = +0xC0");
-        CHECK(f->camera.aspect43 == 4.0f / 3.0f && f->camera.nearZ == 2.0f &&
+        CHECK(memcmp(f->camera.proj, matrixptr + 0xC0, 64) == 0, "vu: camera proj = +0xC0");
+        CHECK(f->camera.aspect == 4.0f / 3.0f && f->camera.nearZ == 2.0f &&
                   f->camera.farZ == 262144.0f,
               "vu: camera aspect and planes");
     }
@@ -835,6 +862,10 @@ static void checkPhotoView(void)
     CHECK(ico_photo_view_saved(), "photo: entered");
     CHECK(slotDiff(&p, &g) == -1, "photo: enter leaves matrixptr+0x%X as it was", slotDiff(&p, &g));
     CHECK(camSame(&p, &g), "photo: enter, the frame's camera is the game's");
+    /* the photo camera not moved yet: the game's camera rule (no
+       rd_free_camera) */
+    CHECK(rd__rec_frame() && !rd__rec_frame()->freeCamera,
+          "photo: enter, the game camera's rule (not a free camera)");
     CHECK(p.focus == g.focus, "photo: enter, currentFocusDistance");
     const float fov0 = ico_photo_fov_deg(&g.cam);
     CHECK(fabsf(ico_photo_fov_now() - fov0) < 1e-3f, "photo: the field of view %.4f (want %.4f)",
@@ -858,17 +889,17 @@ static void checkPhotoView(void)
     RdCamera game0;
     memset(&game0, 0, sizeof(game0));
     memcpy(game0.view, g.m[0], 64);
-    memcpy(game0.proj43, g.m[1], 64);
+    memcpy(game0.proj, g.m[1], 64);
     RdCamera ov;
     CHECK(ico_photo_camera(&ov, &game0), "photo: ico_photo_camera");
     int bad = -1;
     for (int i = 0; i < 16; i++) {
-        if (!relNear(ov.proj43[i], z.cam.proj43[i], 1e-5f)) {
+        if (!relNear(ov.proj[i], z.cam.proj[i], 1e-5f)) {
             bad = i;
         }
     }
-    CHECK(bad < 0, "photo: proj43[%d] %.6f, ico_photo_camera's %.6f", bad,
-          (double)(bad < 0 ? 0.0f : z.cam.proj43[bad]), (double)(bad < 0 ? 0.0f : ov.proj43[bad]));
+    CHECK(bad < 0, "photo: proj[%d] %.6f, ico_photo_camera's %.6f", bad,
+          (double)(bad < 0 ? 0.0f : z.cam.proj[bad]), (double)(bad < 0 ? 0.0f : ov.proj[bad]));
     CHECK(memcmp(z.m[0], ov.view, 64) == 0, "photo: +0x80 is ico_photo_camera's view");
     gsb_SetVSMatrix(ScreenWidth, ScreenHeight, PHOTO_D * k);
     Snap r;
@@ -878,6 +909,23 @@ static void checkPhotoView(void)
               s_slot[i]);
     }
     CHECK(z.focus == (int)(PHOTO_D * k), "photo: the reflections' distance %d", z.focus);
+
+    {
+        /* zoomed: a free camera; the aspect sweep (an aspect forced) keeps
+           the game camera's rule, and the free camera is back after it */
+        RdFrame *fr = (RdFrame *)rd__rec_frame();
+        const IcoPhotoPad still = photoPad(0);
+        CHECK(fr && fr->freeCamera, "photo: zoomed, a free camera");
+        if (fr) {
+            fr->freeCamera = 0;
+            ico_video_frame_force_aspect(16.0f / 9.0f);
+            photoTicks(&still, 1);
+            CHECK(!fr->freeCamera, "photo: the sweep keeps the game camera's rule");
+            ico_video_frame_force_aspect(0.0f);
+            photoTicks(&still, 1);
+            CHECK(fr->freeCamera, "photo: after the sweep, a free camera again");
+        }
+    }
 
     /* leave: everything back byte for byte, a camera cut */
     const unsigned cut0 = ico_video_cut_serial();
@@ -911,20 +959,27 @@ static void checkPhotoView(void)
           slotDiff(&x, &pud));
     gameCamAt(PHOTO_D);
 
-    /* 16:9: the photo camera's cull widens as the game's does */
+    /* 16:9: the photo camera's cull is the native frame's, as the game's */
     o.aspect = ICO_ASPECT_16_9;
     ico_video_set(&o);
+    tick(); /* the flip latches the native frame */
+    CHECK(gsFrame.w == 688, "16:9: the native frame 688 wide (%d)", gsFrame.w);
+    const float kw = (float)gsFrame.w / 512.0f;
     gameCamAt(PHOTO_D);
     Snap wide;
     snap(&wide);
-    CHECK(relNear(wide.m[3][0] * (4.0f / 3.0f), g.m[3][0], 1e-6f),
-          "16:9: +0x240's x scale divided by 4/3 (%g -> %g)", (double)g.m[3][0],
+    CHECK(relNear(wide.m[3][0] * kw, g.m[3][0], 1e-6f),
+          "16:9: +0x240's x scale the native one, 688 / 512 narrower (%g -> %g)", (double)g.m[3][0],
           (double)wide.m[3][0]);
+    CHECK(wide.hasCam && wide.cam.aspect == 16.0f / 9.0f, "16:9: the frame's camera aspect %g",
+          (double)wide.cam.aspect);
     ico_photo_enter();
     ico_photo_view_tick();
     snap(&p);
     CHECK(slotDiff(&p, &wide) == -1, "16:9: enter leaves matrixptr+0x%X as it was",
           slotDiff(&p, &wide));
+    CHECK(camSame(&p, &wide), "16:9: enter, the frame's camera is the game's (aspect %g)",
+          (double)p.cam.aspect);
     pp = photoPad(ICO_PHOTO_R2);
     photoTicks(&pp, 10);
     snap(&p);
@@ -932,23 +987,27 @@ static void checkPhotoView(void)
     gsb_SetVSMatrix(ScreenWidth, ScreenHeight, PHOTO_D * st.zoom);
     Snap n;
     snap(&n);
-    CHECK(memcmp(n.m[3], p.m[3], 64) == 0, "16:9: the photo camera's +0x240 is the widened one");
+    CHECK(memcmp(n.m[3], p.m[3], 64) == 0, "16:9: the photo camera's +0x240 is the native one");
     ico_video_defaults(&o);
     ico_video_set(&o);
+    tick(); /* back to the 4:3 frame */
     gsb_SetVSMatrix(ScreenWidth, ScreenHeight, PHOTO_D * st.zoom);
     snap(&n);
-    CHECK(relNear(p.m[3][0] * (4.0f / 3.0f), n.m[3][0], 1e-6f) &&
-              memcmp(&p.m[3][1], &n.m[3][1], 60) == 0,
-          "16:9: +0x240's x scale at zoom %.3f divided by 4/3 (%g -> %g), the rest 4:3's",
+    CHECK(relNear(p.m[3][0] * kw, n.m[3][0], 1e-6f) && memcmp(&p.m[3][1], &n.m[3][1], 60) == 0,
+          "16:9: +0x240's x scale at zoom %.3f 688 / 512 narrower (%g -> %g), the rest 4:3's",
           (double)st.zoom, (double)n.m[3][0], (double)p.m[3][0]);
     o.aspect = ICO_ASPECT_16_9;
     ico_video_set(&o);
+    tick();
     ico_photo_exit();
     ico_photo_view_tick();
     snap(&x);
     CHECK(slotDiff(&x, &wide) == -1, "16:9: leave puts matrixptr+0x%X back", slotDiff(&x, &wide));
+    CHECK(camSame(&x, &wide), "16:9: leave, the frame's camera the game's again (aspect %g)",
+          (double)x.cam.aspect);
     ico_video_defaults(&o);
     ico_video_set(&o);
+    tick();
     gameCamAt(PHOTO_D);
 
     /* a stage change (or the game running again) drops the save: the
@@ -981,7 +1040,8 @@ static void checkPhotoView(void)
     gameCamAt(PHOTO_D);
 }
 
-/* The cull's width and margin (GsBase.c gsbHostWidenCull) on the two
+/* The cull's native width and margin (GsBase.c gsb_SetVSMatrixSub's
+   window half-width gsFrame.w / 2, gsbHostCullMargin) on the two
    projections that cull: +0x240 (slot 3) and the 500 unit pair's +0x680
    (slot 6).  The 4:3 Original-framerate camera is the reference: the
    matrices exactly as gsb_SetVSMatrixSub computes them. */
@@ -997,8 +1057,8 @@ static void checkCullScales(const char *what, const Snap *s, const Snap *raw, fl
             rest &= j == 0 || j == 5 || a[j] == r[j];
         }
         CHECK(sx && sy && rest,
-              "cull %s: matrixptr+0x%X x scale %g (4:3 Original %g, divided by %g), y %g (%g, "
-              "divided by %g), the rest as computed",
+              "cull %s: matrixptr+0x%X x scale %g (4:3 Original %g, over %g), y %g (%g, "
+              "over %g), the rest as computed",
               what, s_slot[cull[i]], (double)a[0], (double)r[0], (double)kx, (double)a[5],
               (double)r[5], (double)ky);
     }
@@ -1015,7 +1075,8 @@ static void checkCull(void)
     IcoVideoOptions o;
     Snap raw, s;
     const float m = 1.0f + 0.12f;
-    const float k = 4.0f / 3.0f;
+    /* 16:9's native frame: 16 ceil(32 x 4/3) = 688 */
+    const float k = 688.0f / 512.0f;
 
     gsb_SetZoom(1.0f, 1000.0f); /* no easing between the cameras below */
     ico_video_defaults(&o);
@@ -1045,24 +1106,37 @@ static void checkCull(void)
 
     o.aspect = ICO_ASPECT_16_9;
     ico_video_set(&o);
+    tick(); /* the flip latches the native frame */
+    CHECK(gsFrame.w == 688 && gsFrame.aspect == 16.0f / 9.0f,
+          "cull 16:9: the native frame %d wide, aspect %g", gsFrame.w, (double)gsFrame.aspect);
     gameCamAt(PHOTO_D);
     snap(&s);
     checkCullScales("16:9 uncapped", &s, &raw, k * m, m);
+    /* +0x240 as gsb_SetVSMatrixSub builds it at the native half-width 344 */
+    CHECK(relNear(s.m[3][0] * m, raw.m[2][0] * 1500.0f / 344.0f, 1e-5f),
+          "cull 16:9 uncapped: +0x240 from the half-width 344 (%g)", (double)s.m[3][0]);
+    CHECK(s.hasCam && s.cam.aspect == 16.0f / 9.0f && memcmp(s.cam.proj, raw.m[1], 64) == 0,
+          "cull 16:9: the frame's camera, aspect %g, proj the 4:3 +0xC0", (double)s.cam.aspect);
 
     o.framerate = 60;
     ico_video_set(&o);
+    tick();
     gameCamAt(PHOTO_D);
     snap(&s);
     checkCullScales("16:9 at 60", &s, &raw, k * m, m);
 
     o.framerate = ICO_FRAMERATE_ORIGINAL;
     ico_video_set(&o);
+    tick();
     gameCamAt(PHOTO_D);
     snap(&s);
     checkCullScales("16:9 Original", &s, &raw, k, 1.0f);
 
     o.aspect = ICO_ASPECT_4_3;
     ico_video_set(&o);
+    tick();
+    CHECK(gsFrame.w == 512 && gsFrame.aspect == 4.0f / 3.0f, "cull 4:3: the frame 512 wide (%d)",
+          gsFrame.w);
     gameCamAt(PHOTO_D);
     snap(&s);
     CHECK(slotDiff(&s, &raw) == -1, "cull 4:3 Original again: matrixptr+0x%X differs",
@@ -1070,6 +1144,7 @@ static void checkCull(void)
 
     ico_video_defaults(&o);
     ico_video_set(&o);
+    tick();
     gameCamAt(PHOTO_D);
 }
 
@@ -1212,7 +1287,7 @@ static void checkCamera(void)
         }
         float v[4], sv[4], cl[4];
         apply(v, f->camera.view, pts[n]);
-        apply(cl, f->camera.proj43, v);
+        apply(cl, f->camera.proj, v);
         apply(sv, (const float *)(matrixptr + 0x100), pts[n]);
         for (int i = 0; i < 4; i++) {
             const float tol = 1e-5f * (1.0f + fabsf(sv[i]));
@@ -1296,23 +1371,21 @@ static void checkDepthAndClear(void)
 
 static void checkHalf(RdTex rows)
 {
-    /* field 0 for three flips: the third frame closes with the half offset */
+    /* field 0 for three flips (the PS2's half-offset case): the frame still
+       closes without the half offset, and every row samples its own texel */
     setField(0);
     for (int i = 0; i < 3; i++) {
         drawScene(rows, RD_FILTER_LINEAR);
         tick();
     }
-    CHECK(halfOf(rd__last_frame(), 0) == 1, "half: the frame carried the half offset");
+    CHECK(halfOf(rd__last_frame(), 0) == 0, "half: field 0, the frame has no half offset");
     uint32_t w, h;
     const uint8_t *s = readTarget(RD_TARGET_SCENE, &w, &h);
     if (s) {
-        /* rows y and y+1 averaged (G = 4y within each 64-row period) */
+        /* G = 4y within each 64-row period, not rows y and y+1 averaged */
         int bad = 0;
-        for (int y = 0; y < H - 1; y++) {
-            if (y % 64 == 63) {
-                continue;
-            }
-            const int want = ((y % 64) * 4 + ((y + 1) % 64) * 4) / 2;
+        for (int y = 0; y < H; y++) {
+            const int want = (y % 64) * 4;
             const int got = s[(y * W + 100) * 4 + 1];
             if (abs(got - want) > 1 && bad++ < 4) {
                 printf("FAIL half: row %d G %d, expected %d\n", y, got, want);
@@ -1549,8 +1622,8 @@ static void checkLetterbox(void)
 
 static void checkPipelines(void)
 {
-    static RdPipeKeyInt keys[512];
-    const uint32_t n = rd__enumerate_reachable(keys, 512);
+    static RdPipeKeyInt keys[RD_PIPELINE_REACHABLE_MAX];
+    const uint32_t n = rd__enumerate_reachable(keys, RD_PIPELINE_REACHABLE_MAX);
     const uint32_t c = rd__pipeline_count();
     for (uint32_t i = 0; i < c; i++) {
         const RdPipeKeyInt *k = rd__pipeline_key_at(i);
@@ -1558,7 +1631,7 @@ static void checkPipelines(void)
             continue; /* test only */
         }
         int found = 0;
-        for (uint32_t j = 0; j < n && j < 512; j++) {
+        for (uint32_t j = 0; j < n && j < RD_PIPELINE_REACHABLE_MAX; j++) {
             found |= rd__pipe_key_equal(k, &keys[j]);
         }
         CHECK(found, "pipeline %u (blend %u fmt %u/%u z %u/%u) not in the enumerated set", i,
@@ -1689,7 +1762,7 @@ static int fullScreenSprites(void)
     int n = 0;
     for (uint32_t i = 0; f && i < f->lists[11].count; i++) {
         const RdCmd *c = &f->lists[11].cmds[i];
-        n += c->type == RDC_SCREEN && c->b[1] == RD_SPACE_FULLSCREEN;
+        n += c->type == RDC_SCREEN && c->b[1] == RD_SPACE_FULLFRAME;
     }
     return n;
 }
@@ -1749,6 +1822,287 @@ static void checkCinematicBars(void)
     }
 }
 
+/* ------------------------------------------------ the GS register decoder
+   (GifPacket.c) at the native frame widths.  One packet per width writes a
+   draw environment (SCENE), a narrower SCISSOR, a full-frame UV sprite, a
+   vertex with XYZ2_HI, and the work buffers at the widths W4 gives them
+   (W/2 x 128, W/4 x 128, W/2 x 256), a sprite after each so rd sees every
+   environment.  gsFrame.w is set by hand as the flip would latch it.  At
+   512 the expectations are literals (what the decoder gave before the
+   native frame), so the 4:3 output is byte-identical. */
+#define DEC_LIST 5
+
+static void decSprite(int x0, int y0, int x1, int y1)
+{
+    gif_SetGsReg(0x00, 6);
+    gif_SetGsReg(0x05,
+                 (unsigned long long)(x0 & 0xFFFF) | ((unsigned long long)(y0 & 0xFFFF) << 16));
+    gif_SetGsReg(0x05,
+                 (unsigned long long)(x1 & 0xFFFF) | ((unsigned long long)(y1 & 0xFFFF) << 16));
+}
+
+static void checkDecoderAt(int fw)
+{
+    const int fh = 448;
+    const int hw = fw / 2, qw = fw / 4;
+
+    tick();
+    gsFrame.w = fw;
+    gsFrame.fbw = (fw + 63) / 64;
+    gif_HostSetFrameWidth(fw); /* as GsBase.c's latch hands it to the decoder */
+    gif_StartPacketPri(DEC_LIST);
+    gif_SetDrawEnviroment(0x800, 0, (unsigned int)fw, (unsigned int)fh, 1, 0);
+    gif_SetGsReg(0x40,
+                 ((unsigned long long)(fw - 100) << 16) | ((unsigned long long)(fh - 1) << 48));
+    /* the full-frame UV sprite: UV (8, 8) to (8 + fw * 16, 8 + fh * 16) */
+    gif_SetGsReg(0x00, 6 | 0x100); /* sprite, FST */
+    gif_SetGsReg(0x03, 8ull | (8ull << 16));
+    gif_SetGsReg(0x05, (unsigned long long)((2048 - hw) * 16) |
+                           ((unsigned long long)((2048 - fh / 2) * 16) << 16));
+    gif_SetGsReg(0x03,
+                 (unsigned long long)(8 + fw * 16) | ((unsigned long long)(8 + fh * 16) << 16));
+    gif_SetGsReg(0x05, (unsigned long long)((2048 + hw) * 16) |
+                           ((unsigned long long)((2048 + fh / 2) * 16) << 16));
+    /* a vertex past 0xFFFF: XYZ2_HI 0xFFFF / 0x0001 on x 0x1234, y 2 */
+    gif_SetGsReg(0x00, 6);
+    gif_SetGsReg(0x7E, 0xFFFFull | (1ull << 16));
+    gif_SetGsReg(0x05, 0x1234ull | (2ull << 16));
+    gif_SetGsReg(0x05, 0x1244ull | (0x12ull << 16));
+    gif_SetDrawEnviroment(0x2800, 0, (unsigned int)hw, 128, 0, 0); /* WORK0 */
+    decSprite(0, 0, 16, 16);
+    gif_SetDrawEnviroment(0x2C00, 0, (unsigned int)qw, 128, 0, 0); /* AA1 */
+    decSprite(0, 0, 16, 16);
+    gif_SetDrawEnviroment(0x2C00, 0, (unsigned int)hw, 256, 0, 0); /* WORK1 */
+    decSprite(0, 0, 16, 16);
+    gif_EndPacket();
+    tick();
+
+    const RdFrame *f = rd__last_frame();
+    if (!f) {
+        CHECK(0, "decoder %d: a frame", fw);
+        return;
+    }
+    const RdCmdList *l = &f->lists[DEC_LIST];
+    uint32_t tgt[8][2], nt = 0, nsc = 0;
+    int32_t sc[4][4];
+    RdScreenVtx vtx[16];
+    uint32_t nv = 0;
+
+    for (uint32_t i = 0; i < l->count; i++) {
+        const RdCmd *c = &l->cmds[i];
+        if (c->type == RDC_TARGET && nt < 8) {
+            tgt[nt][0] = c->u[0];
+            tgt[nt][1] = c->u[2];
+            nt++;
+        } else if (c->type == RDC_SCISSOR && nsc < 4) {
+            for (int k = 0; k < 4; k++) {
+                sc[nsc][k] = (int32_t)c->u[k];
+            }
+            nsc++;
+        } else if (c->type == RDC_SCREEN && c->b[0] == RD_PRIM_SPRITES) {
+            const RdScreenVtx *v = (const RdScreenVtx *)(f->payload + c->u[0]);
+            for (uint32_t k = 0; k < c->u[1] && nv < 16; k++) {
+                vtx[nv++] = v[k];
+            }
+        }
+    }
+    CHECK(nt == 4, "decoder %d: %u targets recorded, expected 4", fw, nt);
+    CHECK(nv == 10, "decoder %d: %u sprite vertices recorded, expected 10", fw, nv);
+    if (nt != 4 || nv != 10) {
+        return;
+    }
+    /* FRAME / XYOFFSET to the native width */
+    CHECK(tgt[0][0] == rd_target(RD_TARGET_SCENE).id && tgt[0][1] == (uint32_t)(fw | (fh << 16)),
+          "decoder %d: SCENE target size %08x", fw, tgt[0][1]);
+    /* SCISSOR past the GS's 11 bits */
+    CHECK(nsc == 1 && sc[0][0] == 0 && sc[0][1] == 0 && sc[0][2] == fw - 100 && sc[0][3] == fh - 1,
+          "decoder %d: scissor %u records, x1 %d (expected %d)", fw, nsc, nsc ? sc[0][2] : -1,
+          fw - 100);
+    /* the full-frame UV sprite keeps its extents */
+    CHECK(vtx[0].s == 8.0f && vtx[0].t == 8.0f, "decoder %d: UV origin %g %g", fw, (double)vtx[0].s,
+          (double)vtx[0].t);
+    CHECK(vtx[1].s == (float)(8 + fw * 16) && vtx[1].t == (float)(8 + fh * 16),
+          "decoder %d: UV extent %g %g (expected %d %d)", fw, (double)vtx[1].s, (double)vtx[1].t,
+          8 + fw * 16, 8 + fh * 16);
+    CHECK(vtx[0].x == (2048 - hw) * 16 && vtx[1].x == (2048 + hw) * 16,
+          "decoder %d: sprite x %d..%d", fw, vtx[0].x, vtx[1].x);
+    /* XYZ2_HI: signed 32-bit (hi << 16) | lo; the next vertex is the plain 16 bits */
+    CHECK(vtx[2].x == (int32_t)0xFFFF1234u && vtx[2].y == 0x10002 && vtx[3].x == 0x1244 &&
+              vtx[3].y == 0x12,
+          "decoder %d: XYZ2_HI vertex %d %d, then %d %d", fw, vtx[2].x, vtx[2].y, vtx[3].x,
+          vtx[3].y);
+    /* the work buffers the frame scales: W/2 x 128 WORK0, W/4 x 128 AA1, W/2 x 256 WORK1 */
+    CHECK(tgt[1][0] == rd_target(RD_TARGET_WORK0).id && tgt[1][1] == (uint32_t)(hw | (128 << 16)),
+          "decoder %d: %dx128 is WORK0 (target %u size %08x)", fw, hw, tgt[1][0], tgt[1][1]);
+    CHECK(tgt[2][0] == rd_target(RD_TARGET_AA1).id && tgt[2][1] == (uint32_t)(qw | (128 << 16)),
+          "decoder %d: %dx128 on TBP 0x2C00 is AA1 (target %u)", fw, qw, tgt[2][0]);
+    CHECK(tgt[3][0] == rd_target(RD_TARGET_WORK1).id && tgt[3][1] == (uint32_t)(hw | (256 << 16)),
+          "decoder %d: %dx256 on TBP 0x2C00 is WORK1 (target %u)", fw, hw, tgt[3][0]);
+    if (fw == 512) {
+        /* the 4:3 literals, as the decoder gave them before the native frame */
+        CHECK(tgt[0][1] == 0x01C00200u && sc[0][2] == 412 && vtx[1].s == 8200.0f &&
+                  vtx[1].t == 7176.0f && vtx[0].x == 28672 && vtx[1].x == 36864 &&
+                  tgt[1][1] == 0x00800100u && tgt[2][1] == 0x00800080u && tgt[3][1] == 0x01000100u,
+              "decoder 512: the 4:3 decode differs from the recorded expectation");
+    }
+}
+
+/* TEX0 on TBP 0x2C00 reads AA1 at the quarter-frame width's TW and WORK1 at
+   the half-frame's */
+static void checkDecoderTex(int fw)
+{
+    tick();
+    gsFrame.w = fw;
+    gsFrame.fbw = (fw + 63) / 64;
+    gif_HostSetFrameWidth(fw); /* as GsBase.c's latch hands it to the decoder */
+    for (int pass = 0; pass < 2; pass++) {
+        const int tw = ico_frame_tw(pass ? fw / 2 : fw / 4);
+        gif_StartPacketPri(DEC_LIST);
+        gif_SetGsReg(0x06, 0x2C00ull | (1ull << 14) | ((unsigned long long)tw << 26) |
+                               (7ull << 30) | (1ull << 34));
+        gif_SetGsReg(0x00, 6 | 0x10 | 0x100); /* sprite, TME, FST */
+        gif_SetGsReg(0x03, 0);
+        gif_SetGsReg(0x05, 0x8000ull | (0x8000ull << 16));
+        gif_SetGsReg(0x03, 16ull | (16ull << 16));
+        gif_SetGsReg(0x05, 0x8100ull | (0x8100ull << 16));
+        gif_EndPacket();
+        tick();
+        const RdFrame *f = rd__last_frame();
+        const RdCmd *t = f ? firstOf(f, DEC_LIST, RDC_TEXTURE) : NULL;
+        const RdTexRec *r = t ? rd__tex_rec(t->u[0]) : NULL;
+        const RdTargetId want = pass ? RD_TARGET_WORK1 : RD_TARGET_AA1;
+
+        CHECK(r && r->kind == RD_TEXKIND_TARGET && r->target == rd_target(want).id,
+              "decoder %d: TEX0 0x2C00 TW %d reads %s", fw, tw, pass ? "WORK1" : "AA1");
+    }
+}
+
+static void checkDecoder(void)
+{
+    static const int widths[] = {512, 688, 1376, 2048, 2560};
+
+    for (unsigned int i = 0; i < sizeof(widths) / sizeof(widths[0]); i++) {
+        checkDecoderAt(widths[i]);
+        checkDecoderTex(widths[i]);
+    }
+    gsFrame.w = ICO_FRAME_BASE_W;
+    gsFrame.fbw = ICO_FRAME_BASE_W / 64;
+    gif_HostSetFrameWidth(ICO_FRAME_BASE_W);
+    tick();
+}
+
+/* ------------------------------------- the CPU strips' window (GifPacket.c)
+   isInScreen keeps the PS2's compares, 0 .. 0xFFF0, at every native width;
+   on a frame wider than 4:3 a strip triangle with a failing vertex is
+   kicked only when its three Z values are in range (in front of the eye)
+   and its x extent lies wholly beside the camera's picture (GS X 1792 ..
+   2304: gifHostBeside), its vertex past 16 bits through XYZ2_HI.  One
+   gif_Draw2DStripG of three vertices (pixels, Z) per case; returns the
+   triangles recorded, the first one's vertices in out. */
+static int stripCase(int fw, const int px[3][3], RdScreenVtx out[3])
+{
+    int v[3][4];
+    GifColor col[3];
+    int tris = 0;
+
+    tick();
+    gsFrame.w = fw;
+    gsFrame.fbw = (fw + 63) / 64;
+    gif_HostSetFrameWidth(fw);
+    for (int i = 0; i < 3; i++) {
+        v[i][0] = px[i][0] * 16;
+        v[i][1] = px[i][1] * 16;
+        v[i][2] = px[i][2];
+        v[i][3] = 0;
+        col[i].r = col[i].g = col[i].b = 0x80;
+        col[i].a = 0x80;
+    }
+    gif_StartPacketPri(DEC_LIST);
+    gif_SetDrawEnviroment(0x800, 0, (unsigned int)fw, 448, 1, 0);
+    gif_Draw2DStripG(&v[0][0], col, 3, 0);
+    gif_EndPacket();
+    tick();
+    const RdFrame *f = rd__last_frame();
+    if (!f) {
+        return -1;
+    }
+    const RdCmdList *l = &f->lists[DEC_LIST];
+    for (uint32_t i = 0; i < l->count; i++) {
+        const RdCmd *c = &l->cmds[i];
+        if (c->type == RDC_SCREEN && c->b[0] == RD_PRIM_TRIANGLES) {
+            const RdScreenVtx *sv = (const RdScreenVtx *)(f->payload + c->u[0]);
+            if (tris == 0 && c->u[1] >= 3) {
+                memcpy(out, sv, 3 * sizeof(*sv));
+            }
+            tris += (int)(c->u[1] / 3);
+        }
+    }
+    return tris;
+}
+
+static void checkStripWindow(void)
+{
+    static const int widths[] = {512, 688, 2560};
+    /* all three inside: drawn at every width */
+    static const int in[3][3] = {
+        {2000, 2000, 0x100000}, {2100, 2000, 0x100000}, {2050, 2100, 0x100000}};
+    /* reaching the picture, a vertex at x 4200 (67200 > 0xFFF0, inside
+       the window the port scaled by W / 512 before): dropped everywhere */
+    static const int reach[3][3] = {
+        {2000, 2000, 0x100000}, {2100, 2000, 0x100000}, {4200, 2100, 0x100000}};
+    /* wholly beside the picture, a vertex at x 5600 (89600, past even the
+       scaled window at 688): drawn on a wide frame, through XYZ2_HI */
+    static const int beside[3][3] = {
+        {2400, 2000, 0x100000}, {2500, 2100, 0x100000}, {5600, 2050, 0x100000}};
+    /* the same with that vertex's Z negative (behind the eye): dropped */
+    static const int behind[3][3] = {
+        {2400, 2000, 0x100000}, {2500, 2100, 0x100000}, {5600, 2050, -16}};
+
+    for (unsigned int i = 0; i < sizeof(widths) / sizeof(widths[0]); i++) {
+        const int fw = widths[i];
+        RdScreenVtx t[3];
+        int n;
+        volatile int p[4] = {0xFFF0, 0x8000, 0x100000, 0};
+
+        /* the PS2's compares at every width */
+        CHECK(_IsInScreen(p) == 1, "strips %d: x 0xFFF0 passes", fw);
+        p[0] = 0xFFF1;
+        CHECK(_IsInScreen(p) == 0, "strips %d: x 0xFFF1 fails", fw);
+        p[0] = -1;
+        CHECK(_IsInScreen(p) == 0, "strips %d: x -1 fails", fw);
+        n = stripCase(fw, in, t);
+        CHECK(n == 1 && t[0].x == 32000 && t[2].y == 33600,
+              "strips %d: the inside triangle drawn (%d, x %d)", fw, n, n > 0 ? t[0].x : -1);
+        n = stripCase(fw, reach, t);
+        CHECK(n == 0,
+              "strips %d: the triangle reaching the picture with a vertex past 0xFFF0 is "
+              "dropped (%d)",
+              fw, n);
+        n = stripCase(fw, beside, t);
+        if (fw == ICO_FRAME_BASE_W) {
+            /* 4:3: the PS2's drop (the rule is off; the packet is the PS2's) */
+            CHECK(n == 0,
+                  "strips 512: the triangle past 0xFFF0 is dropped as the PS2 drops it "
+                  "(%d)",
+                  n);
+        } else {
+            CHECK(n == 1 && t[2].x == 89600 && t[2].y == 2050 * 16 && t[0].x == 2400 * 16,
+                  "strips %d: the triangle wholly beside the picture is drawn, its far vertex "
+                  "at x %d (want 89600)",
+                  fw, n, n > 0 ? t[2].x : -1);
+        }
+        n = stripCase(fw, behind, t);
+        CHECK(n == 0,
+              "strips %d: a triangle beside the picture with a vertex behind the eye is "
+              "dropped (%d)",
+              fw, n);
+    }
+    gsFrame.w = ICO_FRAME_BASE_W;
+    gsFrame.fbw = ICO_FRAME_BASE_W / 64;
+    gif_HostSetFrameWidth(ICO_FRAME_BASE_W);
+    tick();
+}
+
 static void boot(void)
 {
     matrixptr = s_spr;
@@ -1774,6 +2128,8 @@ static void recordingChecks(void)
     checkZScale();
     checkPhotoView();
     checkCull();
+    checkDecoder();
+    checkStripWindow();
 }
 
 int main(void)

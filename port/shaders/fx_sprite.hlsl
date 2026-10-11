@@ -23,7 +23,11 @@
 //            for images and in Original)
 // FrameCB: g_origin.xy the XYOFFSET of the bound target (GS pixels, + 0.5 y
 // with the half-line offset), g_z.x the GS Z scale of its depth, g_z.yz the
-// bound target's texels per GS pixel (1 in Original).
+// bound target's texels per GS pixel (1 in Original). The target is as wide
+// as the native frame in GS pixels, so the scale is the resolution's alone,
+// the same both ways (y == z) but under the Window resolution, whose box
+// keeps the PS2's 7:6 pixel shape (rd_present.c rd__apply_display); the
+// two are read apart for that.
 //
 // Scaled targets: a texel stands for the GS pixel coordinate its centre falls on, (pos / s - 0.5)
 // in 12.4, and the texture coordinates address t1 at its own scale (UV
@@ -129,8 +133,7 @@ float4 fx_sprite_ps(float4 pos : SV_Position) : SV_Target0
             const uint4 b = fx_texel(i0 + int2(1, 0), flags);
             const uint4 c = fx_texel(i0 + int2(0, 1), flags);
             const uint4 d = fx_texel(i0 + int2(1, 1), flags);
-            t = (a * ((16u - fu) * (16u - fv)) + b * (fu * (16u - fv)) + c * ((16u - fu) * fv) +
-                 d * (fu * fv)) >> 8;
+            t = gs_bilerp(a, b, c, d, fu, fv);
         } else {
             t = fx_texel(int2(su >> 4, sv >> 4), flags);
         }

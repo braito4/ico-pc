@@ -456,6 +456,16 @@ RhiTexture rhi_create_texture(const RhiTextureDesc *desc)
     if (desc->usage & RHI_TEX_COPY_DST) {
         usage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     }
+    /* the destination read (RhiDstRead): asked for only where the device
+     * has the path (RhiLimits), ignored elsewhere */
+    if ((desc->usage & RHI_TEX_STORAGE) && g_vkr.interlock && desc->format == RHI_FMT_RGBA8_UNORM &&
+        desc->samples <= 1u) {
+        usage |= VK_IMAGE_USAGE_STORAGE_BIT;
+    }
+    if ((desc->usage & RHI_TEX_INPUT_ATTACHMENT) && g_vkr.rasterOrder &&
+        (desc->usage & RHI_TEX_RENDER_TARGET)) {
+        usage |= VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
+    }
     /* rhi_readback_texture works on any texture */
     usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 
@@ -465,6 +475,17 @@ RhiTexture rhi_create_texture(const RhiTextureDesc *desc)
         return out;
     }
     uint32_t mips = desc->mipLevels ? desc->mipLevels : 1u;
+    /* multisampled: a count the device takes (RhiLimits.msaaCounts), one
+     * mip, an attachment */
+    const uint32_t samples = desc->samples > 1u ? desc->samples : 1u;
+    if (samples > 1u &&
+        ((g_vkr.msaaCounts & samples) == 0u || (samples & (samples - 1u)) != 0u || mips != 1u ||
+         !(desc->usage & (RHI_TEX_RENDER_TARGET | RHI_TEX_DEPTH_STENCIL)))) {
+        VKR_LOG("rhi_create_texture %s: %u samples not taken",
+                desc->debugName ? desc->debugName : "", samples);
+        vkr_pool_release(&g_vkr.textures, id);
+        return out;
+    }
     VkImageCreateInfo ci = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
         .imageType = VK_IMAGE_TYPE_2D,
@@ -472,7 +493,7 @@ RhiTexture rhi_create_texture(const RhiTextureDesc *desc)
         .extent = {desc->width, desc->height, 1},
         .mipLevels = mips,
         .arrayLayers = 1,
-        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .samples = (VkSampleCountFlagBits)samples,
         .tiling = VK_IMAGE_TILING_OPTIMAL,
         .usage = usage,
         .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
@@ -495,6 +516,7 @@ RhiTexture rhi_create_texture(const RhiTextureDesc *desc)
     t->width = desc->width;
     t->height = desc->height;
     t->mips = mips;
+    t->samples = samples;
     /* copy-only textures (staging, R8 copy targets) have no view: a view
      * needs a sampled or attachment usage */
     if ((desc->usage & (RHI_TEX_SAMPLED | RHI_TEX_RENDER_TARGET | RHI_TEX_DEPTH_STENCIL)) &&
@@ -555,6 +577,7 @@ uint32_t vkr_register_swapchain_image(VkImage image, VkFormat fmt, RhiFormat rf,
     t->width = w;
     t->height = h;
     t->mips = 1;
+    t->samples = 1;
     t->swapchain = true;
     if (!vkr_create_view(image, fmt, VK_IMAGE_ASPECT_COLOR_BIT, 1, &t->view)) {
         vkr_pool_release(&g_vkr.textures, id);

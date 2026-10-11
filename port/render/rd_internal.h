@@ -45,6 +45,7 @@
 #include "rd.h"
 #include "rhi.h"
 #include "rd_camera_blend.h"
+#include "../include/ico_frame.h"
 
 #ifdef __cplusplus
 
@@ -263,6 +264,13 @@ typedef struct RdFrame {
     uint32_t keep;   /* rd_end_frame(keep) */
     uint32_t closed;
     uint32_t gsW, gsH;
+    /* the native frame the game built this tick for (rd_frame_head; dump
+     * version 10): the display aspect, the visible width in GS pixels (512 k)
+     * and the width the cull and the draws used (= gsW).  For a frame
+     * without a head 4/3, 0 (unknown: the presenter derives it, a dump
+     * writes gsW) and gsW; 4/3, 512 and 512 in the dumps before version 10 */
+    float aspect, wExact;
+    uint32_t cullW;
     uint32_t tempTargets[RD_MAX_TEMP_PER_FRAME]; /* owned, freed when the frame is reused */
     uint32_t tempCount;
     /* rd_frame.c; not dumped */
@@ -319,14 +327,6 @@ typedef struct RdTargetRec {
      * scale (rd__target_scale_of) */
     uint32_t tw, th;
     float sx, sy;
-    uint8_t wide; /* scene-class: draws other than full-screen ones take the wide x scale */
-    /* Widescreen reflections: a render-to-texture block with its own depth
-     * buffer (rd_block_target, the decoder's blocks) widened by the display
-     * aspect: tw = w / f texels for f = (4/3) / aspect, wide set, so its 3D
-     * view shows what the wide scene shows; the draws that sample it scale
-     * their x addressing by f (fillDrawCB, DrawCB.g_scale.zw).  0 at 4:3
-     * and in Original */
-    uint8_t wideBlock;
     RhiFormat format;
     RhiTexture color, depth;
     RhiState colorState, depthState;
@@ -342,17 +342,20 @@ typedef struct RdTargetRec {
      * (rd_replay.c clearNewTargets: colour 0, depth 1.0) at the next replay
      * (clearPending) */
     uint8_t parked, clearPending;
+    /* the destination reads the colour texture was made for
+     * (rd__dst_target_usage: 1 storage, 2 input attachment), 0 none */
+    uint8_t dstUsage;
 } RdTargetRec;
 
 /* The texels a screen-prim command can touch on the bound target tc: the
- * bounding box of its vertices (12.4, after XYOFFSET) padded by two GS
- * pixels (three with PRIM.AA1's edge fringes), through the same wide x
- * scale, mirror and texel scale as the draw, intersected with the scissor
- * bindDraw sets.  stretch, uiPrim and mirror are the draw's (rd_replay.c
- * doScreen).  False when it covers nothing.  The DATE snapshot copies only
- * this area (rd_replay.c dateSnapshot). */
+ * bounding box of its vertices (12.4, after XYOFFSET: the native frame's
+ * origin 2048 - gsW / 2) padded by two GS pixels (three with PRIM.AA1's
+ * edge fringes), through the same mirror and texel scale as the draw,
+ * intersected with the scissor bindDraw sets.  mirror is the draw's
+ * (rd_replay.c doScreen).  False when it covers nothing.  The DATE
+ * snapshot copies only this area (rd_replay.c dateSnapshot). */
 bool rd__screen_area(const RdTargetRec *tc, const RdStateBlock *st, const RdScreenVtx *v,
-                     uint32_t n, int stretch, int uiPrim, int mirror, int aa1, RhiRect *area);
+                     uint32_t n, int mirror, int aa1, RhiRect *area);
 /* Whether the DATE snapshot must be (re)taken for a draw on target tcId at
  * write serial serial that reads area want (texels; NULL = the whole tw x
  * th target), given the snapshot held (for target heldFor at serial
@@ -611,12 +614,10 @@ typedef struct RdMeshRec {
     /* issue 25: the index list the device draws, index with
      * ICO_VU_INDEX_LATER on each triangle that overlaps an earlier
      * triangle of the mesh in its plane (rd_mesh.c markLaterOverlaps);
-     * NULL when none does (rd__mesh_draw_index); also ICO_VU_INDEX_WIDE
-     * on each triangle of a stage closing plane (rd_mesh.c markWideHidden) */
+     * NULL when none does (rd__mesh_draw_index); also ICO_VU_INDEX_HIDE
+     * on each triangle of a content table entry (rd_content_hide.c,
+     * rd_mesh.c markContentHidden) */
     uint32_t *drawIndex;
-    /* drawIndex holds an ICO_VU_INDEX_WIDE triangle: rd_replay.c draws
-     * the mesh beside the 4:3 picture of a wide target without them */
-    uint8_t wideHidden;
     uint32_t indexCount;
     RdVuBatchRec *batches;
     uint32_t lastUsed;   /* g_rd.frameCounter of the last draw recorded */
@@ -683,10 +684,37 @@ static inline const uint32_t *rd__mesh_draw_index(const RdMeshRec *m)
     return m->drawIndex ? m->drawIndex : m->index;
 }
 
-/* dst's drawIndex (and wideHidden) becomes a copy of src's (none when src
+/* dst's drawIndex becomes a copy of src's (none when src
  * has none): the interpolation's scratch meshes draw their source's (rd_interp.c);
  * false on no memory (dst then has none) */
 bool rd__vu_mesh_copy_draw_index(RdMeshRec *dst, const RdMeshRec *src);
+
+/* The content table (rd_content_hide.c): stage geometry made for the PS2's
+ * 4:3 picture, by the stream bits of its black corners, and what the
+ * renderer does with it.  RD_HIDE_OFF is never listed (an override's
+ * "off"). */
+typedef enum RdHideVerb { RD_HIDE_OFF = 0, RD_HIDE = 1 } RdHideVerb;
+
+typedef struct RdContentHide {
+    const char *model; /* where it is, for the reader */
+    RdHideVerb verb;
+    uint32_t count;
+    uint32_t corner[8][3]; /* x, y, z float bits */
+} RdContentHide;
+
+extern const RdContentHide rd__content_hide[];
+extern const int rd__content_hide_count;
+#define RD_CONTENT_HIDE_MAX 256 /* the table's size at most (rd_content_hide.c asserts) */
+
+/* rd_mesh.c: the verbs the meshes created from now on are marked with,
+ * for tools/content_table_check.py (the environment variable
+ * ICO_RD_CONTENT_HIDE, read when the first mesh is marked) and the tests.
+ * spec: comma-separated "off", "hide" or "table" for every entry
+ * (table: as listed), or "N=verb" for entry N; NULL is "table".  False
+ * (nothing changed) on a bad spec. */
+bool rd__content_hide_set(const char *spec);
+/* the verb entry i is applied with (RD_HIDE_OFF for an index outside) */
+RdHideVerb rd__content_hide_verb(int i);
 /* rd_mesh.c: the per-list VU images (rd_set_vu_common updates all 13). */
 void rd__vu_init(void);
 void rd__vu_shutdown(void);
@@ -763,6 +791,16 @@ typedef enum RdFsId {
     /* fog_lut_buffer_ps: fog_lut_ps reading the depth's bits from an
      * R32_UINT texture (RD_FOG_BUFFER, rd_fog_path.c) */
     RD_FS_FOG_BUFFER,
+    /* aa_reduce_ps: supersampling, DISPLAY box-averaged to the present box
+     * (rd_present.c) */
+    RD_FS_AA_REDUCE,
+    /* MSAA (rd_replay.c, the MSAA epoch): fog_lut_ms_ps, the fog per sample
+     * reading the multisampled depth (created only with sample-rate
+     * shading); depth_resolve_ps and depth_upsample_ps, the scene depth
+     * between its multisampled and single-sampled textures */
+    RD_FS_FOG_MS,
+    RD_FS_DEPTH_RESOLVE,
+    RD_FS_DEPTH_UPSAMPLE,
     RD_FS_COUNT
 } RdFsId;
 
@@ -786,6 +824,9 @@ typedef struct RdPipeKeyInt {
     uint8_t vs, fs;
     uint8_t colorFmt; /* RhiFormat */
     uint8_t depthFmt; /* RhiFormat, RHI_FMT_UNKNOWN = no depth attachment */
+    /* RhiDstRead: the exact blend's destination read (rd_dst_read.c); the
+     * fragment entry is its _dstrov or _dstatt twin, blending off */
+    uint8_t dst;
 } RdPipeKeyInt;
 
 /* One hardware draw of a screen-prim command (the AFAIL split makes two). */
@@ -795,6 +836,12 @@ typedef struct RdDrawPass {
     uint32_t modeZ; /* atst | ate << 8 | split << 16 */
     uint32_t aref;
     uint32_t fix; /* FIX as the shader gets it (clamped where the path needs it) */
+    /* the exact blend (rd_dst_read.c): FIX as the GS has it (never
+     * clamped), and whether the fixed-function blend of this pass is not
+     * the GS's (dstWant: a LERP, Cd*FIX + Cs, an Ad form, Cd*As + Cd, PABE
+     * on a premultiplied form, COLCLAMP 0) */
+    uint32_t fixGs;
+    uint8_t dstWant;
 } RdDrawPass;
 
 RdBlendPath rd__blend_path(uint8_t keyBlend);
@@ -826,6 +873,35 @@ int rd__expand_no_dual(const RdDrawPass *in, int n, RdDrawPass out[4]);
 bool rd__no_dual_second(const RdDrawPass *ex, int i);
 /* Whether fragment entry fs has a *_nodual twin (it calls gs_dual_out). */
 bool rd__fs_has_no_dual(uint8_t fs);
+
+/* ------------------------------------------------ the exact blend
+ * rd_dst_read.c (the design is at its top).  rd__dst_init at rd_init
+ * picks g_rd.dstMode (RdBlendExact) from the device and ICO_RD_BLEND and
+ * logs it.  rd__dst_target_usage: the RhiTextureUsage bits a colour
+ * target of format fmt is made with (the destination reads the device has)
+ * and *dstUsage its RdTargetRec.dstUsage.  rd__fs_has_dst: whether entry fs
+ * has the _dstrov / _dstatt twins (the gs_dual_out entries).
+ * rd__expand_dst: the passes in[0..n) as drawn under destination read
+ * mode (RdBlendExact; RD_BLEND_EXACT_OFF copies them), into out (at most 2
+ * per pass: give out[4] for 2): a pass with dstWant on an RGBA8 target
+ * whose entry has the twins and whose mask writes RGB becomes a
+ * destination-read pass (key.dst, blending off, FIX unclamped, the write
+ * mask in DF bits 19..22); under the storage mode a pass that both writes
+ * Z and can discard (alpha test, DATE) is drawn as that colour pass
+ * without Z write and then a depth-only pass when its Z test is ALWAYS or
+ * NEVER, else left on the fixed-function blend (logged once).  Returns the
+ * number of passes written. */
+void rd__dst_init(void);
+uint32_t rd__dst_target_usage(RhiFormat fmt, uint8_t *dstUsage);
+bool rd__fs_has_dst(uint8_t fs);
+int rd__expand_dst(const RdDrawPass *in, int n, int mode, RdDrawPass out[4]);
+/* The keys the exact blend adds to a reachable set: for each of in[0..n)
+ * its rd__expand_dst images under every mode the device has (a pass whose
+ * flags and alpha test the key does not keep is taken both ways), added
+ * to out (rd__add_pipe_key); returns the new count. */
+uint32_t rd__enumerate_dst(const RdPipeKeyInt *in, uint32_t n, RdPipeKeyInt *out, uint32_t max,
+                           uint32_t count);
+const char *rd__blend_exact_name(int mode);
 /* Turns a planned pass of a command whose prims carry Q != 1
  * into the STQ shaders (IcoSpriteStqVertex); 0 when the pass keeps its own. */
 int rd__stq_pass(RdDrawPass *dp);
@@ -835,6 +911,10 @@ int rd__stq_pass(RdDrawPass *dp);
  * draws whose bilinear edges depend on TEXA coming before the filter; the
  * planners give them sprite_texa_ps / vu_texa_ps. */
 int rd__texa_per_texel(const RdStateBlock *s);
+/* Whether a draw under this state takes the TEXA entries' integer filter
+ * because it samples GS levels at the GS's LOD in the Original preset
+ * (rd_pipeline.c); rd__texa_per_texel includes it. */
+int rd__gs_filter_int(const RdStateBlock *s);
 RdPipeKeyInt rd__post_key(RdVsId vs, RdFsId fs, RhiFormat colorFmt);
 /* The present's box blit with the effects depth: blit_vs and
  * blit_depth_ps into colorFmt (the headless output's RGBA8, the swapchain's
@@ -888,9 +968,6 @@ uint32_t rd__enumerate_reachable_fog(RdPipeKeyInt *out, uint32_t max, uint32_t n
 /* rd_replay.c: frees the fog's LUT texture (rd__gpu_shutdown); the fog samples
  * the depth target itself. */
 void rd__fog_shutdown(void);
-/* rd_replay.c: a scissor x0..x1 under the wide x scale f (a side at the
- * target's edge stays there) */
-void rd__wide_scissor(int32_t *x0, int32_t *x1, int32_t w, float f);
 void rd__shadow_shutdown(void); /* frees the reduced shadow count */
 /* staticBlur.c's sprites (rd_blur.c): the pipeline of an
  * RD_POST_MOTION_BLUR .. RD_POST_EYE_BLUR sprite under state s
@@ -974,10 +1051,35 @@ void rd__crt_shoulder(float c[3], float st);
 float rd__crt_beam(float c, float d, float beamMin, float beamMax);
 /* True when the present draws the CRT filter (a mode, strength > 0). */
 bool rd__crt_on(void);
-/* The filter's source grid: the PS2 picture's pixels, vw across (512 at
- * 4:3, wider with the aspect) and vh lines (DISPLAY's, 512 with
- * full_height); the overlay's layer is vw x gsH (the frame's lines). */
+/* ---------------------------------------------------- anti-aliasing
+ * RdSettings.antiAlias as it is drawn (rd_core.c): RD_AA_OFF under the
+ * Original preset, for an unknown value, and for an MSAA count outside
+ * rd_aa_supported_mask(); else the setting. */
+int rd__aa_mode(void);
+/* 2 or 4 for the supersampling values, else 1 */
+uint32_t rd__aa_ssaa_factor(int mode);
+/* ", anti-aliasing <name>" for the display log line */
+const char *rd__aa_label(int mode);
+/* Tests: the fog inside the MSAA epoch reads the resolved depth (the epoch
+ * closes) even where it could run per sample (rd_replay.c doFog). */
+void rd__msaa_test_fog_resolved(bool on);
+/* Frees the MSAA epoch's multisampled scene pair (rd_replay.c; remade at
+ * the next replay that wants it). */
+void rd__msaa_free(void);
+/* The multisampled scene pair's budget on a tile-based GPU, in bytes
+ * (rd__apply_display halves the scale until it fits). */
+#define RD_MSAA_TILER_BUDGET (384ull << 20)
+/* The filter's source grid: the PS2 picture's pixels, vw across and vh
+ * lines (DISPLAY's, 512 with full_height); the overlay's layer is vw x gsH
+ * (the frame's lines).  vw is the native frame's width less rd__crt_crop
+ * columns at each side: the columns of its exact width (rd__frame_wexact)
+ * in whole GS pixels, 512 at 4:3.  rd__crt_box: the filter's box in an
+ * outW x outH output, of the grid's shape vw / 384 (the 4:3 box at 512),
+ * so a source pixel spans as many output pixels as at 4:3 (the box of the
+ * exact width, rd_present.c, differs from it by less than a column). */
 void rd__crt_grid(uint32_t *vw, uint32_t *vh);
+uint32_t rd__crt_crop(void);
+void rd__crt_box(uint32_t outW, uint32_t outH, RhiRect *box);
 /* From rd__present_record, in place of the line doubling and
  * the box blit: disp (SHADER_READ), with the overlay drawn into the source
  * grid (rd__overlay_grid_draw), through the glow passes, then the composite
@@ -989,7 +1091,8 @@ void rd__crt_grid(uint32_t *vw, uint32_t *vh);
 bool rd__crt_record(RhiCommandList cl, const RdTargetRec *disp, RhiTexture out, RhiFormat outFmt,
                     uint32_t outW, uint32_t outH, const RhiRect *box, int mirror, bool overlay);
 /* The films under the filter.  rd__crt_film_grid is a film's
- * grid: the game's tube (its 512 triads across the 4:3 box: GS width) and
+ * grid: the game's tube (its 512 triads across the 4:3 box, whatever the
+ * frame's width: the films stay 4:3) and
  * the film's field lines in its PS2 display area (dispH / 2, every line
  * with full_height, as the game's).  rd__crt_record_film: pic (pw x ph, the
  * film in its display area, already mirrored, SHADER_READ), box-reduced
@@ -1240,6 +1343,14 @@ typedef struct RdContext {
      * ICO_RD_NO_DUAL or rd_set_no_dual) */
     RhiShader fsNoDual[RD_FS_COUNT];
     bool noDual;
+    /* the exact blend (rd_dst_read.c): the mode in force (RdBlendExact),
+     * the modes the device has (bit 1 << mode), the _dstrov and _dstatt
+     * twins of the gs_dual_out entries, and group 3's layout per mode (the
+     * target as a storage texture or an input attachment) */
+    uint8_t dstMode;
+    uint8_t dstModes;
+    RhiShader fsDstRov[RD_FS_COUNT], fsDstAtt[RD_FS_COUNT];
+    RhiBindGroupLayout layoutDstStorage, layoutDstAttach;
     /* The scene depth is read through a copy (rd__sampled_depth) and every
      * pass keeps its stencil (loaded and stored), as up to v0.4.4: whenever
      * the fog's depth path (fogPath) is not RD_FOG_INPLACE.  Off, the fog
@@ -1269,15 +1380,27 @@ typedef struct RdContext {
     bool deferText;
     /* the Enhanced display options as applied (rd_present.c
      * rd__apply_display from settings): the scene-class targets' scale, the
-     * fixed work buffers' scale, the wide x factor (4/3) / aspect for draws
-     * into scene-class targets (1 in Original), the output aspect, and the
-     * texture filter upgrade in force */
-    float sceneSx, sceneSy, workScale, wideX, outAspect;
+     * fixed work buffers' scale, the aspect option (the present box's when
+     * no frame says otherwise: rd__frame_wexact), and the texture filter
+     * upgrade in force */
+    float sceneSx, sceneSy, workScale, outAspect;
+    /* the last replayed frame's exact width (RdFrame.wExact, from its head:
+     * GsBase.c gsFrame.wExact) and its camera's display aspect
+     * (RdCamera.aspect, rd__set_replay_camera); 0 before one: the frame's
+     * exact width the presenter shows (rd__frame_wexact) */
+    float frameWExact, frameAspect;
     /* the scene scale the options asked for (rd__apply_display); sceneSx/Sy
      * are what the targets were made at, lower when createNamedTargets had
      * to fall back (sceneFellBack) */
     float sceneReqSx, sceneReqSy;
     bool sceneFellBack;
+    /* the sample count of the render pass being recorded (rd_replay.c
+     * beginPass): 1, or the MSAA epoch's count; rd__get_pipeline makes the
+     * pipelines of that pass with it (RdPipelineKey.msaa) */
+    uint8_t passSamples;
+    /* the supersampling factor in force (rd__apply_display): 1, 2 or 4,
+     * already in sceneReqSx/Sy; rd_scene_scale_lowered divides it out */
+    float ssaa;
     /* a scene-sized texture made after the named targets (a shadow count, a
      * depth copy, a snapshot, the wrap accumulator) could not be allocated
      * while the scene scale was above 1: rd_begin_frame then halves the
@@ -1348,6 +1471,8 @@ enum {
     RD_ONCE_NODUAL_KEY,     /* a LERP or Cd*FIX + Cs key reached rd__get_pipeline unexpanded */
     RD_ONCE_EFFECTS_DEPTH_CRT, /* RdSettings.effectsDepth under the CRT filter: none */
     RD_ONCE_POST_RESERVED,     /* rd_post with a reserved kind: not recorded */
+    RD_ONCE_DST_ZWRITE, /* exact blend, storage: a Z-writing draw that can discard under Z GEQUAL */
+    RD_ONCE_DST_FIXED,  /* exact blend: a draw left on the fixed-function blend (MSAA, format) */
     RD_ONCE_COUNT
 };
 
@@ -1443,18 +1568,25 @@ void rd__present_record(RhiCommandList cl);
 /* The presentation box of aspect (4:3: the Original integer
  * box) centred in outW x outH; rd_video.c's movie box is the 4:3 one. */
 void rd__present_box(uint32_t outW, uint32_t outH, float aspect, RhiRect *box);
+/* the 2D layer's 4:3 box (rd.h rd_ui_box_of) inside the presentation box of
+ * an outW x outH output: the movie's box */
+void rd__ui_box(uint32_t outW, uint32_t outH, RhiRect *box);
 /* The reduction pass's border crop: columns at each side and rows of
  * DISPLAY's gsH / 2 at the top and bottom (GsBase.c) that it leaves black.
  * Shared with the presenter's deferred text, which keeps off that border
  * unless full pixel is on (the reduction then draws the whole frame). */
 uint32_t rd__reduction_crop(uint32_t gsH);
-/* The widest aspect the presenter shows: ICO_ASPECT_MAX in
- * port/game/video_options.h (4/3 times ICO_WIDE_X_MAX, the factor the
- * water's dot window can be widened by).  Mirrored here because the
- * renderer is built without the game's options module; rd_present_test
- * checks the two are equal. */
-#define RD_ASPECT_MAX (4.0f / 3.0f * 5.0f)
-/* g_rd.settings -> g_rd.sceneSx/Sy, workScale, wideX,
+/* The widest aspect the presenter shows is the native frame's,
+ * ICO_FRAME_ASPECT_MAX (port/include/ico_frame.h, included above). */
+/* The frame's exact width in GS pixels, the columns the presenter shows
+ * (ico_frame.h IcoFrame.wExact): exactly 512 when the scene is 512 wide (the
+ * Original integer box, no crop); else the last replayed frame's own
+ * (RdFrame.wExact), or 384 times the display aspect (its camera's, else
+ * the aspect option) for a frame without one; at most gsW.  The
+ * present box has the aspect wExact / 384, and the source rectangle drops
+ * (gsW - wExact) / 2 GS pixels at each side (rd_present.c). */
+float rd__frame_wexact(void);
+/* g_rd.settings -> g_rd.sceneSx/Sy, workScale,
  * outAspect, filterUpgrade, fullHeight (and the swapchain's vsync).  True
  * when a target scale changed (the caller recreates the named targets). */
 bool rd__apply_display(void);
@@ -1509,10 +1641,11 @@ void rd__overlay_collect(const RdFrame *f, int keep);
  * laid out on the output and drawn on it after the filter. */
 bool rd__overlay_grid_pending(void);
 void rd__overlay_grid_draw(RhiCommandList cl, RhiTexture t, RhiFormat fmt, uint32_t w, uint32_t h);
-/* rd_present.c's blit: src (sw x sh) into box of dst, filter, x flipped */
+/* rd_present.c's blit: src (sw x sh) into box of dst, filter, x flipped,
+ * crop texels of src left out at each side (0: all of it) */
 void rd__present_blit(RhiCommandList cl, RhiTexture src, uint32_t sw, uint32_t sh, RhiTexture dst,
                       RhiFormat dstFmt, uint32_t dw, uint32_t dh, RhiLoadOp load,
-                      const RhiRect *box, RdFilter filter, int mirror);
+                      const RhiRect *box, RdFilter filter, int mirror, float crop);
 /* rd_core.c, from rd_post: records the RD_OTEXT_OP of a post
  * pass of kind (FADE, LETTERBOX, BRIGHTNESS, KEEP, REDUCTION) when the frame being
  * recorded has deferred text already; nothing otherwise */
@@ -1699,10 +1832,17 @@ RdUniform rd__frame_group(uint32_t targetW, uint32_t targetH, float originX, flo
  * uses 2^-24 (no depth bound). */
 RdUniform rd__frame_group_z(uint32_t targetW, uint32_t targetH, float originX, float originY,
                             float zScale);
-/* FrameCB with the wide x scale spaceX in both g_space slots
- * and the target's texels per GS pixel in g_z.yz. */
+/* FrameCB with the native frame's region scale (g_frame.x; 1 for none:
+ * rd__region_scale gives a target's) and the target's texels per GS pixel
+ * in g_z.yz. */
 RdUniform rd__frame_group_ex(uint32_t targetW, uint32_t targetH, float originX, float originY,
-                             float zScale, float spaceX, float scaleX, float scaleY);
+                             float zScale, float regionScale, float scaleX, float scaleY);
+/* The region scale of a draw into tc: 512 / W on a target of the native
+ * frame's GS size W x H (g_rd.gsW x gsH: SCENE, WORK2, AURA_WORK, the shadow
+ * count, a block the game sizes as the frame) when W is not 512 (FrameCB
+ * g_frame.x carries it, which no shader reads: the VU region test compares
+ * the position as computed); exactly 1 otherwise (every target at 4:3). */
+float rd__region_scale(const RdTargetRec *tc);
 
 /* ------------------------------------------------- frame head and camera
  * rd_frame.c. */
@@ -1769,11 +1909,27 @@ bool rd__read_texture(RdTex t, void *dst, size_t dstSize, uint32_t *w, uint32_t 
  * RD_TARGET_FEED_HELD, a 17th fixed target; 7 RD_TEXEL_SHEET images, the
  * style in the view word; 8 RD_TARGET_DISPLAY_HELD, an 18th fixed target
  * (issue 28); 9 RdStateBlock.tex1Lod, RDC_FILTER's u[0] and an image's GS
- * levels (RdTexRec.gsLevels) after its texels.  rd__dump_frame writes this
- * version; rd__load_frame reads 3 to it. */
-#define RD_DUMP_VERSION 9u
+ * levels (RdTexRec.gsLevels) after its texels; 10 the native frame after
+ * gsH: f32 aspect, f32 wExact, u32 cullW (RdFrame.aspect, .wExact, .cullW).
+ * rd__dump_frame writes this version; rd__load_frame reads 3 to it, and a
+ * dump before 10 loads as the 4:3 frame (aspect 4/3, wExact 512, cullW 512).
+ * A dump holds the picture as drawn at its width: a replay can crop it to a
+ * narrower aspect, never widen it (rd_replay_tool). */
+#define RD_DUMP_VERSION 10u
 bool rd__dump_frame(const RdFrame *f, const char *path);
 bool rd__load_frame(const char *path, RdFrame *out);
+
+/* A dump's header, read without loading it (rd_replay_tool sizes the
+ * renderer and chooses the replay's aspect from it). */
+typedef struct RdDumpInfo {
+    uint32_t version;
+    uint32_t gsW, gsH;
+    float aspect;   /* 4/3 before version 10 */
+    float wExact;   /* 512 before version 10 */
+    uint32_t cullW; /* 512 before version 10 */
+} RdDumpInfo;
+
+bool rd__dump_peek(const char *path, RdDumpInfo *info);
 
 /* rd_water.c: render-to-texture surfaces (rd.h rd_alias_target,
  * rd_block_target, rd_push_camera).  The per-frame records live in rd_water.c,

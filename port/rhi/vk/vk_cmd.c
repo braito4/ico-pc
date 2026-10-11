@@ -797,10 +797,16 @@ void rhi_cmd_begin_render_pass(RhiCommandList cl, const RhiRenderPassDesc *pass)
         } else {
             memcpy(cv.color.float32, a->clear, sizeof(cv.color.float32));
         }
+        if (a->readable && !g_vkr.rasterOrder) {
+            VKR_LOG("render pass: a readable colour target without the attachment read");
+            return;
+        }
         color[i] = (VkRenderingAttachmentInfo){
             .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
             .imageView = t->view,
-            .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            /* read by the pass's RHI_DST_READ_ATTACHMENT pipelines */
+            .imageLayout = vkr_state_layout(
+                a->readable ? RHI_STATE_RENDER_TARGET_READ : RHI_STATE_RENDER_TARGET, t->rhiFormat),
             .loadOp = vkr_loadOpMap[a->load < RHI_LOAD_COUNT ? a->load : 0].vk,
             /* DONT_CARE when asked (a tiler skips the write-back) */
             .storeOp = a->store == RHI_STORE_DONT_CARE ? VK_ATTACHMENT_STORE_OP_DONT_CARE
@@ -872,9 +878,14 @@ void rhi_cmd_begin_render_pass(RhiCommandList cl, const RhiRenderPassDesc *pass)
         h.src = h.dst = 0;
         vkr_hz_take_pending(&h, c);
         for (uint32_t i = 0; i < pass->colorCount; i++) {
-            vkr_hz_image(&h, c, colorTex[i], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                         VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+            /* a readable attachment is also read by the fragment shaders */
+            const bool rd = pass->color[i].readable;
+            vkr_hz_image(&h, c, colorTex[i], color[i].imageLayout,
+                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                             (rd ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT : 0u),
+                         VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+                             VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                             (rd ? VK_ACCESS_INPUT_ATTACHMENT_READ_BIT : 0u),
                          ~0u);
         }
         /* a read-only depth attachment is only read when it is loaded and
@@ -903,6 +914,7 @@ void rhi_cmd_begin_render_pass(RhiCommandList cl, const RhiRenderPassDesc *pass)
     }
     g_vkr.cmdBeginRendering(c->cb, &ri);
     c->inPass = true;
+    c->storageDrawn = c->drawnInPass = false;
     g_vkr.stats.renderPasses++;
 
     /* defaults: full-target viewport and scissor */
@@ -1061,6 +1073,41 @@ void rhi_cmd_set_blend_constant(RhiCommandList cl, const float rgba[4])
     }
 }
 
+/* A destination-read draw (rhi.h RhiDstRead) needs no barrier before it:
+ * the interlock orders a storage draw's critical sections after the
+ * pass's earlier ones (primitive order, the image Coherent), and the
+ * rasterization-order attachment access orders an attachment read after
+ * the pass's earlier colour writes.  The validation layer's
+ * synchronisation checks model neither, so with g_vkr.storageBarriers
+ * (under the layer, or ICO_VK_STORAGE_BARRIERS=1) a by-region barrier
+ * from the pass's earlier writes goes before it (inside the render pass:
+ * dynamic rendering local read).  drawnInPass / storageDrawn: a draw, a
+ * storage draw, recorded in the open pass. */
+static void vkr_dst_order(VkrCmdList *c)
+{
+    const uint8_t dst = c->pipeline ? c->pipeline->dstRead : (uint8_t)RHI_DST_READ_NONE;
+    if (c->inPass && g_vkr.storageBarriers) {
+        VkMemoryBarrier mb = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        VkPipelineStageFlags src = 0, dstStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        if (dst == RHI_DST_READ_STORAGE && c->storageDrawn) {
+            src = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+            mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+            mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        } else if (dst == RHI_DST_READ_ATTACHMENT && c->drawnInPass) {
+            src = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+            mb.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            mb.dstAccessMask = VK_ACCESS_INPUT_ATTACHMENT_READ_BIT;
+        }
+        if (src) {
+            vkCmdPipelineBarrier(c->cb, src, dstStage, VK_DEPENDENCY_BY_REGION_BIT, 1, &mb, 0, NULL,
+                                 0, NULL);
+            g_vkr.stats.orderBarriers++; /* not stats.barriers: validation only */
+        }
+    }
+    c->drawnInPass = true;
+    c->storageDrawn = c->storageDrawn || dst == RHI_DST_READ_STORAGE;
+}
+
 void rhi_cmd_draw(RhiCommandList cl, uint32_t vertexCount, uint32_t firstVertex,
                   uint32_t instanceCount)
 {
@@ -1069,6 +1116,7 @@ void rhi_cmd_draw(RhiCommandList cl, uint32_t vertexCount, uint32_t firstVertex,
         return;
     }
     vkr_flush_barriers(c);
+    vkr_dst_order(c);
     vkr_flush_bind_groups(c);
     vkCmdDraw(c->cb, vertexCount, instanceCount ? instanceCount : 1u, firstVertex, 0);
     g_vkr.stats.draws++;
@@ -1082,6 +1130,7 @@ void rhi_cmd_draw_indexed(RhiCommandList cl, uint32_t indexCount, uint32_t first
         return;
     }
     vkr_flush_barriers(c);
+    vkr_dst_order(c);
     vkr_flush_bind_groups(c);
     vkCmdDrawIndexed(c->cb, indexCount, instanceCount ? instanceCount : 1u, firstIndex,
                      vertexOffset, 0);
@@ -1177,6 +1226,10 @@ void rhi_cmd_copy_texture(RhiCommandList cl, RhiTexture src, RhiRect srcRegion, 
     if (!c || !s || !d) {
         return;
     }
+    if (s->samples > 1u || d->samples > 1u) {
+        VKR_LOG("rhi_cmd_copy_texture: a multisampled texture is not copied (resolve it)");
+        return;
+    }
     VkImageCopy r = {
         .srcSubresource = {s->aspects, 0, 0, 1},
         .srcOffset = {srcRegion.x, srcRegion.y, 0},
@@ -1187,6 +1240,33 @@ void rhi_cmd_copy_texture(RhiCommandList cl, RhiTexture src, RhiRect srcRegion, 
     vkr_hz_copy(c, s, NULL, d, 0, NULL);
     vkCmdCopyImage(c->cb, s->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, d->image,
                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &r);
+    g_vkr.stats.copies++;
+}
+
+void rhi_cmd_resolve_color(RhiCommandList cl, RhiTexture src, RhiTexture dst)
+{
+    VkrCmdList *c = vkr_get_cmd(cl);
+    VkrTexture *s = vkr_get_texture(src);
+    VkrTexture *d = vkr_get_texture(dst);
+    if (!c || !s || !d) {
+        return;
+    }
+    if (s->samples <= 1u || d->samples > 1u || s->width != d->width || s->height != d->height ||
+        s->format != d->format || !(s->aspects & VK_IMAGE_ASPECT_COLOR_BIT)) {
+        VKR_LOG("rhi_cmd_resolve_color: needs a multisampled colour texture and a "
+                "single-sampled one of its size and format");
+        return;
+    }
+    VkImageResolve r = {
+        .srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+        .srcOffset = {0, 0, 0},
+        .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+        .dstOffset = {0, 0, 0},
+        .extent = {s->width, s->height, 1},
+    };
+    vkr_hz_copy(c, s, NULL, d, 0, NULL);
+    vkCmdResolveImage(c->cb, s->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, d->image,
+                      VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &r);
     g_vkr.stats.copies++;
 }
 
@@ -1240,8 +1320,8 @@ bool rhi_readback_texture(RhiTexture h, RhiViewAspect aspect, void *dst, size_t 
                           uint32_t *outRowPitch)
 {
     VkrTexture *t = vkr_get_texture(h);
-    if (!t || !dst) {
-        return false;
+    if (!t || !dst || t->samples > 1u) {
+        return false; /* a multisampled texture is resolved first (rhi.h) */
     }
     if (aspect == RHI_ASPECT_DEPTH && !(t->aspects & VK_IMAGE_ASPECT_DEPTH_BIT)) {
         return false;

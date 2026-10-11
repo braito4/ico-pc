@@ -143,6 +143,25 @@ static const char *const kAspect[] = {"4:3", "16:10", "16:9", "21:9", "32:9", "4
 static const char *const kWindowMode[] = {"windowed", "borderless", "fullscreen"};
 static const char *const kFilter[] = {"original", "trilinear", "anisotropic"};
 
+static const char *const kAntiAlias[ICO_AA_COUNT] = {"off",   "ssaa2", "ssaa4",
+                                                     "msaa2", "msaa4", "msaa8"};
+
+int ico_video_parse_anti_alias(const char *s, int *aa)
+{
+    for (int i = 0; s && i < ICO_AA_COUNT; i++) {
+        if (lower_eq(s, kAntiAlias[i])) {
+            *aa = i;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+const char *ico_video_anti_alias_name(int aa)
+{
+    return aa >= 0 && aa < ICO_AA_COUNT ? kAntiAlias[aa] : kAntiAlias[ICO_AA_OFF];
+}
+
 static const char *const kCrtMode[ICO_CRT_MODES] = {"scanlines", "consumer", "trinitron", "pvm",
                                                     "shadow"};
 
@@ -286,6 +305,8 @@ static void set_preset(IcoVideoOptions *o, int preset, int android)
         o->aspect = ICO_ASPECT_4_3;
         o->filter = ICO_FILTER_ORIGINAL;
         o->fullHeight = 0;
+        /* the PS2 picture has no anti-aliasing */
+        o->antiAlias = ICO_AA_OFF;
     } else if (preset == ICO_VIDEO_ENHANCED) {
         /* the window's size (on Android "auto": the window's, lowered
            while the phone falls behind), its aspect, anisotropic, full
@@ -345,6 +366,9 @@ static void sanitize(IcoVideoOptions *o)
     o->vsync = o->vsync != 0;
     o->fullHeight = o->fullHeight != 0;
     o->fullPixel = o->fullPixel != 0;
+    if (o->antiAlias < 0 || o->antiAlias >= ICO_AA_COUNT) {
+        o->antiAlias = ICO_AA_OFF;
+    }
     if (o->framerate != ICO_FRAMERATE_ORIGINAL && o->framerate != ICO_FRAMERATE_UNCAPPED &&
         (o->framerate < FRAMERATE_MIN || o->framerate > FRAMERATE_MAX)) {
         o->framerate = d.framerate;
@@ -429,6 +453,11 @@ static void read_config(void)
     o.vsync = ico_config_get_bool("video.vsync", 1) != 0;
     o.fullHeight = ico_config_get_bool("video.full_height", 0) != 0;
     o.fullPixel = ico_config_get_bool("video.full_pixel", 0) != 0;
+    if (ico_video_parse_anti_alias(ico_config_get_string("video.anti_aliasing", "off"),
+                                   &o.antiAlias) != 0) {
+        o.antiAlias = ICO_AA_OFF;
+        fprintf(stderr, "video: anti_aliasing not understood; \"off\" used\n");
+    }
     {
         /* no key: the default (60 on Android, else "uncapped") */
         char dfr[16];
@@ -555,6 +584,7 @@ int ico_video_save(void)
     r |= ico_config_set_string("video.texture_filter", ico_video_filter_name(o.filter));
     r |= ico_config_set_bool("video.full_height", o.fullHeight);
     r |= ico_config_set_bool("video.full_pixel", o.fullPixel);
+    r |= ico_config_set_string("video.anti_aliasing", ico_video_anti_alias_name(o.antiAlias));
     r |= ico_config_set_string("video.framerate",
                                ico_video_framerate_name(o.framerate, fr, sizeof(fr)));
     r |= ico_config_set_bool("video.crt", o.crt);
@@ -644,11 +674,21 @@ float ico_video_aspect(void)
     }
 }
 
-float ico_video_wide_x(void)
-{
-    float k = ico_video_aspect() / ASPECT_4_3;
+static float s_forceAspect; /* ico_video_frame_force_aspect, 0: none */
 
-    return k > 1.0f + 1e-5f ? k : 1.0f;
+void ico_video_frame_force_aspect(float aspect)
+{
+    s_forceAspect = aspect > 0.0f ? aspect : 0.0f;
+}
+
+int ico_video_frame_forced(void)
+{
+    return s_forceAspect > 0.0f;
+}
+
+void ico_video_frame(IcoFrame *out, int h)
+{
+    ico_frame_make(out, s_forceAspect > 0.0f ? s_forceAspect : ico_video_aspect(), h);
 }
 
 /* issue 11: the effect switches, read once a frame at most by the game */
@@ -706,6 +746,23 @@ int ico_video_effects_depth(void)
         read_config();
     }
     return s_opt.effectsDepth;
+}
+
+int ico_video_anti_alias(void)
+{
+    if (!s_read) {
+        read_config();
+    }
+    return ico_video_preset(&s_opt) == ICO_VIDEO_ORIGINAL ? ICO_AA_OFF : s_opt.antiAlias;
+}
+
+void ico_video_set_anti_alias(int aa)
+{
+    IcoVideoOptions o;
+
+    ico_video_get(&o);
+    o.antiAlias = aa;
+    ico_video_set(&o);
 }
 
 int ico_video_model_pack(void)

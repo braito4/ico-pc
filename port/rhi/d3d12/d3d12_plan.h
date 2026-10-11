@@ -21,6 +21,7 @@
 #define D3DP_STATE_VERTEX_AND_CONSTANT_BUFFER 0x1u
 #define D3DP_STATE_INDEX_BUFFER 0x2u
 #define D3DP_STATE_RENDER_TARGET 0x4u
+#define D3DP_STATE_UNORDERED_ACCESS 0x8u
 #define D3DP_STATE_DEPTH_WRITE 0x10u
 #define D3DP_STATE_DEPTH_READ 0x20u
 #define D3DP_STATE_NON_PIXEL_SHADER_RESOURCE 0x40u
@@ -121,7 +122,13 @@ void d3dp_ring_reset(D3dpRing *r);
 #define D3DP_MAX_ROOT_PARAMS (RHI_MAX_BIND_SLOTS * (2 + RHI_MAX_DYNAMIC_OFFSETS))
 _Static_assert(D3DP_MAX_ROOT_PARAMS <= 127, "root parameter indices are int8_t");
 
-typedef enum D3dpRegClass { D3DP_REG_B = 0, D3DP_REG_T = 1, D3DP_REG_S = 2 } D3dpRegClass;
+/* u: RHI_BIND_STORAGE_TEXTURE (a UAV in the resource table) */
+typedef enum D3dpRegClass {
+    D3DP_REG_B = 0,
+    D3DP_REG_T = 1,
+    D3DP_REG_S = 2,
+    D3DP_REG_U = 3
+} D3dpRegClass;
 
 typedef struct D3dpLayout {
     uint32_t slotCount;
@@ -135,7 +142,8 @@ typedef struct D3dpLayout {
 } D3dpLayout;
 
 D3dpRegClass d3dp_reg_class(RhiBindType t);
-/* False for an invalid layout: a bad type, more than D3DP_MAX_SLOTS, more
+/* False for an invalid layout: a bad type (RHI_BIND_INPUT_ATTACHMENT among
+ * them: Vulkan only), more than D3DP_MAX_SLOTS, more
  * than RHI_MAX_DYNAMIC_OFFSETS dynamic uniforms, or two slots on one
  * register (t1 as a texture and a storage buffer). */
 bool d3dp_layout_build(const RhiBindSlot *slots, uint32_t count, D3dpLayout *out);

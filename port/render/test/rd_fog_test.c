@@ -68,6 +68,7 @@
 #include "ZFog.h"
 #include "debug.h"
 #include "main.h"
+#include "../../include/ico_frame.h"
 
 static int failures;
 
@@ -83,6 +84,8 @@ static int failures;
 
 /* ------------------------------------------------- what the files import */
 int ScreenWidth = 512, ScreenHeight = 512;
+/* GsBase.c's native frame: 4:3 */
+IcoFrame gsFrame = {512, 512, 8, 512.0f, 4.0f / 3.0f};
 float center_X = 2048.0f, center_Y = 2048.0f;
 int screenOffsetX, screenOffsetY;
 int fbKeep;
@@ -737,8 +740,13 @@ static void checkPixels(int k, int tol, const char *what)
                 const uint8_t *t = &lut[((z >> 16) & 0xFF) * 4];
                 int as = (t[3] * kFog[k][8]) >> 7;
                 as = as > 255 ? 255 : as;
+                /* the fixed-function blend stops the factor at 1.0; the
+                 * exact blend (rd_dst_read.c) is the GS's, As past 0x80
+                 * overshooting */
+                const int fa =
+                    rd_blend_exact() != RD_BLEND_EXACT_OFF ? as : (as > 0x80 ? 0x80 : as);
                 for (int ch = 0; ch < 3; ch++) {
-                    want[ch] = lerp((t[ch] * 0x80) >> 7, want[ch], as > 0x80 ? 0x80 : as);
+                    want[ch] = lerp((t[ch] * 0x80) >> 7, want[ch], fa);
                 }
                 want[3] = as;
                 fogged++;
@@ -917,14 +925,14 @@ static void checkEdge(void)
 
 static void checkPipelines(void)
 {
-    static RdPipeKeyInt keys[512];
-    const uint32_t n = rd__enumerate_reachable(keys, 512);
+    static RdPipeKeyInt keys[RD_PIPELINE_REACHABLE_MAX];
+    const uint32_t n = rd__enumerate_reachable(keys, RD_PIPELINE_REACHABLE_MAX);
     CHECK(n < RD_PIPELINE_REACHABLE_MAX, "reachable pipelines %u", n);
     int fog = 0, fogWords = 0;
     for (uint32_t i = 0; i < rd__pipeline_count(); i++) {
         const RdPipeKeyInt *k = rd__pipeline_key_at(i);
         int found = 0;
-        for (uint32_t j = 0; j < n && j < 512; j++) {
+        for (uint32_t j = 0; j < n && j < RD_PIPELINE_REACHABLE_MAX; j++) {
             found |= rd__pipe_key_equal(&keys[j], k);
         }
         fog += k->fs == RD_FS_FOG;
@@ -936,8 +944,9 @@ static void checkPipelines(void)
            rd__pipeline_count(), fog, fogWords, n);
     /* the fog's LERP takes a colour and an alpha pass in the
      * two-pass blend fallback (rd_fog_nodual), with either fragment shader
-     * the paths case d replayed took */
-    const int wantFog = rd_no_dual() ? 2 : 1;
+     * the paths case d replayed took; the exact blend (rd_dst_read.c)
+     * computes it in the shader in one pass either way */
+    const int wantFog = rd_no_dual() && rd_blend_exact() == RD_BLEND_EXACT_OFF ? 2 : 1;
     const bool sampled =
         rd__fog_path_supported(RD_FOG_INPLACE) || rd__fog_path_supported(RD_FOG_COPY);
     CHECK(fog == (sampled ? wantFog : 0), "%d fog pipeline(s), %d expected", fog, wantFog);

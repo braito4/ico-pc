@@ -383,7 +383,9 @@ static void samePixels(const char *what, const uint8_t *a, const uint8_t *b)
  * the frame (FrameCB), draw (DrawCB) and VU (DrawCB, VuCB, VuBoneCB over
  * the stream's buffer) layouts, all three in this frame, whose meshes live
  * in one arena chunk.  The other groups are texture groups, one per
- * (texture, sampler, DATE snapshot). */
+ * (texture, sampler, DATE snapshot), and under the exact blend one per pass
+ * that draws with the destination read (rd_replay.c dstBind: the target as
+ * the input attachment or storage texture). */
 #define UNIFORM_LAYOUTS 3
 
 static void checkGroups(const char *what, const Sum *s)
@@ -407,19 +409,39 @@ static void checkGroups(const char *what, const Sum *s)
  * out in one call, joined to the next pass's or copy's own barrier
  * (vk_cmd.c, vkr_flush_barriers); the global mode records each transition
  * in a call of its own.  18 and 21 are the steady-state counts this test
- * prints. */
+ * prints with the fixed-function blend.
+ *
+ * Under the exact blend's attachment read (rd_dst_read.c) a pending clear
+ * of a readable target is a pass of its own before the pass that draws
+ * (the load op's clear is not ordered against the shaders' reads of the
+ * attachment), and the pass after it starts behind a barrier: two in this
+ * frame (SCENE with its depth, the reflection's block target), so 20 and
+ * 23.  No draw adds one: the rasterization-order access orders the reads
+ * (the by-region barriers the validation layer needs before a
+ * destination-read draw are RhiStats.orderBarriers, not counted here).
+ * The storage path (interlock, ROV) is not measured on the devices the
+ * tests run on (lavapipe has no interlock): not checked. */
 #define BARRIERS_REPLAY 18
 #define BARRIERS_RECORD 21
+#define BARRIERS_ATTACHMENT_CLEARS 2
 #define BARRIERS_REPLAY_GLOBAL 42
 #define BARRIERS_RECORD_GLOBAL 46
 
 static void checkBarriers(const char *what, const Sum *s, uint32_t tracked, uint32_t global)
 {
     const char *env = getenv("ICO_VK_GLOBAL_BARRIERS");
-    const uint32_t want = env && env[0] && env[0] != '0' ? global : tracked;
+    const bool globalMode = env && env[0] && env[0] != '0';
+    uint32_t want = globalMode ? global : tracked;
     if (s->n > 0 && s->barrierMax == 0) {
         printf("%s: the backend counts no barriers: not checked\n", what);
         return;
+    }
+    if (rd_blend_exact() == RD_BLEND_EXACT_STORAGE) {
+        printf("%s: the exact blend's storage path: barriers not checked\n", what);
+        return;
+    }
+    if (rd_blend_exact() == RD_BLEND_EXACT_ATTACHMENT) {
+        want += BARRIERS_ATTACHMENT_CLEARS; /* the global mode's too (43, 47) */
     }
     CHECK(s->n > 0 && s->barrierMin == want && s->barrierMax == want,
           "%s: %u..%u pipeline barriers a replay, %u expected", what, s->barrierMin, s->barrierMax,

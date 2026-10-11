@@ -123,6 +123,33 @@ GS_FN int gs_blend_reg_ch(uint reg, int cs, int cd, int as, int ad, int fix, uin
     return gs_blend_ch(a, b, c, d, clampMode);
 }
 
+// What the GS stores in channel ch (0 R, 1 G, 2 B, 3 A) of a pixel for a
+// fragment with colour channel cs and alpha as (after the texture function
+// and the alpha test), over a destination whose channel is cd and alpha ad
+// (port/render/rd_dst_read.c: the destination-read blend):
+//   wmask   the channels written, bit ch (FRAME.FBMSK by whole channels):
+//           a masked channel keeps cd;
+//   alpha   never blended: As, with its MSB set under FBA;
+//   PABE    an As whose MSB is clear writes Cs unblended;
+//   colour  the ALPHA register's ((A - B) * C >> 7) + D, C = As, Ad or FIX
+//           (0x80 = 1.0, above it the GS overshoots), clamped to 0..255 by
+//           COLCLAMP 1 or wrapped to 8 bits by COLCLAMP 0 (gs_blend_reg_ch).
+GS_FN uint gs_dst_channel(uint ch, uint cs, uint cd, uint as, uint ad, uint reg, uint fix,
+                          uint clampMode, bool fba, bool pabe, uint wmask)
+{
+    uint o = cd;
+    if (((wmask >> ch) & 1u) == 0u) {
+        o = cd;
+    } else if (ch == 3u) {
+        o = (fba ? (as | 0x80u) : as) & 255u;
+    } else if (pabe && (as & 0x80u) == 0u) {
+        o = cs;
+    } else {
+        o = (uint)gs_blend_reg_ch(reg, (int)cs, (int)cd, (int)as, (int)ad, (int)fix, clampMode);
+    }
+    return o;
+}
+
 // GS Z to depth, increasing with Z (GS GEQUAL is the depth test GEQUAL,
 // GREATER is GREATER): depth = z * scale. scale is 1 / 2^24 for PSMZ24, 1 /
 // 2^16 for PSMZ16 (exact for every z: below 2^24, a float holds it) and, for

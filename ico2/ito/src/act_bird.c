@@ -627,9 +627,12 @@ void subBirdBrainMain(void *volatile gobj)
                 sv[0] = sv[0] / sv[3] - 2048.0f;
                 sv[1] = sv[1] / sv[3] - 2048.0f;
 
+                /* PC port: ScreenWidth is SCALE here (sx in 4:3 half-widths,
+                   the unit of the 0.6 bound, which the frame's width scales) */
                 sx = sv[0] / (ScreenWidth / 2);
                 sy = sv[1] / (ScreenHeight / 2);
-                if (sv[3] > 0.0f && __builtin_fabsf(sx) < 0.6f && sy > -1.3f && sy < 0.5f) {
+                if (sv[3] > 0.0f && __builtin_fabsf(sx) < 0.6f * ((float)gsFrame.w / 512.0f) &&
+                    sy > -1.3f && sy < 0.5f) {
                     float dy;
 
                     sceVu0InversMatrix(im, (char *)matrixptr + 128);

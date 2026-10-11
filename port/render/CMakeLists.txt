@@ -97,11 +97,13 @@ add_library(ico_render STATIC
     rd_blur.c # staticBlur.c's sprites
     rd_core.c
     rd_crt.c # the CRT filter at present time
+    rd_dst_read.c # the exact GS blend: the destination read
     rd_dump.c
     rd_fog_path.c # how the fog reads the depth: the paths, the probe, the self-test
     rd_frame.c
     rd_interp.c # interpolation between the retained frames
     rd_mesh.c
+    rd_content_hide.c # the content table: stage geometry made for the 4:3 picture
     modelpack.c # model packs, the index, the glTF conversion, the dump
     rd_perf.c # per-replay performance records
     rd_pipeline.c
@@ -140,9 +142,11 @@ if(TARGET SDL3::SDL3-shared)
 endif()
 
 # rd_replay_tool: a dump to a PNG, headless.
-add_executable(rd_replay_tool tools/rd_replay_tool.c)
+# (and a F12 .zip: platform/dump_zip.c reads it)
+add_executable(rd_replay_tool tools/rd_replay_tool.c ../platform/dump_zip.c)
 target_compile_options(rd_replay_tool PRIVATE ${ICO_SEMANTIC_OPTIONS} ${ICO_PORT_WARNINGS})
-target_link_libraries(rd_replay_tool PRIVATE ico_render)
+target_include_directories(rd_replay_tool PRIVATE ../platform)
+target_link_libraries(rd_replay_tool PRIVATE ico_render ico_miniz ico_host_fs)
 
 # --- Tests ----------------------------------------------------------------------
 # rd_state_test: lists, state leakage, keep frames, recording of the stubbed
@@ -162,18 +166,31 @@ target_include_directories(rd_pixel_test PRIVATE "${CMAKE_SOURCE_DIR}/port/shade
 target_compile_options(rd_pixel_test PRIVATE ${ICO_SEMANTIC_OPTIONS} ${ICO_PORT_WARNINGS})
 target_link_libraries(rd_pixel_test PRIVATE ico_render ico_sheet_ref)
 
+# rd_native_test: one synthetic game frame (VU triangles, UI and full-frame
+# sprites, the DISPLAY reduction) at native widths 512..2560: the centre
+# columns equal the 512 render's and no step at the old band edges (Gate B).
+# The wide cases run with ICO_NATIVE_GATE=1 (the gate once W2 has landed);
+# without it only W = 512 is checked and the test exits 77.
+add_executable(rd_native_test test/rd_native_test.c)
+target_include_directories(rd_native_test PRIVATE "${CMAKE_SOURCE_DIR}/port/shaders"
+                           "${CMAKE_SOURCE_DIR}/port/rhi")
+target_compile_options(rd_native_test PRIVATE ${ICO_SEMANTIC_OPTIONS} ${ICO_PORT_WARNINGS})
+target_link_libraries(rd_native_test PRIVATE ico_render)
+
 # rd_layout_test: the seki layer's host path (GifPacket.c, DisplayList.c,
 # DmaPacket.c compiled with ICO_HOST and ICO_RD, as the window build has
-# them) fed layout_texture.c's call sequence for a synthetic layout; the
+# them) fed layout_texture.c's call sequence for a synthetic layout and
+# kanban.c (compiled in) for the boot signs' backdrop; the
 # recording is checked without a device, one sprite's pixels on one.
 add_executable(rd_layout_test test/rd_layout_test.c
     "${CMAKE_SOURCE_DIR}/ico2/seki/src/GifPacket.c"
     "${CMAKE_SOURCE_DIR}/ico2/seki/src/DisplayList.c"
-    "${CMAKE_SOURCE_DIR}/ico2/seki/src/DmaPacket.c")
+    "${CMAKE_SOURCE_DIR}/ico2/seki/src/DmaPacket.c"
+    "${CMAKE_SOURCE_DIR}/ico2/common/src/kanban.c")
 ico_include_dirs(seki _ico_seki_incs)
 target_include_directories(rd_layout_test PRIVATE ${_ico_seki_incs}
                            "${CMAKE_SOURCE_DIR}/port/shaders" "${CMAKE_SOURCE_DIR}/port/math"
-                           "${CMAKE_SOURCE_DIR}/port/rhi")
+                           "${CMAKE_SOURCE_DIR}/port/rhi" "${CMAKE_SOURCE_DIR}/port/ui")
 target_compile_definitions(rd_layout_test PRIVATE ICO_HOST=1 ICO_RD=1)
 target_compile_options(rd_layout_test PRIVATE ${ICO_SEMANTIC_OPTIONS} ${ICO_GAME_LAYOUT_OPTIONS}
                        ${ICO_GAME_WARNINGS})
@@ -298,6 +315,16 @@ add_executable(rd_mirror_test test/rd_mirror_test.c)
 target_compile_options(rd_mirror_test PRIVATE ${ICO_SEMANTIC_OPTIONS} ${ICO_PORT_WARNINGS})
 target_include_directories(rd_mirror_test PRIVATE "${CMAKE_SOURCE_DIR}/port/rhi")
 target_link_libraries(rd_mirror_test PRIVATE ico_render)
+
+# rd_msaa_test: the anti-aliasing's MSAA epoch: MSAA4 against no
+# anti-aliasing on a synthetic scene (identical away from edges, integer
+# sprites identical), a DATE draw closing the epoch, the fog per sample and
+# through the resolved depth, the Original preset unchanged; 77 without a
+# device that takes 4 samples.
+add_executable(rd_msaa_test test/rd_msaa_test.c)
+target_compile_options(rd_msaa_test PRIVATE ${ICO_SEMANTIC_OPTIONS} ${ICO_PORT_WARNINGS})
+target_include_directories(rd_msaa_test PRIVATE "${CMAKE_SOURCE_DIR}/port/rhi")
+target_link_libraries(rd_msaa_test PRIVATE ico_render)
 
 # rd_perf_test: a synthetic game-shaped frame replayed 200
 # times and recorded 200 times: no resource is created or destroyed and no
@@ -585,12 +612,15 @@ target_link_libraries(texpack_e2e_test PRIVATE ico_render)
 ico_copy_sdl3_dll(texpack_test texpack_e2e_test rd_replay_tool rd_state_test rd_pixel_test
                   rd_layout_test rd_tex_test rd_gsbase_test rd_mesh_test modelpack_test
                   rd_shadow_test rd_fog_test rd_fog_selftest_test rd_blur_test rd_water_test rd_raw_test rd_debug_test
-                  rd_present_test rd_filter_test rd_interp_test rd_mirror_test rd_mip_test
-                  rd_perf_test rd_boot_present_test rd_crt_test texpack_load_test gsb_cull_test)
+                  rd_present_test rd_filter_test rd_interp_test rd_mirror_test rd_msaa_test rd_mip_test
+                  rd_perf_test rd_boot_present_test rd_crt_test texpack_load_test gsb_cull_test
+                  rd_native_test)
 
 if(ICO_RUN_TESTS)
     add_test(NAME rd_state COMMAND rd_state_test "${CMAKE_CURRENT_BINARY_DIR}")
     add_test(NAME rd_pixel COMMAND rd_pixel_test "${CMAKE_CURRENT_BINARY_DIR}")
+    add_test(NAME rd_native COMMAND rd_native_test)
+    set_tests_properties(rd_native PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 1500)
     add_test(NAME rd_layout COMMAND rd_layout_test)
     set_tests_properties(rd_layout PROPERTIES SKIP_RETURN_CODE 77)
     add_test(NAME rd_mip COMMAND rd_mip_test)
@@ -639,6 +669,33 @@ if(ICO_RUN_TESTS)
                      -P "${CMAKE_CURRENT_SOURCE_DIR}/test/rd_replay_tool_list.cmake")
     set_tests_properties(rd_replay_tool_list PROPERTIES SKIP_REGULAR_EXPRESSION "SKIP:"
                                                         FIXTURES_REQUIRED rd_dump)
+    # --pass-dump (every target and the present from one run), the unknown
+    # --target and the wider-than-recorded --aspect errors
+    add_test(NAME rd_replay_tool_pass_dump
+             COMMAND "${CMAKE_COMMAND}" -DTOOL=$<TARGET_FILE:rd_replay_tool>
+                     "-DDUMP=${CMAKE_CURRENT_BINARY_DIR}/rd_pixel_frame.rddump"
+                     "-DOUT=${CMAKE_CURRENT_BINARY_DIR}/rd_replay_tool_pass_dump"
+                     -P "${CMAKE_CURRENT_SOURCE_DIR}/test/rd_replay_tool_pass_dump.cmake")
+    set_tests_properties(rd_replay_tool_pass_dump PROPERTIES SKIP_REGULAR_EXPRESSION "SKIP:"
+                                                             FIXTURES_REQUIRED rd_dump TIMEOUT 300)
+    # the native frame gates (tools/native_frame_check.py, docs/BUILDING.md "Native frame
+    # gates"): Gate A re-renders the dump list ICO_DUMPS names and compares with
+    # docs/native_frame_baseline.json; Gate B checks the aspect sweeps ICO_SWEEPS names.
+    # Both skip (77) without the variable, the dumps, a device or Pillow; the selftest
+    # of the Gate B logic always runs.
+    if(Python3_FOUND)
+        set(ICO_NFC "${CMAKE_SOURCE_DIR}/tools/native_frame_check.py")
+        add_test(NAME native_frame_gate_a
+                 COMMAND "${Python3_EXECUTABLE}" -I "${ICO_NFC}" gate-a --ctest
+                         --tool $<TARGET_FILE:rd_replay_tool>)
+        add_test(NAME native_frame_gate_b
+                 COMMAND "${Python3_EXECUTABLE}" -I "${ICO_NFC}" gate-b --ctest)
+        add_test(NAME native_frame_check_selftest
+                 COMMAND "${Python3_EXECUTABLE}" -I "${ICO_NFC}" selftest)
+        set_tests_properties(native_frame_gate_a native_frame_gate_b native_frame_check_selftest
+                             PROPERTIES SKIP_RETURN_CODE 77)
+        set_tests_properties(native_frame_gate_a PROPERTIES TIMEOUT 3600)
+    endif()
     add_test(NAME rd_water COMMAND rd_water_test)
     set_tests_properties(rd_water PROPERTIES SKIP_RETURN_CODE 77)
     add_test(NAME rd_raw COMMAND rd_raw_test WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
@@ -653,6 +710,8 @@ if(ICO_RUN_TESTS)
     add_test(NAME rd_interp COMMAND rd_interp_test)
     add_test(NAME rd_mirror COMMAND rd_mirror_test)
     set_tests_properties(rd_mirror PROPERTIES SKIP_RETURN_CODE 77)
+    add_test(NAME rd_msaa COMMAND rd_msaa_test)
+    set_tests_properties(rd_msaa PROPERTIES SKIP_RETURN_CODE 77)
     add_test(NAME rd_perf COMMAND rd_perf_test)
     set_tests_properties(rd_perf PROPERTIES SKIP_RETURN_CODE 77)
     add_test(NAME rd_boot_present COMMAND rd_boot_present_test "${ICO_BOOT_DUMP_DIR}")
@@ -675,7 +734,7 @@ if(ICO_RUN_TESTS)
     if(_env)
         set_tests_properties(rd_water PROPERTIES ENVIRONMENT "${_env}")
         set_tests_properties(rd_pixel rd_replay_tool rd_layout rd_tex rd_gsbase rd_mesh modelpack
-                             rd_shadow rd_fog rd_blur rd_raw rd_debug rd_present rd_crt rd_interp rd_mirror rd_perf PROPERTIES ENVIRONMENT
+                             rd_shadow rd_fog rd_blur rd_raw rd_debug rd_present rd_crt rd_interp rd_mirror rd_msaa rd_perf rd_native PROPERTIES ENVIRONMENT
                                                                            "${_env}")
     endif()
     # the same tests and expectations in the two-pass blend
@@ -691,10 +750,36 @@ if(ICO_RUN_TESTS)
     add_test(NAME rd_raw_nodual COMMAND rd_raw_test)
     add_test(NAME rd_mirror_nodual COMMAND rd_mirror_test)
     add_test(NAME rd_interp_nodual COMMAND rd_interp_test)
+    add_test(NAME rd_msaa_nodual COMMAND rd_msaa_test)
     set_tests_properties(rd_pixel_nodual rd_present_nodual rd_fog_nodual rd_shadow_nodual
                          rd_water_nodual rd_raw_nodual rd_mirror_nodual rd_interp_nodual
+                         rd_msaa_nodual
                          PROPERTIES SKIP_RETURN_CODE 77 WORKING_DIRECTORY "${_nd}"
                                     ENVIRONMENT "${_env_nodual}")
+    # the exact GS blend (rd_dst_read.c) by each path: lavapipe has both
+    # destination reads and takes the attachment read by default, so the
+    # storage path (fragment shader interlock, the Deck's and the desktop
+    # drivers') and the fixed-function blend (devices without either) are
+    # forced; the fixed-function runs also compare rd_present's and rd_crt's
+    # recorded hashes, which are that blend's
+    set(_env_blend_storage ${_env} "ICO_RD_BLEND=storage")
+    set(_env_blend_fixed ${_env} "ICO_RD_BLEND=fixed")
+    set(_bs "${CMAKE_CURRENT_BINARY_DIR}/blend_storage")
+    set(_bf "${CMAKE_CURRENT_BINARY_DIR}/blend_fixed")
+    file(MAKE_DIRECTORY "${_bs}" "${_bf}")
+    add_test(NAME rd_pixel_storage COMMAND rd_pixel_test "${_bs}")
+    add_test(NAME rd_fog_storage COMMAND rd_fog_test)
+    add_test(NAME rd_present_storage COMMAND rd_present_test "${_bs}")
+    set_tests_properties(rd_pixel_storage rd_fog_storage rd_present_storage
+                         PROPERTIES SKIP_RETURN_CODE 77 WORKING_DIRECTORY "${_bs}"
+                                    ENVIRONMENT "${_env_blend_storage}")
+    add_test(NAME rd_pixel_fixed COMMAND rd_pixel_test "${_bf}")
+    add_test(NAME rd_fog_fixed COMMAND rd_fog_test)
+    add_test(NAME rd_present_fixed COMMAND rd_present_test "${_bf}")
+    add_test(NAME rd_crt_fixed COMMAND rd_crt_test "${_bf}")
+    set_tests_properties(rd_pixel_fixed rd_fog_fixed rd_present_fixed rd_crt_fixed
+                         PROPERTIES SKIP_RETURN_CODE 77 WORKING_DIRECTORY "${_bf}"
+                                    ENVIRONMENT "${_env_blend_fixed}")
     # the fog on the 24-bit depth buffer a phone GPU without a sampled
     # D32S8 gets (ICO_VK_FAKE_D24S8=1, port/rhi/vk/vk_device.c): the same
     # pixels as on D32S8, one-pass and two-pass blends

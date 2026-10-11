@@ -732,7 +732,33 @@ static int extrasMusic(void)
 /* the model viewer's list (port/game/model_viewer.c registers
    it), -1 without one */
 static int (*s_modelsEnter)(void);
-static int (*s_windowModeQuery)(void); /* the window's truth, when installed */
+static int (*s_windowModeQuery)(void);  /* the window's truth, when installed */
+static unsigned (*s_aaMaskQuery)(void); /* the Anti-aliasing list, when installed */
+
+/* the RdAntiAlias values the row offers, a bit each (Off always) */
+static unsigned aaMask(void)
+{
+    unsigned m;
+    if (s_aaMaskQuery) {
+        m = s_aaMaskQuery();
+    } else {
+#ifdef ICO_RD
+        m = rd_aa_supported_mask();
+#else
+        m = (1u << ICO_AA_OFF) | (1u << ICO_AA_SSAA2) | (1u << ICO_AA_SSAA4);
+#endif
+    }
+    return m | (1u << ICO_AA_OFF);
+}
+
+/* the Anti-aliasing row is the Enhanced presets': under Original it stays
+   Off and does not step (ico_video_anti_alias) */
+static int aaLocked(void)
+{
+    IcoVideoOptions o;
+    ico_video_get(&o);
+    return ico_video_preset(&o) == ICO_VIDEO_ORIGINAL;
+}
 
 void ui_settings_set_models_handler(int (*fn)(void))
 {
@@ -1014,6 +1040,12 @@ static const char *rawValue(int opt, char *buf, unsigned size)
     case UI_OPT_ASPECT:
         return o.aspect == ICO_ASPECT_AUTO ? ui_str(UI_STR_VAL_AUTO)
                                            : ico_video_aspect_name(o.aspect);
+    case UI_OPT_ANTI_ALIAS: {
+        static const int aaStr[ICO_AA_COUNT] = {UI_STR_AA_OFF,   UI_STR_AA_SSAA2, UI_STR_AA_SSAA4,
+                                                UI_STR_AA_MSAA2, UI_STR_AA_MSAA4, UI_STR_AA_MSAA8};
+        const int aa = ico_video_anti_alias(); /* Off under Original */
+        return ui_str(aaStr[aa >= 0 && aa < ICO_AA_COUNT ? aa : ICO_AA_OFF]);
+    }
     case UI_OPT_WINDOW_MODE: {
         /* the window's own answer when the host installed one */
         const int m = s_windowModeQuery ? s_windowModeQuery() : o.windowMode;
@@ -1165,6 +1197,8 @@ static const char *rawValue(int opt, char *buf, unsigned size)
         return girlControlMode != 0 ? "2" : "1";
     case UI_OPT_YORDA:
         return onOff(ico_opt_yorda_safe());
+    case UI_OPT_DOOR_FIX:
+        return onOff(ico_opt_door_fix());
     case UI_OPT_LANGUAGE:
         return languageName(NonLinearCameraMove);
     case UI_OPT_DEVELOPER:
@@ -1259,6 +1293,7 @@ static int canStep(int opt)
 {
     return steppable(opt) && (opt != UI_OPT_VIDEO_MODE || onTitle()) && optShown(opt, -1) &&
            (opt != UI_OPT_RESOLUTION || !resolutionLocked()) &&
+           (opt != UI_OPT_ANTI_ALIAS || !aaLocked()) &&
            (opt != UI_OPT_TEXTURE_PACK || texturePackInstalled()) &&
            (opt != UI_OPT_MODEL_PACK || modelPackInstalled());
 }
@@ -1362,6 +1397,24 @@ void ui_settings_step(UiSettingsOpt opt, int dir)
         o.aspect = stepIndex(o.aspect, ICO_ASPECT_COUNT, dir);
         video = 1;
         break;
+    case UI_OPT_ANTI_ALIAS: {
+        if (aaLocked()) {
+            return; /* Off under Original */
+        }
+        /* Off, then the values the device can draw, around */
+        const unsigned m = aaMask();
+        int a = o.antiAlias;
+        a = a >= 0 && a < ICO_AA_COUNT ? a : ICO_AA_OFF;
+        for (int k = 0; k < ICO_AA_COUNT; k++) {
+            a = stepIndex(a, ICO_AA_COUNT, dir);
+            if (m & (1u << a)) {
+                break;
+            }
+        }
+        o.antiAlias = a;
+        video = 1;
+        break;
+    }
     case UI_OPT_WINDOW_MODE:
         /* from what the window is: Windowed, Borderless, Fullscreen */
         o.windowMode = stepIndex(s_windowModeQuery ? s_windowModeQuery() : o.windowMode,
@@ -1567,6 +1620,11 @@ void ui_settings_step(UiSettingsOpt opt, int dir)
     case UI_OPT_YORDA:
         ico_opt_set_yorda_safe(!ico_opt_yorda_safe());
         ico_config_set_bool("gameplay.yorda_safe", ico_opt_yorda_safe());
+        s_dirtyConfig = 1;
+        break;
+    case UI_OPT_DOOR_FIX:
+        ico_opt_set_door_fix(!ico_opt_door_fix());
+        ico_config_set_bool("gameplay.door_fix", ico_opt_door_fix());
         s_dirtyConfig = 1;
         break;
     case UI_OPT_LANGUAGE: {
@@ -1910,9 +1968,8 @@ static void buildGalleryBar(void)
 
 /* A page's first row and pitch (field lines) for n rows shown.  Every page
    keeps Back's box inside the 226 lines and above the notes:
-     Display      from 36, 14 apart (at most twelve rows shown; Video mode
-                  and Model pack are the title's, Brightness the pause
-                  menu's)
+     Display      from 36, 14 apart (at most eleven rows shown; Video mode
+                  and Model pack are the title's)
      Characters   from 40, 13 apart (twelve rows: Back at 183, its box to
                   219); inside the model viewer CV_ROW_Y0 and CV_ROW_PITCH
      Main         from 40: up to 8 rows 19 apart, 9 rows 17, 10 rows 15,
@@ -1921,7 +1978,10 @@ static void buildGalleryBar(void)
      Controls     from 40, up to 9 rows 18 apart, 10 or 11 rows 16, 12 or
                   13 rows 13 (Back at 183, its box to 219); 14 or more from
                   30, 11 apart (Back at 184, its box to 220)
-     Effects      from 40, 18 apart, ten rows 16 (Back at 184, its box to 220)
+     Effects      from 40, 18 apart, ten rows 16 (Back at 184, its box to 220);
+                  eleven or twelve rows 13 (twelve: Back at 183); thirteen
+                  (the pause menu's, with Brightness) from 34, 13 apart
+                  (Back at 190, its box to 226)
      the others   from 40, 18 apart */
 static int pagePitch(int page, int n, int *y0)
 {
@@ -1931,6 +1991,13 @@ static int pagePitch(int page, int n, int *y0)
         return 14;
     }
     *y0 = 40;
+    if (page == UI_PAGE_EFFECTS && n > 12) {
+        *y0 = 34;
+        return 13; /* thirteen rows: Back at 190, its box to 226 */
+    }
+    if (page == UI_PAGE_EFFECTS && n > 10) {
+        return 13; /* eleven or twelve: Back at 173 or 183 */
+    }
     if (page == UI_PAGE_EFFECTS && n > 9) {
         return 16; /* ten rows: Back at 184, its box to 220 */
     }
@@ -2066,6 +2133,7 @@ static void buildOptionPage(int id, int header, const int *opts, const int *strs
         break;
     case UI_PAGE_DISPLAY:
         addNote(pg, UI_OPT_RESOLUTION, UI_STR_RESOLUTION_CRT_NOTE);
+        addNote(pg, UI_OPT_ANTI_ALIAS, UI_STR_OPT_AA_NOTE);
         addNote(pg, UI_OPT_TEXTURE_PACK, UI_STR_TEXTURE_PACK_NOTE);
         addNote(pg, UI_OPT_MODEL_PACK, UI_STR_MODEL_PACK_NOTE);
         break;
@@ -2092,6 +2160,7 @@ static void buildOptionPage(int id, int header, const int *opts, const int *strs
         break;
     case UI_PAGE_GAMEPLAY:
         addNote(pg, UI_OPT_YORDA, UI_STR_OPT_YORDA_NOTE);
+        addNote(pg, UI_OPT_DOOR_FIX, UI_STR_OPT_DOOR_FIX_NOTE);
         addNote(pg, UI_OPT_PLAYERS, UI_STR_PLAYERS_NOTE);
         break;
     case UI_PAGE_EXTRAS:
@@ -2493,7 +2562,10 @@ static void build(void)
                                   UI_OPT_BACK};
     static const int gpuStrs[] = {UI_STR_OPT_GPU_DRIVER, UI_STR_GPU_DRIVER_ADD,
                                   UI_STR_GPU_DRIVER_REMOVE, UI_STR_BACK};
-    static const int fxOpts[] = {UI_OPT_CRT,
+    static const int fxOpts[] = {UI_OPT_FULL_HEIGHT,
+                                 UI_OPT_FILTER,
+                                 UI_OPT_BRIGHTNESS,
+                                 UI_OPT_CRT,
                                  UI_OPT_CRT_STRENGTH,
                                  UI_OPT_EFFECT_GLOW,
                                  UI_OPT_EFFECT_DEPTH_OF_FIELD,
@@ -2503,7 +2575,10 @@ static void build(void)
                                  UI_OPT_EFFECT_CINEMATIC_BARS,
                                  UI_OPT_FULL_PIXEL,
                                  UI_OPT_BACK};
-    static const int fxStrs[] = {UI_STR_OPT_CRT,
+    static const int fxStrs[] = {UI_STR_OPT_FULL_HEIGHT,
+                                 UI_STR_OPT_FILTERING,
+                                 UI_STR_OPT_BRIGHTNESS,
+                                 UI_STR_OPT_CRT,
                                  UI_STR_OPT_CRT_STRENGTH,
                                  UI_STR_OPT_EFFECT_GLOW,
                                  UI_STR_OPT_EFFECT_DEPTH_OF_FIELD,
@@ -2548,25 +2623,22 @@ static void build(void)
                                    UI_STR_CHAR_RANDOMIZE,
                                    UI_STR_CHAR_RESET,
                                    UI_STR_BACK};
-    /* every Display row always shown, Frame rate included (Brightness
-       from the pause menu) */
-    /* Texture pack after Texture filter */
-    static const int dispOpts[] = {UI_OPT_PRESET,       UI_OPT_RESOLUTION, UI_OPT_ASPECT,
-                                   UI_OPT_WINDOW_MODE,  UI_OPT_VSYNC,      UI_OPT_FILTER,
-                                   UI_OPT_TEXTURE_PACK, UI_OPT_MODEL_PACK, UI_OPT_FULL_HEIGHT,
-                                   UI_OPT_FRAMERATE,    UI_OPT_BRIGHTNESS, UI_OPT_VIDEO_MODE,
-                                   UI_OPT_BACK};
+    /* every Display row always shown, Frame rate included; Full-height
+       picture, Texture filtering and Brightness (the pause menu's) are the
+       Effects page's, first there */
+    static const int dispOpts[] = {UI_OPT_PRESET,       UI_OPT_RESOLUTION,  UI_OPT_ASPECT,
+                                   UI_OPT_ANTI_ALIAS,   UI_OPT_WINDOW_MODE, UI_OPT_VSYNC,
+                                   UI_OPT_TEXTURE_PACK, UI_OPT_MODEL_PACK,  UI_OPT_FRAMERATE,
+                                   UI_OPT_VIDEO_MODE,   UI_OPT_BACK};
     static const int dispStrs[] = {UI_STR_OPT_PRESET,
                                    UI_STR_OPT_RESOLUTION,
                                    UI_STR_OPT_ASPECT,
+                                   UI_STR_OPT_AA,
                                    UI_STR_OPT_WINDOW_MODE,
                                    UI_STR_OPT_VSYNC,
-                                   UI_STR_OPT_FILTERING,
                                    UI_STR_OPT_TEXTURE_PACK,
                                    UI_STR_OPT_MODEL_PACK,
-                                   UI_STR_OPT_FULL_HEIGHT,
                                    UI_STR_OPT_FRAMERATE,
-                                   UI_STR_OPT_BRIGHTNESS,
                                    UI_STR_OPT_VIDEO_MODE,
                                    UI_STR_BACK};
     static const int audioOpts[] = {UI_OPT_VOLUME, UI_OPT_MUSIC,  UI_OPT_EFFECTS,
@@ -2591,10 +2663,11 @@ static void build(void)
     static const int ctlLinks[] = {
         UI_PAGE_REMAP, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
     /* the game's Film effect and Players, once the game is cleared */
-    static const int gameOpts[] = {UI_OPT_YORDA, UI_OPT_STICK_FIX, UI_OPT_FILM_EFFECT,
-                                   UI_OPT_PLAYERS, UI_OPT_BACK};
-    static const int gameStrs[] = {UI_STR_OPT_YORDA, UI_STR_OPT_STICK_FIX, UI_STR_OPT_FILM_EFFECT,
-                                   UI_STR_OPT_PLAYERS, UI_STR_BACK};
+    static const int gameOpts[] = {UI_OPT_YORDA,       UI_OPT_STICK_FIX, UI_OPT_DOOR_FIX,
+                                   UI_OPT_FILM_EFFECT, UI_OPT_PLAYERS,   UI_OPT_BACK};
+    static const int gameStrs[] = {UI_STR_OPT_YORDA,    UI_STR_OPT_STICK_FIX,
+                                   UI_STR_OPT_DOOR_FIX, UI_STR_OPT_FILM_EFFECT,
+                                   UI_STR_OPT_PLAYERS,  UI_STR_BACK};
     _Static_assert(sizeof(dispOpts) == sizeof(dispStrs), "a string for each Display row");
     _Static_assert(sizeof(ctlOpts) == sizeof(ctlStrs) && sizeof(ctlOpts) == sizeof(ctlLinks),
                    "a string and a link for each Controls row");
@@ -2849,6 +2922,11 @@ int ui_settings_capturing(void)
 void ui_settings_set_window_mode_query(int (*fn)(void))
 {
     s_windowModeQuery = fn;
+}
+
+void ui_settings_set_aa_mask_query(unsigned (*fn)(void))
+{
+    s_aaMaskQuery = fn;
 }
 
 void ui_settings_set_model_pack_count(int (*fn)(void))
@@ -3401,7 +3479,7 @@ static int parentLayout(const Page *pg)
  * Achievements and the remap targets: what each page's items are; the
  * window, the scrolling and the rows are ui_list.c's. */
 
-/* the items: the achievements, the pop-ups switch, then Back */
+/* the items: the pop-ups switch, the achievements, then Back */
 static int achCount(void *user)
 {
     (void)user;
@@ -3412,7 +3490,7 @@ static void achFill(void *user, int d, UiListSlot *out)
 {
     (void)user;
     const int n = ico_ach_count();
-    if (d == n) {
+    if (d == 0) {
         out->labelStr = UI_STR_OPT_ACH_POPUPS;
         out->colA = onOff(ico_ach_popups_enabled());
         return;
@@ -3421,9 +3499,10 @@ static void achFill(void *user, int d, UiListSlot *out)
         out->labelStr = UI_STR_BACK;
         return;
     }
-    IcoAchState st = ico_ach_state(d);
-    int hidden = ico_ach_hidden(d) && st == ICO_ACH_LOCKED;
-    out->label = hidden ? "???" : ui_str((UiStrId)ico_ach_title_str(d));
+    const int a = d - 1;
+    IcoAchState st = ico_ach_state(a);
+    int hidden = ico_ach_hidden(a) && st == ICO_ACH_LOCKED;
+    out->label = hidden ? "???" : ui_str((UiStrId)ico_ach_title_str(a));
     out->colAStr = st == ICO_ACH_UNLOCKED ? UI_STR_ACH_STATE_UNLOCKED : UI_STR_ACH_LOCKED;
 }
 
@@ -3438,15 +3517,15 @@ static void achDecorate(void *user, int d)
     snprintf(s_text, sizeof(s_text), "%s   %d / %d", ui_str(UI_STR_SECTION_ACHIEVEMENTS), got, n);
     lt_ext_set_text(pg->header, s_text);
     char buf[256];
-    if (d >= 0 && d < n) {
-        int hidden = ico_ach_hidden(d) && ico_ach_state(d) == ICO_ACH_LOCKED;
-        wrapText(hidden ? "???" : ui_str((UiStrId)ico_ach_desc_str(d)), NOTE_SIZE, 580.0f, buf,
+    if (d >= 1 && d <= n) {
+        int hidden = ico_ach_hidden(d - 1) && ico_ach_state(d - 1) == ICO_ACH_LOCKED;
+        wrapText(hidden ? "???" : ui_str((UiStrId)ico_ach_desc_str(d - 1)), NOTE_SIZE, 580.0f, buf,
                  sizeof(buf));
         lt_ext_set_text(pg->list.status, buf);
     } else {
         lt_ext_set_text(pg->list.status, "");
     }
-    const int s = n - pg->list.offset;
+    const int s = 0 - pg->list.offset;
     if (s >= 0 && s < UI_LIST_SLOTS) {
         lt_ext_set_pointer_role(pg->list.colA[s], LT_POINTER_STEP);
     }
@@ -3461,7 +3540,7 @@ static int achInput(void *user, int d, int flags)
     if ((flags & PAD_BACK) || ((flags & LT_PAD_CROSS) && d == n + 1)) {
         return leaveTo(UI_PAGE_ACHIEVEMENTS, parentLayout(pg));
     }
-    if (d == n && (flags & (LT_PAD_LEFT | LT_PAD_RIGHT))) {
+    if (d == 0 && (flags & (LT_PAD_LEFT | LT_PAD_RIGHT))) {
         ui_settings_step(UI_OPT_ACH_POPUPS, (flags & LT_PAD_LEFT) ? -1 : 1);
         CUR_SE();
         return -1;
@@ -3726,6 +3805,9 @@ static int rowLocked(const Row *r)
     if (r->opt == UI_OPT_RESOLUTION) {
         return resolutionLocked(); /* under the CRT filter */
     }
+    if (r->opt == UI_OPT_ANTI_ALIAS) {
+        return aaLocked(); /* Off under Original */
+    }
     if (r->opt == UI_OPT_TEXTURE_PACK) {
         return !texturePackInstalled(); /* "None installed" */
     }
@@ -3796,7 +3878,8 @@ static void layoutPage(Page *pg, int id)
     }
 }
 
-/* the notes shown only while their row is locked */
+/* the notes shown only while their row is locked (Anti-aliasing's says
+   what the row does: on the cursor, locked or not) */
 static int lockedNote(const Row *r)
 {
     return isExtrasOpt(r->opt) || r->opt == UI_OPT_RESOLUTION;
@@ -3932,8 +4015,8 @@ static void refreshPage(Page *pg, int id, int cur)
         if (r->value >= 0) {
             lt_ext_set_text(r->value, ui_settings_value_text((UiSettingsOpt)r->opt));
         }
-        if (isExtrasOpt(r->opt) || r->opt == UI_OPT_RESOLUTION || r->opt == UI_OPT_TEXTURE_PACK ||
-            r->opt == UI_OPT_MODEL_PACK) {
+        if (isExtrasOpt(r->opt) || r->opt == UI_OPT_RESOLUTION || r->opt == UI_OPT_ANTI_ALIAS ||
+            r->opt == UI_OPT_TEXTURE_PACK || r->opt == UI_OPT_MODEL_PACK) {
             /* the locked style: the label and its value greyed */
             lt_ext_set_dim(r->label, locked);
             if (r->value >= 0) {

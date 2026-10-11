@@ -12,6 +12,7 @@
 #include "audio_host.h"
 #include "config.h"
 #include "diag_host.h"
+#include "dump_zip.h"
 #include "font.h" /* port/ui: ico_window_progress's text and bar */
 #include "host_config.h"
 #include "host_fs.h"
@@ -184,6 +185,8 @@ static struct {
     unsigned gpuPostPartial;            /* replays whose effects were not all timed apart */
     uint64_t draws, passes, pipeBinds, groupBinds, groups, barriers, copies, bytes, meshBytes;
     uint64_t texUploads, meshUploads, dateSnaps, exact, pipeCreates;
+    uint64_t msaaResolves;
+    uint32_t msaaSamples; /* the block's largest count (0: no MSAA) */
     uint64_t bufCreated, bufDestroyed, texCreated, texDestroyed, allocs, fenceWaits, waitIdles,
         readbacks;
 } s_perf;
@@ -207,6 +210,9 @@ static void video_settings(RdSettings *rs, int w, int h)
     rs->filterUpgrade = (uint8_t)o.filter;
     rs->fullHeightScene = (uint8_t)(o.fullHeight != 0);
     rs->fullPixel = (uint8_t)(o.fullPixel != 0);
+    /* off under the Original preset (ico_video_anti_alias); the renderer
+       draws an MSAA count the device lacks as off (rd_aa_supported_mask) */
+    rs->antiAlias = (uint8_t)ico_video_anti_alias();
     rs->sceneWidth = (uint32_t)o.resW;
     rs->sceneHeight = (uint32_t)o.resH;
     rs->sceneScale = (float)o.resScale;
@@ -407,18 +413,67 @@ static void video_apply(int force)
     }
 }
 
-/* The touch overlay's zones from the window's pixel size and
-   its safe area (a notch, rounded corners, the system bars), which SDL
-   gives in points: scaled to pixels.  On open and when either changes; the
-   Touch size row is followed by input_sdl.c. */
+/* What the touch layout knows of the screen besides its pixels (touch.h
+   IcoTouchEnv): its density, so the controls keep a size in millimetres,
+   and on Android a foldable's fold, so nothing sits on it.  Android: the
+   activity's own report (ico_android_screen), whose fold bounds are in the
+   window's pixels as Java sees them, scaled here to SDL's pixel size pw x
+   ph (the same numbers when the surface fills the window).  Elsewhere, or
+   before the first report: the display scale SDL gives, as dots per inch
+   over a base of 96 (160 on Android, its density for scale 1). */
+static void touch_env_build(IcoTouchEnv *env, int pw, int ph)
+{
+    float scale;
+#ifdef __ANDROID__
+    IcoAndroidScreen a;
+
+    if (ico_android_screen(&a) > 0 && a.densityDpi > 0) {
+        const float kx = a.winW > 0 ? (float)pw / (float)a.winW : 1.0f;
+        const float ky = a.winH > 0 ? (float)ph / (float)a.winH : 1.0f;
+
+        SDL_zerop(env);
+        env->pxPerMm = ico_touch_px_per_mm((float)a.densityDpi) * kx;
+        if ((a.fold == ICO_TOUCH_FOLD_VERTICAL || a.fold == ICO_TOUCH_FOLD_HORIZONTAL) &&
+            a.winW > 0 && a.winH > 0 && a.r >= a.l && a.b >= a.t) {
+            env->fold.orientation = a.fold;
+            env->fold.halfOpened = a.halfOpened;
+            env->fold.separating = a.separating;
+            env->fold.bounds.x = (float)a.l * kx;
+            env->fold.bounds.y = (float)a.t * ky;
+            env->fold.bounds.w = (float)(a.r - a.l) * kx;
+            env->fold.bounds.h = (float)(a.b - a.t) * ky;
+        }
+        return;
+    }
+#endif
+    SDL_zerop(env);
+    scale = SDL_GetWindowDisplayScale(s_window);
+#ifdef __ANDROID__
+    env->pxPerMm = ico_touch_px_per_mm(scale * 160.0f);
+#else
+    env->pxPerMm = ico_touch_px_per_mm(scale * 96.0f);
+#endif
+}
+
+/* The touch overlay's zones from the window's pixel size, its safe area (a
+   notch, rounded corners, the system bars), which SDL gives in points:
+   scaled to pixels, and the screen's density and fold (touch_env_build).
+   On open, when the size, the safe area or the display scale changes, and
+   on Android when the activity reports a new density or fold
+   (ico_window_pump); the Touch size row is followed by input_sdl.c.  The
+   screen goes first: each call lays the zones out again, and the second
+   one has everything. */
 static void touch_layout_update(void)
 {
     int pw = 0, ph = 0, ww = 0, wh = 0;
     SDL_Rect r;
+    IcoTouchEnv env;
 
     if (s_window == NULL || !SDL_GetWindowSizeInPixels(s_window, &pw, &ph) || pw <= 0 || ph <= 0) {
         return;
     }
+    touch_env_build(&env, pw, ph);
+    ico_input_sdl_set_touch_env(&env);
     if (SDL_GetWindowSize(s_window, &ww, &wh) && ww > 0 && wh > 0 &&
         SDL_GetWindowSafeArea(s_window, &r) && r.w > 0 && r.h > 0) {
         const double kx = (double)pw / ww, ky = (double)ph / wh;
@@ -1076,11 +1131,17 @@ static int device_lost_quit(void)
     return 1;
 }
 
-/* F12, the frame on the screen as an rd dump and a PNG in
-   <pref>/dumps, for a bug report */
+/* F12, the frame on the screen for a bug report, in <pref>/dumps: a PNG
+   and a zip of the rd dump and a copy of the log (GitHub issues refuse
+   .rddump files but take a .zip; the PNG stays a loose file, it is too big
+   for a zip at high scales). The dump is written first, zipped, and the
+   loose .rddump deleted by ico_frame_dump_zip once the zip is written; when the zip fails the
+   .rddump is kept. The log is logs/ico-pc.log, a file on Android too; with
+   --console there is none and the zip holds the dump alone. */
 static void frame_dump(void)
 {
-    char pref[ICO_PATH_MAX], dir[ICO_PATH_MAX], dump[ICO_PATH_MAX], png[ICO_PATH_MAX];
+    char pref[ICO_PATH_MAX], dir[ICO_PATH_MAX], dump[ICO_PATH_MAX], png[ICO_PATH_MAX],
+        zip[ICO_PATH_MAX], why[160];
     char stamp[32];
     const time_t now = time(NULL);
     const struct tm *tm = localtime(&now);
@@ -1094,16 +1155,179 @@ static void frame_dump(void)
         return;
     }
     if (ico_frame_dump_paths(dir, stamp, ico_host_vsync_count(), dump, sizeof(dump), png,
-                             sizeof(png)) != 0) {
+                             sizeof(png), zip, sizeof(zip)) != 0) {
         fprintf(stderr, "window: F12: the dumps folder %s is too deep for the file names\n", dir);
         return;
     }
     const int ok = rd_dump_on_demand(dump, png);
     /* the recording up to this moment, for the same report */
     ico_input_record_flush();
-    fprintf(stderr, "window: F12 at vsync %u, Main tick %u, frame %u: %s %s and %s\n",
+    /* the zip is made after the dump is closed; with --console the log
+       "path" is not a file, so the zip holds the dump alone */
+    int zr = -1;
+
+    snprintf(why, sizeof(why), "no dump");
+    if (ok) {
+        ico_host_log_flush();
+        zr = ico_frame_dump_zip(zip, dump, ico_diag_log_path(), why, sizeof(why));
+    }
+    if (zr < 0) {
+        fprintf(stderr, "window: dump: zip not written: %s%s\n", why,
+                ok ? "; the .rddump is kept" : "");
+    }
+    fprintf(stderr, "window: F12 at vsync %u, Main tick %u, frame %u: %s %s%s%s\n",
             ico_host_vsync_count(), ico_host_main_ticks(), (unsigned)rd_frame_number(),
-            ok ? "wrote" : "could not write all of", dump, png);
+            ok ? "wrote" : "could not write all of", png, zr >= 0 ? " and " : "",
+            zr >= 0 ? zip : "");
+}
+
+/* Shift+F12 in photo mode, the aspect sweep: the paused frame captured at
+   4:3, 16:9, 32:9, 48:9 and 60:9 into <pref>/dumps/sweep-<time>.zip, each
+   aspect's <aspect>.rddump and <aspect>.png (dump_zip.h ico_sweep_zip), for
+   the Gate B harness (tools/native_frame_check.py).
+
+   The game builds its frame at the width gsFrame holds, latched at each
+   flip from ico_video_frame (GsBase.c gsbHostFrameLatch), so the sweep forces
+   the aspect there (ico_video_frame_force_aspect) and waits.  At the next
+   flip the latch makes the new width and remakes rd's scene-sized targets
+   (rd_reset_scene, the 50/60 Hz switch's path), and the paused tick that
+   follows draws from the photo camera (photo_view.c ico_photo_view_tick) and
+   rebuilds the game's matrices at that width, +0x280 the cull's included,
+   each tick: no game state is touched.  Once the last closed frame is a frame
+   at the width and SWEEP_SETTLE closed frames have followed it (the feedback
+   passes and the blended picture settle), the normal F12 path takes it
+   (rd_dump_on_demand: the .rddump and the DISPLAY .png at the native width).
+   After the last aspect, or on leaving photo mode or a timeout, the forcing
+   is cleared: the next flip latches the live width back with its
+   rd_reset_scene.  The window shows the sweep's frames meanwhile (a second
+   or two); the presentation's aspect stays the live one. */
+#define SWEEP_SETTLE 4
+#define SWEEP_TIMEOUT_PUMPS 900
+
+static struct {
+    int active, idx, captured, seen, waited;
+    unsigned lastNumber;
+    char prefix[ICO_PATH_MAX], zip[ICO_PATH_MAX];
+} s_sweep;
+
+static void sweep_finish(const char *reason)
+{
+    char why[160];
+
+    ico_video_frame_force_aspect(0.0f);
+    s_sweep.active = 0;
+    why[0] = '\0';
+    if (reason != NULL) {
+        fprintf(stderr, "window: aspect sweep: %s\n", reason);
+    }
+    if (s_sweep.captured > 0) {
+        ico_host_log_flush();
+        const int n = ico_sweep_zip(s_sweep.zip, s_sweep.prefix, why, sizeof(why));
+
+        if (n >= 0) {
+            fprintf(stderr, "window: aspect sweep: %d of %d aspects in %s\n", n, ICO_SWEEP_COUNT,
+                    s_sweep.zip);
+        } else {
+            fprintf(stderr, "window: aspect sweep: zip not written: %s; the loose files are kept\n",
+                    why);
+        }
+    } else {
+        fprintf(stderr, "window: aspect sweep: nothing captured\n");
+    }
+}
+
+static void sweep_start(void)
+{
+    char pref[ICO_PATH_MAX], dir[ICO_PATH_MAX], stamp[32];
+    const time_t now = time(NULL);
+    const struct tm *tm = localtime(&now);
+
+    if (s_sweep.active) {
+        return;
+    }
+    if (!ico_photo_active()) {
+        fprintf(stderr, "window: aspect sweep: Shift+F12 works in photo mode only\n");
+        return;
+    }
+    if (tm == NULL || strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", tm) == 0) {
+        snprintf(stamp, sizeof(stamp), "unknown");
+    }
+    ico_host_pref_dir(pref, sizeof(pref));
+    if (ico_path_join(dir, sizeof(dir), pref, "dumps") != 0 || ico_make_dir(dir) != 0 ||
+        ico_sweep_paths(dir, stamp, s_sweep.prefix, sizeof(s_sweep.prefix), s_sweep.zip,
+                        sizeof(s_sweep.zip)) != 0) {
+        fprintf(stderr, "window: aspect sweep: no usable dumps folder under %s\n", pref);
+        return;
+    }
+    s_sweep.active = 1;
+    s_sweep.idx = 0;
+    s_sweep.captured = 0;
+    s_sweep.seen = 0;
+    s_sweep.waited = 0;
+    s_sweep.lastNumber = 0;
+    fprintf(stderr, "window: aspect sweep: starts, %d aspects\n", ICO_SWEEP_COUNT);
+    ico_video_frame_force_aspect(ico_sweep_aspect_value(0));
+}
+
+/* one pump of the sweep: capture the aspect in force once its frame has
+   settled, then ask for the next */
+static void sweep_pump(void)
+{
+    IcoFrame want;
+    uint32_t number = 0, w = 0;
+    float aspect = 0.0f;
+    char dump[ICO_PATH_MAX], png[ICO_PATH_MAX];
+
+    if (!s_sweep.active) {
+        return;
+    }
+    if (!ico_photo_active()) {
+        sweep_finish("left photo mode");
+        return;
+    }
+    if (++s_sweep.waited > SWEEP_TIMEOUT_PUMPS) {
+        fprintf(stderr, "window: aspect sweep: no frame at %s after %d vsyncs\n",
+                ico_sweep_aspect_name(s_sweep.idx), SWEEP_TIMEOUT_PUMPS);
+        sweep_finish("gave up");
+        return;
+    }
+    ico_frame_make(&want, ico_sweep_aspect_value(s_sweep.idx), 448);
+    if (!rd_last_frame_native(&number, &aspect, &w) || (int)w != want.w ||
+        aspect < want.aspect - 1e-3f || aspect > want.aspect + 1e-3f) {
+        s_sweep.seen = 0;
+        return;
+    }
+    if (number != s_sweep.lastNumber) {
+        s_sweep.lastNumber = number;
+        s_sweep.seen++;
+    }
+    if (s_sweep.seen < SWEEP_SETTLE) {
+        return;
+    }
+    if (snprintf(dump, sizeof(dump), "%s%s.rddump", s_sweep.prefix,
+                 ico_sweep_aspect_name(s_sweep.idx)) >= (int)sizeof(dump) ||
+        snprintf(png, sizeof(png), "%s%s.png", s_sweep.prefix,
+                 ico_sweep_aspect_name(s_sweep.idx)) >= (int)sizeof(png)) {
+        sweep_finish("the capture path is too long");
+        return;
+    }
+    if (rd_dump_on_demand(dump, png)) {
+        s_sweep.captured++;
+        fprintf(stderr, "window: aspect sweep: %s at frame %u, GS width %u\n",
+                ico_sweep_aspect_name(s_sweep.idx), (unsigned)number, (unsigned)w);
+    } else {
+        fprintf(stderr, "window: aspect sweep: %s could not be written\n",
+                ico_sweep_aspect_name(s_sweep.idx));
+    }
+    s_sweep.idx++;
+    s_sweep.seen = 0;
+    s_sweep.waited = 0;
+    s_sweep.lastNumber = 0;
+    if (s_sweep.idx >= ICO_SWEEP_COUNT) {
+        sweep_finish(NULL);
+    } else {
+        ico_video_frame_force_aspect(ico_sweep_aspect_value(s_sweep.idx));
+    }
 }
 
 /* Cross in photo mode: the picture shown at the next present into
@@ -1228,9 +1452,11 @@ int ico_window_pump(void)
             quit = 1;
             break;
         case SDL_EVENT_KEY_DOWN:
-            hotkey = ico_hotkey_for(e.key.key, e.key.repeat);
+            hotkey = ico_hotkey_for_mod(e.key.key, e.key.repeat, (e.key.mod & SDL_KMOD_SHIFT) != 0);
             if (hotkey == ICO_HOTKEY_FRAME_DUMP) {
                 frame_dump();
+            } else if (hotkey == ICO_HOTKEY_ASPECT_SWEEP) {
+                sweep_start();
             } else if (hotkey == ICO_HOTKEY_STATS_FAST) {
                 stats_fast_toggle();
             } else if (e.key.key == SDLK_F11 || e.key.key == SDLK_F12) {
@@ -1299,6 +1525,9 @@ int ico_window_pump(void)
         case SDL_EVENT_WINDOW_SAFE_AREA_CHANGED:
             touch_layout_update(); /* a notch or the system bars moved */
             break;
+        case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
+            touch_layout_update(); /* another density: the controls' size */
+            break;
         default:
             ico_input_sdl_event(&e);
             break;
@@ -1310,6 +1539,20 @@ int ico_window_pump(void)
     }
     if (s_quitLatched) {
         return 1;
+    }
+#endif
+#ifdef __ANDROID__
+    {
+        /* the activity's density and fold reports (IcoActivity): folding,
+           unfolding or bending the screen does not always resize the
+           window, so a new report lays the touch controls out again */
+        static int s_screenGen;
+        const int gen = ico_android_screen(NULL);
+
+        if (gen != s_screenGen) {
+            s_screenGen = gen;
+            touch_layout_update();
+        }
     }
 #endif
     first_pump_recheck();
@@ -1326,6 +1569,7 @@ int ico_window_pump(void)
         rd_camera_cut();
     }
     photo_pump();                /* photo mode's captures */
+    sweep_pump();                /* Shift+F12's aspect sweep */
     set_capture(capture_mode()); /* play and photo mode */
     pointer_visibility();        /* the pointer in the menus */
     ico_input_sdl_update();
@@ -1708,6 +1952,10 @@ static void perf_drain(void)
         s_perf.dateSnaps += r.dateSnapshots;
         s_perf.exact += r.exactBlends;
         s_perf.pipeCreates += r.pipelineCreates;
+        s_perf.msaaResolves += r.msaaResolves;
+        if (r.msaaSamples > s_perf.msaaSamples) {
+            s_perf.msaaSamples = r.msaaSamples;
+        }
         s_perf.bufCreated += r.buffersCreated;
         s_perf.bufDestroyed += r.buffersDestroyed;
         s_perf.texCreated += r.texturesCreated;
@@ -1803,6 +2051,12 @@ static void perf_log(void)
             (unsigned long long)s_perf.texDestroyed, (unsigned long long)s_perf.allocs,
             (unsigned long long)s_perf.pipeCreates, (unsigned long long)s_perf.fenceWaits,
             (unsigned long long)s_perf.waitIdles, (unsigned long long)s_perf.readbacks);
+    if (s_perf.msaaSamples) {
+        /* the anti-aliasing's cost: its resolves' GPU time is the effects'
+           "MSAA resolve" above */
+        fprintf(stderr, "window: msaa: %u samples, resolves %.1f per replay\n", s_perf.msaaSamples,
+                (double)s_perf.msaaResolves / n);
+    }
     {
         /* the graphics allocations against the device's limit (a
            phone GPU allows 4096) and the process's memory (a phone ends a
@@ -1920,9 +2174,11 @@ static void pace_log(Uint64 now)
    and this names any present that was not.  For game frames BOOT_LOG_FIRST
    to BOOT_LOG_LAST, and the first BOOT_LOG_AFTER_FULL after the first frame
    that is not a keep frame: the frame, its keep flag, the fade it recorded
-   (1 + alpha), its snap, the present's alpha, DISPLAY at its centre and
-   its quarters' centres (a readback, so only in that window; never again
-   once past it) and "first" on a tick's first present. */
+   (1 + alpha), its snap, the present's alpha and "first" on a tick's first
+   present.  No pixels: a readback here waited for the GPU on every present
+   of the window (about a frame's GPU time each at high resolutions, the
+   sign's fade-in presented unevenly); rd_boot_present_test probes DISPLAY
+   (rd_display_probe) where the pixels are checked. */
 #define BOOT_LOG_FIRST 100u
 #define BOOT_LOG_LAST 130u
 #define BOOT_LOG_AFTER_FULL 12u
@@ -1935,9 +2191,6 @@ static struct {
 static void boot_log(float alpha)
 {
     RdPresentInfo pi;
-    uint8_t px[RD_DISPLAY_PROBE_POINTS][4];
-    char pts[RD_DISPLAY_PROBE_POINTS * 20] = "";
-    size_t n = 0;
 
     if (s_bootLog.done || !rd_last_present_info(&pi)) {
         return;
@@ -1955,18 +2208,8 @@ static void boot_log(float alpha)
         }
         return;
     }
-    if (rd_display_probe(px)) {
-        for (int k = 0; k < RD_DISPLAY_PROBE_POINTS && n < sizeof(pts); k++) {
-            const int w =
-                snprintf(pts + n, sizeof(pts) - n, " (%u,%u,%u)", px[k][0], px[k][1], px[k][2]);
-
-            n += w > 0 ? (size_t)w : 0;
-        }
-    } else {
-        snprintf(pts, sizeof(pts), " unread");
-    }
-    fprintf(stderr, "boot: frame %u keep %u fade %u snap %u t %.3f display%s%s\n", pi.frame,
-            pi.keep, pi.fade, pi.snap, (double)alpha, pts, pi.firstOfTick ? " first" : "");
+    fprintf(stderr, "boot: frame %u keep %u fade %u snap %u t %.3f%s\n", pi.frame, pi.keep, pi.fade,
+            pi.snap, (double)alpha, pi.firstOfTick ? " first" : "");
 }
 
 /* The pacer more than RESYNC_NS behind: the lag is dropped (counted) */
@@ -2094,7 +2337,7 @@ static void pace(int hz)
     if (!rd_interpolation_active()) {
         /* framerate "original": rd_end_frame presented the frame once; the
            picture is held until the next.  That present's start-up log line
-           (the frame whole: t 1), its readback inside the wait */
+           (the frame whole: t 1) */
         if (newFrame) {
             boot_log(1.0f);
         }
@@ -2195,7 +2438,7 @@ static void pace(int hz)
                a present is slower with an effects program loaded */
             s_pres.paceSlow = pace_slow_present(&s_pres.paceHist, s_pres.cost, refresh, period,
                                                 rhi_injector_name() != NULL);
-            /* after the cost: the start-up log's readback is not the present's */
+            /* the start-up log line, after the cost */
             boot_log(a);
         }
         if (!ok) {

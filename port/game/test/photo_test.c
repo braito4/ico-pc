@@ -65,11 +65,11 @@ static void gameCamera(RdCamera *c)
     c->view[12] = 0.0f;
     c->view[13] = 100.0f;
     c->view[14] = 500.0f;
-    c->proj43[0] = c->proj43[5] = 500.0f;
-    c->proj43[8] = c->proj43[9] = 2048.0f;
-    c->proj43[10] = 1.0f;
-    c->proj43[11] = 1.0f;
-    c->proj43[14] = 1.0f;
+    c->proj[0] = c->proj[5] = 500.0f;
+    c->proj[8] = c->proj[9] = 2048.0f;
+    c->proj[10] = 1.0f;
+    c->proj[11] = 1.0f;
+    c->proj[14] = 1.0f;
     c->zoom = 500.0f;
 }
 
@@ -173,8 +173,8 @@ int main(int argc, char **argv)
     eyeOf(&out, e);
     CHECK(near3(e, 0.0f, -500.0f, -500.0f, 0.05f), "free: Up rises 400 (%.2f, %.2f, %.2f)",
           (double)e[0], (double)e[1], (double)e[2]);
-    CHECK(fabsf(out.proj43[5] - 500.0f) < 1e-3f, "free: Up leaves the zoom alone (%.3f)",
-          (double)out.proj43[5]);
+    CHECK(fabsf(out.proj[5] - 500.0f) < 1e-3f, "free: Up leaves the zoom alone (%.3f)",
+          (double)out.proj[5]);
     p.held = ICO_PHOTO_DOWN;
     ticks(&p, 50, &out, &game);
     eyeOf(&out, e);
@@ -305,9 +305,9 @@ int main(int argc, char **argv)
         ico_photo_update(&p);
     }
     ico_photo_camera(&out, &game);
-    CHECK(fabsf(out.proj43[5] / 500.0f - expf(0.35f)) < 1e-3f && out.proj43[8] == 2048.0f &&
+    CHECK(fabsf(out.proj[5] / 500.0f - expf(0.35f)) < 1e-3f && out.proj[8] == 2048.0f &&
               fabsf(out.zoom - 500.0f * expf(0.35f)) < 0.05f,
-          "zoom: focal %.2f, centre %.1f", (double)out.proj43[5], (double)out.proj43[8]);
+          "zoom: focal %.2f, centre %.1f", (double)out.proj[5], (double)out.proj[8]);
     CHECK(ico_photo_fov_deg(&out) < fov0, "zoom: the field of view narrower");
     /* the field of view's range, orbit */
     ticks(&p, 25 * 10, &out, &game);
@@ -346,8 +346,8 @@ int main(int argc, char **argv)
     p = idle();
     p.held = ICO_PHOTO_R2;
     ticks(&p, 25, &out, &game);
-    CHECK(fabsf(out.proj43[5] / 500.0f - expf(0.35f)) < 1e-3f && out.proj43[8] == 2048.0f,
-          "free: zoom focal %.2f", (double)out.proj43[5]);
+    CHECK(fabsf(out.proj[5] / 500.0f - expf(0.35f)) < 1e-3f && out.proj[8] == 2048.0f,
+          "free: zoom focal %.2f", (double)out.proj[5]);
     ticks(&p, 25 * 10, &out, &game);
     CHECK(fabsf(ico_photo_fov_deg(&out) - 10.0f) < 0.01f, "free: R2 stops at 10 (%.3f)",
           (double)ico_photo_fov_deg(&out));
@@ -388,8 +388,8 @@ int main(int argc, char **argv)
     p = idle();
     p.held = ICO_PHOTO_R2;
     ticks(&p, 25, &out, &game);
-    CHECK(fabsf(out.proj43[5] / 500.0f - expf(0.7f)) < 1e-3f,
-          "stick_speed 2: the zoom e^0.7 in a second (%.4f)", (double)(out.proj43[5] / 500.0f));
+    CHECK(fabsf(out.proj[5] / 500.0f - expf(0.7f)) < 1e-3f,
+          "stick_speed 2: the zoom e^0.7 in a second (%.4f)", (double)(out.proj[5] / 500.0f));
     p = idle();
     p.held = ICO_PHOTO_R1;
     ticks(&p, 25, &out, &game);

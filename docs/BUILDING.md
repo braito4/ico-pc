@@ -514,6 +514,163 @@ allocations; `rhi_vk_mali` also checks that what goes past them is refused
 by the limit's name, and `rd_perf_mali` creates the whole reachable pipeline
 set). On a device, the log is mirrored to logcat: `adb logcat -s ico-pc`.
 
+The renderer blends as the PS2 does (integer arithmetic, rounding down)
+where the GPU can read the pixel it draws over; the start-up log says
+which way: `rd: blend: exact (attachment read)` (Vulkan rasterization-order
+attachment access, phones and lavapipe), `exact (interlock)` (Vulkan
+fragment shader interlock: the Steam Deck and the desktop drivers),
+`exact (rov)` (D3D12) or `fixed-function (rounds up)` (none of them).
+lavapipe has every one and takes the attachment read, so the
+`*_storage` tests run the render tests again with `ICO_RD_BLEND=storage`
+and the `*_fixed` ones with `ICO_RD_BLEND=fixed` (the latter also compare
+`rd_present`'s and `rd_crt`'s recorded hashes, which are the fixed-function
+blend's); `ICO_VK_FAKE_NO_DST=1` / `ICO_DX_FAKE_NO_DST=1` report a device
+without them.
+
+## Native frame gates
+
+Two checks guard the renderer rework (they need saved frame dumps and a
+Vulkan device, so they are developer tools, not part of CI). Both are
+`tools/native_frame_check.py` (Python 3 and Pillow; run it with `python3 -I`)
+over `rd_replay_tool`, and both are ctests that skip (exit 77) without
+`ICO_DUMPS`, the dumps, a device or Pillow:
+
+- **Gate A** (`native_frame_gate_a`): the Original preset at 4:3, 1x, and
+  Enhanced at 4:3, 2x, must stay byte-identical. It renders every dump of the
+  dump list at both settings, every named target (SCENE, DISPLAY, the shadow
+  maps, WORK0..3, AA0/1, FEED128, the aura and held buffers) plus the
+  presented picture, and compares the SHA-256 of the RGBA pixels with
+  `docs/native_frame_baseline.json`. A mismatch names the dump, the settings
+  and the target; with the baseline pictures kept (`--ref-dir`) it also gives
+  the first differing pixel.
+- **Gate B** (`native_frame_gate_b`): the centre of a wide picture equals the
+  4:3 picture. Give it one game state captured at 4:3, 16:9, 32:9, 48:9 and
+  60:9 (a zip, a folder or PNG files; the file or folder name holds the
+  aspect: `4x3`, `16x9`, ...). Columns `[(W/2 - 256) * s, + 512 * s)` of
+  each wide picture must equal the 4:3 picture byte for byte. `--effects R`
+  allows a band of R pixels at each old edge (a blur kernel's radius) and
+  reports the largest difference in it. A continuity check compares the
+  gradient at each old edge column with the 99th percentile of the
+  neighbourhood (16 columns each side), per channel. `--allow FILE.json`
+  lists explained differences (`{"diffs": [{"group", "aspect", "cols",
+  "rows", "reason"}], "continuity": [{"group", "aspect", "edge", "reason"}]}`).
+  `native_frame_check_selftest` always runs the logic on synthetic pictures.
+
+The dump list is a text file of paths (`tools/native_frame_dumps.txt` is the
+default; it holds this machine's paths and is machine-local; the dumps are
+never committed). `ICO_DUMPS` names a list file or a folder of `.rddump` and
+`.zip` files; `ICO_SWEEPS` names the Gate B sweeps (paths separated by `:`);
+`ICO_REPLAY_TOOL` the tool (default `build-host/linux-x64/port/render/`).
+A run holds `build-host/tmp/replay.lock` and renders with 3 workers
+(`--jobs`), one `rd_replay_tool --pass-dump` process per dump and setting
+(every target and the presented picture from one run; a tool without that
+switch, or `--per-target`, gets one process per target, about ten times
+slower).
+
+```
+ICO_DUMPS=tools/native_frame_dumps.txt ctest --preset linux-x64 -R native_frame_gate_a
+python3 -I tools/native_frame_check.py gate-a --tool build-host/linux-x64/port/render/rd_replay_tool
+python3 -I tools/native_frame_check.py gate-b --effects 0 sweep-bridge.zip
+```
+
+After an intended change to Original at 4:3 (a bug fix that changes pixels),
+check the difference by eye first, then rebuild the manifest from the new
+build with `python3 -I tools/native_frame_check.py baseline --ref-dir
+build-host/tmp/native_frame_ref` and commit `docs/native_frame_baseline.json`
+with the change. The manifest holds hashes only (plus the harness commit, the
+settings, and each dump's name, size and SHA-256).
+
+## Frame captures (F12)
+
+F12 in the running game saves the frame on the screen, for a bug report or
+for renderer work. Two files go in `dumps/` under the user folder
+(`<pref>/dumps`; [where that is](PORTABLE_MODE.md#where-your-saves-are)),
+named `frame-<yyyymmdd-hhmmss>-v<N>`, where `<N>` is the count of vertical
+syncs since start:
+
+| file | holds |
+| --- | --- |
+| `.png` | the picture on the screen at that moment (optional for a report; large at a high Resolution, so it stays a loose file) |
+| `.zip` | the `.rddump` (`port/render/rd_dump.c`, format version 10, `RD_DUMP_VERSION`) and a copy of `logs/ico-pc.log`, for a GitHub issue, which refuses `.rddump` files. With no log file (the program started with `--console`) it holds the dump alone |
+
+The game writes the `.rddump` first, zips it, and deletes the loose file once
+the zip is written; if the zip cannot be written the `.rddump` stays and the
+log says `dump: zip not written`. The `.rddump` holds the frame's draw lists with their state, the textures
+and meshes the frame used, and the camera. It has no display options: the
+resolution, aspect ratio and filtering of a replay are given on the
+command line. A replacement texture from a texture pack is stored blank
+(the dump carries the game's own textures, which are the disc's, so keep
+dumps out of the repository and public places). The version number is
+checked on load; versions 3 to 10 are read. Version 10 adds, after the GS
+size, the frame's display aspect, its visible width (`wExact`) and the
+native GS width the game culled and drew the frame at; versions 3 to 9 load
+as the 4:3 frame (aspect 4/3, 512 and 512). A dump holds the picture at the
+width it was drawn: it can be shown narrower (cropped) but never wider.
+
+### The aspect sweep (Shift+F12 in photo mode)
+
+One game state at every aspect, for Gate B and for looking at the sides.
+Pause the game in photo mode, then press Shift+F12 (PC; there is no key on
+Android). The game re-renders the paused frame at 4:3, 16:9, 32:9, 48:9 and
+60:9, one after the other for a second or two (the window shows each
+width as it goes; the game itself is not touched), and writes
+`<pref>/dumps/sweep-<yyyymmdd-hhmmss>.zip` holding `4x3.rddump`, `4x3.png`,
+`16x9.rddump`, `16x9.png`, ... For each aspect the game's frame is rebuilt
+at that width: the frame width is set, the scene is remade
+(`rd_reset_scene`) and the paused camera rebuilds the game's matrices,
+the cull included, so a draw beside the 4:3 picture is really drawn
+there. The sweep renders with the game's own camera rule: while it runs,
+the photo camera's free-camera drawing (which keeps the triangles with a
+vertex behind the eye) is off, so the frames drop what the game's camera
+drops, as in play; the same holds whenever the photo camera has not been
+moved or zoomed. Each `.png` is the frame's DISPLAY target at its native width, not
+cropped. Afterwards the live width and scene come back by themselves. Leaving photo mode
+during a sweep ends it with what was captured so far; the log says
+`aspect sweep:` for each step. The zip is also a valid input to
+`rd_replay_tool` (its first `.rddump` is the 4:3 one) and, as a folder
+or zip of PNGs, to `native_frame_check.py gate-b`.
+
+`rd_replay_tool` (`port/render/tools/rd_replay_tool.c`, built with the
+`ico_render` library; its usage comment lists every switch) renders a dump
+headless to a PNG, or inspects it without a graphics device. It takes the
+F12 `.zip` directly (the first `.rddump` in it) or an extracted `.rddump`.
+The switches used most:
+
+- `--list` prints every command of the replayed lists (list, index, type,
+  texture, bounding box); with `--no-device` nothing is rendered and no
+  device is needed. `--nop L:A[-B]` turns commands A to B of list L into
+  no-ops, to find the draw behind a pixel.
+- `--aspect A`, `--resolution Nx` (or `WxH`), `--full-height` and
+  `--enhanced` give the replay the display options the dump does not carry;
+  without them it renders the PS2 picture. `--aspect` defaults to the
+  dump's own aspect (`--list` prints it). A narrower aspect crops the
+  `--present` picture to the centre columns; a wider one is refused (`a dump
+  drawn at 4:3 cannot show 16:9: capture an aspect sweep`), and dumps before
+  version 10 are 4:3 dumps.
+- `--pass-dump DIR` renders the frame once and writes `<TARGET>.png` into
+  DIR (which must exist) for each named target (`SCENE`, `DISPLAY`,
+  `SHADOW0`..`2`, `WORK0`..`3`, `AA0`, `AA1`, `FEED128`, `AURA_WORK`,
+  `AURA_TAP`, `WORK2_PAD`, `FEED_HELD`, `DISPLAY_HELD`) and, with
+  `--present WxH`, `PRESENT.png`. `<out.png>` is unused (give `-`). An
+  unknown `--target` name exits 1 and lists the names.
+- `--interp T PREV` replays the frame between the dump PREV and the dump at
+  alpha T; `--dump-textures DIR` writes every texture of the dump as a PNG;
+  `--mesh NAME` prints the vertices of the meshes of that name.
+
+Two examples. List a dump's commands without a graphics device, then render
+the same dump at 48:9 and 4x with the full-height picture:
+
+```sh
+rd_replay_tool frame-20261010-083039-v7967.zip out.png --list --no-device
+rd_replay_tool frame-20261010-083039-v7967.zip out.png --enhanced \
+    --aspect 48:9 --resolution 4x --full-height
+```
+
+To find which draw makes a wrong pixel, repeat the render with
+`--nop 0:120-130` (list 0, commands 120 to 130 removed) and compare the
+two PNGs. Exit status 77 means no graphics device or no dump file, as in the
+ctest skip convention.
+
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs on every push to main, every pull request and

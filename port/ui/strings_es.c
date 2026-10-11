@@ -492,4 +492,16 @@ const char *const ui_strings_es[UI_STR_COUNT] = {
     [UI_STR_VAL_RANGE_NORMAL] = "Normal",
     [UI_STR_VAL_RANGE_FULL] = "Total",
     [UI_STR_VAL_INSTANT] = "Instantánea",
+    [UI_STR_OPT_DOOR_FIX] = "Puerta del reflector este",
+    [UI_STR_OPT_DOOR_FIX_NOTE] =
+        "De la mano, Ico y Yorda ya no vuelven a salir enseguida por una puerta.",
+    [UI_STR_OPT_AA] = "Antialiasing",
+    [UI_STR_OPT_AA_NOTE] =
+        "Suaviza los bordes dentados. El supermuestreo dibuja la imagen más grande y la reduce; el MSAA suaviza los bordes de las formas.",
+    [UI_STR_AA_OFF] = "Desactivado",
+    [UI_STR_AA_SSAA2] = "Supermuestreo 2x",
+    [UI_STR_AA_SSAA4] = "Supermuestreo 4x",
+    [UI_STR_AA_MSAA2] = "MSAA 2x",
+    [UI_STR_AA_MSAA4] = "MSAA 4x",
+    [UI_STR_AA_MSAA8] = "MSAA 8x",
 };

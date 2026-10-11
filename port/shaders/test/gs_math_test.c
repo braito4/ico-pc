@@ -142,6 +142,80 @@ int main(void)
     CHECK(gs_blend_reg_ch(0x64, 0, 255, 0x70, 0, 0x70, 1) == 255 + (((0 - 255) * 0x70) >> 7),
           "floor toward -inf");
 
+    /* the destination-read blend (gs_dst_channel): the forest's tint sprite
+     * after the fog as PCSX2 2.8.2's software renderer draws it (the
+     * godrays oracle, forest_trunk state 552, GS draw 480: SPRITE with ABE,
+     * ALPHA 0x44 = (Cs - Cd) * As >> 7 + Cd, COLCLAMP 1, FBA 0, PABE 0,
+     * FBMSK 0, RGBA 223 219 205 4 over the fogged SCENE), eight pixels of
+     * its rt0 (before) and rt1 (after) dumps.  The floor formula gives
+     * every pixel of the 512 x 512 draw (pass mean +4.98 +4.77 +4.68); the
+     * fixed-function blend's round to nearest is one level up on half of
+     * them (+5.51 +5.22 +5.19), the hw column below */
+    {
+        static const struct {
+            int x, y;
+            uint8_t dst[3], gs[3], hw[3];
+        } tint[8] = {
+            {1, 0, {15, 22, 8}, {21, 28, 14}, {22, 28, 14}},
+            {427, 76, {12, 17, 14}, {18, 23, 19}, {19, 23, 20}},
+            {500, 150, {37, 40, 31}, {42, 45, 36}, {43, 46, 36}},
+            {256, 223, {66, 84, 38}, {70, 88, 43}, {71, 88, 43}},
+            {236, 297, {23, 31, 16}, {29, 36, 21}, {29, 37, 22}},
+            {385, 368, {9, 9, 9}, {15, 15, 15}, {16, 16, 15}},
+            {13, 440, {79, 89, 56}, {83, 93, 60}, {84, 93, 61}},
+            {511, 511, {25, 31, 24}, {31, 36, 29}, {31, 37, 30}},
+        };
+
+        static const uint src[4] = {223, 219, 205, 4};
+        for (int i = 0; i < 8; i++) {
+            int hwDiffers = 0;
+            for (uint ch = 0; ch < 3; ch++) {
+                const uint got = gs_dst_channel(ch, src[ch], tint[i].dst[ch], src[3], 0x80u, 0x44u,
+                                                0x80u, 1u, false, false, 15u);
+                CHECK(got == tint[i].gs[ch], "forest tint (%d,%d) channel %u: %u, PCSX2 %u",
+                      tint[i].x, tint[i].y, ch, got, tint[i].gs[ch]);
+                /* the float lerp the blender rounds: Cs * F + Cd * (1 - F) */
+                const double f = 4.0 / 128.0;
+                const int r = (int)(src[ch] * f + tint[i].dst[ch] * (1.0 - f) + 0.5);
+                CHECK(r == tint[i].hw[ch], "forest tint (%d,%d) channel %u: round %d, table %u",
+                      tint[i].x, tint[i].y, ch, r, tint[i].hw[ch]);
+                hwDiffers |= r != (int)tint[i].gs[ch];
+            }
+            CHECK(hwDiffers, "forest tint (%d,%d): a pixel the blender rounds up", tint[i].x,
+                  tint[i].y);
+            /* the alpha written is As (FBA 0) */
+            CHECK(gs_dst_channel(3u, src[3], 0x55u, src[3], 0x55u, 0x44u, 0x80u, 1u, false, false,
+                                 15u) == 4u,
+                  "forest tint alpha");
+        }
+    }
+    /* the channel rules: a masked channel keeps Cd, FBA sets the stored
+     * alpha's MSB, PABE writes Cs where As < 0x80, As above 0x80 overshoots
+     * (no 1.0 clamp), COLCLAMP 0 wraps, the Ad and FIX factors */
+    CHECK(gs_dst_channel(0u, 200, 100, 0x40, 0, 0x44, 0x80, 1, false, false, 14u) == 100u,
+          "mask R");
+    /* channel 3's Cd is Ad (common.hlsli passes dst.a for both) */
+    CHECK(gs_dst_channel(3u, 0x40, 0x22, 0x40, 0x22, 0x44, 0x80, 1, false, false, 7u) == 0x22u,
+          "mask A keeps Ad");
+    CHECK(gs_dst_channel(3u, 0, 0, 0x40, 0, 0x44, 0x80, 1, true, false, 15u) == 0xC0u, "FBA");
+    CHECK(gs_dst_channel(0u, 200, 100, 0x40, 0, 0x44, 0x80, 1, false, true, 15u) == 200u,
+          "PABE below 0x80: Cs");
+    CHECK(gs_dst_channel(0u, 200, 100, 0x90, 0, 0x44, 0x80, 1, false, true, 15u) ==
+              (uint)ref_blend_int(200, 100, 0x90, 100, 1),
+          "PABE MSB set: blended");
+    CHECK(gs_dst_channel(0u, 200, 100, 0xFF, 0, 0x44, 0x80, 1, false, false, 15u) == 255u,
+          "As 0xFF overshoots, clamped by COLCLAMP");
+    CHECK(gs_dst_channel(0u, 150, 100, 0xC0, 0, 0x44, 0x80, 1, false, false, 15u) == 175u,
+          "As 0xC0 overshoots past Cs");
+    CHECK(gs_dst_channel(0u, 200, 100, 0x80, 0, 0x48, 0x80, 0, false, false, 15u) == 44u,
+          "COLCLAMP 0 wraps");
+    CHECK(gs_dst_channel(1u, 200, 100, 0x10, 0x40, 0x54, 0x80, 1, false, false, 15u) == 150u,
+          "Ad lerp (mode 10)");
+    CHECK(gs_dst_channel(2u, 200, 100, 0x10, 0, 0x64, 0x20, 1, false, false, 15u) == 125u,
+          "FIX lerp (mode 2)");
+    CHECK(gs_dst_channel(0u, 60, 100, 0x40, 0, 0x29, 0xC0, 1, false, false, 15u) == 210u,
+          "Cd*FIX + Cs with FIX above 0x80 (mode 3)");
+
     /* alpha test: all eight modes over a grid */
     for (int atst = 0; atst < 8; atst++) {
         for (int aref = 0; aref < 256; aref += 1) {

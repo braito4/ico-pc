@@ -34,7 +34,10 @@ static void testBuild(void)
         UI_OPT_LINK,          UI_OPT_LINK,        UI_OPT_LINK, UI_OPT_LINK, UI_OPT_LINK,
         UI_OPT_LINK,          UI_OPT_LANGUAGE,    UI_OPT_LINK, UI_OPT_LINK, UI_OPT_DEVELOPER,
         UI_OPT_DUMP_TEXTURES, UI_OPT_DUMP_MODELS, UI_OPT_BACK};
-    static const int fxOpts[] = {UI_OPT_CRT,
+    static const int fxOpts[] = {UI_OPT_FULL_HEIGHT,
+                                 UI_OPT_FILTER,
+                                 UI_OPT_BRIGHTNESS,
+                                 UI_OPT_CRT,
                                  UI_OPT_CRT_STRENGTH,
                                  UI_OPT_EFFECT_GLOW,
                                  UI_OPT_EFFECT_DEPTH_OF_FIELD,
@@ -44,7 +47,10 @@ static void testBuild(void)
                                  UI_OPT_EFFECT_CINEMATIC_BARS,
                                  UI_OPT_FULL_PIXEL,
                                  UI_OPT_BACK};
-    static const int fxStrs[] = {UI_STR_OPT_CRT,
+    static const int fxStrs[] = {UI_STR_OPT_FULL_HEIGHT,
+                                 UI_STR_OPT_FILTERING,
+                                 UI_STR_OPT_BRIGHTNESS,
+                                 UI_STR_OPT_CRT,
                                  UI_STR_OPT_CRT_STRENGTH,
                                  UI_STR_OPT_EFFECT_GLOW,
                                  UI_STR_OPT_EFFECT_DEPTH_OF_FIELD,
@@ -67,22 +73,19 @@ static void testBuild(void)
                                    UI_STR_OPT_DUMP_TEXTURES,
                                    UI_STR_OPT_DUMP_MODELS,
                                    UI_STR_BACK};
-    static const int dispOpts[] = {UI_OPT_PRESET,       UI_OPT_RESOLUTION, UI_OPT_ASPECT,
-                                   UI_OPT_WINDOW_MODE,  UI_OPT_VSYNC,      UI_OPT_FILTER,
-                                   UI_OPT_TEXTURE_PACK, UI_OPT_MODEL_PACK, UI_OPT_FULL_HEIGHT,
-                                   UI_OPT_FRAMERATE,    UI_OPT_BRIGHTNESS, UI_OPT_VIDEO_MODE,
-                                   UI_OPT_BACK};
+    static const int dispOpts[] = {UI_OPT_PRESET,       UI_OPT_RESOLUTION,  UI_OPT_ASPECT,
+                                   UI_OPT_ANTI_ALIAS,   UI_OPT_WINDOW_MODE, UI_OPT_VSYNC,
+                                   UI_OPT_TEXTURE_PACK, UI_OPT_MODEL_PACK,  UI_OPT_FRAMERATE,
+                                   UI_OPT_VIDEO_MODE,   UI_OPT_BACK};
     static const int dispStrs[] = {UI_STR_OPT_PRESET,
                                    UI_STR_OPT_RESOLUTION,
                                    UI_STR_OPT_ASPECT,
+                                   UI_STR_OPT_AA,
                                    UI_STR_OPT_WINDOW_MODE,
                                    UI_STR_OPT_VSYNC,
-                                   UI_STR_OPT_FILTERING,
                                    UI_STR_OPT_TEXTURE_PACK,
                                    UI_STR_OPT_MODEL_PACK,
-                                   UI_STR_OPT_FULL_HEIGHT,
                                    UI_STR_OPT_FRAMERATE,
-                                   UI_STR_OPT_BRIGHTNESS,
                                    UI_STR_OPT_VIDEO_MODE,
                                    UI_STR_BACK};
     static const int audioOpts[] = {UI_OPT_VOLUME, UI_OPT_MUSIC,  UI_OPT_EFFECTS,
@@ -100,10 +103,11 @@ static void testBuild(void)
         UI_STR_OPT_MOUSE_INVERT, UI_STR_OPT_MOUSE_SPEED,   UI_STR_OPT_MOUSE_RANGE,
         UI_STR_OPT_MOUSE_RETURN, UI_STR_OPT_CIRCLE_BACK,   UI_STR_OPT_TOUCH_MODE,
         UI_STR_OPT_TOUCH_SIZE,   UI_STR_OPT_TOUCH_OPACITY, UI_STR_BACK};
-    static const int gameOpts[] = {UI_OPT_YORDA, UI_OPT_STICK_FIX, UI_OPT_FILM_EFFECT,
-                                   UI_OPT_PLAYERS, UI_OPT_BACK};
-    static const int gameStrs[] = {UI_STR_OPT_YORDA, UI_STR_OPT_STICK_FIX, UI_STR_OPT_FILM_EFFECT,
-                                   UI_STR_OPT_PLAYERS, UI_STR_BACK};
+    static const int gameOpts[] = {UI_OPT_YORDA,       UI_OPT_STICK_FIX, UI_OPT_DOOR_FIX,
+                                   UI_OPT_FILM_EFFECT, UI_OPT_PLAYERS,   UI_OPT_BACK};
+    static const int gameStrs[] = {UI_STR_OPT_YORDA,    UI_STR_OPT_STICK_FIX,
+                                   UI_STR_OPT_DOOR_FIX, UI_STR_OPT_FILM_EFFECT,
+                                   UI_STR_OPT_PLAYERS,  UI_STR_BACK};
     static const int listOpts[8] = {UI_OPT_LIST, UI_OPT_LIST, UI_OPT_LIST, UI_OPT_LIST,
                                     UI_OPT_LIST, UI_OPT_LIST, UI_OPT_LIST, UI_OPT_LIST};
     static const int listStrs[8] = {-1, -1, -1, -1, -1, -1, -1, -1};
@@ -115,7 +119,7 @@ static void testBuild(void)
     ui_set_language(UI_LANG_EN);
     ui_settings_install();
     CHECK(labelsAre(UI_PAGE_MAIN, mainOpts, mainStrs, 13), "main page rows");
-    CHECK(labelsAre(UI_PAGE_EFFECTS, fxOpts, fxStrs, 10), "effects rows");
+    CHECK(labelsAre(UI_PAGE_EFFECTS, fxOpts, fxStrs, 13), "effects rows");
     {
         /* Characters (a link) before Back */
         static const int extrasOpts[] = {UI_OPT_EXTRAS_MUSIC, UI_OPT_EXTRAS_MODELS,
@@ -125,12 +129,12 @@ static void testBuild(void)
                                          UI_STR_BACK};
         CHECK(labelsAre(UI_PAGE_EXTRAS, extrasOpts, extrasStrs, 5), "Extras page rows");
     }
-    CHECK(labelsAre(UI_PAGE_DISPLAY, dispOpts, dispStrs, 13),
+    CHECK(labelsAre(UI_PAGE_DISPLAY, dispOpts, dispStrs, 11),
           "display rows (Frame rate without a framerate key)");
     CHECK(labelsAre(UI_PAGE_AUDIO, audioOpts, audioStrs, 6), "audio rows");
     CHECK(labelsAre(UI_PAGE_CONTROLS, ctlOpts, ctlStrs, 15), "controls rows");
-    CHECK(labelsAre(UI_PAGE_GAMEPLAY, gameOpts, gameStrs, 5), "gameplay rows");
-    /* the pop-ups switch is an item of the list (before Back), not a row of its own */
+    CHECK(labelsAre(UI_PAGE_GAMEPLAY, gameOpts, gameStrs, 6), "gameplay rows");
+    /* the pop-ups switch is an item of the list (first, before the achievements), not a row of its own */
     CHECK(labelsAre(UI_PAGE_ACHIEVEMENTS, listOpts, listStrs, 8), "achievement slots");
     CHECK(labelsAre(UI_PAGE_REMAP, listOpts, listStrs, 8), "remap slots");
 
@@ -203,7 +207,7 @@ static void testBuild(void)
     lt_ext_reset();
     ui_settings_reset();
     ui_settings_install();
-    CHECK(labelsAre(UI_PAGE_DISPLAY, dispOpts, dispStrs, 13), "display rows (Enhanced)");
+    CHECK(labelsAre(UI_PAGE_DISPLAY, dispOpts, dispStrs, 11), "display rows (Enhanced)");
     CHECK(strcmp(ui_settings_value_text(UI_OPT_FRAMERATE), "144 fps") == 0, "framerate 144 (%s)",
           ui_settings_value_text(UI_OPT_FRAMERATE));
 }
@@ -2013,12 +2017,10 @@ static void testVideoGate(void)
             continue;
         }
         while (vm < n && opts[vm] != UI_OPT_VIDEO_MODE) {
-            /* Brightness, from the pause menu only, is above it */
             downs += !lt_ext_prop(labels[vm])->defaultMask;
             vm++;
         }
-        CHECK(downs == (title ? vm - 1 : vm), "title %d: Brightness %s", title,
-              title ? "hidden" : "shown");
+        CHECK(downs == vm, "title %d: every row above Video mode is shown", title);
         for (int i = 0; i < downs; i++) {
             press(0x4000);
         }
@@ -2401,12 +2403,28 @@ static void testGameOptions(void)
         stage_no = title ? 1 : 11;
         int mainL = enterMain(title);
         openPage(mainL, 0, UI_PAGE_DISPLAY);
-        CHECK(rowShown(UI_PAGE_DISPLAY, UI_OPT_BRIGHTNESS) == !title, "title %d: Brightness %s",
-              title, title ? "hidden" : "shown");
+        CHECK(ui_settings_row_of(UI_PAGE_DISPLAY, UI_OPT_BRIGHTNESS) < 0 &&
+                  ui_settings_row_of(UI_PAGE_DISPLAY, UI_OPT_FILTER) < 0 &&
+                  ui_settings_row_of(UI_PAGE_DISPLAY, UI_OPT_FULL_HEIGHT) < 0,
+              "title %d: Brightness, Texture filtering and Full-height are not on Display", title);
         checkPageFits(UI_PAGE_DISPLAY, title ? "Display (title)" : "Display (pause)");
         press(0x10);
         CHECK(settle(mainL, 60), "Display: back");
         openPage(mainL, 1, UI_PAGE_EFFECTS);
+        CHECK(rowShown(UI_PAGE_EFFECTS, UI_OPT_BRIGHTNESS) == !title, "title %d: Brightness %s",
+              title, title ? "hidden" : "shown");
+        CHECK(rowShown(UI_PAGE_EFFECTS, UI_OPT_FILTER) &&
+                  rowShown(UI_PAGE_EFFECTS, UI_OPT_FULL_HEIGHT),
+              "title %d: Texture filtering and Full-height are on Effects", title);
+        {
+            /* the three first, before the CRT rows */
+            int fl[16], fo[16];
+            const int fn = ui_settings_page_rows(UI_PAGE_EFFECTS, fl, fo, NULL, 16);
+            CHECK(fn > 3 && fo[0] == UI_OPT_FULL_HEIGHT && fo[1] == UI_OPT_FILTER &&
+                      fo[2] == UI_OPT_BRIGHTNESS && fo[3] == UI_OPT_CRT,
+                  "title %d: Effects starts Full-height, Texture filtering, Brightness, CRT",
+                  title);
+        }
         CHECK(rowShown(UI_PAGE_EFFECTS, UI_OPT_CRT) &&
                   rowShown(UI_PAGE_EFFECTS, UI_OPT_CRT_STRENGTH) &&
                   !rowShown(UI_PAGE_DISPLAY, UI_OPT_CRT) &&
@@ -2450,7 +2468,8 @@ static void testGameOptions(void)
     checkPageFits(UI_PAGE_GAMEPLAY, "Gameplay (cleared)");
     press(0x4000);
     press(0x4000);
-    CHECK(lt_ext_layout(gameL)->curItem == film, "down twice from Yorda: Film effect");
+    press(0x4000);
+    CHECK(lt_ext_layout(gameL)->curItem == film, "down three times from Yorda: Film effect");
     optionScreenMode = 0;
     s_filmCalls = 0;
     CHECK(strcmp(ui_settings_value_text(UI_OPT_FILM_EFFECT), "Off") == 0, "film effect Off (%s)",
@@ -2587,18 +2606,18 @@ static void testGameOptions(void)
     /* Square on the row: the default again (the adjust screen's Default) */
     {
         const int mainB = enterMain(0);
-        const int dispL = openPage(mainB, 0, UI_PAGE_DISPLAY);
-        lt_ext_layout(dispL)->curItem = ui_settings_row_of(UI_PAGE_DISPLAY, UI_OPT_BRIGHTNESS);
+        const int dispL = openPage(mainB, 1, UI_PAGE_EFFECTS);
+        lt_ext_layout(dispL)->curItem = ui_settings_row_of(UI_PAGE_EFFECTS, UI_OPT_BRIGHTNESS);
         frame(0);
         press(0x0080);
         CHECK(systemStatus[11] == 7 && settle(dispL, 4), "Square: brightness 7 again (%d)",
               systemStatus[11]);
         systemStatus[11] = 3;
-        lt_ext_layout(dispL)->curItem = ui_settings_row_of(UI_PAGE_DISPLAY, UI_OPT_VIDEO_MODE);
+        lt_ext_layout(dispL)->curItem = ui_settings_row_of(UI_PAGE_EFFECTS, UI_OPT_CRT);
         press(0x0080);
         CHECK(systemStatus[11] == 3, "Square on another row: no reset (%d)", systemStatus[11]);
         press(0x10);
-        CHECK(settle(mainB, 60), "Display: back");
+        CHECK(settle(mainB, 60), "Effects: back");
     }
     systemStatus[11] = 0;
 

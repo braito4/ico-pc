@@ -29,12 +29,12 @@
  *   BRIGHTNESS    gsb_controlBrightness: white sprite, alpha = the step,
  *                 gif_SetAlpha(1, 7, 0), PRIM 0x446, with the corners the GS
  *                 receives (see postBrightness)
- *   AA_DOWNSAMPLE gsb_antiAlias, first half: SCENE (512 x 512) into AA0
- *                 (256 x 256), then with params->lines >= 2 AA0 into AA1
- *                 (128 x 128); TEST 0x30000, Z write off, PABE 1, ALPHA 0x64
+ *   AA_DOWNSAMPLE gsb_antiAlias, first half: SCENE (W x 512) into AA0
+ *                 (W/2 x 256), then with params->lines >= 2 AA0 into AA1
+ *                 (W/4 x 128); TEST 0x30000, Z write off, PABE 1, ALPHA 0x64
  *                 FIX 0x80 (gif_SetAlpha(0, 2, 128)), no ABE
- *   AA_COMPOSITE  gsb_antiAlias, second half: into SCENE (512 x 512, the
- *                 original's literal), AA1 at FIX params->rgba[1] when it is
+ *   AA_COMPOSITE  gsb_antiAlias, second half: into SCENE (W x 512, the
+ *                 original's literal 512 lines), AA1 at FIX params->rgba[1] when it is
  *                 not 0, then AA0 at FIX params->rgba[0] when it is not 0,
  *                 each a LERP_FIX sprite with ABE (PABE 0); then Z write on,
  *                 TEST 0x50000 and the SCENE environment at the scene size
@@ -106,7 +106,7 @@ static void spriteRaw(int32_t x0, int32_t y0, uint32_t z0, int32_t x1, int32_t y
     v[0].q = v[1].q = 1.0f;
     memcpy(v[0].rgba, rgba, 4);
     memcpy(v[1].rgba, rgba, 4);
-    rd_screen_prims(RD_PRIM_SPRITES, v, 2, RD_SPACE_FULLSCREEN, 1, s_spriteKey);
+    rd_screen_prims(RD_PRIM_SPRITES, v, 2, RD_SPACE_FULLFRAME, 1, s_spriteKey);
 }
 
 static void sprite(int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint32_t z,
@@ -136,10 +136,24 @@ static void targetSize(RdTarget t, uint32_t *w, uint32_t *h)
 }
 
 /* GS window coordinate (12.4) of the target's pixel x for a centred
- * XYOFFSET of a w-wide target: 0x8000 is 2048.0. */
+ * XYOFFSET of a w-wide target: 0x8000 is 2048.0.  w is the target's own GS
+ * width, the native frame's for the scene-class targets. */
 static int32_t win(int32_t px16, uint32_t w)
 {
     return 0x8000 - (int32_t)(w / 2) * 16 + px16;
+}
+
+/* An x length v of the 4:3 frame at the native frame's width W (g_rd.gsW,
+ * the frame head's gsFrame.w): v * W / 512 towards zero, v itself at 4:3
+ * (ico_frame.h ico_frame_x, as GsBase.c computes the same passes) */
+static int32_t frameX(int32_t v)
+{
+    const uint32_t w = g_rd.gsW ? g_rd.gsW : ICO_FRAME_BASE_W;
+
+    if (w == ICO_FRAME_BASE_W) {
+        return v;
+    }
+    return (int32_t)((int64_t)v * (int64_t)w / ICO_FRAME_BASE_W);
 }
 
 /* The op the present folds into the deferred text before this
@@ -160,7 +174,8 @@ static void textOp(RdPostKind kind, const uint8_t rgba[4], uint8_t fix, uint32_t
  * drawn by rd_replay.c's doBlurSprite through fx_sprite_ps in the GS
  * integer arithmetic (rd_blur.c), with the state block in force: corners
  * and UV as the GS receives them (12.4), the TEX0 size 2^TW x 2^TH of
- * gsb_Reduction's TEX0 (TW = TH = 9), MODULATE (TFX 0). */
+ * gsb_Reduction's TEX0 (TW = TH = 9 at 4:3; TW ceil(log2 W) on a wider
+ * frame, so the UVs up to W * 16 + 8 stay on the texture), MODULATE (TFX 0). */
 static void reductionSprite(int32_t x0, int32_t y0, int32_t x1, int32_t y1, const uint8_t rgba[4],
                             int32_t u0, int32_t v0, int32_t u1, int32_t v1, int textured)
 {
@@ -176,7 +191,11 @@ static void reductionSprite(int32_t x0, int32_t y0, int32_t x1, int32_t y1, cons
     q.uv[3] = (float)v1;
     memcpy(q.rgba, rgba, 4);
     q.z = 0xFFFFFFFFu;
-    q.scalar[0] = q.scalar[1] = 512.0f;
+    q.scalar[0] = (float)(1u << ico_frame_tw((int)(g_rd.gsW ? g_rd.gsW : ICO_FRAME_BASE_W)));
+    q.scalar[1] = 512.0f;
+    if (q.scalar[0] < 512.0f) {
+        q.scalar[0] = 512.0f; /* a test's frame narrower than 4:3 */
+    }
     q.scalar[2] = 1.0f;
     if (!textured) {
         rd__post_blur(RD_POST_REDUCTION, &q);
@@ -371,39 +390,44 @@ static void makeSprite(int32_t x, int32_t y, int32_t w, int32_t h, const int32_t
 
 static const uint8_t kAaCol[4] = {128, 128, 128, 128};
 
+/* gsb_antiAlias at the native frame's width W (GsBase.c: every x extent the
+ * 4:3 one through ico_frame_x, frameX here): AA0 W/2 x 256, AA1 W/4 x 128
+ * (rd_core.c namedTargetDesc); the -4 corner offsets are deltas.  At 4:3
+ * the PS2's rectangles and sizes. */
 static void postAaDownsample(const RdPostParams *p)
 {
-    static const int32_t s0[4] = {4, 4, 8192, 8192}, s1[4] = {4, 4, 4096, 4096};
+    const int32_t s0[4] = {4, 4, frameX(8192), 8192}, s1[4] = {4, 4, frameX(4096), 4096};
     RdTarget scene = orDefault(p->src, RD_TARGET_SCENE);
     rd_test_gs(RD_TEST_Z_ALWAYS); /* gif_SetZTest(0) */
     rd_z_write(0);                /* gif_SetZWrite(0) */
-    /* gif_SetDrawEnviroment(0x2800, 0, 256, 256, 0, 0): FBMSK 0 */
+    /* gif_SetDrawEnviroment(0x2800, 0, W/2, 256, 0, 0): FBMSK 0 */
     rd_color_mask(0);
-    rd_set_target(rd_target(RD_TARGET_AA0), (RdTarget){0}, 256, 256, 0);
-    /* TEX0 0x800, TBW 8, 512 x 512, TCC 1, MODULATE */
+    rd_set_target(rd_target(RD_TARGET_AA0), (RdTarget){0}, (uint32_t)frameX(256), 256, 0);
+    /* TEX0 0x800, TBW 8, 512 x 512 (at 4:3), TCC 1, MODULATE */
     rd_texture(rd_target_texture(scene, RD_VIEW_RGBA), RD_TEXFN_MODULATE, RD_TCC_RGBA);
     rd_pabe(1); /* gif_SetAlpha(0, 2, 128) */
     rd_blend_func(RD_BLEND_LERP_FIX, 128);
     prim(0, 0); /* PRIM 0x116 */
-    makeSprite(-2052, -2052, 4096, 4096, s0, kAaCol);
+    makeSprite(-frameX(2048) - 4, -2052, frameX(4096), 4096, s0, kAaCol);
     if (p->lines >= 2) {
-        /* TEX0 0x2800, TBW 4, 256 x 256; gif_SetDrawEnviroment(0x2C00, 0, 128, 128, 0, 0) */
+        /* TEX0 0x2800, TBW 4, 256 x 256 (at 4:3);
+           gif_SetDrawEnviroment(0x2C00, 0, W/4, 128, 0, 0) */
         rd_texture(rd_target_texture(rd_target(RD_TARGET_AA0), RD_VIEW_RGBA), RD_TEXFN_MODULATE,
                    RD_TCC_RGBA);
         rd_color_mask(0);
-        rd_set_target(rd_target(RD_TARGET_AA1), (RdTarget){0}, 128, 128, 0);
-        makeSprite(-1028, -1028, 2048, 2048, s1, kAaCol);
+        rd_set_target(rd_target(RD_TARGET_AA1), (RdTarget){0}, (uint32_t)frameX(128), 128, 0);
+        makeSprite(-frameX(1024) - 4, -1028, frameX(2048), 2048, s1, kAaCol);
     }
 }
 
 static void postAaComposite(const RdPostParams *p)
 {
-    static const int32_t s1[4] = {4, 4, 4096, 4096}, s2[4] = {4, 4, 2048, 2048};
+    const int32_t s1[4] = {4, 4, frameX(4096), 4096}, s2[4] = {4, 4, frameX(2048), 2048};
     RdTarget scene = orDefault(p->dst, RD_TARGET_SCENE);
     const uint8_t lv0 = p->rgba[0], lv1 = p->rgba[1];
-    /* gif_SetDrawEnviroment(0x800, 0, 512, 512, 1, 0): 512 lines whatever
+    /* gif_SetDrawEnviroment(0x800, 0, W, 512, 1, 0): 512 lines whatever
      * the scene size, as the original writes it */
-    sceneEnv(scene, 512, 512);
+    sceneEnv(scene, frameX(512), 512);
     if (lv1) {
         rd_pabe(0); /* gif_SetAlpha(1, 2, lv1) */
         rd_blend_func(RD_BLEND_LERP_FIX, lv1);
@@ -411,7 +435,7 @@ static void postAaComposite(const RdPostParams *p)
         rd_texture(rd_target_texture(rd_target(RD_TARGET_AA1), RD_VIEW_RGBA), RD_TEXFN_MODULATE,
                    RD_TCC_RGBA);
         prim(1, 0); /* PRIM 0x156 */
-        makeSprite(-4100, -4100, 8192, 8192, s2, kAaCol);
+        makeSprite(-frameX(4096) - 4, -4100, frameX(8192), 8192, s2, kAaCol);
     }
     if (lv0) {
         rd_pabe(0);
@@ -419,7 +443,7 @@ static void postAaComposite(const RdPostParams *p)
         rd_texture(rd_target_texture(rd_target(RD_TARGET_AA0), RD_VIEW_RGBA), RD_TEXFN_MODULATE,
                    RD_TCC_RGBA);
         prim(1, 0);
-        makeSprite(-4100, -4100, 8192, 8192, s1, kAaCol);
+        makeSprite(-frameX(4096) - 4, -4100, frameX(8192), 8192, s1, kAaCol);
     }
     rd_z_write(1);                /* gif_SetZWrite(1) */
     rd_test_gs(RD_TEST_Z_GEQUAL); /* gif_SetZTest(1) */
@@ -450,7 +474,7 @@ static void postFilmNoise(const RdPostParams *p)
     v[0].q = v[1].q = 1.0f;
     memcpy(v[0].rgba, col, 4);
     memcpy(v[1].rgba, col, 4);
-    rd_screen_prims(RD_PRIM_SPRITES, v, 2, RD_SPACE_FULLSCREEN, 0, 0);
+    rd_screen_prims(RD_PRIM_SPRITES, v, 2, RD_SPACE_FULLFRAME, 0, 0);
 }
 
 static void postComposite(const RdPostParams *p)

@@ -105,6 +105,10 @@ static DxRootSig *dx_root_signature(const RhiBindGroupLayout *layouts, uint32_t 
             case RHI_BIND_SAMPLER:
                 dr->RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER;
                 break;
+            case RHI_BIND_STORAGE_TEXTURE:
+                /* the destination read's ROV (u register) */
+                dr->RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+                break;
             default:
                 dr->RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
                 break;
@@ -206,6 +210,14 @@ static void dx_null_view(const RhiBindSlot *s, D3D12_CPU_DESCRIPTOR_HANDLE h)
         ID3D12Device_CreateConstantBufferView(g_dx.device, NULL, h);
         return;
     }
+    if (s->type == RHI_BIND_STORAGE_TEXTURE) {
+        D3D12_UNORDERED_ACCESS_VIEW_DESC u;
+        memset(&u, 0, sizeof(u));
+        u.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        u.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        ID3D12Device_CreateUnorderedAccessView(g_dx.device, NULL, NULL, &u, h);
+        return;
+    }
     D3D12_SHADER_RESOURCE_VIEW_DESC v;
     memset(&v, 0, sizeof(v));
     v.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
@@ -275,10 +287,32 @@ static bool dx_write_resource(const RhiBindSlot *s, const RhiBinding *b,
         /* depth formats are always viewed as depth (plane 0), whatever the
          * aspect: stencil is never sampled (rhi.h) */
         v.Format = t->swapchain ? t->resFormat : fm->view;
-        v.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
         v.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        v.Texture2D.MipLevels = t->mips;
+        if (t->samples > 1u) {
+            /* Texture2DMS in the shader (Load at a sample) */
+            v.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DMS;
+        } else {
+            v.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+            v.Texture2D.MipLevels = t->mips;
+        }
         ID3D12Device_CreateShaderResourceView(g_dx.device, t->res, &v, h);
+        return true;
+    }
+    case RHI_BIND_STORAGE_TEXTURE: {
+        /* the destination read: the target as a typed RGBA8 UNORM UAV, in
+         * UNORDERED_ACCESS (RHI_STATE_STORAGE); the shader declares it a
+         * RasterizerOrderedTexture2D */
+        DxTexture *t = dx_get_texture(b->texture);
+        if (!t || !t->uav) {
+            DX_LOG("bind group: u%u: invalid storage texture (not made with RHI_TEX_STORAGE)",
+                   s->slot);
+            return false;
+        }
+        D3D12_UNORDERED_ACCESS_VIEW_DESC u;
+        memset(&u, 0, sizeof(u));
+        u.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        u.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        ID3D12Device_CreateUnorderedAccessView(g_dx.device, t->res, NULL, &u, h);
         return true;
     }
     default:
@@ -490,6 +524,14 @@ RhiPipeline rhi_create_pipeline(const RhiPipelineDesc *d)
         DX_LOG("pipeline %s: invalid description", name);
         return out;
     }
+    /* the destination read: ROVs only, with no render target (the pixel
+     * shader writes the target through its UAV) */
+    if (d->dstRead == RHI_DST_READ_ATTACHMENT ||
+        (d->dstRead == RHI_DST_READ_STORAGE && (!g_dx.limits.rov || d->colorCount != 0)) ||
+        d->dstRead >= RHI_DST_READ_COUNT) {
+        DX_LOG("pipeline %s: destination read %d not available", name, (int)d->dstRead);
+        return out;
+    }
     DxShader *vs = d3dp_pool_get(&g_dx.shaders, d->vertex.id);
     DxShader *fs = d3dp_pool_get(&g_dx.shaders, d->fragment.id);
     if (!vs) {
@@ -579,7 +621,7 @@ RhiPipeline rhi_create_pipeline(const RhiPipelineDesc *d)
     pd.InputLayout.NumElements = d->vertexAttrCount;
     pd.PrimitiveTopologyType = dx_topologyMap[d->topology].type;
     pd.NumRenderTargets = d->colorCount;
-    pd.SampleDesc.Count = 1;
+    pd.SampleDesc.Count = d->samples > 1u ? d->samples : 1u;
 
     DxPipeline *p = NULL;
     uint32_t id = d3dp_pool_alloc(&g_dx.pipelines, (void **)&p);

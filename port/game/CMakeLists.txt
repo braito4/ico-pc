@@ -10,7 +10,9 @@
 # appearance.c: the characters' colours, their
 # [characters] keys and the CLUT recolour Texture.c applies (ICO_RD); rd_tex.h
 # for its constants and CLUT order only (nothing of rd is linked)
-add_library(ico_options STATIC options.c video_options.c photo_mode.c appearance.c)
+# door_grace.c: the doorway fix's arm and arrival grace ([gameplay] door_fix),
+# called by the exit check in ico2/fumi/src/boyact.c
+add_library(ico_options STATIC options.c video_options.c photo_mode.c appearance.c door_grace.c)
 target_include_directories(ico_options PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}"
                            "${CMAKE_SOURCE_DIR}/port/render")
 target_compile_options(ico_options PRIVATE ${ICO_SEMANTIC_OPTIONS} ${ICO_PORT_WARNINGS})
@@ -35,6 +37,32 @@ if(ICO_RUN_TESTS)
     add_test(NAME options COMMAND options_test "${CMAKE_CURRENT_BINARY_DIR}")
 endif()
 
+# IsPointIsInScreen's x bound (ico2/omori/src/poly-flat.c, compiled into the
+# test) at gsFrame.w = 512 and wider: the PS2's window at 4:3, the native width
+# otherwise.  Stubs for the projection and the packet writers.
+add_executable(poly_flat_test test/poly_flat_test.c)
+target_include_directories(poly_flat_test PRIVATE ${_ico_options_incs})
+target_compile_definitions(poly_flat_test PRIVATE ${ICO_GAME_DEFINITIONS})
+target_compile_options(poly_flat_test PRIVATE ${ICO_SEMANTIC_OPTIONS} ${ICO_GAME_LAYOUT_OPTIONS}
+                       ${ICO_GAME_WARNINGS} -Wno-unused-parameter -Wno-unused-variable
+                       -Wno-unused-function)
+if(ICO_RUN_TESTS)
+    add_test(NAME poly_flat COMMAND poly_flat_test)
+endif()
+
+# The doorway fix (issue 53): the arm and the grace with the option off and
+# on, holding hands or not, the stage it leads to, the frame count, and a copy
+# of the exit check's guard driven through an arrival frame by frame. CPU
+# only, no game sources.
+add_executable(door_grace_test test/door_grace_test.c ../platform/host_config.c)
+target_include_directories(door_grace_test PRIVATE "${CMAKE_SOURCE_DIR}/port/platform")
+target_compile_options(door_grace_test PRIVATE ${ICO_SEMANTIC_OPTIONS} ${ICO_PORT_WARNINGS})
+target_link_libraries(door_grace_test PRIVATE ico_options)
+if(ICO_RUN_TESTS)
+    add_test(NAME door_grace COMMAND door_grace_test "${CMAKE_CURRENT_BINARY_DIR}")
+endif()
+
+
 # Photo mode's state and camera: the orbit, the clamps, the
 # zoom, the keys, the capture's name; the basis kept from the game camera at
 # enter, the field of view now and the step limit (issue 14). CPU only.
@@ -47,6 +75,19 @@ if(NOT WIN32)
 endif()
 if(ICO_RUN_TESTS)
     add_test(NAME photo COMMAND photo_test "${CMAKE_CURRENT_BINARY_DIR}")
+endif()
+
+# The native frame (port/include/ico_frame.h): the width for an aspect, the
+# frame, the x scaling and TW, and ico_video_frame from the options. CPU only.
+add_executable(ico_frame_test test/ico_frame_test.c ../platform/host_config.c)
+target_include_directories(ico_frame_test PRIVATE "${CMAKE_SOURCE_DIR}/port/platform")
+target_compile_options(ico_frame_test PRIVATE ${ICO_SEMANTIC_OPTIONS} ${ICO_PORT_WARNINGS})
+target_link_libraries(ico_frame_test PRIVATE ico_options)
+if(NOT WIN32)
+    target_link_libraries(ico_frame_test PRIVATE m)
+endif()
+if(ICO_RUN_TESTS)
+    add_test(NAME ico_frame COMMAND ico_frame_test)
 endif()
 
 # The characters' colours: the rule table over

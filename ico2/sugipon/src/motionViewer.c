@@ -130,6 +130,8 @@ static void dispProgressBar(int s, int e, int n, float c, GifColor *col)
     gif_SetZTest(0);
     gif_SetZWrite(0);
     gif_SetAlpha(1, 5, 128);
+    /* PC port: ScreenWidth in the bars below is UI (the debug viewer's bar in
+       the centred 4:3 box) */
     if (r0 < rc && rc <= r1) {
         GifColor dark = {col->r / 2, col->g / 2, col->b / 2, 0x80};
         GifRect ra = {(int)((-(ScreenWidth << 4) / 2 + (ScreenWidth << 4) * r0) * 8 / 10),

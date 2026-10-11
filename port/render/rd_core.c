@@ -394,18 +394,28 @@ static void namedTargetDesc(int id, uint32_t gsW, uint32_t gsH, uint32_t *w, uin
         *w = gsW;
         *h = gsH / 2;
         break;
+    /* The work buffers and the shadow levels: the PS2's sizes per 512
+     * columns of the frame (Shadow.c, staticBlur.c and GsBase.c's softening
+     * draw them as ico_frame_x of their 4:3 widths), so a buffer pixel
+     * covers the screen pixels it covers on the PS2 at every aspect: W / 2,
+     * W / 4 or W / 8 across for the 256, 128 and 64 of the 4:3 frame
+     * (W = gsW, the native frame's width, a multiple of 16), the PS2's
+     * heights; at 4:3 the PS2's sizes. */
     case RD_TARGET_SHADOW0:
-        *w = *h = 256;
+        *w = gsW / 2;
+        *h = 256;
         break;
     case RD_TARGET_SHADOW1:
-        *w = *h = 128;
+        *w = gsW / 4;
+        *h = 128;
         break;
     case RD_TARGET_SHADOW2:
-        *w = *h = 64;
+        *w = gsW / 8;
+        *h = 64;
         break;
     case RD_TARGET_WORK0:
-    case RD_TARGET_WORK3: /* TBP 0x3000, 256 x 128 */
-        *w = 256;
+    case RD_TARGET_WORK3: /* TBP 0x3000, 256 x 128 at 4:3 */
+        *w = gsW / 2;
         *h = 128;
         break;
     case RD_TARGET_WORK2: /* TBP 0x2E00, the scene-sized flare mask */
@@ -415,16 +425,18 @@ static void namedTargetDesc(int id, uint32_t gsW, uint32_t gsH, uint32_t *w, uin
         break;
     case RD_TARGET_WORK1:
     case RD_TARGET_AA0:
-        *w = *h = 256;
+        *w = gsW / 2;
+        *h = 256;
         break;
     case RD_TARGET_AA1:
-    case RD_TARGET_FEED128:
+    case RD_TARGET_FEED128: /* 128 x 128 at 4:3, whatever the name says */
     case RD_TARGET_FEED_HELD:
     case RD_TARGET_AURA_TAP:
-        *w = *h = 128;
+        *w = gsW / 4;
+        *h = 128;
         break;
     case RD_TARGET_WORK2_PAD:
-        *w = 256;
+        *w = gsW / 2;
         *h = 64;
         break;
     case RD_TARGET_DATE_SNAPSHOT:
@@ -436,14 +448,20 @@ static void namedTargetDesc(int id, uint32_t gsW, uint32_t gsH, uint32_t *w, uin
         *w = *h = 1;
         break;
     }
+    if (*w == 0) {
+        *w = 1; /* a test's frame narrower than 8 pixels */
+    }
     /* the work buffers' resolution scale (rd.h rd_work_target_scale) applies
      * to the texture, not to the GS size: rd__target_scale_of */
 }
 
-/* The scene-class targets, which take the Enhanced scene
- * resolution and (SCENE, WORK2, AURA_WORK) the wide projection: the
- * scene-sized buffers and DISPLAY.  The other named targets are the fixed
- * work buffers, scaled by rd_work_target_scale. */
+/* The scene-class targets, which take the Enhanced scene resolution: the
+ * frame-sized buffers (SCENE, WORK2, AURA_WORK, the DATE snapshot), DISPLAY
+ * and its held copy.  Their GS width is the native frame's (g_rd.gsW: the
+ * frame head's gsW, GsBase.c gsFrame.w), so a wide picture has more GS
+ * pixels, not wider ones.  The other named targets are the work buffers,
+ * as wide as the frame per 512 columns (namedTargetDesc), scaled by
+ * rd_work_target_scale. */
 static int sceneClass(int id)
 {
     return id == RD_TARGET_SCENE || id == RD_TARGET_DISPLAY || id == RD_TARGET_WORK2 ||
@@ -457,13 +475,16 @@ static int displayClass(int id)
     return id == RD_TARGET_DISPLAY || id == RD_TARGET_DISPLAY_HELD;
 }
 
-/* Shadow.c's blur levels (SHADOW0..2) keep the PS2 sizes at every scale.
- * The shadow's blur is not a GS distance there but the levels' resolution
- * itself (each level a bilinear half of the one before, 256, 128 and 64
- * texels over the screen, composited back with bilinear magnification), so
- * levels at the work scale would halve the penumbra: at 4x the softest level
- * would need a further Gaussian of about 4 GS pixels to match the Original
- * preset's. */
+/* Shadow.c's blur levels (SHADOW0..2) keep the PS2 sizes per 512 columns at
+ * every scale (W / 2, W / 4 and W / 8 across, 256, 128 and 64 lines: their
+ * GS sizes, namedTargetDesc).  The shadow's blur is not a GS distance there
+ * but the levels' resolution itself (each level a bilinear half of the one
+ * before, 256, 128 and 64 texels over 512 screen columns, composited back
+ * with bilinear magnification), so levels at the work scale would halve the
+ * penumbra: at 4x the softest level would need a further Gaussian of about 4
+ * GS pixels to match the Original preset's.  On a wide frame the levels are
+ * as much wider as the frame, so the penumbra is the same number of screen
+ * pixels at every aspect. */
 static int shadowLevel(int id)
 {
     return id == RD_TARGET_SHADOW0 || id == RD_TARGET_SHADOW1 || id == RD_TARGET_SHADOW2;
@@ -477,9 +498,15 @@ static uint32_t scaled(uint32_t n, float k)
 
 /* The texture size and scale of a target of GS size t->w x t->h: named is
  * the RdTargetId of a named target, -1 for a temporary one (scene-class when
- * it has the scene's GS size: the shadow count, rd_shadow.c).  At scale 1
- * (Original, and every Enhanced target the options leave alone) tw == w,
- * th == h. */
+ * it has the scene's GS size: the shadow count, rd_shadow.c, and a
+ * render-to-texture block the game sizes as the frame, puddle.c).  At scale
+ * 1 (Original, and every Enhanced target the options leave alone) tw == w,
+ * th == h.  The scale is the resolution's alone: sx == sy, but under the
+ * Window resolution, whose box keeps the PS2's pixel shape
+ * (rd__apply_display).  A block of any other size (a reflection block, the
+ * queen barrier's copy) is drawn at its own GS size, whatever the aspect:
+ * the game sizes it, and its picture is the one its own screen matrix
+ * gives. */
 void rd__target_scale_of(RdTargetRec *t, int named)
 {
     float sx = 1.0f, sy = 1.0f;
@@ -493,24 +520,10 @@ void rd__target_scale_of(RdTargetRec *t, int named)
     } else if (named >= 0 && g_rd.workScale > 1.0f && !shadowLevel(named)) {
         sx = sy = g_rd.workScale;
     }
-    /* Widescreen reflections: a temporary target of another size with its
-     * own depth buffer is a render-to-texture block that a 3D view is drawn
-     * into through a screen matrix centred on it (puddle.c, pool.c; the
-     * decoder's blocks, GifPacket.c gsAliasTarget).  Wider than 4:3 it gets
-     * 1 / f times the texels across and the wide x scale, as SCENE does at
-     * 1x, so the reflection covers what the wide scene shows instead of
-     * ending at the 4:3 frame's edge.  f = 1 (4:3, Original): untouched. */
-    const float f = g_rd.wideX;
-    const int block = named < 0 && !scene && t->withDepth && f > 0.0f && f < 1.0f;
-    if (block) {
-        sx = 1.0f / f;
-    }
     t->sx = sx;
     t->sy = sy;
     t->tw = sx == 1.0f ? t->w : scaled(t->w, sx);
     t->th = sy == 1.0f ? t->h : scaled(t->h, sy);
-    t->wide = (scene && !displayClass(named) && named != RD_TARGET_DATE_SNAPSHOT) || block;
-    t->wideBlock = (uint8_t)block;
 }
 
 float rd_work_target_scale(uint32_t sceneHeight)
@@ -546,7 +559,9 @@ bool rd__target_create_gpu(RdTargetRec *t, const char *name)
         return true;
     }
     uint32_t usage = RHI_TEX_RENDER_TARGET | RHI_TEX_SAMPLED | RHI_TEX_COPY_SRC | RHI_TEX_COPY_DST;
-    t->color = rhi_create_texture(&(RhiTextureDesc){t->tw, t->th, 1, t->format, usage, name});
+    /* the exact blend's destination read (rd_dst_read.c) */
+    usage |= rd__dst_target_usage(t->format, &t->dstUsage);
+    t->color = rhi_create_texture(&(RhiTextureDesc){t->tw, t->th, 1, t->format, usage, name, 0});
     t->colorState = RHI_STATE_UNDEFINED;
     if (t->withDepth) {
         /* every use the device allows, whichever way the fog reads it
@@ -555,8 +570,8 @@ bool rd__target_create_gpu(RdTargetRec *t, const char *name)
         const bool sampled = rhi_limits()->depthSampled;
         const uint32_t dsUsage =
             RHI_TEX_DEPTH_STENCIL | RHI_TEX_COPY_SRC | (sampled ? (uint32_t)RHI_TEX_SAMPLED : 0u);
-        t->depth =
-            rhi_create_texture(&(RhiTextureDesc){t->tw, t->th, 1, RHI_FMT_D32F_S8, dsUsage, name});
+        t->depth = rhi_create_texture(
+            &(RhiTextureDesc){t->tw, t->th, 1, RHI_FMT_D32F_S8, dsUsage, name, 0});
         t->depthState = RHI_STATE_UNDEFINED;
         t->depthSampled = sampled;
     }
@@ -577,9 +592,10 @@ RhiTexture rd__sampled_depth(RhiCommandList cl, RdTargetRec *t, RdDepthCopy *cop
         /* the depth-stencil usage: Vulkan's sampled depth layout
          * (DEPTH_STENCIL_READ_ONLY_OPTIMAL) requires it; a copy source for
          * the fog's probe (rd_fog_path.c) */
-        copy->tex = rhi_create_texture(&(RhiTextureDesc){
-            t->tw, t->th, 1, RHI_FMT_D32F_S8,
-            RHI_TEX_SAMPLED | RHI_TEX_DEPTH_STENCIL | RHI_TEX_COPY_DST | RHI_TEX_COPY_SRC, name});
+        copy->tex = rhi_create_texture(&(RhiTextureDesc){t->tw, t->th, 1, RHI_FMT_D32F_S8,
+                                                         RHI_TEX_SAMPLED | RHI_TEX_DEPTH_STENCIL |
+                                                             RHI_TEX_COPY_DST | RHI_TEX_COPY_SRC,
+                                                         name, 0});
         copy->state = RHI_STATE_UNDEFINED;
         copy->w = t->tw;
         copy->h = t->th;
@@ -781,6 +797,7 @@ uint32_t rd__temp_target_alloc(uint32_t w, uint32_t h, int withDepth, int keepAc
         t->depth = keep.depth;
         t->colorState = keep.colorState;
         t->depthState = keep.depthState;
+        t->dstUsage = keep.dstUsage; /* the texture's (rd__target_create_gpu) */
         t->snap = keep.snap;
         t->snapState = keep.snapState;
         g_rd.stats.tempReused++;
@@ -828,6 +845,7 @@ void rd__temp_target_free(uint32_t id)
         t->depth = keep.depth;
         t->colorState = keep.colorState;
         t->depthState = keep.depthState;
+        t->dstUsage = keep.dstUsage;
         t->snap = keep.snap;
         t->snapState = keep.snapState;
     }
@@ -1299,6 +1317,9 @@ bool rd_init(uint32_t gsWidth, uint32_t gsHeight, const RdSettings *settings, vo
     if (g_rd.noDual) {
         rd__log("blend: two-pass fallback (no dualSrcBlend)");
     }
+    /* the exact GS blend (rd_dst_read.c): the destination read the device
+     * has, before the targets are made with its usage */
+    rd__dst_init();
     /* the fog's depth path (RdContext.fogPath, depthCopy) */
     rd__fog_path_init();
     rd__apply_display(); /* the scales the named targets take */
@@ -1404,14 +1425,85 @@ void rd_get_scene_scale(float *sx, float *sy)
     }
 }
 
+uint32_t rd_aa_samples(int antiAlias)
+{
+    switch (antiAlias) {
+    case RD_AA_MSAA2:
+        return 2u;
+    case RD_AA_MSAA4:
+        return 4u;
+    case RD_AA_MSAA8:
+        return 8u;
+    default:
+        return 1u;
+    }
+}
+
+uint32_t rd_aa_supported_mask(void)
+{
+    uint32_t mask = (1u << RD_AA_OFF) | (1u << RD_AA_SSAA2) | (1u << RD_AA_SSAA4);
+
+    if (!g_rd.hasDevice) {
+        return mask;
+    }
+    {
+        const RhiLimits *l = rhi_limits();
+
+        /* the fog reads the multisampled depth (per sample) or its shader
+           resolve: both sample the depth, which the buffer path cannot */
+        if (!l->depthSampled || g_rd.fogPath == RD_FOG_BUFFER) {
+            return mask;
+        }
+        for (int aa = RD_AA_MSAA2; aa <= RD_AA_MSAA8; aa++) {
+            const uint32_t n = rd_aa_samples(aa);
+
+            /* a tile-based GPU: 4 samples at most (memory) */
+            if ((l->msaaCounts & n) != 0u && !(l->tiler && n > 4u)) {
+                mask |= 1u << aa;
+            }
+        }
+    }
+    return mask;
+}
+
+int rd__aa_mode(void)
+{
+    const int aa = g_rd.settings.antiAlias;
+
+    if (aa <= RD_AA_OFF || aa >= RD_AA_COUNT || g_rd.settings.preset == RD_PRESET_ORIGINAL) {
+        return RD_AA_OFF;
+    }
+    return (rd_aa_supported_mask() & (1u << aa)) != 0u ? aa : RD_AA_OFF;
+}
+
+uint32_t rd__aa_ssaa_factor(int mode)
+{
+    return mode == RD_AA_SSAA2 ? 2u : (mode == RD_AA_SSAA4 ? 4u : 1u);
+}
+
+const char *rd__aa_label(int mode)
+{
+    static const char *const names[RD_AA_COUNT] = {
+        "",
+        ", anti-aliasing 2x supersampling",
+        ", anti-aliasing 4x supersampling",
+        ", anti-aliasing MSAA 2x",
+        ", anti-aliasing MSAA 4x",
+        ", anti-aliasing MSAA 8x",
+    };
+    return mode > RD_AA_OFF && mode < RD_AA_COUNT ? names[mode] : "";
+}
+
 int rd_scene_scale_lowered(void)
 {
     /* below what was asked, whether the GPU's size limit or the allocation
-       fallback brought it down */
-    if (g_rd.settings.sceneScale <= 0.0f || g_rd.sceneSy + 0.5f >= g_rd.settings.sceneScale) {
+       fallback brought it down; in the Resolution row's terms (the
+       supersampling factor divided out) */
+    const float m = g_rd.ssaa > 1.0f ? g_rd.ssaa : 1.0f;
+    if (g_rd.settings.sceneScale <= 0.0f || g_rd.sceneSy + 0.5f >= g_rd.settings.sceneScale * m) {
         return 0;
     }
-    return g_rd.sceneSy < 1.0f ? 1 : (int)g_rd.sceneSy;
+    return g_rd.sceneSy / m < 1.0f ? 1 : (int)(g_rd.sceneSy / m);
 }
 
 void rd_set_mirror(int on)
@@ -1580,6 +1672,12 @@ void rd_begin_frame(void)
     f->startState = g_rd.persistent;
     f->gsW = g_rd.gsW;
     f->gsH = g_rd.gsH;
+    f->aspect = 4.0f / 3.0f;
+    /* 0 until a frame head gives it (rd_frame.c): the presenter then takes
+     * the camera's or the option's aspect (rd__frame_wexact), and a dump
+     * writes gsW (rd_dump.c) */
+    f->wExact = 0.0f;
+    f->cullW = g_rd.gsW;
     g_rd.recIndex = idx;
     g_rd.stats.draws = 0;
     f->cut = g_rd.cutPending; /* rd_camera_cut between frames */
@@ -1695,6 +1793,25 @@ uint32_t rd_frame_number(void)
 {
     const RdFrame *f = rd__last_frame();
     return f && f->closed ? f->number : 0;
+}
+
+bool rd_last_frame_native(uint32_t *number, float *aspect, uint32_t *gsW)
+{
+    const RdFrame *f = rd__last_frame();
+
+    if (!f || !f->closed) {
+        return false;
+    }
+    if (number) {
+        *number = f->number;
+    }
+    if (aspect) {
+        *aspect = f->aspect > 0.0f ? f->aspect : 4.0f / 3.0f;
+    }
+    if (gsW) {
+        *gsW = f->cullW ? f->cullW : f->gsW;
+    }
+    return true;
 }
 
 const RdFrame *rd__last_frame(void)
@@ -2063,7 +2180,7 @@ void rd__deferred_text_op(uint8_t kind, const RdTextOp *op, RdKey key)
 int rd_set_space_override(int space)
 {
     const int prev = g_rd.spaceOverride - 1;
-    g_rd.spaceOverride = space < 0 || space > RD_SPACE_FULLSCREEN ? 0 : space + 1;
+    g_rd.spaceOverride = space < 0 || space > RD_SPACE_FULLFRAME ? 0 : space + 1;
     return prev;
 }
 

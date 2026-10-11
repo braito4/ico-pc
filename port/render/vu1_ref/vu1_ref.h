@@ -136,12 +136,56 @@ void vu1ref_mesh_set_light(Vu1Ref *r, const float qw[8][4]);
 /* particle code 16, SET_PARTICLE_MATRIX (particle.vsm:43): vf01..vf08. */
 void vu1ref_particle_set_matrix(Vu1Ref *r, const float qw[8][4]);
 
-/* The wide factor of the frame's world space (g_space[SPACE_WORLD].x, the
- * renderer's wideX: (4/3) / aspect on a wide scene target, 1 otherwise),
- * shared by every Vu1Ref. The region test of normal_c, normal_l and mesh
- * compares x squeezed by it about GS X 2048, as vu_common.hlsli's
- * vu_region_pos does; 1 (the default) tests the position as it is. */
-void vu1ref_set_wide_x(float f);
+/* ------------------------------------------------------- the port's rule
+ * What the renderer draws of what the programs above output
+ * (port/shaders/vu_common.hlsli vu_triangle_out_marked, vu_region_drops,
+ * vu_content_hidden; vu_particle.hlsl vu_particle_vs).  The region test
+ * itself is the program's own on the position as computed, at every
+ * aspect (VuGsVertex.inside). */
+enum {
+    VU1REF_ORIGINAL = 0, /* the Original preset (FrameCB misc[1] 0): the PS2's picture */
+    VU1REF_ENHANCED = 1
+};
+
+enum {
+    VU1REF_DRAW_NONE = 0,   /* not drawn */
+    VU1REF_DRAW_EXACT = 1,  /* drawn at its GS positions, as the GS draws it */
+    VU1REF_DRAW_CLIPPED = 2 /* drawn, clipped by the GPU at the native frustum */
+};
+
+/* A strip triangle whose vertices' region tests are insideA..C: all inside,
+ * drawn exactly; one outside: clipped under photo mode's free camera
+ * (freeCamera, ICO_VU_BEHIND_EYE); else not drawn when reaches (what the
+ * GPU draws of it, cut to 0 <= z <= w and to the picture's rows, meets the
+ * camera's picture's columns: vu_cut_reaches_picture,
+ * vu1ref_polygon_reaches_picture), as the PS2 does not draw it, and
+ * clipped when it lies wholly beside it.  The same in both presets (preset
+ * changes nothing here).  hide: the triangle carries ICO_VU_INDEX_HIDE
+ * (never drawn). */
+int vu1ref_region_draw(int preset, int freeCamera, int insideA, int insideB, int insideC, int hide,
+                       int reaches);
+/* A particle: shown (alpha non-zero, w inside the window) and drawn (the
+ * VU's test, both corners inside its x/y window too).  Not drawn by the VU:
+ * the whole sprite (the GPU clips it) under the free camera; else dropped
+ * when its quad reaches the camera's picture (reaches,
+ * vu1ref_rect_reaches_picture), drawn whole when
+ * wholly beside it; the same in both presets. */
+int vu1ref_particle_draw(int preset, int freeCamera, int drawn, int shown, int reaches);
+
+/* The reach those two take (vu_common.hlsli vu_cut_reaches_picture,
+ * vu_rect_reaches_picture). pic = the camera's picture: x0, x1, y0, y1
+ * (left, right, top, bottom; GS (2048, 2048) -+ the picture's half-size
+ * from FrameCB frame[1] and frame[2]: 256 by half the native height for the
+ * frame's camera, a reflection camera's own), in the same pixels as the
+ * points. A polygon: what the GPU draws of a triangle the region test
+ * drops, cut at the near plane, in screen pixels (at most
+ * VU1REF_POLY_MAX - 2 corners); it is cut to the picture's rows, then its
+ * x extent met with the columns: a triangle whose part within the
+ * columns lies wholly above or below the picture reaches nothing. A
+ * sprite: its corners (x0, y0) and (x1, y1). Edges count as reaching. */
+#define VU1REF_POLY_MAX 8
+int vu1ref_polygon_reaches_picture(const float (*poly)[2], int n, const float pic[4]);
+int vu1ref_rect_reaches_picture(float x0, float y0, float x1, float y1, const float pic[4]);
 
 /* ------------------------------------------------------------- draws
  * in = the batch at TOP: in[0] is the GIF tag (NLOOP in the low 15 bits of

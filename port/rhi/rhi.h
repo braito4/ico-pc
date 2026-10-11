@@ -159,7 +159,15 @@ typedef enum RhiTextureUsage {
     RHI_TEX_RENDER_TARGET = 1 << 1,
     RHI_TEX_DEPTH_STENCIL = 1 << 2,
     RHI_TEX_COPY_SRC = 1 << 3,
-    RHI_TEX_COPY_DST = 1 << 4
+    RHI_TEX_COPY_DST = 1 << 4,
+    /* The destination read (RhiPipelineDesc.dstRead).  STORAGE: the
+     * texture can be bound as RHI_BIND_STORAGE_TEXTURE (Vulkan storage
+     * image, D3D12 UAV; RGBA8_UNORM only, single-sampled), only with
+     * RhiLimits.fragmentInterlock or .rov.  INPUT_ATTACHMENT: a colour
+     * target a pass can read as RHI_BIND_INPUT_ATTACHMENT (Vulkan, only
+     * with RhiLimits.rasterOrderAttachment; ignored by D3D12). */
+    RHI_TEX_STORAGE = 1 << 5,
+    RHI_TEX_INPUT_ATTACHMENT = 1 << 6
 } RhiTextureUsage;
 
 typedef struct RhiTextureDesc {
@@ -168,6 +176,12 @@ typedef struct RhiTextureDesc {
     RhiFormat format;
     uint32_t usage; /* RhiTextureUsage bits */
     const char *debugName;
+    /* 0 or 1: single-sampled.  2, 4 or 8: multisampled (a count in
+     * RhiLimits.msaaCounts), a colour target or depth-stencil with one mip;
+     * a shader reads it as Texture2DMS (Load at a sample).  It is never
+     * copied (rhi_cmd_copy_texture*) or read back: its colour is resolved
+     * (rhi_cmd_resolve_color), its depth read by a shader. */
+    uint32_t samples;
 } RhiTextureDesc;
 
 /* Views: a depth-stencil texture is sampled either as depth (fog, DoF) or
@@ -200,6 +214,15 @@ typedef enum RhiState {
     RHI_STATE_COPY_SRC,
     RHI_STATE_COPY_DST,
     RHI_STATE_PRESENT,
+    /* bound as RHI_BIND_STORAGE_TEXTURE (read and written by fragment
+     * shaders: Vulkan GENERAL, D3D12 UNORDERED_ACCESS); the texture is no
+     * colour attachment while in it */
+    RHI_STATE_STORAGE,
+    /* a colour attachment the pass's fragment shaders also read as
+     * RHI_BIND_INPUT_ATTACHMENT (Vulkan RENDERING_LOCAL_READ; D3D12 the
+     * same as RENDER_TARGET).  Begin the pass with
+     * RhiColorAttachment.readable. */
+    RHI_STATE_RENDER_TARGET_READ,
     RHI_STATE_COUNT
 } RhiState;
 
@@ -244,6 +267,16 @@ typedef enum RhiBindType {
      * per slot.  Same b register
      * class as RHI_BIND_UNIFORM_BUFFER: the shader does not change. */
     RHI_BIND_UNIFORM_BUFFER_DYNAMIC,
+    /* The destination read (RhiPipelineDesc.dstRead).  STORAGE_TEXTURE: a
+     * u register (HLSL RasterizerOrderedTexture2D: a D3D12 ROV; DXC makes
+     * a Vulkan storage image with fragment shader interlock), the texture
+     * in RHI_STATE_STORAGE, made with RHI_TEX_STORAGE.  INPUT_ATTACHMENT
+     * (Vulkan only): colour attachment 0 of the pass the group is used in,
+     * read with subpassLoad (HLSL SubpassInput, input attachment index 0;
+     * the t-register binding: slot + 16), the texture in
+     * RHI_STATE_RENDER_TARGET_READ, made with RHI_TEX_INPUT_ATTACHMENT. */
+    RHI_BIND_STORAGE_TEXTURE,
+    RHI_BIND_INPUT_ATTACHMENT,
     RHI_BIND_COUNT
 } RhiBindType;
 
@@ -381,6 +414,23 @@ typedef struct RhiVertexBinding {
     bool perInstance;
 } RhiVertexBinding;
 
+/* How a pipeline's fragment shader reads its own pixel of the target
+ * (the exact GS blend, port/render/rd_dst_read.c).  STORAGE: through an
+ * RHI_BIND_STORAGE_TEXTURE in rasterization order (the shader's
+ * RasterizerOrderedTexture2D); the pipeline has no colour target
+ * (colorCount 0) and draws in a pass without one.  ATTACHMENT: colour
+ * attachment 0 read as an input attachment in rasterization order (Vulkan
+ * VK_EXT/ARM_rasterization_order_attachment_access over
+ * VK_KHR_dynamic_rendering_local_read); the pass begins it readable.
+ * Either needs the RhiLimits bit of its kind; rhi_create_pipeline fails
+ * without it. */
+typedef enum RhiDstRead {
+    RHI_DST_READ_NONE = 0,
+    RHI_DST_READ_STORAGE,
+    RHI_DST_READ_ATTACHMENT,
+    RHI_DST_READ_COUNT
+} RhiDstRead;
+
 typedef struct RhiPipelineDesc {
     RhiShader vertex, fragment;
     const RhiBindGroupLayout *layouts;
@@ -397,6 +447,10 @@ typedef struct RhiPipelineDesc {
     uint32_t colorCount;
     RhiFormat depthFormat; /* RHI_FMT_UNKNOWN for none */
     const char *debugName;
+    /* the attachments' sample count: 0 or 1 single-sampled, else the
+     * RhiTextureDesc.samples of the targets it draws into */
+    uint32_t samples;
+    RhiDstRead dstRead; /* RHI_DST_READ_NONE (0) for every ordinary pipeline */
 } RhiPipelineDesc;
 
 /* ------------------------------------------------------------- passes */
@@ -421,6 +475,10 @@ typedef struct RhiColorAttachment {
     RhiLoadOp load;
     float clear[4]; /* integer formats (RGBA8_UINT...): the integer value per channel, 0..255 */
     RhiStoreOp store;
+    /* the texture is in RHI_STATE_RENDER_TARGET_READ: the pass's
+     * RHI_DST_READ_ATTACHMENT pipelines read it (Vulkan: the attachment in
+     * RENDERING_LOCAL_READ; D3D12 ignores it) */
+    bool readable;
 } RhiColorAttachment;
 
 typedef struct RhiDepthAttachment {
@@ -509,6 +567,37 @@ typedef struct RhiLimits {
      * D3D12).  The fog then reads a copy of the scene depth first, before
      * the depth itself (rd_fog_path.c). */
     bool tiler;
+    /* Multisampling.  msaaCounts: the sample counts every
+     * multisampled target the renderer makes takes (colour RGBA8_UNORM and
+     * RGBA8_UINT, depth-stencil D32F_S8 as created, all sampled), a bit
+     * per count with the count's value (1 | 2 | 4 | 8: bit 2 = 2 samples;
+     * Vulkan's VkSampleCountFlags), 1 at least.  Vulkan:
+     * framebufferColorSampleCounts & framebufferDepthSampleCounts &
+     * sampledImageColorSampleCounts & sampledImageDepthSampleCounts &
+     * framebufferStencilSampleCounts.  D3D12: CheckFeatureSupport
+     * MULTISAMPLE_QUALITY_LEVELS > 0 for each format.
+     * sampleRateShading: a fragment shader reading SV_SampleIndex runs per
+     * sample (Vulkan sampleRateShading; D3D12 always). */
+    uint32_t msaaCounts;
+    bool sampleRateShading;
+    /* The destination read (RhiDstRead), each false where the device
+     * lacks it:
+     *   fragmentInterlock      Vulkan fragmentShaderPixelInterlock
+     *                          (VK_EXT_fragment_shader_interlock) with
+     *                          RGBA8_UNORM storage images that load and
+     *                          store: RHI_DST_READ_STORAGE
+     *   rov                    D3D12 ROVsSupported with typed UAV loads of
+     *                          R8G8B8A8_UNORM: RHI_DST_READ_STORAGE
+     *   rasterOrderAttachment  Vulkan rasterizationOrderColorAttachmentAccess
+     *                          (VK_EXT_ or VK_ARM_rasterization_order_
+     *                          attachment_access) and
+     *                          dynamicRenderingLocalRead
+     *                          (VK_KHR_dynamic_rendering_local_read or
+     *                          Vulkan 1.4): RHI_DST_READ_ATTACHMENT
+     * ICO_VK_FAKE_NO_DST=1 (Vulkan) reports all of them false. */
+    bool fragmentInterlock;
+    bool rov;
+    bool rasterOrderAttachment;
 } RhiLimits;
 
 typedef struct RhiDeviceDesc {
@@ -674,6 +763,14 @@ void rhi_cmd_copy_texture_to_buffer(RhiCommandList cl, RhiTexture src, RhiViewAs
                                     RhiRect region, RhiBuffer dst, uint64_t dstOffset,
                                     uint32_t rowPitch);
 
+/* Multisampling: src, a multisampled RGBA8_UNORM texture in
+ * RHI_STATE_COPY_SRC, into dst, a single-sampled one of its size and format
+ * in RHI_STATE_COPY_DST, each pixel the mean of its samples (Vulkan
+ * vkCmdResolveImage; D3D12 ResolveSubresource, the backend moving both to
+ * the resolve states and back).  Outside render passes; both stay in their
+ * states.  A depth is resolved by a shader (the renderer's own pass). */
+void rhi_cmd_resolve_color(RhiCommandList cl, RhiTexture src, RhiTexture dst);
+
 /* Debug markers: no-ops without debug layers. */
 void rhi_cmd_begin_label(RhiCommandList cl, const char *name);
 void rhi_cmd_end_label(RhiCommandList cl);
@@ -707,6 +804,11 @@ typedef struct RhiStats {
     uint64_t fenceWaits, fenceWaitNs;
     uint64_t waitIdles, readbacks;
     uint64_t acquireNs, presentNs;
+    /* the by-region barriers before destination-read draws that only the
+     * validation layer's synchronisation checks need (Vulkan, under the
+     * layer or ICO_VK_STORAGE_BARRIERS=1; vk_cmd.c vkr_dst_order): not in
+     * barriers, which counts what a release build records */
+    uint64_t orderBarriers;
     /* gauges, not counts: the device memory objects alive now and
      * the most ever, their bytes, and the device's limit on their number
      * (Vulkan; 0 elsewhere) */

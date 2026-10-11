@@ -68,6 +68,7 @@ typedef struct VkrTexture {
     RhiFormat rhiFormat;
     VkImageAspectFlags aspects;
     uint32_t width, height, mips;
+    uint32_t samples; /* 1, or the multisampled count (RhiTextureDesc.samples) */
     bool swapchain;
     /* hazard tracking (vk_cmd.c, "Hazards"): what touched the image since
      * its last barrier, valid while hzEpoch is the recording list's: the
@@ -97,6 +98,7 @@ typedef struct VkrPipeline {
     VkPipeline pipeline;
     VkPipelineLayout layout;
     uint32_t layoutCount;
+    uint8_t dstRead; /* RhiDstRead (vk_cmd.c vkr_dst_order) */
 } VkrPipeline;
 
 /* --------------------------------------------------------- per frame slot */
@@ -144,6 +146,9 @@ typedef struct VkrCmdList {
     uint32_t offsets[RHI_MAX_BIND_SLOTS][RHI_MAX_DYNAMIC_OFFSETS];
     uint32_t groupDirty; /* bit per group */
     bool inPass;
+    /* a draw, and a RHI_DST_READ_STORAGE draw, recorded in the open
+     * render pass (vk_cmd.c vkr_dst_order) */
+    bool drawnInPass, storageDrawn;
     /* the list's hazard-tracking epoch (g_vkr.hzEpoch when it began);
      * globalOrder: a global barrier before every pass and copy instead
      * (ICO_VK_GLOBAL_BARRIERS=1, or lists recorded interleaved) */
@@ -208,6 +213,22 @@ typedef struct VkrState {
     /* texture packs: textureCompressionBC enabled and the four BC formats
      * sampleable and copyable (RhiLimits.bcTextures) */
     bool bc;
+    /* multisampling (RhiLimits.msaaCounts, sampleRateShading): the counts
+     * every multisampled format takes, and the feature enabled */
+    uint32_t msaaCounts;
+    bool sampleRate;
+    /* the destination read (RhiLimits.fragmentInterlock,
+     * rasterOrderAttachment): the features enabled */
+    bool interlock;
+    bool rasterOrder;
+    /* VK_KHR_dynamic_rendering_local_read enabled (the attachment read, and
+     * barriers inside a render pass); validationOn: the Khronos validation
+     * layer is loaded; storageBarriers: a by-region barrier before a
+     * destination-read draw after other draws of its pass (vk_cmd.c
+     * vkr_dst_order) */
+    bool localRead;
+    bool validationOn;
+    bool storageBarriers;
     uint32_t validationErrors;
     bool deviceLost; /* a call returned VK_ERROR_DEVICE_LOST (rhi_device_lost) */
 

@@ -41,7 +41,17 @@ cbuffer FrameCB : register(b0, space0)
     float4 g_origin;    // xy GS window coordinate of the target's top-left pixel
                         // (XYOFFSET / 16), zw added to the result (GS pixel-centre
                         // convention; 0 puts GS integer coordinates on pixel edges)
-    float4 g_space[2];  // [0] WORLD, [1] UI: ndc = ndc * xy + zw (scale xy, offset zw)
+    // The native frame (port/include/ico_frame.h). g_frameRegs[0] (g_frame):
+    // x the region scale, 512 / W on a target as wide as the native frame W,
+    // exactly 1 on every other target and at 4:3 (no shader reads it);
+    // y, z the drawing camera's picture, its half-width and half-height in
+    // GS pixels about (2048, 2048) (vu_common.hlsli vu_picture_half: 256 by
+    // half the native height for the frame's camera, a reflection camera's
+    // own); w reserved. g_frameRegs[1] reserved. Nothing transforms a
+    // position: a GS X is drawn where the game put it, at every aspect, and
+    // the VU programs' region test reads the position as computed
+    // (vu_common.hlsli vu_triangle_out).
+    float4 g_frameRegs[2];
     float4 g_z;         // x scale (1 / 2^24), yz the bound target's texels per GS
                         // pixel (1 in Original), w 1: the VU programs output
                         // unquantised X, Y (only the developer switch
@@ -65,9 +75,7 @@ cbuffer FrameCB : register(b0, space0)
 //   g_param  kind-specific: each entry's header says what it reads (e.g.
 //            blend_int's source offset in pixels, xy)
 //   g_scale  xy t1 texels per GS texel: 1 for images and unscaled targets,
-//            the target's scale for a scaled one; zw the x addressing
-//            of a widened render-to-texture block, u' = u * z + w (0, 0:
-//            none; gs_block_uv)
+//            the target's scale for a scaled one; zw reserved (0)
 cbuffer DrawCB : register(b1, space1)
 {
     uint4 g_col;
@@ -78,14 +86,6 @@ cbuffer DrawCB : register(b1, space1)
     float4 g_param;
     float4 g_scale;
 };
-
-// Widescreen reflections: a draw that samples a render-to-texture block
-// widened by the display aspect maps its 4:3 u into the block (rd_replay.c
-// fillDrawCB). z = 0 everywhere else, which returns uv as it is.
-float2 gs_block_uv(float2 uv)
-{
-    return g_scale.z != 0.0 ? float2(uv.x * g_scale.z + g_scale.w, uv.y) : uv;
-}
 
 #define DF_TEXTURED 1u   // PRIM.TME
 #define DF_DECAL 2u      // TFX DECAL (else MODULATE)
@@ -114,6 +114,9 @@ float2 gs_block_uv(float2 uv)
 // sample at the GS's level of detail (gs_lod_level) with TEX1's fields in
 // g_blend.w. Every entry that samples a game texture honours it.
 #define DF_GS_LOD 262144u
+// A destination-read pass (the *_dstrov and *_dstatt entries): the channels
+// it writes, R G B A = bits 19..22 (shader_consts.h ICO_DF_WMASK_SHIFT)
+#define DF_WMASK_SHIFT 19u
 
 // TEST.DATE. snap is the R8 DATE snapshot (1.0 where the destination alpha
 // had its MSB set when the snapshot was taken). Returns true when the
@@ -128,9 +131,7 @@ bool gs_date_discard(uint flags, float snap)
     return msb != want;
 }
 
-// Space index into g_space.
-#define SPACE_WORLD 0
-#define SPACE_UI 1
+#define g_frame g_frameRegs[0]
 
 // ------------------------------------------------------------ vector forms
 
@@ -163,18 +164,36 @@ uint4 gs_texa_expand(uint4 t, uint mode, uint fmt)
     return uint4(t.rgb, gs_texa_alpha(t.r, t.g, t.b, t.a, mode, fmt));
 }
 
+// The GS's bilinear blend of the four texels around a sample point with
+// its 4-bit fractions fu, fv: across first, each step truncated,
+//   top = a + (((b - a) fu) >> 4), bottom = c + (((d - c) fu) >> 4),
+//   t = top + (((bottom - top) fv) >> 4)
+// (arithmetic shifts: a negative step floors).  PCSX2's software renderer
+// filters so; its per-draw dumps of the opening's blur chain (staticBlur,
+// 20 sprite steps and the eye blur) match this to the bit, where one
+// weighted sum >> 8 is a level above on ~5 % of the pixels of each step
+// and the 20 steps add up to ~15 % more glow (rd_blur_test
+// testBilerpPcsx2).
+uint4 gs_bilerp(uint4 a, uint4 b, uint4 c, uint4 d, uint fu, uint fv)
+{
+    const int4 ia = int4(a), ib = int4(b), ic = int4(c), id = int4(d);
+    const int4 top = ia + (((ib - ia) * int(fu)) >> 4);
+    const int4 bot = ic + (((id - ic) * int(fu)) >> 4);
+    return uint4(top + (((bot - top) * int(fv)) >> 4));
+}
+
 // TEXA before filtering (sprite_texa_ps, vu_texa_ps): the texel of a
 // PSMCT24 or PSMCT16 texture (or one with a 24- or 16-bit CLUT) under TEXA
 // with AEM, filtered as the GS filters it.
 // The GS expands TEXA per texel and then filters; the sampler would filter
 // RGB and the A bit first, so where texels of different alpha meet (AEM's
 // black, 7F/81's two A values) a bilinear edge differs. Here each of the
-// four texels around the sample point is loaded, expanded, and weighted
+// four texels around the sample point is loaded, expanded, and blended
 // with the GS's 4-bit fractions (the UV rounded to 12.4 texels, u - 0.5,
-// floor of the weighted sum >> 8), as fx_sprite_ps does. Addressing is the
+// gs_bilerp), as fx_sprite_ps does. Addressing is the
 // sampler's: REPEAT or CLAMP at t1's own size. MAG or MIN by the
 // footprint (rho > 1 texel: minified), as the sampler picks it. uvn is the
-// normalised UV (after gs_block_uv); flags g_mode.x.
+// normalised UV; flags g_mode.x.
 uint4 gs_texa_load(Texture2D<float4> tex, int2 c, int2 size, uint flags)
 {
     c.x = (flags & DF_TEXA_CLAMP_S) != 0u ? clamp(c.x, 0, size.x - 1)
@@ -209,8 +228,7 @@ uint4 gs_texa_texture(Texture2D<float4> tex, SamplerState smp, float2 uvn, uint 
     const uint4 b = gs_texa_load(tex, i0 + int2(1, 0), size, flags);
     const uint4 c = gs_texa_load(tex, i0 + int2(0, 1), size, flags);
     const uint4 d = gs_texa_load(tex, i0 + int2(1, 1), size, flags);
-    return (a * ((16u - fu) * (16u - fv)) + b * (fu * (16u - fv)) + c * ((16u - fu) * fv) +
-            d * (fu * fv)) >> 8;
+    return gs_bilerp(a, b, c, d, fu, fv);
 }
 
 // ------------------------------------------------------- GS mipmapping
@@ -296,8 +314,7 @@ uint4 gs_texa_level(Texture2D<float4> tex, float2 uvn, uint lv, bool filtered, u
     const uint4 b = gs_texa_load_lv(tex, i0 + int2(1, 0), size, lv, flags);
     const uint4 c = gs_texa_load_lv(tex, i0 + int2(0, 1), size, lv, flags);
     const uint4 d = gs_texa_load_lv(tex, i0 + int2(1, 1), size, lv, flags);
-    return (a * ((16u - fu) * (16u - fv)) + b * (fu * (16u - fv)) + c * ((16u - fu) * fv) +
-            d * (fu * fv)) >> 8;
+    return gs_bilerp(a, b, c, d, fu, fv);
 }
 
 // gs_texa_texture with DF_GS_LOD: the level (or the two levels, blended by
@@ -461,21 +478,118 @@ DualOut gs_dual_out(uint4 col, uint flags, uint fix)
 }
 #endif
 
+// ------------------------------------------------- destination read
+// The GS blend computed here, exactly, instead of in the GPU's blender
+// (port/render/rd_dst_read.c says why and when). The fragment reads its own
+// pixel of the bound target, works out what the GS stores there
+// (gs_dst_channel: ((A - B) * C >> 7) + D with C = As, Ad or FIX on the
+// 0x80 = 1.0 scale, COLCLAMP, PABE, FBA, the write mask) and writes it with
+// the pipeline's blending off. The fixed-function blender instead computes
+// Cs * F + Cd * (1 - F) in floats and rounds to nearest, where the GS
+// truncates: one level up on about half the pixels of every LERP.
+//
+//   ICO_DST_READ=1 (*_dstrov): the target is a rasterizer-ordered view,
+//     u0 in space 3 (D3D12 ROV; Vulkan storage image under
+//     VK_EXT_fragment_shader_interlock, which DXC emits for it:
+//     PixelInterlockOrderedEXT around the access). The pass has no colour
+//     attachment, so the shader writes the target and applies the write
+//     mask itself. globallycoherent (SPIR-V Coherent): the critical
+//     section's load sees the previous fragment's store, not a stale cache
+//     line. [earlydepthstencil]: the Z and stencil tests run before
+//     the shader, as the GS tests before it writes (a fragment that fails
+//     never reaches the store); the planner keeps a discard and a Z write
+//     from meeting in one such pass (rd_dst_read.c).
+//   ICO_DST_READ=2 (*_dstatt, Vulkan only): the colour attachment read as
+//     an input attachment (VK_KHR_dynamic_rendering_local_read) in
+//     rasterization order (VK_EXT_rasterization_order_attachment_access),
+//     the result written to SV_Target0 under the pipeline's write mask;
+//     depth, stencil and discard as on any pass. Compiled for DXIL the
+//     entries are the ICO_DST_READ=1 ones (never used there).
+#ifndef ICO_DST_READ
+#define ICO_DST_MODE 0
+#elif ICO_DST_READ == 2 && defined(__spirv__)
+#define ICO_DST_MODE 2
+#elif ICO_DST_READ != 0
+#define ICO_DST_MODE 1
+#else
+#define ICO_DST_MODE 0
+#endif
+
+// The pixel the GS stores for colour col (As in col.a) over dst.
+uint4 gs_dst_pixel(uint4 col, uint4 dst, uint flags)
+{
+    const bool fba = (flags & DF_FBA) != 0u;
+    const bool pabe = (flags & DF_PABE) != 0u;
+    const uint wmask = (flags >> DF_WMASK_SHIFT) & 15u;
+    const uint reg = g_blend.x, fix = g_blend.y, cl = g_blend.z;
+    uint4 o;
+    o.r = gs_dst_channel(0u, col.r, dst.r, col.a, dst.a, reg, fix, cl, fba, pabe, wmask);
+    o.g = gs_dst_channel(1u, col.g, dst.g, col.a, dst.a, reg, fix, cl, fba, pabe, wmask);
+    o.b = gs_dst_channel(2u, col.b, dst.b, col.a, dst.a, reg, fix, cl, fba, pabe, wmask);
+    o.a = gs_dst_channel(3u, col.a, dst.a, col.a, dst.a, reg, fix, cl, fba, pabe, wmask);
+    return o;
+}
+
+#if ICO_DST_MODE == 1
+#ifdef __spirv__
+[[vk::image_format("rgba8")]]
+#endif
+globallycoherent RasterizerOrderedTexture2D<unorm float4> g_dstRov : register(u0, space3);
+
+// UNORM8 holds k / 255 exactly: a load gives k back, a store of k / 255
+// stores k (as blend_int's and fx_sprite_ps's targets)
+void gs_dst_out(uint4 col, float4 pos)
+{
+    const uint2 p = uint2(pos.xy);
+    const uint4 dst = uint4(floor(g_dstRov[p] * 255.0 + 0.5));
+    g_dstRov[p] = float4(gs_dst_pixel(col, dst, g_mode.x)) * (1.0 / 255.0);
+}
+#define GS_PS_OUT void
+#define GS_PS_ATTR [earlydepthstencil]
+#define GS_RETURN(col, pos)                                                                        \
+    {                                                                                              \
+        gs_dst_out(col, pos);                                                                      \
+        return;                                                                                    \
+    }
+#elif ICO_DST_MODE == 2
+[[vk::input_attachment_index(0)]] [[vk::binding(16, 3)]] SubpassInput<float4> g_dstIn;
+
+struct DstOut
+{
+    VK_LOC(0) float4 c0 : SV_Target0;
+};
+
+DstOut gs_dst_out(uint4 col)
+{
+    const uint4 dst = uint4(floor(g_dstIn.SubpassLoad() * 255.0 + 0.5));
+    DstOut o;
+    o.c0 = float4(gs_dst_pixel(col, dst, g_mode.x)) * (1.0 / 255.0);
+    return o;
+}
+#define GS_PS_OUT DstOut
+#define GS_PS_ATTR
+#define GS_RETURN(col, pos) return gs_dst_out(col)
+#else
+// every other build of an entry: the fixed-function blend's outputs
+#define GS_PS_OUT DualOut
+#define GS_PS_ATTR
+#define GS_RETURN(col, pos) return gs_dual_out(col, g_mode.x, g_blend.y)
+#endif
+
 // ------------------------------------------------------- vertex helpers
 
-// A 12.4 GS window coordinate (as two u16 in a uint2) to clip space in the
-// given space (SPACE_WORLD or SPACE_UI).  precise (here and in gs_depth,
+// A 12.4 GS window coordinate (as two u16 in a uint2) to clip space, the
+// same for every space tag.  precise (here and in gs_depth,
 // vu_common.hlsli vu_ndc and vu_homogeneous_position): no fused
 // multiply-add, so every pipeline that draws a primitive gets the same
 // position and depth bits (the two-pass blend of a device without
 // dual-source blending draws it twice, the second pass GEQUAL against the
 // depth the first wrote: rd_pipeline.c).
-float2 gs_xy_to_ndc(uint2 xy, int space)
+float2 gs_xy_to_ndc(uint2 xy)
 {
     precise float2 px = float2(xy) * (1.0 / 16.0) - g_origin.xy + g_origin.zw;
     precise float2 ndc = float2(px.x * g_target.z * 2.0 - 1.0, 1.0 - px.y * g_target.w * 2.0);
-    precise float2 r = ndc * g_space[space].xy + g_space[space].zw;
-    return r;
+    return ndc;
 }
 
 float gs_depth(uint z)

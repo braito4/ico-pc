@@ -105,7 +105,11 @@ static const char *const s_fsNames[RD_FS_COUNT] = {"sprite_ps" /* indexed by RD_
                                                    "sprite_texa_ps",
                                                    "vu_texa_ps",
                                                    "blit_depth_ps",
-                                                   "fog_lut_buffer_ps"};
+                                                   "fog_lut_buffer_ps",
+                                                   "aa_reduce_ps",
+                                                   "fog_lut_ms_ps",
+                                                   "depth_resolve_ps",
+                                                   "depth_upsample_ps"};
 
 /* ------------------------------------------------------------------ init */
 
@@ -180,14 +184,48 @@ bool rd__gpu_init(void *sdlWindow)
     g_rd.layoutVu = rhi_create_bind_group_layout(&(RhiBindGroupLayoutDesc){s4, 4, "rd vu"});
     bool ok = g_rd.layoutFrame.id && g_rd.layoutDraw.id && g_rd.layoutTex.id && g_rd.layoutInt.id &&
               g_rd.layoutVu.id;
+    /* the exact blend's group 3 (rd_dst_read.c): the target as a storage
+     * texture (interlock, ROV) or as the pass's input attachment; made only
+     * where the device has the destination read (a missing piece leaves
+     * that mode out, rd__dst_init, never the renderer) */
+    const bool dstStorage = lim->fragmentInterlock || lim->rov;
+    const bool dstAttach = lim->rasterOrderAttachment;
+    if (dstStorage) {
+        const RhiBindSlot sd[1] = {{0, RHI_BIND_STORAGE_TEXTURE, FS}};
+        g_rd.layoutDstStorage =
+            rhi_create_bind_group_layout(&(RhiBindGroupLayoutDesc){sd, 1, "rd dst storage"});
+    }
+    if (dstAttach) {
+        const RhiBindSlot sa[1] = {{0, RHI_BIND_INPUT_ATTACHMENT, FS}};
+        g_rd.layoutDstAttach =
+            rhi_create_bind_group_layout(&(RhiBindGroupLayoutDesc){sa, 1, "rd dst attachment"});
+    }
     for (int i = 0; i < RD_VS_COUNT; i++) {
         g_rd.vs[i] = rd__make_shader(s_vsNames[i]);
         ok = ok && g_rd.vs[i].id;
     }
     for (int i = 0; i < RD_FS_COUNT; i++) {
+        /* the per-sample fog reads SV_SampleIndex: only a device with
+         * sample-rate shading takes it (else it is never asked for) */
+        if (i == RD_FS_FOG_MS && !lim->sampleRateShading) {
+            continue;
+        }
         /* without dual-source blending the gs_dual_out entries are not
          * created (their second output needs the feature); their *_nodual
          * twins always are (rd_set_no_dual) */
+        /* the exact blend's twins (rd_dst_read.c), for the destination
+         * reads the device has; their absence only leaves the mode out */
+        if (rd__fs_has_dst((uint8_t)i)) {
+            char name[64];
+            if (dstStorage) {
+                snprintf(name, sizeof(name), "%s_dstrov", s_fsNames[i]);
+                g_rd.fsDstRov[i] = rd__make_shader(name);
+            }
+            if (dstAttach) {
+                snprintf(name, sizeof(name), "%s_dstatt", s_fsNames[i]);
+                g_rd.fsDstAtt[i] = rd__make_shader(name);
+            }
+        }
         if (rd__fs_has_no_dual((uint8_t)i)) {
             char name[64];
             snprintf(name, sizeof(name), "%s_nodual", s_fsNames[i]);
@@ -225,7 +263,7 @@ bool rd__gpu_init(void *sdlWindow)
         ok = ok && g_rd.samplers[i].id;
     }
     g_rd.dummy = rhi_create_texture(&(RhiTextureDesc){
-        1, 1, 1, RHI_FMT_RGBA8_UNORM, RHI_TEX_SAMPLED | RHI_TEX_COPY_DST, "rd dummy"});
+        1, 1, 1, RHI_FMT_RGBA8_UNORM, RHI_TEX_SAMPLED | RHI_TEX_COPY_DST, "rd dummy", 0});
     g_rd.dummyState = RHI_STATE_UNDEFINED;
     return ok && g_rd.dummy.id;
 }
@@ -251,6 +289,7 @@ void rd__gpu_shutdown(void)
     rd__fog_shutdown();      /* the fog LUT */
     rd__shadow_shutdown();   /* the box-reduced shadow count */
     rd__wrap_shutdown();     /* the COLCLAMP 0 wrap's pipelines and accumulator */
+    rd__msaa_free();         /* the MSAA scene pair */
     if (g_rd.dummy.id) {
         rhi_destroy_texture(g_rd.dummy);
     }
@@ -271,10 +310,17 @@ void rd__gpu_shutdown(void)
         if (g_rd.fsNoDual[i].id) {
             rhi_destroy_shader(g_rd.fsNoDual[i]);
         }
+        if (g_rd.fsDstRov[i].id) {
+            rhi_destroy_shader(g_rd.fsDstRov[i]);
+        }
+        if (g_rd.fsDstAtt[i].id) {
+            rhi_destroy_shader(g_rd.fsDstAtt[i]);
+        }
     }
-    RhiBindGroupLayout ls[5] = {g_rd.layoutFrame, g_rd.layoutDraw, g_rd.layoutTex, g_rd.layoutInt,
-                                g_rd.layoutVu};
-    for (int i = 0; i < 5; i++) {
+    RhiBindGroupLayout ls[7] = {g_rd.layoutFrame,    g_rd.layoutDraw, g_rd.layoutTex,
+                                g_rd.layoutInt,      g_rd.layoutVu,   g_rd.layoutDstStorage,
+                                g_rd.layoutDstAttach};
+    for (int i = 0; i < 7; i++) {
         if (ls[i].id) {
             rhi_destroy_bind_group_layout(ls[i]);
         }
@@ -313,11 +359,44 @@ static struct {
     uint32_t colorTex, depthTex; /* their RhiTexture ids, 0 when no reset is pending */
 } s_stencil;
 
+/* The MSAA epoch's state (RdSettings.antiAlias MSAA; the section "the MSAA
+ * epoch" below says what it does) */
+static struct {
+    RhiTexture color, depth; /* SCENE_MS: RGBA8 and D32F_S8, samples each */
+    RhiState colorState, depthState;
+    uint32_t w, h, samples;          /* the pair's size and count (0: none made) */
+    uint32_t want;                   /* this replay's count; 1 = no MSAA */
+    uint32_t sceneColor, sceneDepth; /* SCENE's single-sampled textures (ids) */
+    bool active;                     /* the epoch is open: SCENE's picture is in the pair */
+    bool ended;                      /* it closed this replay (no re-entry) */
+    bool internal;                   /* the epoch's own transitions of SCENE (no hook) */
+    bool colorLive, depthLive;       /* the pair's colour / depth hold the picture */
+    bool failLogged;
+    struct Replay *r;
+} s_ms;
+
+static void msaaEnd(struct Replay *r);
+
+static bool s_fogResolvedForced; /* rd__msaa_test_fog_resolved */
+
+void rd__msaa_test_fog_resolved(bool on)
+{
+    s_fogResolvedForced = on;
+}
+
 static void flushClear(void);
 static void flushStencilClear(void);
 
 void rd__transition(RhiCommandList cl, RhiTexture t, RhiState *cur, RhiState want)
 {
+    /* the MSAA epoch: SCENE's own colour or depth touched outside a pass
+     * into SCENE_MS (read, copied, drawn single-sampled) closes it first,
+     * resolving the picture into them (msaaEnd); even a transition to the
+     * state they are in (the epoch put them in their attachment states) */
+    if (s_ms.active && !s_ms.internal && t.id != 0 &&
+        (t.id == s_ms.sceneColor || t.id == s_ms.sceneDepth) && cl.id == s_cl.id) {
+        msaaEnd(s_ms.r);
+    }
     if (!t.id || *cur == want) {
         return;
     }
@@ -345,14 +424,19 @@ void rd__transition(RhiCommandList cl, RhiTexture t, RhiState *cur, RhiState wan
 }
 
 /* every transient bind group of the replay goes through here, timed into
- * the record's bind phase and counted by kind (texture or uniform) */
+ * the record's bind phase and counted by kind (texture or uniform: the
+ * uniform layouts' groups are the frame, draw and VU ones) */
 static RhiBindGroup bindGroup(RhiBindGroupLayout layout, const RhiBinding *b, uint32_t n)
 {
     const double t0 = rd__now_ms();
     const RhiBindGroup g = rhi_create_bind_group(&(RhiBindGroupDesc){layout, b, n});
     g_rdPerf.bindMs += rd__now_ms() - t0;
     if (g.id) {
-        if (layout.id == g_rd.layoutTex.id || layout.id == g_rd.layoutInt.id) {
+        /* the exact blend's group (dstBind: the pass's target as a storage
+         * texture or input attachment) is a texture group too */
+        if (layout.id == g_rd.layoutTex.id || layout.id == g_rd.layoutInt.id ||
+            (g_rd.layoutDstStorage.id && layout.id == g_rd.layoutDstStorage.id) ||
+            (g_rd.layoutDstAttach.id && layout.id == g_rd.layoutDstAttach.id)) {
             g_rdPerf.textureGroups++;
         } else {
             g_rdPerf.uniformGroups++;
@@ -508,6 +592,7 @@ void rd__set_replay_camera(const RdCamera *cam)
     if (cam) {
         s_replayCam = *cam;
         s_hasReplayCam = 1;
+        g_rd.frameAspect = cam->aspect; /* the frame's exact width (rd__frame_wexact) */
     }
 }
 
@@ -522,8 +607,16 @@ RdUniform rd__frame_group_z(uint32_t targetW, uint32_t targetH, float originX, f
     return rd__frame_group_ex(targetW, targetH, originX, originY, zScale, 1.0f, 1.0f, 1.0f);
 }
 
+/* the MSAA epoch's expanded sprites (msaaFrame): integer GS coordinates on
+ * texel edges instead of texel centres */
+static bool s_frameNoHalf;
+
+/* the camera's picture of the frame group being made (Replay.picture), and
+ * the height of the frame it is drawn on (0: the native height) */
+static uint32_t s_framePicture, s_framePictureFrameH;
+
 RdUniform rd__frame_group_ex(uint32_t targetW, uint32_t targetH, float originX, float originY,
-                             float zScale, float spaceX, float scaleX, float scaleY)
+                             float zScale, float regionScale, float scaleX, float scaleY)
 {
     IcoFrameCB cb;
     memset(&cb, 0, sizeof(cb));
@@ -539,12 +632,27 @@ RdUniform rd__frame_group_ex(uint32_t targetW, uint32_t targetH, float originX, 
      * pixels), so integer edges are block edges (expand) */
     cb.origin[2] = scaleX > 1.0f ? 0.5f / scaleX : 0.5f;
     cb.origin[3] = scaleY > 1.0f ? 0.5f / scaleY : 0.5f;
-    /* Original: both spaces identity.  Otherwise the wide projection's x
-     * scale about the target's centre (spaceX = (4/3) / aspect) for draws
-     * into a scene-class target other than full-screen ones (bindDraw).
-     * The mirror is not applied here but to the vertices (mirrorDraw). */
-    cb.space[0][0] = cb.space[1][0] = spaceX;
-    cb.space[0][1] = cb.space[1][1] = 1.0f;
+    if (s_frameNoHalf) {
+        cb.origin[2] = cb.origin[3] = 0.0f;
+    }
+    /* The native frame: no position is transformed (a GS X is drawn where
+     * the game put it, at every aspect; the mirror is applied to the
+     * vertices, mirrorDraw).  frame[0] the region scale (rd__region_scale:
+     * exactly 1 at 4:3 and on every target that is not frame-wide; no
+     * shader reads it) */
+    cb.frame[0] = regionScale;
+    /* frame[1], frame[2]: the drawing camera's picture, half-width and
+     * half-height in GS pixels about (2048, 2048), which the VU programs'
+     * rule for the triangles their region test drops reads
+     * (vu_common.hlsli vu_picture_half): a reflection camera's from its
+     * draw's command (rd.h RdCamera.pictureW/H), else the full screen's,
+     * 256 (gsb_SetVSMatrix's 512-pixel screen) by half the native height
+     * (never less than half the frame drawn on: at 4:3 the picture is the
+     * whole frame, so a triangle wholly beside it is off the frame) */
+    const uint32_t pw = s_framePicture & 255u, ph = (s_framePicture >> 8) & 255u;
+    const uint32_t fh = s_framePictureFrameH > g_rd.gsH ? s_framePictureFrameH : g_rd.gsH;
+    cb.frame[1] = pw ? (float)pw : 256.0f;
+    cb.frame[2] = ph ? (float)ph : (float)(fh >> 1);
     /* the GS Z scale of the bound depth buffer: 2^-32 for the game's PSMZ32
      * so UI Z values above 2^24 keep their order */
     cb.z[0] = zScale;
@@ -683,13 +791,22 @@ typedef struct Replay {
     RdStateBlock st;
     int passOpen;
     uint32_t passColor, passDepth;
+    /* the exact blend (rd_dst_read.c): the open pass is a storage pass (the
+     * colour target bound as a storage texture, no colour attachment) or
+     * its colour attachment is readable (the attachment read); the scissor
+     * last set, which a pass begun again for the other kind takes back;
+     * group 3 of the open pass */
+    int passStorage, passReadable;
+    RhiRect sc;
+    RhiBindGroup dstGroup;
+    uint32_t dstGroupSerial;
     RdUniform frameBG;
-    uint32_t frameKey[6]; /* colour, gsW, gsH, useOffset, pass serial, full-screen */
-    int stretch;          /* the draw being bound is full-screen (no wide x scale) */
-    int mirror;           /* the draw being bound is a flipped UI draw (scissor too) */
-    int uiPrim;    /* the draw being bound is a UI screen prim (its scissor gets the wide scale) */
+    uint32_t frameKey[6]; /* colour, gsW, gsH, useOffset, pass serial, picture */
+    /* the VU draw being bound: its camera's picture (RdCmd b[3] | b[6] << 8,
+     * rd_mesh.c pushVu), 0 for the full screen's and every other draw */
+    uint32_t picture;
+    int mirror;    /* the draw being bound is a flipped UI draw (scissor too) */
     int halfAdded; /* sceneKeepsHalf gave the target in force the frame head's half pixel */
-    float blockCs; /* a stretched draw's u at the target's centre (blockCentre) */
     uint32_t passSerial;
     uint32_t writeSerial; /* bumped by every action that may change a target's alpha */
     uint32_t dateFor;     /* target id the DATE snapshot holds, 0 = none */
@@ -706,7 +823,13 @@ static void flushScreenRun(Replay *r);
 
 static void beginPass(Replay *r, RdTargetRec *c, RdTargetRec *d, uint32_t cid, uint32_t did,
                       RhiLoadOp colorLoad, const float clear[4], RhiLoadOp depthLoad,
-                      float clearDepth);
+                      float clearDepth, bool storage);
+
+static bool passWantsReadable(const RdTargetRec *c);
+static bool msaaPass(Replay *r, RdTargetRec *c, RdTargetRec *d, uint32_t cid, uint32_t did);
+
+static void msaaAttach(RdTargetRec *c, RdTargetRec *d, RhiLoadOp colorLoad, RhiLoadOp depthLoad,
+                       RhiTexture *colorTex, RhiTexture *depthTex);
 
 static void endPass(Replay *r)
 {
@@ -714,7 +837,15 @@ static void endPass(Replay *r)
     if (r->passOpen) {
         rhi_cmd_end_render_pass(s_cl);
         r->passOpen = 0;
+        /* a storage pass's target goes back to its attachment state, so a
+         * later storage pass on it starts behind a barrier (rd_dst_read.c) */
+        RdTargetRec *tc = r->passStorage ? rd__target_rec(r->passColor) : NULL;
+        if (tc) {
+            rd__transition(s_cl, tc->color, &tc->colorState, RHI_STATE_RENDER_TARGET);
+        }
     }
+    r->passStorage = r->passReadable = 0;
+    g_rd.passSamples = 1;
     /* whoever ends a pass is about to record something else (a copy,
      * another pass): a pending clear goes first, unless beginPass took it */
     flushClear();
@@ -824,12 +955,15 @@ static void flushStencilClear(void)
     if (!tc || !td || td->depth.id != depthTex) {
         return;
     }
-    rd__transition(s_cl, tc->color, &tc->colorState, RHI_STATE_RENDER_TARGET);
+    const bool readable = passWantsReadable(tc); /* the state of its passes */
+    rd__transition(s_cl, tc->color, &tc->colorState,
+                   readable ? RHI_STATE_RENDER_TARGET_READ : RHI_STATE_RENDER_TARGET);
     rd__transition(s_cl, td->depth, &td->depthState, RHI_STATE_DEPTH_WRITE);
     RhiRenderPassDesc p;
     memset(&p, 0, sizeof(p));
     p.color[0].texture = tc->color;
     p.color[0].load = RHI_LOAD_LOAD;
+    p.color[0].readable = readable;
     p.colorCount = 1;
     p.depth.texture = td->depth;
     p.depth.depthLoad = RHI_LOAD_LOAD;
@@ -859,18 +993,35 @@ static void flushClear(void)
         return;
     }
     beginPass(r, t, p.depth ? t : NULL, p.target, p.depth ? p.target : 0, RHI_LOAD_CLEAR, p.color,
-              RHI_LOAD_CLEAR, p.clearDepth);
+              RHI_LOAD_CLEAR, p.clearDepth, false);
     endPass(r);
+}
+
+/* the exact blend's attachment read: every pass on an RGBA8 target made
+ * for it is begun readable (outside the MSAA epoch) */
+static bool passWantsReadable(const RdTargetRec *c)
+{
+    return g_rd.dstMode == RD_BLEND_EXACT_ATTACHMENT && (c->dstUsage & 2u) != 0 &&
+           c->format == RHI_FMT_RGBA8_UNORM;
 }
 
 static void beginPass(Replay *r, RdTargetRec *c, RdTargetRec *d, uint32_t cid, uint32_t did,
                       RhiLoadOp colorLoad, const float clear[4], RhiLoadOp depthLoad,
-                      float clearDepth)
+                      float clearDepth, bool storage)
 {
+    /* the MSAA epoch: whether this pass draws into SCENE_MS (msaaPass may
+     * close the epoch instead, recording what is open first).  A storage
+     * pass (the exact blend, rd_dst_read.c) is never in it: its draws come
+     * from a single-sampled pass */
+    bool ms = !storage && s_ms.want > 1u && msaaPass(r, c, d, cid, did);
+    const bool wantReadable = !storage && passWantsReadable(c);
     /* the pending clear as this pass's load op when it can take it
-     * (the same clear values, the same render area: the whole target) */
+     * (the same clear values, the same render area: the whole target); a
+     * storage pass has no colour attachment and a readable one does not
+     * read the attachment a load op cleared (rd_dst_read.c): their clear is
+     * a pass of its own (endPass below records it) */
     float pendColor[4];
-    if (s_pend.p.target &&
+    if (s_pend.p.target && !storage && !wantReadable &&
         rd__take_pending_clear(&s_pend.p, cid, d ? did : 0, &colorLoad, &depthLoad)) {
         memcpy(pendColor, s_pend.p.color, sizeof(pendColor));
         clear = pendColor;
@@ -886,25 +1037,48 @@ static void beginPass(Replay *r, RdTargetRec *c, RdTargetRec *d, uint32_t cid, u
      * shadow window only (RdStencilWindow) */
     RhiLoadOp stencilLoad = depthLoad;
     RhiStoreOp stencilStore = RHI_STORE_STORE;
-    if (d && stencilOps(&s_stencil.w, d->depth.id, c->tw == d->tw && c->th == d->th, depthLoad,
-                        &stencilLoad, &stencilStore)) {
+    /* SCENE_MS's stencil is not the shadow window's (the shadow commands
+     * close the epoch): a pass into it neither takes nor keeps a reset */
+    if (!ms && d &&
+        stencilOps(&s_stencil.w, d->depth.id, c->tw == d->tw && c->th == d->th, depthLoad,
+                   &stencilLoad, &stencilStore)) {
         s_stencil.colorTex = s_stencil.depthTex = 0;
     }
     endPass(r);
-    rd__transition(s_cl, c->color, &c->colorState, RHI_STATE_RENDER_TARGET);
-    if (d) {
-        rd__transition(s_cl, d->depth, &d->depthState, RHI_STATE_DEPTH_WRITE);
+    if (ms && s_ms.ended) {
+        /* what endPass recorded closed the epoch: single-sampled */
+        ms = false;
+        if (d && stencilOps(&s_stencil.w, d->depth.id, c->tw == d->tw && c->th == d->th, depthLoad,
+                            &stencilLoad, &stencilStore)) {
+            s_stencil.colorTex = s_stencil.depthTex = 0;
+        }
+    }
+    RhiTexture colorTex = c->color, depthTex = d ? d->depth : (RhiTexture){0};
+    const bool readable = wantReadable && !ms;
+    if (ms) {
+        msaaAttach(c, d, colorLoad, depthLoad, &colorTex, &depthTex);
+    } else {
+        rd__transition(s_cl, c->color, &c->colorState,
+                       storage    ? RHI_STATE_STORAGE
+                       : readable ? RHI_STATE_RENDER_TARGET_READ
+                                  : RHI_STATE_RENDER_TARGET);
+        if (d) {
+            rd__transition(s_cl, d->depth, &d->depthState, RHI_STATE_DEPTH_WRITE);
+        }
     }
     RhiRenderPassDesc p;
     memset(&p, 0, sizeof(p));
-    p.color[0].texture = c->color;
+    p.color[0].texture = colorTex;
     p.color[0].load = colorLoad;
+    p.color[0].readable = readable;
     if (clear) {
         memcpy(p.color[0].clear, clear, sizeof(p.color[0].clear));
     }
-    p.colorCount = 1;
+    /* a storage pass: the target is the shaders' storage texture, no
+     * attachment (its contents are kept: they are the texture's) */
+    p.colorCount = storage ? 0u : 1u;
     if (d) {
-        p.depth.texture = d->depth;
+        p.depth.texture = depthTex;
         p.depth.depthLoad = depthLoad;
         p.depth.stencilLoad = stencilLoad;
         p.depth.stencilStore = stencilStore;
@@ -920,6 +1094,339 @@ static void beginPass(Replay *r, RdTargetRec *c, RdTargetRec *d, uint32_t cid, u
     r->passColor = cid;
     r->passDepth = did;
     r->passSerial++;
+    r->passStorage = storage;
+    r->passReadable = readable;
+    g_rd.passSamples = ms ? (uint8_t)s_ms.samples : 1;
+}
+
+/* ------------------------------------------------------------ the MSAA epoch
+ * RdSettings.antiAlias MSAA2/4/8 (rd__aa_mode: never under the Original
+ * preset, only for a count rd_aa_supported_mask lists).  SCENE has a
+ * multisampled twin, SCENE_MS (s_ms: RGBA8 and D32F_S8 at SCENE's texture
+ * size, N samples).  Per replay:
+ *  - the epoch opens at the first pass whose colour is SCENE and whose depth
+ *    is SCENE's or none (beginPass, msaaPass): that pass and every such pass
+ *    after it draw into SCENE_MS, their pipelines with N samples
+ *    (g_rd.passSamples, rd__get_pipeline).  A pass that loads an
+ *    attachment the epoch has not drawn yet first spreads SCENE's own
+ *    texels over the samples (msaaUpsample: the colour by blit_ps, the depth
+ *    by depth_upsample_ps); a cleared one starts from the clear;
+ *  - it closes (msaaEnd) at the first command that reads or writes SCENE's
+ *    single-sampled colour or depth outside such a pass: every such access
+ *    goes through rd__transition, which closes the epoch first (the hook;
+ *    SCENE's textures are put in their attachment states when the epoch
+ *    opens, so a read always transitions): a texture read of SCENE (a draw
+ *    sampling it, a block or feedback copy, the reduction), a DATE snapshot,
+ *    the fog's depth read (unless the fog runs per sample, below), a copy
+ *    or exact blend (blend_int: its ping-pong never runs on SCENE_MS), the
+ *    COLCLAMP 0 wrap's snapshot, a pass binding SCENE's depth with another
+ *    colour (the shadow count) or SCENE with another depth, and the end of
+ *    the replay (dumps and readbacks then read the resolved SCENE);
+ *  - closing resolves: the colour by rhi_cmd_resolve_color (the mean of the
+ *    samples) into SCENE's colour, the depth by depth_resolve_ps (the
+ *    largest sample: the nearest under GEQUAL) into SCENE's depth, each
+ *    only when the epoch drew it.  Everything after draws single-sampled;
+ *    the epoch does not open again in the replay;
+ *  - the fog inside the epoch, with sample-rate shading and the depth drawn
+ *    in it, runs per sample (fog_lut_ms_ps reading SCENE_MS's depth at
+ *    SV_SampleIndex) and keeps the epoch open; otherwise its depth read
+ *    closes it and it fogs the resolved picture;
+ *  - integer-aligned sprites drawn inside it cover whole pixels (doScreen:
+ *    msaaSpriteExpand), so clears and backdrops keep full coverage; the
+ *    per-sample fog's sprite too (doFog);
+ *  - the stencil of SCENE_MS is not the shadow window's: the shadow
+ *    commands draw on SCENE's own depth after the epoch closed. */
+static void msaaFree(void)
+{
+    if (s_ms.color.id) {
+        rhi_destroy_texture(s_ms.color);
+    }
+    if (s_ms.depth.id) {
+        rhi_destroy_texture(s_ms.depth);
+    }
+    s_ms.color = s_ms.depth = (RhiTexture){0};
+    s_ms.w = s_ms.h = s_ms.samples = 0;
+    s_ms.active = s_ms.ended = false;
+}
+
+void rd__msaa_free(void)
+{
+    msaaFree();
+}
+
+/* At the start of a replay: the count in force and SCENE_MS at SCENE's
+ * size (made or remade here); the epoch closed. */
+static void msaaFrameBegin(Replay *r)
+{
+    s_ms.active = s_ms.ended = s_ms.internal = false;
+    s_ms.colorLive = s_ms.depthLive = false;
+    s_ms.r = r;
+    s_ms.want = 1;
+    s_ms.sceneColor = s_ms.sceneDepth = 0;
+    const uint32_t n = rd_aa_samples(rd__aa_mode());
+    RdTargetRec *ts = rd__target_rec(RD_TARGET_SCENE + 1);
+    if (n <= 1u || !ts || !ts->color.id || !ts->withDepth || !ts->depth.id ||
+        ts->format != RHI_FMT_RGBA8_UNORM) {
+        if (s_ms.samples) {
+            msaaFree(); /* anti-aliasing turned off: the pair goes */
+        }
+        return;
+    }
+    if (s_ms.samples != n || s_ms.w != ts->tw || s_ms.h != ts->th) {
+        msaaFree();
+        s_ms.color = rhi_create_texture(&(RhiTextureDesc){ts->tw, ts->th, 1, RHI_FMT_RGBA8_UNORM,
+                                                          RHI_TEX_RENDER_TARGET | RHI_TEX_SAMPLED,
+                                                          "rd scene ms", n});
+        s_ms.depth = rhi_create_texture(&(RhiTextureDesc){ts->tw, ts->th, 1, RHI_FMT_D32F_S8,
+                                                          RHI_TEX_DEPTH_STENCIL | RHI_TEX_SAMPLED,
+                                                          "rd scene ms depth", n});
+        s_ms.colorState = s_ms.depthState = RHI_STATE_UNDEFINED;
+        if (!s_ms.color.id || !s_ms.depth.id) {
+            msaaFree();
+            if (!s_ms.failLogged) {
+                s_ms.failLogged = true;
+                rd__log("msaa: the %u-sample scene (%ux%u) could not be made: drawn without", n,
+                        ts->tw, ts->th);
+            }
+            rd__note_scene_pressure(); /* the scale comes down at the next frame */
+            return;
+        }
+        s_ms.w = ts->tw;
+        s_ms.h = ts->th;
+        s_ms.samples = n;
+        rd__log("msaa: %u samples, scene %ux%u", n, ts->tw, ts->th);
+    }
+    s_ms.want = n;
+    s_ms.sceneColor = ts->color.id;
+    s_ms.sceneDepth = ts->depth.id;
+    g_rdPerf.msaaSamples = n;
+}
+
+/* A fullscreen draw into the open pass of SCENE_MS: blit_vs with fs, src
+ * bound at t1 (aspect) */
+static void msaaFullscreen(RdFsId fs, RhiFormat colorFmt, RhiTexture src, RhiViewAspect aspect,
+                           uint32_t w, uint32_t h)
+{
+    RdPipeKeyInt k = rd__post_key(RD_VS_BLIT, fs, colorFmt);
+    if (colorFmt == RHI_FMT_UNKNOWN) {
+        k.depthFmt = RHI_FMT_D32F_S8;
+        k.gs.ztst = RD_ZTST_ALWAYS;
+        k.gs.zwrite = RD_ZWRITE_ON;
+    }
+    const RhiPipeline pipe = rd__get_pipeline(&k);
+    if (!pipe.id) {
+        return;
+    }
+    const RhiRect all = {0, 0, w, h};
+    rhi_cmd_set_scissor(s_cl, &all);
+    IcoDrawCB cb;
+    memset(&cb, 0, sizeof(cb));
+    for (int i = 0; i < 4; i++) {
+        cb.col[i] = 0x80; /* blit_ps: modulate by 1.0 */
+    }
+    cb.mode[0] = ICO_DF_TEXTURED | ICO_DF_TCC_RGBA;
+    cb.uvRect[2] = (float)w;
+    cb.uvRect[3] = (float)h;
+    cb.tex[0] = (float)w;
+    cb.tex[1] = (float)h;
+    cb.tex[2] = 1.0f / (float)w;
+    cb.tex[3] = 1.0f / (float)h;
+    RhiBinding b[2];
+    memset(b, 0, sizeof(b));
+    b[0].slot = 1;
+    b[0].type = RHI_BIND_SAMPLED_TEXTURE;
+    b[0].texture = src;
+    b[0].aspect = aspect;
+    b[1].slot = 1;
+    b[1].type = RHI_BIND_SAMPLER;
+    b[1].sampler = rd__sampler(RD_FILTER_NEAREST, RD_FILTER_NEAREST, RD_WRAP_CLAMP, RD_WRAP_CLAMP);
+    const RhiBindGroup g2 = bindGroup(g_rd.layoutTex, b, 2);
+    if (!g2.id) {
+        return;
+    }
+    rhi_cmd_set_pipeline(s_cl, pipe);
+    rd__bind_uniform(s_cl, 0, rd__frame_group(w, h, 0.0f, 0.0f));
+    rd__bind_uniform(s_cl, 1, rd__draw_group(&cb));
+    rhi_cmd_set_bind_group(s_cl, 2, g2);
+    rhi_cmd_draw(s_cl, 3, 0, 1);
+}
+
+/* SCENE's colour (depth 0) or depth (1) spread over SCENE_MS's samples, in
+ * a pass of its own (no pass is open) */
+static void msaaUpsample(RdTargetRec *ts, int depth)
+{
+    s_ms.internal = true;
+    RhiRenderPassDesc p;
+    memset(&p, 0, sizeof(p));
+    if (!depth) {
+        rd__transition(s_cl, ts->color, &ts->colorState, RHI_STATE_SHADER_READ);
+        rd__transition(s_cl, s_ms.color, &s_ms.colorState, RHI_STATE_RENDER_TARGET);
+        p.color[0].texture = s_ms.color;
+        p.color[0].load = RHI_LOAD_DONT_CARE;
+        p.colorCount = 1;
+    } else {
+        rd__transition(s_cl, ts->depth, &ts->depthState, RHI_STATE_SHADER_READ);
+        rd__transition(s_cl, s_ms.depth, &s_ms.depthState, RHI_STATE_DEPTH_WRITE);
+        p.depth.texture = s_ms.depth;
+        p.depth.depthLoad = RHI_LOAD_DONT_CARE;
+        p.depth.stencilLoad = RHI_LOAD_CLEAR;
+        p.depth.clearStencil = 0;
+    }
+    p.width = s_ms.w;
+    p.height = s_ms.h;
+    rhi_cmd_begin_render_pass(s_cl, &p);
+    const RhiViewport vp = {0.0f, 0.0f, (float)s_ms.w, (float)s_ms.h, 0.0f, 1.0f};
+    rhi_cmd_set_viewport(s_cl, &vp);
+    g_rd.passSamples = (uint8_t)s_ms.samples;
+    if (!depth) {
+        msaaFullscreen(RD_FS_BLIT, RHI_FMT_RGBA8_UNORM, ts->color, RHI_ASPECT_COLOR, s_ms.w,
+                       s_ms.h);
+    } else {
+        msaaFullscreen(RD_FS_DEPTH_UPSAMPLE, RHI_FMT_UNKNOWN, ts->depth, RHI_ASPECT_DEPTH, s_ms.w,
+                       s_ms.h);
+    }
+    g_rd.passSamples = 1;
+    rhi_cmd_end_render_pass(s_cl);
+    /* back in the attachment states, so a later read of SCENE transitions
+     * (and closes the epoch through the hook) */
+    rd__transition(s_cl, depth ? ts->depth : ts->color, depth ? &ts->depthState : &ts->colorState,
+                   depth ? RHI_STATE_DEPTH_WRITE : RHI_STATE_RENDER_TARGET);
+    s_ms.internal = false;
+}
+
+/* Whether the pass beginPass is about to open (colour c, depth d) draws into
+ * SCENE_MS, opening the epoch if need be; a pass on SCENE's colour or depth
+ * that cannot closes it */
+static bool msaaPass(Replay *r, RdTargetRec *c, RdTargetRec *d, uint32_t cid, uint32_t did)
+{
+    if (s_ms.want <= 1u || s_ms.ended || s_ms.internal) {
+        return false;
+    }
+    const uint32_t scene = RD_TARGET_SCENE + 1u;
+    const bool cScene = cid == scene && c->color.id == s_ms.sceneColor;
+    const bool dScene = d && did == scene && d->depth.id == s_ms.sceneDepth;
+    if (cScene && (!d || dScene)) {
+        return true; /* opened (msaaAttach) once the pass before has ended */
+    }
+    if (s_ms.active && (cScene || (d && did == scene))) {
+        msaaEnd(r);
+    }
+    return false;
+}
+
+/* Closes the epoch: the open pass (and a clear pending on SCENE) recorded
+ * into SCENE_MS, then the colour and depth the epoch drew resolved into
+ * SCENE's own textures */
+static void msaaEnd(struct Replay *r)
+{
+    if (!s_ms.active || s_ms.internal) {
+        return;
+    }
+    endPass(r); /* the run, the pass, a pending clear: still into SCENE_MS */
+    s_ms.active = false;
+    s_ms.ended = true;
+    RdTargetRec *ts = rd__target_rec(RD_TARGET_SCENE + 1);
+    if (!ts || ts->color.id != s_ms.sceneColor || ts->depth.id != s_ms.sceneDepth) {
+        return;
+    }
+    s_ms.internal = true;
+    rd__perf_post(s_cl, RD_PERF_POST_MSAA); /* the resolves' GPU time */
+    if (s_ms.colorLive) {
+        rd__transition(s_cl, s_ms.color, &s_ms.colorState, RHI_STATE_COPY_SRC);
+        rd__transition(s_cl, ts->color, &ts->colorState, RHI_STATE_COPY_DST);
+        rhi_cmd_resolve_color(s_cl, s_ms.color, ts->color);
+    }
+    if (s_ms.depthLive) {
+        rd__transition(s_cl, s_ms.depth, &s_ms.depthState, RHI_STATE_SHADER_READ);
+        rd__transition(s_cl, ts->depth, &ts->depthState, RHI_STATE_DEPTH_WRITE);
+        RhiRenderPassDesc p;
+        memset(&p, 0, sizeof(p));
+        p.depth.texture = ts->depth;
+        p.depth.depthLoad = RHI_LOAD_LOAD; /* every texel is written; the stencil kept */
+        p.depth.stencilLoad = RHI_LOAD_LOAD;
+        p.width = ts->tw;
+        p.height = ts->th;
+        rhi_cmd_begin_render_pass(s_cl, &p);
+        const RhiViewport vp = {0.0f, 0.0f, (float)ts->tw, (float)ts->th, 0.0f, 1.0f};
+        rhi_cmd_set_viewport(s_cl, &vp);
+        msaaFullscreen(RD_FS_DEPTH_RESOLVE, RHI_FMT_UNKNOWN, s_ms.depth, RHI_ASPECT_DEPTH, ts->tw,
+                       ts->th);
+        rhi_cmd_end_render_pass(s_cl);
+    }
+    rd__perf_post(s_cl, r ? r->perfPost : -1);
+    s_ms.internal = false;
+    g_rdPerf.msaaResolves++;
+}
+
+/* beginPass's attachments for a pass into SCENE_MS: the pair in its
+ * attachment states, an attachment the epoch has not drawn and the pass
+ * loads first spread from SCENE (msaaUpsample) */
+static void msaaAttach(RdTargetRec *c, RdTargetRec *d, RhiLoadOp colorLoad, RhiLoadOp depthLoad,
+                       RhiTexture *colorTex, RhiTexture *depthTex)
+{
+    if (!s_ms.active) {
+        /* the epoch opens: SCENE's textures in their attachment states, so
+         * any later read transitions them, which closes it (rd__transition) */
+        s_ms.internal = true;
+        rd__transition(s_cl, c->color, &c->colorState, RHI_STATE_RENDER_TARGET);
+        RdTargetRec *ts = rd__target_rec(RD_TARGET_SCENE + 1);
+        if (ts && ts->depth.id) {
+            rd__transition(s_cl, ts->depth, &ts->depthState, RHI_STATE_DEPTH_WRITE);
+        }
+        s_ms.internal = false;
+        s_ms.active = true;
+        s_ms.colorLive = s_ms.depthLive = false;
+    }
+    if (!s_ms.colorLive && colorLoad == RHI_LOAD_LOAD) {
+        msaaUpsample(c, 0);
+    }
+    s_ms.colorLive = true;
+    rd__transition(s_cl, s_ms.color, &s_ms.colorState, RHI_STATE_RENDER_TARGET);
+    *colorTex = s_ms.color;
+    if (d) {
+        if (!s_ms.depthLive && depthLoad == RHI_LOAD_LOAD) {
+            msaaUpsample(d, 1);
+        }
+        s_ms.depthLive = true;
+        rd__transition(s_cl, s_ms.depth, &s_ms.depthState, RHI_STATE_DEPTH_WRITE);
+        *depthTex = s_ms.depth;
+    }
+}
+
+/* doScreen: inside the epoch, a sprite command whose corners all lie on
+ * whole GS pixels (after the scaled target's snapping) would leave the
+ * outer half of its edge pixels' samples uncovered (its edges lie on pixel
+ * centres: the half-pixel rule).  Its quads are drawn half a texel up and
+ * left instead, with the origin's half texel dropped from FrameCB
+ * (msaaFrame), so the edges lie on pixel boundaries and every sample of
+ * the pixels the single-sampled draw covers is covered; the UVs move with
+ * them, so each pixel centre keeps its attribute.  False (nothing changed)
+ * for any other command. */
+static bool msaaSpriteExpand(const Replay *r, const RdTargetRec *tc, uint8_t prim,
+                             IcoSpriteVertex *o, uint32_t n)
+{
+    if (g_rd.passSamples <= 1 || prim != RD_PRIM_SPRITES || r->mirror || n == 0 || n % 6 != 0) {
+        return false;
+    }
+    for (uint32_t i = 0; i < n; i++) {
+        if ((o[i].x & 15u) != 0u || (o[i].y & 15u) != 0u) {
+            return false;
+        }
+    }
+    const float hx = 0.5f / (tc->sx > 0.0f ? tc->sx : 1.0f); /* half a texel, in GS pixels */
+    const float hy = 0.5f / (tc->sy > 0.0f ? tc->sy : 1.0f);
+    for (uint32_t i = 0; i < n; i += 6) {
+        IcoSpriteVertex *q = &o[i]; /* q0 q1 q2 q2 q1 q3 (expand) */
+        const float wx = (float)((int32_t)q[1].x - (int32_t)q[0].x) * (1.0f / 16.0f);
+        const float wy = (float)((int32_t)q[2].y - (int32_t)q[0].y) * (1.0f / 16.0f);
+        const float du = wx != 0.0f ? (q[1].u - q[0].u) / wx * hx : 0.0f;
+        const float dv = wy != 0.0f ? (q[2].v - q[0].v) / wy * hy : 0.0f;
+        for (int k = 0; k < 6; k++) {
+            q[k].u -= du;
+            q[k].v -= dv;
+        }
+    }
+    return true;
 }
 
 /* ---------------------------------------------------------------- actions */
@@ -934,9 +1441,16 @@ static void pendClear(Replay *r, uint32_t id, RdTargetRec *t, const float col[4]
 {
     r->writeSerial++;
     endPass(r);
-    rd__transition(s_cl, t->color, &t->colorState, RHI_STATE_RENDER_TARGET);
-    if (depth) {
-        rd__transition(s_cl, t->depth, &t->depthState, RHI_STATE_DEPTH_WRITE);
+    /* inside the MSAA epoch a clear of SCENE goes to SCENE_MS (the pass
+     * that takes it, beginPass): SCENE's own textures are not touched */
+    if (!(s_ms.active && t->color.id == s_ms.sceneColor)) {
+        /* the state of the pass that records it (beginPass): one transition */
+        rd__transition(s_cl, t->color, &t->colorState,
+                       passWantsReadable(t) ? RHI_STATE_RENDER_TARGET_READ
+                                            : RHI_STATE_RENDER_TARGET);
+        if (depth) {
+            rd__transition(s_cl, t->depth, &t->depthState, RHI_STATE_DEPTH_WRITE);
+        }
     }
     s_pend.r = r;
     s_pend.p.target = id;
@@ -1059,8 +1573,6 @@ static void setUvShift(float sx, float sy)
     s_uvShiftY = sy > 1.0f ? (sy - 1.0f) / (2.0f * sy) : 0.0f;
 }
 
-static float wideFor(const RdTargetRec *tc, int stretch);
-
 /* The mirror mode's UI flip.  The presenter flips the whole picture
  * (rd_present.c step 2), so an RD_SPACE_UI prim drawn into SCENE or
  * DISPLAY (the targets the present shows) is flipped here about the
@@ -1077,7 +1589,9 @@ static float wideFor(const RdTargetRec *tc, int stretch);
  * exactly the mirrored pixels for any 12.4 edge, and the attributes taken
  * at q are then the original's at p + 1/16: each triangle's UVs are moved
  * back by a sixteenth of a pixel's worth of their x gradient (sprites and
- * quads of the layout and the font: exact UVs).  Colours and Z are not
+ * quads of the layout and the font: exact UVs), and then on by
+ * kMirrorUvBias where they have one, so a sample on a texel's edge stays in
+ * the texel the GS takes.  Colours and Z are not
  * moved (1/16 of a pixel's step of a gradient).  Points are drawn as
  * one-pixel quads, so they follow the triangles.  Lines are reflected about
  * the pixel centre, X' = C - 1 - X.  On a scaled target "1" is one texel,
@@ -1096,6 +1610,11 @@ static uint16_t mirrorX(int32_t c16, float x)
     const int32_t i = (int32_t)(m < 0.0f ? m - 0.5f : m + 0.5f);
     return (uint16_t)(i < 0 ? 0 : (i > 0xFFFF ? 0xFFFF : i));
 }
+
+/* 1/512 texel: above the float error of an interpolated UV, under the
+ * GS's own steps (1/16 texel at a vertex), and not lost to a GPU's 8-bit
+ * subtexel nearest (it rounds onto the edge, which is the GS's texel) */
+static const float kMirrorUvBias = 1.0f / 512.0f;
 
 static void mirrorVerts(IcoSpriteVertex *o, uint32_t n, uint8_t topo, int32_t c16, float texel16)
 {
@@ -1116,9 +1635,16 @@ static void mirrorVerts(IcoSpriteVertex *o, uint32_t n, uint8_t topo, int32_t c1
             dudx = ((t[1].u - t[0].u) * by - (t[2].u - t[0].u) * ay) / det;
             dvdx = ((t[1].v - t[0].v) * by - (t[2].v - t[0].v) * ay) / det;
         }
+        /* the mirrored samples run against the gradient, so a GS sample on
+         * a texel's left edge (a 2x sprite's u = 0.5 + 0.5 k) can come out
+         * a hair under it where the target's NDC is not exact (688 wide)
+         * and the nearest texel is the one before: kMirrorUvBias moves
+         * the sample that much into the texel the GS takes (floor) */
+        const float bu = dudx != 0.0f ? kMirrorUvBias : 0.0f;
+        const float bv = dvdx != 0.0f ? kMirrorUvBias : 0.0f;
         for (int k = 0; k < 3; k++) {
-            t[k].u -= dudx;
-            t[k].v -= dvdx;
+            t[k].u += bu - dudx;
+            t[k].v += bv - dvdx;
             t[k].x = mirrorX(c16, (float)t[k].x + texel16 - 1.0f);
         }
     }
@@ -1131,7 +1657,7 @@ static void mirrorDraw(Replay *r, const RdTargetRec *tc, IcoSpriteVertex *o, uin
 {
     const int32_t ox = 2048 - (int32_t)(r->st.gsW >> 1);
     const int32_t c16 = 32 * ox + 16 * (int32_t)tc->w;
-    const float texels = tc->sx * wideFor(tc, r->stretch);
+    const float texels = tc->sx;
     mirrorVerts(o, n, topo, c16, 16.0f / (texels > 0.0f ? texels : 1.0f));
     r->mirror = 1;
 }
@@ -1251,7 +1777,7 @@ static RdScratch *scratchGet(uint32_t w, uint32_t h, int which)
             s->tex = rhi_create_texture(&(RhiTextureDesc){w, h, 1, RHI_FMT_RGBA8_UINT,
                                                           RHI_TEX_RENDER_TARGET | RHI_TEX_SAMPLED |
                                                               RHI_TEX_COPY_SRC | RHI_TEX_COPY_DST,
-                                                          "rd exact scratch"});
+                                                          "rd exact scratch", 0});
             s->state = RHI_STATE_UNDEFINED;
             s->w = w;
             s->h = h;
@@ -1368,7 +1894,7 @@ static bool takeSnap(Replay *r, RdTargetRec *tc, RhiRect area)
     endPass(r);
     if (!tc->snap.id) {
         tc->snap = rhi_create_texture(&(RhiTextureDesc){
-            tc->tw, tc->th, 1, tc->format, RHI_TEX_SAMPLED | RHI_TEX_COPY_DST, "rd snap"});
+            tc->tw, tc->th, 1, tc->format, RHI_TEX_SAMPLED | RHI_TEX_COPY_DST, "rd snap", 0});
         tc->snapState = RHI_STATE_UNDEFINED;
     }
     if (!tc->snap.id) {
@@ -1526,59 +2052,50 @@ static RhiTexture dateSnapshot(Replay *r, RdTargetRec *tc, uint32_t tcId, const 
     return sn->color;
 }
 
-/* -------------------------------------------------------- scale and wide
+/* ------------------------------------------------------- scale and frame
  * A target's texture is tw x th texels for its w x h GS pixels (sx, sy
  * texels per pixel; 1 in Original).  FrameCB keeps the GS size (g_target),
  * so every vertex lands where it did and the viewport, the scissor and the
  * copies are what scale; g_z.yz carries the scale for the shaders that
  * address a target by texel (fx_sprite_ps, fog_lut_ps).
  *
- * The wide x scale (4/3) / aspect applies, about the target's centre, to
- * draws into the scene-class targets (SCENE, WORK2, AURA_WORK, the shadow
- * count: RdTargetRec.wide), the meshes (vu_ndc) and the screen prims
- * alike, so CPU-projected and UI prims follow the wider projection and the
- * UI stays a centred 4:3 box.  Full-screen draws stretch instead: the
- * RD_SPACE_FULLSCREEN ones (rd_post.c's passes, the fog, layout_texture.c's
- * primary sprite) and any sprite that spans the target's whole width (the
- * clears, Shadow.c's resolve, the game's own full-screen fills). */
+ * The native frame: the scene-class targets are as wide in GS pixels as the
+ * display aspect asks (gsW, GsBase.c gsFrame.w; 512 at 4:3), the origin
+ * 2048 - gsW / 2, and nothing is squeezed or stretched: a world draw, a UI
+ * prim and a full-screen pass are each drawn at the GS X the game gave
+ * (the 2D layer's 640 grid lands on the frame's centre 2048 -+ 256; the
+ * game draws a full-frame item at the frame's width).  The only aspect term
+ * left is the region scale of the PS2's 4:3 window test (rd__region_scale). */
 
 static int32_t floorDiv16(int32_t v)
 {
     return v >= 0 ? v / 16 : -((-v + 15) / 16);
 }
 
-/* The scissor x0..x1 (inclusive GS pixels, inside 0..w-1) of a UI draw on
- * a target w pixels wide under the wide x scale f (the draw's x about w / 2
- * is multiplied by f, rd_frame.c).  A side that reaches the target's edge
- * stays there; the other follows the draw, rounded outwards, so the
- * scissor clips as much as the draw does.  f 1 leaves it alone. */
-void rd__wide_scissor(int32_t *x0, int32_t *x1, int32_t w, float f)
+/* A target of the native frame's GS size (SCENE, WORK2, AURA_WORK, the
+ * shadow count, a render-to-texture block the game sizes as the frame). */
+static int frameSized(const RdTargetRec *tc)
 {
-    if (f == 1.0f || f <= 0.0f) {
-        return;
+    return tc->w == g_rd.gsW && tc->h == g_rd.gsH;
+}
+
+float rd__region_scale(const RdTargetRec *tc)
+{
+    if (!tc || g_rd.gsW == ICO_FRAME_BASE_W || g_rd.gsW == 0 || !frameSized(tc)) {
+        return 1.0f;
     }
-    const float c = (float)w * 0.5f;
-    if (*x0 > 0) {
-        *x0 = (int32_t)floorf(c + f * ((float)*x0 - c));
-    }
-    if (*x1 < w - 1) {
-        *x1 = (int32_t)ceilf(c + f * ((float)(*x1 + 1) - c)) - 1;
-    }
+    return (float)ICO_FRAME_BASE_W / (float)g_rd.gsW;
 }
 
 /* GS pixels x0..x1, y0..y1 (inclusive, after XYOFFSET) of target tc in its
- * texels: the wide x scale f about the target's centre (rd__wide_scissor:
- * outwards, a side at or beyond the target's edge left alone; f 1 nothing),
- * the UI flip when mirror (GS pixel p is target pixel w - 1 - p),
+ * texels: the UI flip when mirror (GS pixel p is target pixel w - 1 - p),
  * clipped to the target, then the texel scale: GS pixels x0..x1 cover texels
- * floor(x0 * sx) .. ceil((x1 + 1) * sx) - 1.  f is at most 1 (the display's
- * aspect is 4:3 or wider), so a range inside the target stays inside and
- * the clip changes nothing for the scissor; a draw's box may start outside
- * (its vertices off the target's edge).  False when nothing is left. */
+ * floor(x0 * sx) .. ceil((x1 + 1) * sx) - 1.  A draw's box may start
+ * outside (its vertices off the target's edge).  False when nothing is
+ * left. */
 static bool gsRectToTexels(const RdTargetRec *tc, int32_t x0, int32_t y0, int32_t x1, int32_t y1,
-                           float f, int mirror, RhiRect *out)
+                           int mirror, RhiRect *out)
 {
-    rd__wide_scissor(&x0, &x1, (int32_t)tc->w, f);
     if (mirror) {
         const int32_t a = (int32_t)tc->w - 1 - x1, b = (int32_t)tc->w - 1 - x0;
         x0 = a;
@@ -1605,11 +2122,9 @@ static bool gsRectToTexels(const RdTargetRec *tc, int32_t x0, int32_t y0, int32_
 }
 
 /* the scissor (SCISSOR_1, inclusive GS pixels) in texels, clipped to the
- * target first.  A UI draw's x scale about the target's centre (the wide
- * factor) applies to a scissor that does not reach the edges; a flipped
- * UI draw clips where its scissor lands after the flip. */
-static bool scissorTexels(const RdTargetRec *tc, const RdStateBlock *st, int stretch, int uiPrim,
-                          int mirror, RhiRect *sc)
+ * target first; a flipped UI draw clips where its scissor lands after the
+ * flip. */
+static bool scissorTexels(const RdTargetRec *tc, const RdStateBlock *st, int mirror, RhiRect *sc)
 {
     int32_t x0 = st->scissor[0] < 0 ? 0 : st->scissor[0];
     int32_t y0 = st->scissor[1] < 0 ? 0 : st->scissor[1];
@@ -1618,13 +2133,13 @@ static bool scissorTexels(const RdTargetRec *tc, const RdStateBlock *st, int str
     if (x1 < x0 || y1 < y0) {
         return false;
     }
-    return gsRectToTexels(tc, x0, y0, x1, y1, uiPrim ? wideFor(tc, stretch) : 1.0f, mirror, sc);
+    return gsRectToTexels(tc, x0, y0, x1, y1, mirror, sc);
 }
 
 /* the scissor of the draw being bound, in texels */
 static bool scissorRect(const Replay *r, const RdTargetRec *tc, RhiRect *sc)
 {
-    return scissorTexels(tc, &r->st, r->stretch, r->uiPrim, r->mirror, sc);
+    return scissorTexels(tc, &r->st, r->mirror, sc);
 }
 
 static bool rectMeet(RhiRect a, RhiRect b, RhiRect *out)
@@ -1652,12 +2167,10 @@ static bool rectHolds(RhiRect outer, RhiRect inner)
  * (snapAxis), points drawn as one-pixel quads, lines reaching the pixels
  * next to them, the mirror's sixteenth of a texel and the half-line offset
  * of a field target; AA1 adds a one-pixel fringe outside every edge
- * (aa1Fringe).  The pad covers all of them, convVtx's clamp to the 12.4
- * range is applied to the box as to the vertices, and the box takes the
- * wide x scale the vertex shader gives the draw (every draw that is not
- * full-screen). */
+ * (aa1Fringe).  The pad covers all of them, and convVtx's clamp to the
+ * 12.4 range is applied to the box as to the vertices. */
 bool rd__screen_area(const RdTargetRec *tc, const RdStateBlock *st, const RdScreenVtx *v,
-                     uint32_t n, int stretch, int uiPrim, int mirror, int aa1, RhiRect *area)
+                     uint32_t n, int mirror, int aa1, RhiRect *area)
 {
     if (!tc || n == 0) {
         return false;
@@ -1677,9 +2190,8 @@ bool rd__screen_area(const RdTargetRec *tc, const RdStateBlock *st, const RdScre
     const int32_t ox = 2048 - (int32_t)(st->gsW >> 1), oy = 2048 - (int32_t)(st->gsH >> 1);
     RhiRect box, sc;
     if (!gsRectToTexels(tc, floorDiv16(lx) - ox - pad, floorDiv16(ly) - oy - pad,
-                        -floorDiv16(-hx) - ox + pad, -floorDiv16(-hy) - oy + pad,
-                        wideFor(tc, stretch), mirror, &box) ||
-        !scissorTexels(tc, st, stretch, uiPrim, mirror, &sc)) {
+                        -floorDiv16(-hx) - ox + pad, -floorDiv16(-hy) - oy + pad, mirror, &box) ||
+        !scissorTexels(tc, st, mirror, &sc)) {
         return false;
     }
     return rectMeet(box, sc, area);
@@ -1706,78 +2218,44 @@ bool rd__date_retake(uint32_t heldFor, uint32_t heldSerial, const RhiRect *held,
     return true;
 }
 
-static float wideFor(const RdTargetRec *tc, int stretch)
-{
-    return tc->wide && !stretch ? g_rd.wideX : 1.0f;
-}
-
-/* A sprite (vertices i and i + 1) the layout draws as a full-width band:
- * the first and last pixel it covers (ceil(x0), ceil(x1) - 1 in the target's
- * pixels) are within one of the target's two edges.  True for such a band. */
-static int bandSprite(const Replay *r, const RdTargetRec *tc, const RdScreenVtx *v, uint32_t i,
-                      int32_t *first, int32_t *last)
-{
-    const int32_t ox = 2048 - (int32_t)(r->st.gsW >> 1);
-    int32_t a = v[i].x, b = v[i + 1].x;
-    if (a > b) {
-        const int32_t t = a;
-        a = b;
-        b = t;
-    }
-    *first = -floorDiv16(-a) - ox;
-    *last = -floorDiv16(-b) - 1 - ox;
-    return *first <= 1 && *last >= (int32_t)tc->w - 2;
-}
-
-/* Whether a screen-prim command is full-screen: tagged so, or sprites that
- * cover the target's whole width (in GS pixels, after XYOFFSET).  A sprite
- * covers the pixels p with x0 <= p < x1 (the GS's top-left rule on the 1/16
- * grid); "the whole width" allows one pixel short at either edge, as the
- * layout's screen bands are drawn: the pause and End Game menus' black bars
- * (layout_texture.c, gif_SpriteSensitiveOffset) run from 1792.25 to
- * 2303.44, pixels 1..511 of 512. */
-static int screenStretch(const Replay *r, const RdTargetRec *tc, const RdScreenVtx *v, uint32_t n,
-                         uint8_t prim, uint8_t space)
-{
-    if (g_rd.wideX == 1.0f || !tc->wide) {
-        return 0;
-    }
-    if (space == RD_SPACE_FULLSCREEN) {
-        return 1;
-    }
-    if (prim != RD_PRIM_SPRITES || n < 2) {
-        return 0;
-    }
-    for (uint32_t i = 0; i + 1 < n; i += 2) {
-        int32_t first, last;
-        if (bandSprite(r, tc, v, i, &first, &last)) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
-/* Full pixel: the screen bands one pixel short of the target's edge
- * (bandSprite) reach the edge, so the strip the option shows beside them
- * is not a column of the picture under the bar.  Only the sprite's x
+/* Full pixel: a sprite the game tags RD_SPACE_FULLFRAME (a bar or fade that
+ * spans the frame: layout_texture.c's spanning items and primary sprite,
+ * the posts' rects) that ends one pixel short of the target's edge is moved
+ * to the edge, so the strip the option shows beside it is not a column of
+ * the picture under the bar.  "One pixel short" is the first and last pixel
+ * it covers (ceil(x0), ceil(x1) - 1 in the target's pixels) within tol of
+ * the target's two edges; tol is 1 and grows by one per 640 pixels of the
+ * target's width (the layout bars are inset 0.75 of a 640-grid unit on the
+ * right, which is more than a pixel on a wide frame).  Only the sprite's x
  * moves; its u stays, so the added pixel reads the sprite's own end texel
  * and the texture is never extrapolated.  Returns v, or a copy with the
- * bands moved (the recorded frame is never written).  Off, a
- * full-screen-space prim, a block target or no short band: v itself. */
-static const RdScreenVtx *widenBands(const Replay *r, const RdTargetRec *tc, const RdScreenVtx *v,
-                                     uint32_t n, uint8_t prim, uint8_t space)
+ * bands moved (the recorded frame is never written).  Off, a space that is
+ * not FULLFRAME, a target that is not frame-sized or no short band: v
+ * itself.  The tag is the whole rule: nothing is detected from the pixels. */
+static const RdScreenVtx *extendFullFrame(const Replay *r, const RdTargetRec *tc,
+                                          const RdScreenVtx *v, uint32_t n, uint8_t prim,
+                                          uint8_t space)
 {
     static RdScreenVtx *s_wv;
     static uint32_t s_wvCap;
-    if (!g_rd.settings.fullPixel || !tc || !tc->wide || tc->wideBlock ||
-        space == RD_SPACE_FULLSCREEN || prim != RD_PRIM_SPRITES || n < 2) {
+    if (!g_rd.settings.fullPixel || !tc || !frameSized(tc) || space != RD_SPACE_FULLFRAME ||
+        prim != RD_PRIM_SPRITES || n < 2) {
         return v;
     }
     const RdScreenVtx *src = v;
     const int32_t ox = 2048 - (int32_t)(r->st.gsW >> 1);
+    const int32_t tol = 1 + ((int32_t)tc->w - 1) / 640;
     for (uint32_t i = 0; i + 1 < n; i += 2) {
-        int32_t first, last;
-        if (!bandSprite(r, tc, v, i, &first, &last) || (first <= 0 && last >= (int32_t)tc->w - 1)) {
+        int32_t a = v[i].x, b = v[i + 1].x;
+        if (a > b) {
+            const int32_t t = a;
+            a = b;
+            b = t;
+        }
+        const int32_t first = -floorDiv16(-a) - ox;
+        const int32_t last = -floorDiv16(-b) - 1 - ox;
+        if (first > tol || last < (int32_t)tc->w - 1 - tol ||
+            (first <= 0 && last >= (int32_t)tc->w - 1)) {
             continue;
         }
         if (src == v) {
@@ -1819,27 +2297,11 @@ typedef struct DrawSetup {
     uint32_t tw, th, tfmt;
     int textured;
     int mipmapped;   /* the image texture has generated mips */
-    int wideBlock;   /* the texture is a widened render-to-texture block (RdTargetRec.wideBlock) */
     int replacement; /* texture packs: the image texture is a pack replacement */
     int gsLevels;    /* the image texture's GS levels as uploaded (RdTexRec.gsLevels), 0 none:
                         sampled at the GS's level (DF_GS_LOD) */
     int screenCopy;  /* a screen-space pass, not geometry (screenCopy): no added half pixel */
 } DrawSetup;
-
-/* Widescreen reflections: whether the draw samples a block that
- * rd__target_scale_of widened by the display aspect. */
-static int samplesWideBlock(const Replay *r, const DrawSetup *ds)
-{
-    if (!ds->textured || !r->st.ds.texEnabled) {
-        return 0;
-    }
-    const RdTexRec *t = rd__tex_rec(r->st.tex);
-    if (!t || t->kind == RD_TEXKIND_IMAGE) {
-        return 0;
-    }
-    const RdTargetRec *src = rd__target_rec(t->target);
-    return src && src->wideBlock;
-}
 
 /* Whether a screen prim is a screen-space pass rather than geometry: a
  * sprite whose texture is a render target (the shadow pass's and the
@@ -1854,7 +2316,7 @@ static int screenCopy(const Replay *r, const DrawSetup *ds, uint8_t prim, uint8_
     if (prim != RD_PRIM_SPRITES) {
         return 0;
     }
-    if (space == RD_SPACE_FULLSCREEN) {
+    if (space == RD_SPACE_FULLFRAME) {
         return 1;
     }
     if (!ds->textured || !r->st.ds.texEnabled) {
@@ -1873,30 +2335,6 @@ static uint32_t drawOffset(const Replay *r, const DrawSetup *ds)
         return r->st.useOffset & ~(uint32_t)RD_TARGET_HALF_Y;
     }
     return r->st.useOffset;
-}
-
-/* The u (normalised) a stretched draw that samples a widened block has at
- * the target's centre: the vertices furthest left and right, interpolated
- * (exact for the full-width sprite puddle.c's copy draws).  0.5 otherwise,
- * where fillDrawCB does not need it. */
-static void blockCentre(Replay *r, const DrawSetup *ds, const IcoSpriteVertex *o, uint32_t n)
-{
-    r->blockCs = 0.5f;
-    if (!ds->wideBlock || !r->stretch || n == 0 || ds->tw == 0) {
-        return;
-    }
-    uint32_t lo = 0, hi = 0;
-    for (uint32_t i = 1; i < n; i++) {
-        lo = o[i].x < o[lo].x ? i : lo;
-        hi = o[i].x > o[hi].x ? i : hi;
-    }
-    if (o[hi].x > o[lo].x) {
-        /* the centre in 12.4 window coordinates: ox + w / 2, ox as bindDraw */
-        const float xc =
-            16.0f * (float)(2048 - (int32_t)(r->st.gsW >> 1)) + 8.0f * (float)ds->tc->w;
-        const float t = (xc - (float)o[lo].x) / (float)(o[hi].x - o[lo].x);
-        r->blockCs = (o[lo].u + t * (o[hi].u - o[lo].u)) / (float)ds->tw;
-    }
 }
 
 /* Texture packs: a replacement's UVs are normalised by the GS size of the
@@ -1924,9 +2362,19 @@ static void replacementUv(uint32_t tex, DrawSetup *ds)
 static int drawGsLevels(const Replay *r, const DrawSetup *ds)
 {
     const RdTexRec *t = ds->textured && r->st.ds.texEnabled ? rd__tex_rec(r->st.tex) : NULL;
-    if (!t || t->kind != RD_TEXKIND_IMAGE || t->replacement || t->gsLevels < 2 ||
-        ds->tex.id != t->rhi.id || t->mipLevels < 2) {
+    if (!t || t->kind != RD_TEXKIND_IMAGE || t->replacement || ds->tex.id != t->rhi.id ||
+        t->mipLevels < 2) {
         return 0;
+    }
+    if (t->gsLevels < 2) {
+        /* the Original preset: a texture whose TIM2 levels are reductions of
+         * its base (RdTexRec.gsLevels 0) at the GS's level too, over the
+         * chain built from the base (texLevels).  PCSX2 draws the title's
+         * castle (TEX1 MXL 1 to 3, K -10.3 to -11.9) at levels 1 to 3, where
+         * level 0 had every brick sharp */
+        return g_rd.settings.preset == RD_PRESET_ORIGINAL && rd_tex1_mipmapped(r->st.tex1Lod)
+                   ? t->mipLevels
+                   : 0;
     }
     return t->mipLevels < t->gsLevels ? t->mipLevels : t->gsLevels;
 }
@@ -1937,10 +2385,7 @@ static int drawGsLevels(const Replay *r, const DrawSetup *ds)
 static bool prepareDraw(Replay *r, DrawSetup *ds, const RhiRect *dateArea)
 {
     memset(ds, 0, sizeof(*ds));
-    r->stretch = 0;    /* doScreen decides for screen prims after this */
-    r->mirror = 0;     /* likewise */
-    r->uiPrim = 0;     /* doScreen and doScreenWrap set it */
-    r->blockCs = 0.5f; /* likewise (blockCentre) */
+    r->mirror = 0; /* likewise */
     ds->tc = rd__target_rec(r->st.color);
     if (!ds->tc || !ds->tc->color.id) {
         return false;
@@ -1958,7 +2403,6 @@ static bool prepareDraw(Replay *r, DrawSetup *ds, const RhiRect *dateArea)
     ds->tex = resolveTexture(r, ds->tc, r->st.color, &ds->tw, &ds->th, &ds->tfmt, &ds->textured,
                              &ds->mipmapped);
     replacementUv(r->st.tex, ds);
-    ds->wideBlock = samplesWideBlock(r, ds);
     ds->gsLevels = drawGsLevels(r, ds);
     return true;
 }
@@ -1988,7 +2432,8 @@ static RdWrap drawWrap(const Replay *r, const DrawSetup *ds, RdWrap w)
  * the scissor leaves nothing to draw.  With scOut the scissor is returned
  * (doScreen sets it when it draws) instead of set, and the sampler's id
  * with it. */
-static RhiBindGroup bindDrawEx(Replay *r, const DrawSetup *ds, RhiRect *scOut, uint32_t *smpOut)
+static RhiBindGroup bindDrawEx(Replay *r, const DrawSetup *ds, RhiRect *scOut, uint32_t *smpOut,
+                               bool keepStorage)
 {
     RdTargetRec *tc = ds->tc;
     /* scissor (SCISSOR_1, inclusive) clipped to the target, in texels */
@@ -2004,29 +2449,37 @@ static RhiBindGroup bindDrawEx(Replay *r, const DrawSetup *ds, RhiRect *scOut, u
                          drawWrap(r, ds, (RdWrap)r->st.ds.wrap.t), ds->mipmapped, ds->replacement);
     RhiBindGroup g2 = rd__tex_group_date(ds->tex, smp, ds->dateTex);
 
-    if (!r->passOpen || r->passColor != r->st.color || r->passDepth != ds->tdId) {
+    /* a storage pass (the exact blend) stays open for the callers that
+     * choose the pass kind per draw (keepStorage: doScreen, the VU draws,
+     * the fog); every other draw needs the colour attachment */
+    if (!r->passOpen || r->passColor != r->st.color || r->passDepth != ds->tdId ||
+        (r->passStorage && !keepStorage)) {
         beginPass(r, tc, ds->tdId ? rd__target_rec(ds->tdId) : NULL, r->st.color, ds->tdId,
-                  RHI_LOAD_LOAD, NULL, RHI_LOAD_LOAD, 0.0f);
+                  RHI_LOAD_LOAD, NULL, RHI_LOAD_LOAD, 0.0f, false);
     }
     const uint32_t useOffset = drawOffset(r, ds);
     const uint32_t fk[6] = {r->st.color, r->st.gsW,     r->st.gsH,
-                            useOffset,   r->passSerial, (uint32_t)r->stretch};
+                            useOffset,   r->passSerial, r->picture};
     if (memcmp(fk, r->frameKey, sizeof(fk)) != 0) {
-        /* XYOFFSET = (2048 - w/2, 2048 - h/2) (+ the preset's field offset
-         * when useOffset; zero in Original) */
+        /* XYOFFSET = (2048 - w/2, 2048 - h/2), w the native frame's width
+         * (+ the preset's field offset when useOffset; zero in Original) */
         float ox = 2048.0f - (float)(r->st.gsW >> 1);
         float oy = 2048.0f - (float)(r->st.gsH >> 1);
         if (useOffset & RD_TARGET_HALF_Y) {
             oy += 0.5f; /* the flip's sceGsSetHalfOffset */
         }
+        s_framePicture = r->picture;
+        s_framePictureFrameH = r->st.gsH;
         r->frameBG = rd__frame_group_ex(tc->w, tc->h, ox, oy, rd__target_z_scale(ds->tdId),
-                                        wideFor(tc, r->stretch), tc->sx, tc->sy);
+                                        rd__region_scale(tc), tc->sx, tc->sy);
+        s_framePicture = s_framePictureFrameH = 0;
         memcpy(r->frameKey, fk, sizeof(fk));
     }
     if (scOut) {
         *scOut = sc;
         *smpOut = smp.id;
     } else {
+        r->sc = sc;
         rhi_cmd_set_scissor(s_cl, &sc);
     }
     return g2;
@@ -2034,7 +2487,107 @@ static RhiBindGroup bindDrawEx(Replay *r, const DrawSetup *ds, RhiRect *scOut, u
 
 static RhiBindGroup bindDraw(Replay *r, const DrawSetup *ds)
 {
-    return bindDrawEx(r, ds, NULL, NULL);
+    return bindDrawEx(r, ds, NULL, NULL, false);
+}
+
+/* bindDraw for a draw that picks its pass kind per pass (dstPassMode) */
+static RhiBindGroup bindDrawKeep(Replay *r, const DrawSetup *ds)
+{
+    return bindDrawEx(r, ds, NULL, NULL, true);
+}
+
+/* ------------------------------------------------- the exact blend's passes
+ * rd_dst_read.c.  The destination-read mode a draw into the open pass takes:
+ * the one in force, on a single-sampled RGBA8 target made for it, and for
+ * the attachment read a pass begun readable; RD_BLEND_EXACT_OFF otherwise
+ * (the fixed-function blend). */
+static int dstModeFor(const Replay *r)
+{
+    const int m = g_rd.dstMode;
+    if (m == RD_BLEND_EXACT_OFF || !r->passOpen || g_rd.passSamples > 1) {
+        return RD_BLEND_EXACT_OFF;
+    }
+    const RdTargetRec *tc = rd__target_rec(r->passColor);
+    if (!tc || tc->format != RHI_FMT_RGBA8_UNORM) {
+        return RD_BLEND_EXACT_OFF;
+    }
+    if (m == RD_BLEND_EXACT_ATTACHMENT) {
+        return r->passReadable ? m : RD_BLEND_EXACT_OFF;
+    }
+    return (tc->dstUsage & 1u) ? m : RD_BLEND_EXACT_OFF;
+}
+
+/* The planned passes as drawn into the open pass: the exact blend's images
+ * (rd__expand_dst), then the two-pass fallback's (rd__expand_no_dual); at
+ * most 4 for a plan of 2 (each pass becomes at most two). */
+static int expandPassesMode(const RdDrawPass *in, int n, int mode, RdDrawPass out[8])
+{
+    if (mode == RD_BLEND_EXACT_OFF && g_rd.dstMode != RD_BLEND_EXACT_OFF) {
+        for (int i = 0; i < n; i++) {
+            if (in[i].dstWant) {
+                rd__log_once(RD_ONCE_DST_FIXED,
+                             "blend: a draw in the MSAA epoch or on a target of another format "
+                             "keeps the fixed-function blend");
+            }
+        }
+    }
+    RdDrawPass dx[4];
+    int m = 0;
+    for (int i = 0; i < n && i < 2; i++) {
+        const int nd = rd__expand_dst(&in[i], 1, mode, dx);
+        m += rd__expand_no_dual(dx, nd, out + m);
+    }
+    return m;
+}
+
+static int expandPasses(const Replay *r, const RdDrawPass *in, int n, RdDrawPass out[8])
+{
+    return expandPassesMode(in, n, dstModeFor(r), out);
+}
+
+/* The open pass as the kind a pass's key draws in: a storage pass for a
+ * storage destination read, else one with the colour attached.  Begun
+ * again on the same targets (loaded) when it is the other kind, the
+ * scissor set again. */
+static void dstPassMode(Replay *r, const RdPipeKeyInt *k)
+{
+    const bool storage = k->dst == RHI_DST_READ_STORAGE;
+    if (!r->passOpen || (r->passStorage != 0) == storage) {
+        return;
+    }
+    const uint32_t cid = r->passColor, did = r->passDepth;
+    RdTargetRec *c = rd__target_rec(cid);
+    if (!c) {
+        return;
+    }
+    /* the draw's scissor (a screen run the switch draws first sets its own) */
+    const RhiRect sc = r->sc;
+    beginPass(r, c, did ? rd__target_rec(did) : NULL, cid, did, RHI_LOAD_LOAD, NULL, RHI_LOAD_LOAD,
+              0.0f, storage);
+    r->sc = sc;
+    rhi_cmd_set_scissor(s_cl, &sc);
+}
+
+/* group 3 of a destination-read key: the open pass's target, as a storage
+ * texture or as its input attachment; nothing for the other keys */
+static void dstBind(Replay *r, const RdPipeKeyInt *k)
+{
+    if (k->dst == RHI_DST_READ_NONE || !r->passOpen) {
+        return;
+    }
+    if (!r->dstGroup.id || r->dstGroupSerial != r->passSerial) {
+        RdTargetRec *c = rd__target_rec(r->passColor);
+        RhiBinding b;
+        memset(&b, 0, sizeof(b));
+        b.slot = 0;
+        b.type =
+            k->dst == RHI_DST_READ_STORAGE ? RHI_BIND_STORAGE_TEXTURE : RHI_BIND_INPUT_ATTACHMENT;
+        b.texture = c ? c->color : (RhiTexture){0};
+        r->dstGroup = bindGroup(
+            k->dst == RHI_DST_READ_STORAGE ? g_rd.layoutDstStorage : g_rd.layoutDstAttach, &b, 1);
+        r->dstGroupSerial = r->passSerial;
+    }
+    rhi_cmd_set_bind_group(s_cl, 3, r->dstGroup);
 }
 
 static RhiSampler gsLodSampler(const Replay *r, const DrawSetup *ds)
@@ -2095,8 +2648,10 @@ static void fillDrawCB(const Replay *r, const RdDrawPass *dp, const DrawSetup *d
         }
     }
     cb->mode[1] = r->st.ds.texa | (ds->tfmt << 8);
-    if (dp->key.fs == RD_FS_SPRITE_TEXA || dp->key.fs == RD_FS_VU_TEXA) {
-        /* the sampler state the TEXA shaders' four-tap filter reproduces;
+    if (dp->key.fs == RD_FS_SPRITE_TEXA || dp->key.fs == RD_FS_VU_TEXA ||
+        (dp->key.fs == RD_FS_SPRITE_STQ && rd__gs_filter_int(&r->st))) {
+        /* the sampler state the TEXA shaders' four-tap filter reproduces
+         * (and sprite_stq_ps's, for GS levels: rd__gs_filter_int);
          * minified pixels of a texture texSampler upgrades (the Enhanced
          * trilinear or anisotropic filter) keep the sampler */
         const RdDrawState *d = &r->st.ds;
@@ -2124,22 +2679,6 @@ static void fillDrawCB(const Replay *r, const RdDrawPass *dp, const DrawSetup *d
     cb->tex[3] = 1.0f / (float)ds->th;
     if (dp->key.fs == RD_FS_FONT_SHEET) {
         sheetParam(rd__tex_rec(r->st.tex), cb->param);
-    }
-    if (ds->wideBlock) {
-        /* Widescreen reflections: the block holds its 4:3 picture
-         * compressed about its centre by f.  The game computed the draw's
-         * u for the 4:3 block, at the 4:3 position of what the pixel
-         * shows; that position is the pixel's for a draw that is itself
-         * compressed (fd = f on a wide target, or any draw on a target
-         * that is not wide), and c + (u - c) / f about the draw's u at the
-         * centre c for one stretched across a wide target (fd = 1).  So
-         * u' = 0.5 + f (u_4:3 - 0.5) = z u + w (sprite_ps, vu_ps). */
-        const float f = g_rd.wideX;
-        const float fd = wideFor(ds->tc, r->stretch);
-        const float ft = ds->tc->wide ? f : 1.0f;
-        const float z = f * fd / ft, c = r->blockCs;
-        cb->scale[2] = z;
-        cb->scale[3] = 0.5f + f * (c - 0.5f) - z * c;
     }
 }
 
@@ -2362,12 +2901,16 @@ static void flushScreenRun(Replay *r)
     const uint64_t off = rd__ring_alloc(bytes, 16);
     if (off != ~0ull) {
         memcpy(g_rd.ringMap[s_slot] + off, s_runVx, (size_t)bytes);
+        /* the open pass is the kind the run was recorded in (doScreen
+         * switches before it records a run of the other kind) */
+        r->sc = q->sc;
         rhi_cmd_set_scissor(s_cl, &q->sc);
         rhi_cmd_set_vertex_buffer(s_cl, 0, g_rd.ring[s_slot], off);
         rhi_cmd_set_pipeline(s_cl, q->pipe);
         rd__bind_uniform(s_cl, 0, q->frame);
         rd__bind_uniform(s_cl, 1, rd__draw_group(&q->cb));
         rhi_cmd_set_bind_group(s_cl, 2, q->g2);
+        dstBind(r, &q->key);
         rhi_cmd_draw(s_cl, q->count, 0, 1);
         if (q->passes == 2 && q->pipe2.id) {
             /* the two-pass fallback's alpha pass over the same vertices */
@@ -2375,6 +2918,7 @@ static void flushScreenRun(Replay *r)
             rd__bind_uniform(s_cl, 0, q->frame);
             rd__bind_uniform(s_cl, 1, rd__draw_group(&q->cb2));
             rhi_cmd_set_bind_group(s_cl, 2, q->g2);
+            dstBind(r, &q->key2);
             rhi_cmd_draw(s_cl, q->count, 0, 1);
         }
         g_rdPerf.screenDraws++; /* one draw of the run, however many passes */
@@ -2500,8 +3044,8 @@ static bool joinsRun(const Replay *r, const ScreenRun *n)
 static bool drawExpanded(Replay *r, const RdDrawPass *pass, const DrawSetup *ds, RhiBindGroup g2,
                          uint32_t count, uint32_t first)
 {
-    RdDrawPass ex[4];
-    const int ne = rd__expand_no_dual(pass, 1, ex);
+    RdDrawPass ex[8];
+    const int ne = expandPasses(r, pass, 1, ex); /* the exact blend, the two-pass fallback */
     bool any = false;
     for (int j = 0; j < ne; j++) {
         RhiPipeline p = rd__get_pipeline(&ex[j].key);
@@ -2514,10 +3058,12 @@ static bool drawExpanded(Replay *r, const RdDrawPass *pass, const DrawSetup *ds,
         }
         IcoDrawCB cb;
         fillDrawCB(r, &ex[j], ds, &cb);
+        dstPassMode(r, &ex[j].key); /* a storage pass for a storage destination read */
         rhi_cmd_set_pipeline(s_cl, p);
         rd__bind_uniform(s_cl, 0, r->frameBG);
         rd__bind_uniform(s_cl, 1, rd__draw_group(&cb));
         rhi_cmd_set_bind_group(s_cl, 2, g2);
+        dstBind(r, &ex[j].key);
         rhi_cmd_draw(s_cl, count, first, 1);
     }
     return any;
@@ -2532,9 +3078,25 @@ static bool dateAreaFor(const Replay *r, const RdCmd *c, const RdScreenVtx *v, u
 {
     const RdTargetRec *tcA = rd__target_rec(r->st.color);
     return r->st.ds.test.date != RD_DATE_OFF && tcA &&
-           rd__screen_area(tcA, &r->st, v, n, screenStretch(r, tcA, v, n, c->b[0], c->b[1]),
-                           c->b[1] == RD_SPACE_UI, mirrorUi(r, c->b[1]),
-                           r->st.aa1 && aa1Prim(c->b[0]), area);
+           rd__screen_area(tcA, &r->st, v, n, mirrorUi(r, c->b[1]), r->st.aa1 && aa1Prim(c->b[0]),
+                           area);
+}
+
+/* FrameCB of an expanded sprite in the MSAA epoch (msaaSpriteExpand): the
+ * draw's, without the half texel */
+static RdUniform msaaFrame(const Replay *r, const DrawSetup *ds)
+{
+    const RdTargetRec *tc = ds->tc;
+    float ox = 2048.0f - (float)(r->st.gsW >> 1);
+    float oy = 2048.0f - (float)(r->st.gsH >> 1);
+    if (drawOffset(r, ds) & RD_TARGET_HALF_Y) {
+        oy += 0.5f;
+    }
+    s_frameNoHalf = true;
+    const RdUniform u = rd__frame_group_ex(tc->w, tc->h, ox, oy, rd__target_z_scale(ds->tdId),
+                                           rd__region_scale(tc), tc->sx, tc->sy);
+    s_frameNoHalf = false;
+    return u;
 }
 
 static void doScreen(Replay *r, const RdFrame *f, const RdCmd *c)
@@ -2555,7 +3117,7 @@ static void doScreen(Replay *r, const RdFrame *f, const RdCmd *c)
     }
     const uint32_t n = c->u[1];
     const RdScreenVtx *v = (const RdScreenVtx *)(f->payload + c->u[0]);
-    v = widenBands(r, rd__target_rec(r->st.color), v, n, c->b[0], c->b[1]);
+    v = extendFullFrame(r, rd__target_rec(r->st.color), v, n, c->b[0], c->b[1]);
     RhiRect dateArea;
     const RhiRect *dateAt = dateAreaFor(r, c, v, n, &dateArea) ? &dateArea : NULL;
     if (!prepareDraw(r, &ds, dateAt)) {
@@ -2564,9 +3126,7 @@ static void doScreen(Replay *r, const RdFrame *f, const RdCmd *c)
     ds.screenCopy = screenCopy(r, &ds, c->b[0], c->b[1]);
 
     /* geometry */
-    r->stretch = screenStretch(r, ds.tc, v, n, c->b[0], c->b[1]);
-    r->uiPrim = c->b[1] == RD_SPACE_UI;
-    setUvShift(ds.tc->sx * wideFor(ds.tc, r->stretch), ds.tc->sy);
+    setUvShift(ds.tc->sx, ds.tc->sy);
     uint8_t topo;
     IcoSpriteVertex *out = vxScratch((uint64_t)n * 6);
     if (!out) {
@@ -2577,7 +3137,6 @@ static void doScreen(Replay *r, const RdFrame *f, const RdCmd *c)
     if (nv == 0) {
         return;
     }
-    blockCentre(r, &ds, out, nv);
     if (mirrorUi(r, c->b[1])) {
         mirrorDraw(r, ds.tc, out, nv, topo); /* the mirror mode's UI flip */
     }
@@ -2642,10 +3201,14 @@ static void doScreen(Replay *r, const RdFrame *f, const RdCmd *c)
         stride = sizeof(*ax);
     }
     ScreenRun nr;
-    nr.g2 = bindDrawEx(r, &ds, &nr.sc, &nr.sampler);
+    nr.g2 = bindDrawEx(r, &ds, &nr.sc, &nr.sampler, true);
     if (!nr.g2.id) {
         return;
     }
+    /* the MSAA epoch: integer-aligned sprites cover whole pixels */
+    const bool msExpand = g_rd.passSamples > 1 && vb == (const void *)out &&
+                          msaaSpriteExpand(r, ds.tc, c->b[0], out, nv);
+    const RdUniform frame = msExpand ? msaaFrame(r, &ds) : r->frameBG;
 
     /* one pass drawn whole joins a run (the AFAIL split and AA1's split
      * interior and fringes are two draws, which do not join a run: merged,
@@ -2657,19 +3220,30 @@ static void doScreen(Replay *r, const RdFrame *f, const RdCmd *c)
             /* AA1 lines: all fringe, drawn with Z write off */
             one.key.gs.zwrite = RD_ZWRITE_OFF;
         }
-        /* the two-pass fallback's colour and alpha passes */
-        RdDrawPass ex[4];
-        const int ne = rd__expand_no_dual(&one, 1, ex);
+        /* the exact blend's pass and the two-pass fallback's colour and
+         * alpha passes; a run draws its passes in one pass kind, so the
+         * storage path's split (a storage colour pass and a depth pass
+         * with the colour attached) draws below, as the split passes do */
+        RdDrawPass ex[8];
+        const int ne = expandPasses(r, &one, 1, ex);
+        const bool runnable = ne == 1 || (ne == 2 && (ex[0].key.dst == RHI_DST_READ_STORAGE) ==
+                                                         (ex[1].key.dst == RHI_DST_READ_STORAGE));
+        if (!runnable) {
+            goto immediate;
+        }
         RhiPipeline p = rd__get_pipeline(&ex[0].key);
         if (!p.id) {
             return;
         }
+        /* the open pass of the kind the run draws in (a run of the other
+         * kind is drawn by the switch, in its own) */
+        dstPassMode(r, &ex[0].key);
         nr.key = ex[0].key;
         nr.count = nDraw;
         nr.stride = stride;
         nr.prim = c->b[0];
         nr.pipe = p;
-        nr.frame = r->frameBG;
+        nr.frame = frame;
         fillDrawCB(r, &ex[0], &ds, &nr.cb);
         nr.passes = (uint8_t)ne;
         memset(&nr.key2, 0, sizeof(nr.key2));
@@ -2712,14 +3286,18 @@ static void doScreen(Replay *r, const RdFrame *f, const RdCmd *c)
         return;
     }
 
+immediate:
     flushScreenRun(r);
     const uint64_t drawOff = rd__ring_alloc((uint64_t)nDraw * stride, 16);
     if (drawOff == ~0ull) {
         return;
     }
     memcpy(g_rd.ringMap[s_slot] + drawOff, vb, (size_t)nDraw * stride);
+    r->sc = nr.sc; /* a pass begun again for the exact blend takes it back */
     rhi_cmd_set_scissor(s_cl, &nr.sc);
     rhi_cmd_set_vertex_buffer(s_cl, 0, g_rd.ring[s_slot], drawOff);
+    const RdUniform frameKept = r->frameBG;
+    r->frameBG = frame; /* drawExpanded binds it */
     for (int i = 0; i < np; i++) {
         if (!drawExpanded(r, &dp[i], &ds, nr.g2, (!aa1 || nFirst == nDraw) ? nDraw : nFirst, 0)) {
             continue;
@@ -2745,6 +3323,7 @@ static void doScreen(Replay *r, const RdFrame *f, const RdCmd *c)
             r->writeSerial++;
         }
     }
+    r->frameBG = frameKept;
 }
 
 /* ------------------------------------------------ the presentation overlay
@@ -3003,10 +3582,7 @@ static void doScreenWrap(Replay *r, const RdFrame *f, const RdCmd *c)
     ds.screenCopy = screenCopy(r, &ds, c->b[0], c->b[1]);
     RdTargetRec *tc = ds.tc;
     RdTargetRec *td = ds.tdId ? rd__target_rec(ds.tdId) : NULL;
-    r->stretch = screenStretch(r, tc, (const RdScreenVtx *)(f->payload + c->u[0]), c->u[1], c->b[0],
-                               c->b[1]);
-    r->uiPrim = c->b[1] == RD_SPACE_UI;
-    setUvShift(tc->sx * wideFor(tc, r->stretch), tc->sy);
+    setUvShift(tc->sx, tc->sy);
     if (tc->format != RHI_FMT_RGBA8_UNORM || (td && (td->tw != tc->tw || td->th != tc->th))) {
         rd__log_once(RD_ONCE_WRAP, "COLCLAMP 0 draw on a non-RGBA8 target or a depth of another "
                                    "size: not drawn");
@@ -3028,7 +3604,6 @@ static void doScreenWrap(Replay *r, const RdFrame *f, const RdCmd *c)
     if (nv == 0) {
         return;
     }
-    blockCentre(r, &ds, out, nv);
     if (mirrorUi(r, c->b[1])) {
         mirrorDraw(r, tc, out, nv, topo); /* the mirror mode's UI flip */
     }
@@ -3059,7 +3634,7 @@ static void doScreenWrap(Replay *r, const RdFrame *f, const RdCmd *c)
         }
         s_wrapAcc = rhi_create_texture(&(RhiTextureDesc){tc->tw, tc->th, 1, RHI_FMT_RGBA16F,
                                                          RHI_TEX_RENDER_TARGET | RHI_TEX_SAMPLED,
-                                                         "rd wrap accumulator"});
+                                                         "rd wrap accumulator", 0});
         s_wrapAccState = RHI_STATE_UNDEFINED;
         s_wrapW = tc->tw;
         s_wrapH = tc->th;
@@ -3118,7 +3693,7 @@ static void doScreenWrap(Replay *r, const RdFrame *f, const RdCmd *c)
     rhi_cmd_set_pipeline(s_cl, pa);
     rd__bind_uniform(s_cl, 0,
                      rd__frame_group_ex(tc->w, tc->h, ox, oy, rd__target_z_scale(ds.tdId),
-                                        wideFor(tc, r->stretch), tc->sx, tc->sy));
+                                        rd__region_scale(tc), tc->sx, tc->sy));
     rd__bind_uniform(s_cl, 1, rd__draw_group(&cb));
     rhi_cmd_set_bind_group(s_cl, 2, rd__tex_group(ds.tex, smp));
     rhi_cmd_set_vertex_buffer(s_cl, 0, g_rd.ring[s_slot], vOff);
@@ -3127,7 +3702,7 @@ static void doScreenWrap(Replay *r, const RdFrame *f, const RdCmd *c)
     rd__transition(s_cl, s_wrapAcc, &s_wrapAccState, RHI_STATE_SHADER_READ);
 
     /* 2. (Cd + acc) mod 256 into the target */
-    beginPass(r, tc, NULL, r->st.color, 0, RHI_LOAD_LOAD, NULL, RHI_LOAD_LOAD, 0.0f);
+    beginPass(r, tc, NULL, r->st.color, 0, RHI_LOAD_LOAD, NULL, RHI_LOAD_LOAD, 0.0f, false);
     rhi_cmd_set_scissor(s_cl, &sc);
     IcoDrawCB rb;
     memset(&rb, 0, sizeof(rb));
@@ -3286,7 +3861,7 @@ static void vuDraw(Replay *r, const RdStateBlock *s, const DrawSetup *ds, RhiBin
         return;
     }
     const uint64_t ua = rhi_limits()->uniformAlign;
-    RdDrawPass pl[2], dp[4];
+    RdDrawPass pl[2], dp[8];
     const int npl = rd__plan_screen_draw(s, RD_PRIM_TRIANGLES, RD_SPACE_WORLD, ds->tc->format,
                                          ds->depthFmt, pl);
     for (int i = 0; i < npl; i++) {
@@ -3295,7 +3870,8 @@ static void vuDraw(Replay *r, const RdStateBlock *s, const DrawSetup *ds, RhiBin
         /* the planner's sprite_texa_ps becomes vu_texa_ps */
         pl[i].key.fs = pl[i].key.fs == RD_FS_SPRITE_TEXA ? RD_FS_VU_TEXA : RD_FS_VU;
     }
-    const int np = rd__expand_no_dual(pl, npl, dp); /* two passes without dual-source blend */
+    /* the exact blend's passes, two passes without dual-source blend */
+    const int np = expandPasses(r, pl, npl, dp);
     const RdStateBlock saved = r->st;
     r->st = *s; /* fillDrawCB reads the state the passes were planned from */
     for (int i = 0; i < np; i++) {
@@ -3311,10 +3887,12 @@ static void vuDraw(Replay *r, const RdStateBlock *s, const DrawSetup *ds, RhiBin
             continue;
         }
         const uint32_t offs[3] = {(uint32_t)dOff, (uint32_t)vOff, (uint32_t)bonesOff};
+        dstPassMode(r, &dp[i].key); /* a storage pass for a storage destination read */
         rhi_cmd_set_pipeline(s_cl, p);
         rd__bind_uniform(s_cl, 0, r->frameBG);
         rhi_cmd_set_bind_group_offsets(s_cl, 1, g1, offs, 3);
         rhi_cmd_set_bind_group(s_cl, 2, g2);
+        dstBind(r, &dp[i].key);
         if (indexed) {
             rhi_cmd_draw_indexed(s_cl, count, first, 0, 1);
         } else {
@@ -3330,47 +3908,18 @@ static void vuDraw(Replay *r, const RdStateBlock *s, const DrawSetup *ds, RhiBin
     r->st = saved;
 }
 
-/* The parts of a draw of mesh m that has closing planes (RdMeshRec.wideHidden,
- * rd_mesh.c markWideHidden) on a target under the wide x scale f: the 4:3
- * picture, GS pixels 0..w of the target before the scale, which lands on
- * texels (w/2)(1 - f) sx .. (w/2)(1 + f) sx (rounded outwards, so a texel
- * the 4:3 picture touches stays in it), and the two sides beside it, each
- * met with the draw's scissor.  dropWide[k] is set for the sides, which
- * draw without the planes (ICO_VU_DROP_WIDE).  Every texel is in one part,
- * and a part draws its triangles in the same order as the single draw:
- * inside the 4:3 picture the result is that draw's, bit for bit.  0 (draw
- * once, the scissor as bound) for a mesh without planes, f 1 (4:3, the
- * Original preset, a stretched draw, a target that is not wide) or an
- * empty scissor. */
-static int vuWideParts(const Replay *r, const DrawSetup *ds, const RdMeshRec *m, RhiRect *part,
-                       int *dropWide)
+static void doVuDraw(Replay *r, const RdFrame *f, const RdCmd *c);
+
+/* A VU draw under its camera's picture (Replay.picture: the frame group's
+ * g_frame.yz) */
+static void doVu(Replay *r, const RdFrame *f, const RdCmd *c)
 {
-    const RdTargetRec *tc = ds->tc;
-    const float f = wideFor(tc, r->stretch);
-    RhiRect sc;
-    if (!m || !m->wideHidden || f == 1.0f || !scissorRect(r, tc, &sc)) {
-        return 0;
-    }
-    const float c = (float)tc->w * 0.5f;
-    int64_t x0 = (int64_t)floorf((c - f * c) * tc->sx);
-    int64_t x1 = (int64_t)ceilf((c + f * c) * tc->sx);
-    x0 = x0 < 0 ? 0 : (x0 > (int64_t)tc->tw ? (int64_t)tc->tw : x0);
-    x1 = x1 < x0 ? x0 : (x1 > (int64_t)tc->tw ? (int64_t)tc->tw : x1);
-    const RhiRect side[3] = {
-        {(int32_t)x0, 0, (uint32_t)(x1 - x0), tc->th},
-        {0, 0, (uint32_t)x0, tc->th},
-        {(int32_t)x1, 0, (uint32_t)((int64_t)tc->tw - x1), tc->th},
-    };
-    int n = 0;
-    for (int i = 0; i < 3; i++) {
-        if (side[i].w && rectMeet(side[i], sc, &part[n])) {
-            dropWide[n++] = i != 0;
-        }
-    }
-    return n;
+    r->picture = (uint32_t)c->b[3] | ((uint32_t)c->b[6] << 8);
+    doVuDraw(r, f, c);
+    r->picture = 0;
 }
 
-static void doVu(Replay *r, const RdFrame *f, const RdCmd *c)
+static void doVuDraw(Replay *r, const RdFrame *f, const RdCmd *c)
 {
     RdVuPayload p;
     const uint8_t *at = f->payload + c->u[1];
@@ -3395,10 +3944,6 @@ static void doVu(Replay *r, const RdFrame *f, const RdCmd *c)
     if (!prepareDraw(r, &ds, NULL)) {
         return;
     }
-    /* a model the game draws as a full-screen item (rd_mesh.c pushVu's
-     * b[3]) is stretched across a wide target like a full-screen sprite
-     * (screenStretch): no wide x scale, the whole width's scissor */
-    r->stretch = c->b[3] && g_rd.wideX != 1.0f && ds.tc->wide;
     const uint64_t ua = rhi_limits()->uniformAlign;
     /* bones: VuBoneCB (VU memory 16..255); a zero block for the others */
     uint64_t bonesOff;
@@ -3476,7 +4021,7 @@ static void doVu(Replay *r, const RdFrame *f, const RdCmd *c)
                 }
             }
         }
-        RhiBindGroup g2 = bindDraw(r, &ds);
+        RhiBindGroup g2 = bindDrawKeep(r, &ds);
         if (!g2.id) {
             return;
         }
@@ -3486,7 +4031,7 @@ static void doVu(Replay *r, const RdFrame *f, const RdCmd *c)
         return;
     }
     if (c->type == RDC_PARTICLES) {
-        RhiBindGroup g2 = bindDraw(r, &ds);
+        RhiBindGroup g2 = bindDrawKeep(r, &ds);
         if (!g2.id) {
             return;
         }
@@ -3495,7 +4040,7 @@ static void doVu(Replay *r, const RdFrame *f, const RdCmd *c)
         return;
     }
     /* static and skinned meshes */
-    RhiBindGroup g2 = bindDraw(r, &ds);
+    RhiBindGroup g2 = bindDrawKeep(r, &ds);
     if (!g2.id) {
         return;
     }
@@ -3504,43 +4049,23 @@ static void doVu(Replay *r, const RdFrame *f, const RdCmd *c)
     if (last > m->batchCount || p.batchCount == 0) {
         last = m->batchCount;
     }
-    /* a mesh with closing planes on a wide target: once per part of the
-     * scissor, the 4:3 picture with every triangle and the sides beside it
-     * without the planes (vuWideParts); else once as it is */
-    RhiRect part[3];
-    int dropWide[3];
-    const int nParts = vuWideParts(r, &ds, m, part, dropWide);
-    for (int k = 0; k < (nParts > 0 ? nParts : 1); k++) {
-        IcoVuCB pv = vcb;
-        if (nParts > 0) {
-            rhi_cmd_set_scissor(s_cl, &part[k]);
-            if (dropWide[k]) {
-                pv.draw[2] |= ICO_VU_DROP_WIDE;
-            }
-        }
-        if (p.clip != RD_VU_CLIP_SCISSOR) {
-            const RdVuBatchRec *b0 = &m->batches[p.firstBatch], *b1 = &m->batches[last - 1];
-            vuDraw(r, &r->st, &ds, g2, p.prog, vs, streamBuf, streamBufSize, streamOff, streamSize,
-                   &pv, bonesOff, 1, b0->firstIndex,
-                   b1->firstIndex + b1->indexCount - b0->firstIndex);
-            continue;
-        }
-        IcoVuCB cut = pv, kick = pv;
-        cut.draw[2] |= ICO_VU_CUT_ONLY;
-        kick.draw[2] |= ICO_VU_KICK_ONLY;
-        RdStateBlock fan = r->st;
-        fan.ds.abe = 1; /* the fans' PRIM is the common block's 0x5D: ABE on */
-        for (uint32_t b = p.firstBatch; b < last; b++) {
-            const RdVuBatchRec *br = &m->batches[b];
-            vuDraw(r, &fan, &ds, g2, p.prog, vs, streamBuf, streamBufSize, streamOff, streamSize,
-                   &cut, bonesOff, 1, br->firstIndex, br->indexCount);
-            vuDraw(r, &r->st, &ds, g2, p.prog, vs, streamBuf, streamBufSize, streamOff, streamSize,
-                   &kick, bonesOff, 1, br->firstIndex, br->indexCount);
-        }
+    if (p.clip != RD_VU_CLIP_SCISSOR) {
+        const RdVuBatchRec *b0 = &m->batches[p.firstBatch], *b1 = &m->batches[last - 1];
+        vuDraw(r, &r->st, &ds, g2, p.prog, vs, streamBuf, streamBufSize, streamOff, streamSize,
+               &vcb, bonesOff, 1, b0->firstIndex, b1->firstIndex + b1->indexCount - b0->firstIndex);
+        return;
     }
-    RhiRect sc;
-    if (nParts > 0 && scissorRect(r, ds.tc, &sc)) {
-        rhi_cmd_set_scissor(s_cl, &sc); /* the draw's own, as bindDraw set it */
+    IcoVuCB cut = vcb, kick = vcb;
+    cut.draw[2] |= ICO_VU_CUT_ONLY;
+    kick.draw[2] |= ICO_VU_KICK_ONLY;
+    RdStateBlock fan = r->st;
+    fan.ds.abe = 1; /* the fans' PRIM is the common block's 0x5D: ABE on */
+    for (uint32_t b = p.firstBatch; b < last; b++) {
+        const RdVuBatchRec *br = &m->batches[b];
+        vuDraw(r, &fan, &ds, g2, p.prog, vs, streamBuf, streamBufSize, streamOff, streamSize, &cut,
+               bonesOff, 1, br->firstIndex, br->indexCount);
+        vuDraw(r, &r->st, &ds, g2, p.prog, vs, streamBuf, streamBufSize, streamOff, streamSize,
+               &kick, bonesOff, 1, br->firstIndex, br->indexCount);
     }
 }
 
@@ -3828,7 +4353,7 @@ static void shadowReduce(Replay *r, RdTargetRec *tc)
         }
         s_shadowRed = rhi_create_texture(&(RhiTextureDesc){tc->w, tc->h, 1, RHI_FMT_RGBA8_UNORM,
                                                            RHI_TEX_RENDER_TARGET | RHI_TEX_SAMPLED,
-                                                           "rd shadow count reduced"});
+                                                           "rd shadow count reduced", 0});
         s_shadowRedState = RHI_STATE_UNDEFINED;
         s_shadowRedW = tc->w;
         s_shadowRedH = tc->h;
@@ -3883,7 +4408,8 @@ static void doShadowResolve(Replay *r)
     }
     static const float zero[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     r->writeSerial++;
-    beginPass(r, tc, td, r->st.color, r->st.depth, RHI_LOAD_CLEAR, zero, RHI_LOAD_LOAD, 0.0f);
+    beginPass(r, tc, td, r->st.color, r->st.depth, RHI_LOAD_CLEAR, zero, RHI_LOAD_LOAD, 0.0f,
+              false);
     const RhiRect all = {0, 0, tc->tw, tc->th};
     rhi_cmd_set_scissor(s_cl, &all);
     RdUniform g0 = rd__frame_group(tc->tw, tc->th, 0.0f, 0.0f);
@@ -3954,6 +4480,7 @@ void rd__scene_caches_free(void)
     s_wrapW = s_wrapH = 0;
     rd__depth_copy_free(&s_fogDepth);
     rd__fog_buffer_free();
+    msaaFree(); /* the MSAA scene pair (remade at SCENE's size) */
 }
 
 void rd__fog_shutdown(void)
@@ -3981,10 +4508,10 @@ static void doFog(Replay *r, const RdFrame *f, const RdCmd *c)
         rd__log_once(RD_ONCE_FOG, "fog without a LUT, a depth source or a colour target: skipped");
         return;
     }
-    RdDrawPass pl[2], dp[4];
+    RdDrawPass pl[2], dp[8];
     const int buffer = g_rd.fogPath == RD_FOG_BUFFER;
-    const int np = rd__expand_no_dual(pl, rd__fog_plan(&r->st, tc->format, buffer, pl), dp);
-    if (np == 0) {
+    const int npl = rd__fog_plan(&r->st, tc->format, buffer, pl);
+    if (npl == 0) {
         return;
     }
 
@@ -4013,13 +4540,12 @@ static void doFog(Replay *r, const RdFrame *f, const RdCmd *c)
     setUvShift(tc->sx, tc->sy); /* the fog sprite on a scaled target */
     const uint32_t nv = expand(v, 2, RD_PRIM_SPRITES, 1, (float)tz->w, (float)tz->h, noOff, out,
                                &topo, r->st.gouraud != 0);
-    memcpy(g_rd.ringMap[s_slot] + vOff, out, (size_t)nv * sizeof(out[0]));
     memcpy(g_rd.ringMap[s_slot] + lOff, f->payload + p.lutOffset, 256 * 4);
 
     endPass(r);
     if (!s_fogLut.id) {
         s_fogLut = rhi_create_texture(&(RhiTextureDesc){
-            256, 1, 1, RHI_FMT_RGBA8_UNORM, RHI_TEX_SAMPLED | RHI_TEX_COPY_DST, "rd fog lut"});
+            256, 1, 1, RHI_FMT_RGBA8_UNORM, RHI_TEX_SAMPLED | RHI_TEX_COPY_DST, "rd fog lut", 0});
         s_fogLutState = RHI_STATE_UNDEFINED;
     }
     if (!s_fogLut.id) {
@@ -4027,9 +4553,32 @@ static void doFog(Replay *r, const RdFrame *f, const RdCmd *c)
     }
     /* the GS's BITBLT of the Z buffer to 0x2800: the depth in place, its
      * copy, or its words (g_rd.fogPath); the pass below binds the colour
-     * target alone whichever it is */
+     * target alone whichever it is.  Inside the MSAA epoch, with sample-rate
+     * shading and SCENE's depth drawn in it, the fog runs per sample on
+     * SCENE_MS reading its depth (fog_lut_ms_ps) and the epoch stays open;
+     * otherwise the read below closes it (the fog of the resolved picture) */
     RdFogSource src;
-    if (!rd__fog_source(s_cl, tz, &s_fogDepth, &src) || src.buffer != buffer) {
+    const uint32_t scene = RD_TARGET_SCENE + 1u;
+    /* a fog on SCENE while the MSAA epoch is open blends fixed-function
+     * whichever depth it reads: per sample it draws in the epoch (no
+     * destination read there, rd_dst_read.c), and the fog of the resolved
+     * picture stands in for that one on a device without sample-rate
+     * shading, so it blends the same way rather than exactly */
+    const bool fogEpoch = s_ms.active && zid == scene && r->st.color == scene;
+    const bool fogMs = !s_fogResolvedForced && s_ms.active && s_ms.depthLive && zid == scene &&
+                       r->st.color == scene && !buffer && rhi_limits()->sampleRateShading &&
+                       g_rd.fs[RD_FS_FOG_MS].id &&
+                       (!g_rd.noDual || g_rd.fsNoDual[RD_FS_FOG_MS].id) && !rd__fog_probe_wanted();
+    if (fogMs) {
+        memset(&src, 0, sizeof(src));
+        rd__transition(s_cl, s_ms.depth, &s_ms.depthState, RHI_STATE_SHADER_READ);
+        src.tex = s_ms.depth;
+        src.state = &s_ms.depthState;
+        src.aspect = RHI_ASPECT_DEPTH;
+        for (int i = 0; i < npl; i++) {
+            pl[i].key.fs = RD_FS_FOG_MS;
+        }
+    } else if (!rd__fog_source(s_cl, tz, &s_fogDepth, &src) || src.buffer != buffer) {
         return;
     }
     rd__transition(s_cl, s_fogLut, &s_fogLutState, RHI_STATE_COPY_DST);
@@ -4047,15 +4596,25 @@ static void doFog(Replay *r, const RdFrame *f, const RdCmd *c)
     ds.th = tz->h;
     ds.textured = 1;
     ds.screenCopy = 1; /* it reads the depth texel under each pixel */
-    r->stretch = 1;    /* the fog sprite covers the screen */
     /* no prepareDraw here: the per-draw flags it resets are reset here, so
-     * the previous draw's mirror (scissorRect) is not inherited */
+     * the previous draw's mirror (scissorRect) is not inherited.  The fog
+     * sprite covers the native frame as drawn */
     r->mirror = 0;
-    r->uiPrim = 0;
-    r->blockCs = 0.5f;
-    if (!bindDraw(r, &ds).id) {
+    if (!bindDrawKeep(r, &ds).id) {
         return;
     }
+    /* the planned passes as drawn in this pass: the exact blend's (the fog
+     * is a LERP, ALPHA 0x44), the two-pass fallback's */
+    const int np =
+        fogEpoch ? expandPassesMode(pl, npl, RD_BLEND_EXACT_OFF, dp) : expandPasses(r, pl, npl, dp);
+    /* per sample in the epoch the sprite covers whole pixels, as doScreen's
+     * integer-aligned sprites (msaaSpriteExpand): drawn as is, its top and
+     * left edges would lie on the pixel centres of the frame's first row
+     * and column, leaving half their samples unfogged */
+    const bool msExpand =
+        fogMs && g_rd.passSamples > 1 && msaaSpriteExpand(r, tc, RD_PRIM_SPRITES, out, nv);
+    const RdUniform frame = msExpand ? msaaFrame(r, &ds) : r->frameBG;
+    memcpy(g_rd.ringMap[s_slot] + vOff, out, (size_t)nv * sizeof(out[0]));
     RhiBinding b[3];
     memset(b, 0, sizeof(b));
     b[0].slot = 1;
@@ -4088,10 +4647,12 @@ static void doFog(Replay *r, const RdFrame *f, const RdCmd *c)
         cb.param[2] = src.sabotaged ? 1.0f : 0.0f; /* ICO_RD_FOG_SABOTAGE: reads give 0 */
         cb.scale[0] = tz->sx;                      /* the depth's texels per GS pixel */
         cb.scale[1] = tz->sy;
+        dstPassMode(r, &dp[i].key); /* a storage pass for a storage destination read */
         rhi_cmd_set_pipeline(s_cl, pipe);
-        rd__bind_uniform(s_cl, 0, r->frameBG);
+        rd__bind_uniform(s_cl, 0, frame);
         rd__bind_uniform(s_cl, 1, rd__draw_group(&cb));
         rhi_cmd_set_bind_group(s_cl, 2, g2);
+        dstBind(r, &dp[i].key);
         rhi_cmd_draw(s_cl, nv, 0, 1);
         if (!rd__no_dual_second(dp, i)) {
             g_rd.stats.draws++;
@@ -4156,7 +4717,7 @@ static bool blurUvAxis(int32_t x0, int32_t x1, int32_t u0, int32_t u1, float ss,
  * target until narrowed).  The destination (dstRead: blend, DATE, AFAIL
  * RGB_ONLY) is read at the fragment's own texel, and fragments are the
  * pixels with x0 <= X < x1 of the sprite's rect (fx_sprite_ps's coverage)
- * inside the scissor bindDraw sets (r->stretch is the draw's already):
+ * inside the scissor bindDraw sets:
  * that box padded by two GS pixels (the half-line offset, rounding), in
  * texels.  Sampling itself (selfSample), the texture is read at the UVs:
  * blurUvAxis on each axis, the whole target under REPEAT.  Both: the box
@@ -4174,8 +4735,7 @@ static void blurSnapArea(const Replay *r, const RdTargetRec *tc, const RdPostRec
         RhiRect box, sc;
         if (x1 > x0 && y1 > y0 &&
             gsRectToTexels(tc, floorDiv16(x0 - ox) - 2, floorDiv16(y0 - oy) - 2,
-                           -floorDiv16(-(x1 - ox)) + 2, -floorDiv16(-(y1 - oy)) + 2, 1.0f, 0,
-                           &box) &&
+                           -floorDiv16(-(x1 - ox)) + 2, -floorDiv16(-(y1 - oy)) + 2, 0, &box) &&
             scissorRect(r, tc, &sc) && !rectMeet(box, sc, &dst)) {
             dst = whole; /* nothing covered: kept as it was */
         }
@@ -4293,7 +4853,7 @@ static void doBlurSpriteDraw(Replay *r, const RdFrame *f, const RdCmd *c)
         RdCmd sc = *c;
         sc.type = RDC_SCREEN;
         sc.b[0] = RD_PRIM_SPRITES;
-        sc.b[1] = RD_SPACE_FULLSCREEN;
+        sc.b[1] = RD_SPACE_FULLFRAME;
         sc.b[2] = 1;
         sc.u[0] = screenVtx;
         sc.u[1] = 2;
@@ -4357,12 +4917,10 @@ static void doBlurSpriteDraw(Replay *r, const RdFrame *f, const RdCmd *c)
                         d->test.date != RD_DATE_OFF ||
                         (d->test.ate && d->test.afail == RD_AFAIL_RGB_ONLY);
     const int selfSample = src == tc;
-    r->stretch = 1; /* fx_rect_vs covers the target; no wide x scale */
     /* as doFog: prepareDraw's other per-draw flags, not the previous draw's
-     * (the scissor and blurSnapArea read mirror) */
+     * (the scissor and blurSnapArea read mirror); fx_rect_vs covers the
+     * target in its own GS pixels */
     r->mirror = 0;
-    r->uiPrim = 0;
-    r->blockCs = 0.5f;
     if (blurSpriteClears(r, tc, &p, d, textured, dstRead, useDepth)) {
         /* a clear instead of a full-target draw (blurSpriteClears) */
         const uint32_t a = p.rgba[3] | (d->fba ? 0x80u : 0u);
@@ -4482,8 +5040,9 @@ static void doBlurSprite(Replay *r, const RdFrame *f, const RdCmd *c)
 
 /* ----------------------------------------------------------------- frame */
 
-/* The levels a game texture gets: the full chain with the
- * Enhanced filter on and power-of-two sides, else 1 (Original). */
+/* The levels a game texture gets: the full chain with power-of-two sides
+ * under the Enhanced filter or in the Original preset (where only the draws
+ * whose TEX1 mipmaps reach past level 0: drawGsLevels), else 1. */
 static uint8_t texLevels(const RdTexRec *t)
 {
     if (t->replacement) {
@@ -4492,8 +5051,9 @@ static uint8_t texLevels(const RdTexRec *t)
     if (t->gsLevels > 1 && t->gsChain) {
         return t->gsLevels; /* the TIM2's own levels, whatever the filter */
     }
-    if (!g_rd.filterUpgrade || rd__texel_is_coverage(t->format) || t->w < 2 || t->h < 2 ||
-        (t->w & (t->w - 1)) || (t->h & (t->h - 1))) {
+    if ((!g_rd.filterUpgrade && g_rd.settings.preset != RD_PRESET_ORIGINAL) ||
+        rd__texel_is_coverage(t->format) || t->w < 2 || t->h < 2 || (t->w & (t->w - 1)) ||
+        (t->h & (t->h - 1))) {
         return 1;
     }
     uint8_t n = 1;
@@ -4628,6 +5188,17 @@ static bool ensureRing(uint64_t need)
         RHI_MEM_UPLOAD, "rd ring"});
     g_rd.ringMap[s_slot] = g_rd.ring[s_slot].id ? rhi_map_buffer(g_rd.ring[s_slot]) : NULL;
     g_rd.ringCap[s_slot] = g_rd.ringMap[s_slot] ? cap : 0;
+    /* issue 58: a frame that uploads many pack replacements at once (a
+       stage change) can need a ring of hundreds of MB; the ring never
+       shrinks, so its large sizes are named in the log */
+    if (!g_rd.ringMap[s_slot]) {
+        rd__log("the upload ring of frame slot %d could not grow to %llu MB (this frame needs "
+                "%llu MB)",
+                (int)s_slot, (unsigned long long)(cap >> 20), (unsigned long long)(need >> 20));
+    } else if (cap >= (64ull << 20)) {
+        rd__log("the upload ring of frame slot %d grows to %llu MB (this frame needs %llu MB)",
+                (int)s_slot, (unsigned long long)(cap >> 20), (unsigned long long)(need >> 20));
+    }
     return g_rd.ringMap[s_slot] != NULL;
 }
 
@@ -4710,9 +5281,9 @@ static int uploadReplacement(RdTexRec *t)
         return 1;
     }
     if (!t->rhi.id) {
-        t->rhi = rhi_create_texture(&(RhiTextureDesc){t->w, t->h, p->levels,
-                                                      rd__texel_rhi_format(t->format),
-                                                      RHI_TEX_SAMPLED | RHI_TEX_COPY_DST, t->name});
+        t->rhi = rhi_create_texture(
+            &(RhiTextureDesc){t->w, t->h, p->levels, rd__texel_rhi_format(t->format),
+                              RHI_TEX_SAMPLED | RHI_TEX_COPY_DST, t->name, 0});
         t->state = RHI_STATE_UNDEFINED;
         t->mipLevels = (uint8_t)p->levels;
         if (!t->rhi.id) {
@@ -4738,6 +5309,14 @@ static int uploadReplacement(RdTexRec *t)
         if (!map) {
             if (own.id) {
                 rhi_destroy_buffer(own);
+            }
+            /* issue 58: the replacement waits for a later replay; named once */
+            static int s_ownFailLogged;
+            if (!s_ownFailLogged) {
+                s_ownFailLogged = 1;
+                rd__log("textures: no room for the %llu MB upload of \"%s\" (%ux%u); it waits "
+                        "for a later frame (reported once)",
+                        (unsigned long long)(bytes >> 20), t->name, t->w, t->h);
             }
             return 0;
         }
@@ -4831,7 +5410,7 @@ static void uploadTextures(void)
         if (!t->rhi.id) {
             t->rhi = rhi_create_texture(
                 &(RhiTextureDesc){t->w, t->h, levels, rd__texel_rhi_format(t->format),
-                                  RHI_TEX_SAMPLED | RHI_TEX_COPY_DST, "rd texture"});
+                                  RHI_TEX_SAMPLED | RHI_TEX_COPY_DST, "rd texture", 0});
             t->state = RHI_STATE_UNDEFINED;
             t->mipLevels = levels;
             if (!t->rhi.id) {
@@ -4952,11 +5531,16 @@ static void clearNewTargets(void)
             continue;
         }
         t->clearPending = 0;
-        rd__transition(s_cl, t->color, &t->colorState, RHI_STATE_RENDER_TARGET);
+        /* in the state the target's passes take (beginPass): no transition
+         * back and forth between this pass and the next */
+        const bool readable = passWantsReadable(t);
+        rd__transition(s_cl, t->color, &t->colorState,
+                       readable ? RHI_STATE_RENDER_TARGET_READ : RHI_STATE_RENDER_TARGET);
         RhiRenderPassDesc p;
         memset(&p, 0, sizeof(p));
         p.color[0].texture = t->color;
         p.color[0].load = RHI_LOAD_CLEAR;
+        p.color[0].readable = readable;
         p.colorCount = 1;
         if (t->withDepth && t->depth.id) {
             rd__transition(s_cl, t->depth, &t->depthState, RHI_STATE_DEPTH_WRITE);
@@ -5069,6 +5653,7 @@ static bool replayFrame(const RdFrame *f, int keep, bool present)
     t = t1;
     const double bind0 = g_rdPerf.bindMs;
 
+    g_rd.frameWExact = f->wExact; /* the present's exact width (rd__frame_wexact) */
     if (f->hasCamera) {
         rd__set_replay_camera(&f->camera);
     }
@@ -5077,6 +5662,7 @@ static bool replayFrame(const RdFrame *f, int keep, bool present)
     r.st = f->startState;
     r.perfPost = -1;
     memset(&s_pend, 0, sizeof(s_pend)); /* no clear pending from another replay */
+    msaaFrameBegin(&r);                 /* the MSAA epoch's count and scene pair */
     const uint32_t headHalf = sceneHeadHalf(f);
     for (int l = rd__first_list(keep); l < RD_LIST_COUNT; l++) {
         const RdCmdList *list = &f->lists[l];
@@ -5152,7 +5738,9 @@ static bool replayFrame(const RdFrame *f, int keep, bool present)
         flushScreenRun(&r); /* a run does not cross a list (its timestamp) */
         rd__perf_stamp(s_cl, RD_PERF_TS_LIST0 + (uint32_t)l);
     }
+    msaaEnd(&r); /* an epoch still open: SCENE resolved before anything reads it */
     endPass(&r);
+    s_ms.r = NULL;
     if (doPresent) {
         rd__present_record(s_cl);
         rd__perf_stamp(s_cl, RD_PERF_TS_PRESENT);
@@ -5305,7 +5893,7 @@ bool rd__camera_probe(const RdCamera *cam, const float p[4], float out[3][4])
 
     RhiTexture t = rhi_create_texture(&(RhiTextureDesc){PW, PH, 1, RHI_FMT_RGBA8_UNORM,
                                                         RHI_TEX_RENDER_TARGET | RHI_TEX_COPY_SRC,
-                                                        "rd camera probe"});
+                                                        "rd camera probe", 0});
     RhiState ts = RHI_STATE_UNDEFINED;
     if (!t.id) {
         return false;

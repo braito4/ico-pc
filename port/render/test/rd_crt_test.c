@@ -43,7 +43,17 @@
  *             its ctx the output, its solid quad drawn after the filter
  *             (every pixel its flat colour), the main overlay's quad still
  *             in the filtered picture (its rows vary)
+ *   wide crop a 688 frame at 16:9 (W5): the grid 682 columns, the 3 a
+ *             side past the exact width never in the box (white there, all
+ *             black), columns 3 and 684 at its edges; under Trinitron's
+ *             grille at strength 1 a row's columns light the channels of the
+ *             4:3 run's at the same 3 output pixels a source pixel
  * Without a device, also:
+ *   wide grid the grid at 512, 688 (16:9), 1376 (32:9), 2560 (60:9): the
+ *             columns cropped (0, 3, 5, 0) and the grid's width, the films'
+ *             512, and the filter's box of the grid's shape: output pixels
+ *             a source pixel the 4:3 run's at 768 and 1152 lines (the 4:3
+ *             box itself at 512)
  *   highlights the CPU model of crt_ps over a flat field
  *             (rd__crt_beam, the mask's weights and gains, rd__crt_strength_at,
  *             rd__crt_triad_top, rd__crt_gain_fade, rd__crt_glow_mix,
@@ -556,6 +566,11 @@ static void recordFrame(RdTex t, int rich)
 
 static uint8_t s_out[OUT_MAX];
 
+/* the RdBlendExact the last present() drew with (rd_dst_read.c): kGold
+ * is the fixed-function blend's (rd_crt_fixed), kGoldExact the attachment
+ * read's */
+static int s_presentExact;
+
 /* rd_init with s, the frame, the present into s_out; false without a device */
 static bool present(const RdSettings *s, int rich)
 {
@@ -569,6 +584,7 @@ static bool present(const RdSettings *s, int rich)
     bool ok = n <= OUT_MAX && rd__read_present(s_out, n, &w, &h) && w == s->outputWidth &&
               h == s->outputHeight;
     CHECK(ok, "readback of the %ux%u present", s->outputWidth, s->outputHeight);
+    s_presentExact = (int)rd_blend_exact();
     rd_destroy_texture(t);
     rd_shutdown();
     return ok;
@@ -588,21 +604,35 @@ static RdSettings outputSettings(uint32_t w, uint32_t h)
 
 static bool s_llvmpipe;
 
-/* rd_present_test.c GOLD_PRESENT: the rich frame's 960 x 720 present */
-#define GOLD_OFF 0xedb088b74a237351ull
+/* rd_present_test.c GOLD_PRESENT: the rich frame's 960 x 720 present;
+ * GOLD_PRESENT_EXACT under the exact blend's attachment read */
+#define GOLD_OFF 0x9089548e05b4f69eull
+#define GOLD_OFF_EXACT 0xea894ace64f1d717ull
 
 /* The presents of the rich frame through each mode (llvmpipe, LLVM 19.1.7,
  * this file's frame; the phosphors per output pixel, the leak and the
  * per-triad gain; the flat face counted by column edges, which moves PVM's
  * columns on a stripe's edge at 1920 x 1440; the highlights: the glow
  * mixed in, the gains' fade, the eased strength, the shoulder):
- * [mode - 1][0] 960 x 720, [1] 1920 x 1440 */
+ * [mode - 1][0] 960 x 720, [1] 1920 x 1440; recorded again for the GS
+ * bilinear as PCSX2 filters (gs_bilerp: the reduction's DISPLAY changed) */
 static const uint64_t kGold[RD_CRT_MODE_COUNT - 1][2] = {
-    {0xb63d6f980571913bull, 0x06ebfa2d69b427ceull}, /* scanlines */
-    {0x1bec04fe55e213f3ull, 0x2baabca46892a927ull}, /* consumer */
-    {0x0505b8a12628d29cull, 0x7e1f92155254bf67ull}, /* trinitron */
-    {0x720c638c2a77c2cbull, 0x1a601ddd36dd2326ull}, /* pvm */
-    {0x06baa48527d7aa72ull, 0x8bc4521184dc4de6ull}, /* shadow */
+    {0x3fe07f0f8ee07719ull, 0x40b965bc9c07ed48ull}, /* scanlines */
+    {0x6ed5d89b6db79b69ull, 0xfb155a427b37158dull}, /* consumer */
+    {0x6a621fbc9e86b891ull, 0x839c2f37bbd43b15ull}, /* trinitron */
+    {0xd90eb34208079b34ull, 0x8f6664aef9c91ceeull}, /* pvm */
+    {0xfa878669b0bacab0ull, 0x44a618ae9e1fa647ull}, /* shadow */
+};
+
+/* the same under the exact GS blend's attachment read (rd_dst_read.c;
+ * llvmpipe, LLVM 19.1.7, Mesa 25.0.7); kGold stays the fixed-function
+ * blend's (rd_crt_fixed) */
+static const uint64_t kGoldExact[RD_CRT_MODE_COUNT - 1][2] = {
+    {0x41c3b784485e8d78ull, 0x858c33d2f4f17880ull}, /* scanlines */
+    {0x0de74e2323838d33ull, 0x7b0075fbb1fd4d32ull}, /* consumer */
+    {0x3320bceefdf5a5a1ull, 0x662f2640a74d26c7ull}, /* trinitron */
+    {0x656bc79c70138558ull, 0x070e74f71159ce17ull}, /* pvm */
+    {0xd7a5053db7e17860ull, 0x651df7c27e4ea4e7ull}, /* shadow */
 };
 
 static double boxLuma(uint32_t w, uint32_t h)
@@ -628,7 +658,9 @@ static void checkOff(void)
     }
     const uint64_t off = fnv(s_out, 960 * 720 * 4);
     printf("  off: present %016llx\n", (unsigned long long)off);
-    if (s_llvmpipe) {
+    if (s_llvmpipe && s_presentExact == RD_BLEND_EXACT_ATTACHMENT) {
+        CHECK(off == GOLD_OFF_EXACT, "off: the rd_present baseline's bytes (exact blend)");
+    } else if (s_llvmpipe && !s_presentExact) {
         CHECK(off == GOLD_OFF, "off: the rd_present baseline's bytes");
     }
     for (int m = RD_CRT_SCANLINES; m < RD_CRT_MODE_COUNT; m++) {
@@ -667,7 +699,10 @@ static void checkModes(void)
                    (unsigned long long)h1);
             CHECK(h1 == h2, "modes: %s %ux%u deterministic", kModeName[m], sizes[k][0],
                   sizes[k][1]);
-            if (s_llvmpipe) {
+            if (s_llvmpipe && s_presentExact == RD_BLEND_EXACT_ATTACHMENT) {
+                CHECK(h1 == kGoldExact[m - 1][k], "modes: %s %ux%u the recorded hash (exact blend)",
+                      kModeName[m], sizes[k][0], sizes[k][1]);
+            } else if (s_llvmpipe && !s_presentExact) {
                 CHECK(h1 == kGold[m - 1][k], "modes: %s %ux%u the recorded hash", kModeName[m],
                       sizes[k][0], sizes[k][1]);
             }
@@ -1215,6 +1250,230 @@ static void checkTopLayer(void)
           hi);
 }
 
+/* ------------------------------------------------- the native frame (W5)
+ *
+ * The grid of a frame wider than 512: the native frame's columns its exact
+ * width shows, the (gsW - wExact) / 2 past it at each side rounded to whole
+ * GS pixels and left out, in a box of the grid's shape, so a source pixel
+ * spans as many output pixels as in the 4:3 run; none of this at 512. */
+static void checkWideGrid(void)
+{
+    static const struct {
+        uint32_t w;
+        float we;
+        uint32_t crop, vw;
+    } kW[] = {
+        {512, 512.0f, 0, 512},
+        {688, 384.0f * 16.0f / 9.0f, 3, 682},   /* 16:9: 2.67 a side */
+        {1376, 384.0f * 32.0f / 9.0f, 5, 1366}, /* 32:9: 5.33 a side */
+        {2560, 384.0f * 60.0f / 9.0f, 0, 2560}, /* 60:9: the frame is the exact width */
+    };
+
+    for (size_t i = 0; i < sizeof(kW) / sizeof(kW[0]); i++) {
+        if (!rd__init_record_only(kW[i].w, 512)) {
+            CHECK(0, "wide grid: no record-only context at %u", kW[i].w);
+            return;
+        }
+        g_rd.frameWExact = kW[i].we;
+        uint32_t vw = 0, vh = 0, fw = 0, fh = 0;
+        rd__crt_grid(&vw, &vh);
+        CHECK(rd__crt_crop() == kW[i].crop && vw == kW[i].vw && vh == 256,
+              "wide grid %u (exact %.2f): %u columns cropped a side, a %ux%u grid (want %u, "
+              "%ux256)",
+              kW[i].w, (double)kW[i].we, rd__crt_crop(), vw, vh, kW[i].crop, kW[i].vw);
+        /* the films keep the 4:3 tube whatever the frame's width */
+        rd__crt_film_grid(448, &fw, &fh);
+        CHECK(fw == 512 && fh == 224, "wide grid %u: the films' grid %ux%u (want 512x224)", kW[i].w,
+              fw, fh);
+        /* the mask period: output pixels a source pixel, the 4:3 run's
+         * (2 and 3 at 768 and 1152 lines) */
+        static const uint32_t kH[2] = {768, 1152};
+        for (int k = 0; k < 2; k++) {
+            RhiRect b, b43;
+            rd__crt_box(8192, kH[k], &b);
+            rd__present_box(8192, kH[k], 4.0f / 3.0f, &b43);
+            CHECK(b.h == kH[k] && b.w * 512u == b43.w * vw,
+                  "wide grid %u: box %ux%u, %.4f output pixels a source pixel (the 4:3 run's "
+                  "%.4f)",
+                  kW[i].w, b.w, b.h, (double)b.w / (double)vw, (double)b43.w / 512.0);
+            if (kW[i].w == 512) {
+                CHECK(b.x == b43.x && b.y == b43.y && b.w == b43.w && b.h == b43.h,
+                      "wide grid 512: the filter's box is the 4:3 box");
+            }
+        }
+        rd_shutdown();
+    }
+}
+
+/* A W-wide frame at the aspect through the filter: the clear colour grey
+ * (0..255), white columns cols, the reduction (full pixel as in s) */
+static bool presentWide(const RdSettings *s, uint32_t W, float aspect, uint8_t grey,
+                        const int *cols, int ncols)
+{
+    if (!rd_init(512, 512, s, NULL)) {
+        return false;
+    }
+    rd_reset_scene(W, 512);
+    rd_begin_frame();
+    RdFrameHead hd;
+    memset(&hd, 0, sizeof(hd));
+    hd.rgba[0] = hd.rgba[1] = hd.rgba[2] = grey;
+    hd.rgba[3] = 0x80;
+    hd.gsW = W;
+    hd.gsH = 512;
+    hd.aspect = aspect;
+    hd.wExact = 384.0f * aspect;
+    hd.clear = 1;
+    rd_frame_head(&hd);
+    rd_select_list(0);
+    rd_set_target(rd_target(RD_TARGET_SCENE), rd_target(RD_TARGET_SCENE), W, 512, 1);
+    rd_test_gs(RD_TEST_Z_ALWAYS);
+    rd_z_write(0);
+    rd_blend(RD_BLEND_LERP_AS, 0x80, 0);
+    rd_pabe(0);
+    rd_fba(0);
+    rd_texture_off();
+    static const uint8_t white[4] = {0xFF, 0xFF, 0xFF, 0x80};
+    const int32_t ox = (2048 - (int32_t)W / 2) * 16, oy = (2048 - 256) * 16;
+    for (int i = 0; i < ncols; i++) {
+        RdScreenVtx v[2] = {vtx(ox + cols[i] * 16, oy, white, 0.0f, 0.0f),
+                            vtx(ox + (cols[i] + 1) * 16, oy + 512 * 16, white, 0.0f, 0.0f)};
+        rd_screen_prims(RD_PRIM_SPRITES, v, 2, RD_SPACE_WORLD, 1, 0);
+    }
+    rd_select_list(12);
+    RdPostParams pp;
+    memset(&pp, 0, sizeof(pp));
+    pp.rgba[0] = pp.rgba[1] = pp.rgba[2] = 128;
+    rd_post(RD_POST_REDUCTION, &pp);
+    rd_end_frame(0);
+    uint32_t w = 0, h = 0;
+    const size_t n = (size_t)s->outputWidth * s->outputHeight * 4;
+    const bool ok = n <= OUT_MAX && rd__read_present(s_out, n, &w, &h) && w == s->outputWidth &&
+                    h == s->outputHeight;
+    CHECK(ok, "readback of the %ux%u wide present", s->outputWidth, s->outputHeight);
+    CHECK(rhi_vk_validation_error_count() == 0, "wide present: %u validation errors",
+          rhi_vk_validation_error_count());
+    rd_shutdown();
+    return ok;
+}
+
+/* the lit channel of each column of row y of the box (-1: none or more
+ * than one) */
+static void rowChannels(const RhiRect *b, uint32_t outW, uint32_t y, int *ch)
+{
+    for (uint32_t x = 0; x < b->w; x++) {
+        const uint8_t *c = &s_out[((size_t)(b->y + y) * outW + b->x + x) * 4];
+        int n = 0, k1 = -1;
+        for (int k = 0; k < 3; k++) {
+            if (c[k] > 1) {
+                n++;
+                k1 = k;
+            }
+        }
+        ch[x] = n == 1 ? k1 : -1;
+    }
+}
+
+/* A 688 frame at 16:9 through the filter: the grid is 682 columns (3 a
+ * side cropped); white columns 0..2 and 686..687 never reach the box, 3
+ * and 684 do, at its edges.  Column 685 is cropped too, but the reduction
+ * samples DISPLAY x at SCENE x + 0.75 (rd_blur.c: texels x and x + 1 at
+ * 12/16 and 4/16, the PS2's bias), so a quarter of it reaches DISPLAY 684,
+ * the box's last column: alone it lights only that column, dimmer than 684
+ * lights it (a crop one column short would show it at full).  Under
+ * Trinitron's grille at strength 1 the
+ * columns of the box's row light the same channels as the 4:3 run's, the
+ * same period (3 output pixels a source pixel at 1152 lines) */
+static void checkWideCrop(void)
+{
+    const uint32_t W = 688, ow = 2048, oh = 1152;
+    const float aspect = 16.0f / 9.0f;
+    RdSettings s = outputSettings(ow, oh);
+    s.aspect = aspect;
+    s.fullPixel = 1; /* the reduction draws every column */
+    rd_crt_settings(&s, RD_CRT_TRINITRON, 1.0f);
+    s.crtHalation = s.crtBloom = s.crtCurvature = 0.0f;
+    s.crtScanlines = 0.0f;
+    s.crtMask = 1.0f;
+    static const int kOut[5] = {0, 1, 2, 686, 687}, kIn[2] = {3, 684};
+    if (!presentWide(&s, W, aspect, 0, kOut, 5)) {
+        return;
+    }
+    uint32_t vw = 0, vh = 0;
+    rd__crt_last_pass(&vw, &vh);
+    CHECK(vw == 682 && vh == 256, "wide crop: the filter's grid %ux%u (want 682x256)", vw, vh);
+    uint32_t lit = 0;
+    for (size_t i = 0; i < (size_t)ow * oh; i++) {
+        lit += (s_out[i * 4] | s_out[i * 4 + 1] | s_out[i * 4 + 2]) != 0;
+    }
+    CHECK(lit == 0, "wide crop: the columns past the exact width are left out (%u pixels lit)",
+          lit);
+    /* 685's quarter in DISPLAY 684 against 684 itself: the brightest
+     * channel each lights and where (the box's last source pixel: its last
+     * 3 output pixels, 2046 / 682 a source pixel) */
+    RhiRect eb;
+    rd__present_box(ow, oh, 682.0f / 384.0f, &eb);
+    uint8_t peak[2] = {0, 0};
+    uint32_t outside = 0;
+    for (int k = 0; k < 2; k++) {
+        static const int kEdge[2] = {685, 684};
+        if (!presentWide(&s, W, aspect, 0, &kEdge[k], 1)) {
+            return;
+        }
+        for (size_t i = 0; i < (size_t)ow * oh; i++) {
+            const uint8_t *c = &s_out[i * 4];
+            const uint8_t m =
+                c[0] > c[1] ? (c[0] > c[2] ? c[0] : c[2]) : (c[1] > c[2] ? c[1] : c[2]);
+            const uint32_t x = (uint32_t)(i % ow);
+            peak[k] = m > peak[k] ? m : peak[k];
+            outside += k == 0 && m != 0 && (x + 3 < eb.x + eb.w || x >= eb.x + eb.w);
+        }
+    }
+    CHECK(outside == 0 && peak[0] > 0 && 2u * peak[0] < peak[1],
+          "wide crop: column 685 reaches the box only as the reduction's quarter in its last "
+          "column (%u pixels elsewhere, peak %u against 684's %u)",
+          outside, peak[0], peak[1]);
+    if (!presentWide(&s, W, aspect, 0, kIn, 2)) {
+        return;
+    }
+    RhiRect b;
+    rd__present_box(ow, oh, 682.0f / 384.0f, &b);
+    const uint32_t y = b.h / 2;
+    int edge[2] = {0, 0};
+    for (uint32_t x = 0; x < 3; x++) {
+        const uint8_t *l = &s_out[((size_t)(b.y + y) * ow + b.x + x) * 4];
+        const uint8_t *r = &s_out[((size_t)(b.y + y) * ow + b.x + b.w - 1 - x) * 4];
+        edge[0] |= l[0] | l[1] | l[2];
+        edge[1] |= r[0] | r[1] | r[2];
+    }
+    CHECK(b.w == 2046 && edge[0] && edge[1],
+          "wide crop: columns 3 and 684 at the box's edges (box %u wide, lit %d %d)", b.w, edge[0],
+          edge[1]);
+    /* the mask against the 4:3 run, a grey frame */
+    static int ch43[1536], chW[2046];
+    if (!presentWide(&s, W, aspect, 0x80, NULL, 0)) {
+        return;
+    }
+    rowChannels(&b, ow, y, chW);
+    if (!phosphors(RD_CRT_TRINITRON, 1536, 1152, 0x80, 0x80, 0x80, 1, 1.0f)) {
+        return;
+    }
+    CHECK(s_box.w == 1536 && s_box.h == 1152, "wide crop: the 4:3 run's box %ux%u", s_box.w,
+          s_box.h);
+    rowChannels(&s_box, 1536, y, ch43);
+    /* the 4:3 run's first and last 3 source pixels are the reduction's
+     * border (full pixel off there); the wide one's are cropped */
+    uint32_t same = 0, diff = 0;
+    for (uint32_t x = 9; x + 9 < 1536; x++) {
+        same += ch43[x] >= 0 && ch43[x] == chW[x];
+        diff += ch43[x] != chW[x];
+    }
+    printf("  wide crop: 688 at 16:9, the row's channels as the 4:3 run's: %u same, %u not\n", same,
+           diff);
+    CHECK(diff == 0 && same > 1500,
+          "wide crop: the mask's columns are the 4:3 run's (%u same, %u differ)", same, diff);
+}
+
 /* ------------------------------------------------------------------ main */
 
 int main(int argc, char **argv)
@@ -1224,6 +1483,7 @@ int main(int argc, char **argv)
     checkOptions(dir);
     checkResolve();
     checkHighlights();
+    checkWideGrid();
     RdSettings st = outputSettings(64, 48);
     if (!rd_init(512, 512, &st, NULL)) {
         if (failures) {
@@ -1244,6 +1504,7 @@ int main(int argc, char **argv)
     checkPhosphors();
     checkLight();
     checkTopLayer();
+    checkWideCrop();
     if (failures) {
         printf("rd_crt_test: %d failures\n", failures);
         return 1;

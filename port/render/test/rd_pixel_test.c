@@ -61,7 +61,10 @@
  *            never past MXL, level 0 when magnified or not mipmapped; a
  *            picture whose levels are reductions of its base keeps no GS
  *            levels and draws the bytes of its base alone under a TEX1
- *            that does not mipmap
+ *            that does not mipmap; and the PCSX2 oracle's forest light
+ *            shaft (TEX1 MMIN 5, MXL 2, K -110, Q 0.002873: LOD 1.568)
+ *            draws levels 1 and 2 blended, as PCSX2's software renderer
+ *            does, not the near-black base
  *   stq      a textured triangle strip with Q 1 to 0.25
  *            maps the texture perspective-correctly (U = f q1 / (q0 + f (q1 -
  *            q0)) at the fraction f across it), a strip with Q = 1 stays affine
@@ -97,6 +100,19 @@
  *            fallback off and on (rd_set_no_dual), SCENE, its depth and
  *            DISPLAY equal byte for byte; the pipeline cache is cleared
  *            after it (its states are outside the reachable set)
+ *            (drawn with the fixed-function blend, the exact blend set
+ *            off for the cell)
+ *   tint     the exact GS blend (rd_dst_read.c): PCSX2's forest tint sprite
+ *            (godrays oracle state 552, GS draw 480: RGBA 223 219 205 4,
+ *            ALPHA 0x44) over eight of its rt0 pixels gives its rt1 pixels
+ *            to the bit under every exact mode the device has; under the
+ *            fixed-function blend within 1 (the rounding up it removes)
+ *   exact    the nodual matrix under each exact mode and the fixed-function
+ *            blend: the depth the same in every mode, the hardware-exact
+ *            blends (0, 1, 5, 6 without PABE) the same, the storage path
+ *            and the attachment read the same bytes but in the storage
+ *            path's fixed-function cells, each exact mode off the
+ *            fixed-function blend somewhere
  *   pipes    every pipeline created is in the enumerated reachable set,
  *            whose screen and post part has fewer than 250 keys (with the
  *            sprite_texa_ps twins) and holds the colour mask 7 keys of the
@@ -343,7 +359,7 @@ static void testHalfOffset(void)
         RdScreenVtx v[2] = {
             vtx(ox + (10 + 20 * k) * 16, oy + 20 * 16 + 4, 0, c, 8.0f, 8.0f),
             vtx(ox + (20 + 20 * k) * 16, oy + 30 * 16 + 4, 0, c, 8.0f + 160.0f, 8.0f + 160.0f)};
-        rd_screen_prims(RD_PRIM_SPRITES, v, 2, kKind[k] == 2 ? RD_SPACE_FULLSCREEN : RD_SPACE_WORLD,
+        rd_screen_prims(RD_PRIM_SPRITES, v, 2, kKind[k] == 2 ? RD_SPACE_FULLFRAME : RD_SPACE_WORLD,
                         1, 0);
     }
     rd_end_frame(0);
@@ -848,11 +864,19 @@ static void texaTexel(const uint8_t *tex, int n, int x, int y, uint32_t mode, ui
     o[3] = gs_texa_alpha(t[0], t[1], t[2], t[3], mode, TEXFMT_RGBA16);
 }
 
+/* The GS's bilinear blend with its 4-bit fractions (common.hlsli
+ * gs_bilerp): across first, then down, each step truncated */
+static int gsBilerp(int a, int b, int c, int d, int fu, int fv)
+{
+    const int top = a + (((b - a) * fu) >> 4), bot = c + (((d - c) * fu) >> 4);
+    return top + (((bot - top) * fv) >> 4);
+}
+
 /* An RGBA16 texture whose texels mix A = 0 and A = 1 and
  * black ones (AEM), drawn magnified 4x (UV 8 + 4 x in 12.4, the 4-bit
  * fractions 0, 4, 8 and 12) under TEXA 7F/81+AEM, MODULATE by 0x80 with
  * TCC RGBA: every pixel is the GS order (TEXA per texel, then the 4-bit
- * bilinear, floor of the sum >> 8), 0 LSB, through sprite_texa_ps; the
+ * bilinear, across then down, gsBilerp), 0 LSB, through sprite_texa_ps; the
  * same sprite with nearest filtering (UV 10 + 4 x, off the texel edges) is
  * the expanded texel under it, 0 LSB,
  * through sprite_ps.  The planner gives sprite_texa_ps only to a
@@ -940,9 +964,8 @@ static void testTexa(void)
                 texaTexel(tex, N, i0 + 1, j0 + 1, TEXA_7F_81_AEM, d);
                 int want[4], late[4];
                 for (int k = 0; k < 4; k++) {
-                    want[k] = (int)((a[k] * (16 - fu) * (16 - fv) + b[k] * fu * (16 - fv) +
-                                     c[k] * (16 - fu) * fv + d[k] * fu * fv) >>
-                                    8);
+                    want[k] =
+                        gsBilerp((int)a[k], (int)b[k], (int)c[k], (int)d[k], (int)fu, (int)fv);
                     want[k] = (int)gs_tfx_mod((uint32_t)want[k], 0x80);
                 }
                 /* the order sprite_ps keeps: RGB and the A bit filtered, TEXA after */
@@ -1087,9 +1110,12 @@ static void gsLodWant(double lod, int mmin, int mxl, const int lv[3][3], int wan
         b = a < mxl ? a + 1 : a;
         f = s - a;
     }
+    /* the two levels blended by the LOD's fraction in 256ths, truncated
+       (gs_texa_texture_lod) */
+    const int f8 = (int)floor(f * 256.0);
     for (int i = 0; i < 3; i++) {
-        c[i] = lv[a][i] * (1.0 - f) + lv[b][i] * f;
-        want[i] = (int)floor(c[i] + 0.5);
+        c[i] = (double)((lv[a][i] * (256 - f8) + lv[b][i] * f8) >> 8);
+        want[i] = (int)c[i];
     }
     want[3] = 0x80;
 }
@@ -1102,9 +1128,8 @@ static void gsLodWant(double lod, int mmin, int mxl, const int lv[3][3], int wan
  * level 0 at a LOD of 0 or below).  The same strips from a texture without
  * GS levels draw its base everywhere, byte for byte as with a TEX1 that
  * does not mipmap. */
-static void gsLodStrips(RdTex t, uint64_t tex1, int useTex1)
+static void gsLodStrips(RdTex t, uint64_t tex1, int useTex1, const double *qs, int nq)
 {
-    static const double qs[10] = {2.0, 0.9, 0.72, 0.69, 0.6, 0.5, 0.4, 0.33, 0.25, 0.125};
     static const uint8_t black[4] = {0, 0, 0, 0}, white[4] = {0x80, 0x80, 0x80, 0x80};
     rd_begin_frame();
     rd_select_list(11);
@@ -1121,7 +1146,7 @@ static void gsLodStrips(RdTex t, uint64_t tex1, int useTex1)
     }
     rd_texture(t, RD_TEXFN_MODULATE, RD_TCC_RGBA);
     const int32_t ox = (2048 - 128) * 16, oy = (2048 - 128) * 16;
-    for (int i = 0; i < 10; i++) {
+    for (int i = 0; i < nq; i++) {
         const float q = (float)qs[i];
         const int32_t y0 = (4 + 8 * i) * 16, y1 = (10 + 8 * i) * 16;
         /* S = T = 0.5 Q: the texture's centre at every pixel */
@@ -1197,22 +1222,24 @@ static void testGsLod(void)
     };
 
     for (size_t c = 0; c < sizeof(cases) / sizeof(cases[0]); c++) {
-        gsLodStrips(t, gsTex1(cases[c].mmin, cases[c].lcm, cases[c].l, cases[c].k), 1);
+        gsLodStrips(t, gsTex1(cases[c].mmin, cases[c].lcm, cases[c].l, cases[c].k), 1, qs, 10);
         uint32_t w, h;
         const uint8_t *img = readTarget(RD_TARGET_WORK1, &w, &h);
         if (!img) {
             continue;
         }
-        const int linear = cases[c].mmin == 3 || cases[c].mmin == 5;
         for (int i = 0; i < 10; i++) {
             const double lod = gsLodRef(qs[i], cases[c].lcm, cases[c].l, cases[c].k);
             int want[4];
             gsLodWant(lod, cases[c].mmin, 2, lv, want);
             const int x = 32, y = 7 + 8 * i;
             const uint8_t *p = img + ((size_t)y * w + (size_t)x) * 4;
-            /* the device's blend between levels has as few as 4 bits
+            /* the Original preset filters GS levels as the GS does
+               (rd__gs_filter_int: the two levels blended by the LOD's
+               fraction in 256ths, truncated), 1 LSB from this float model;
+               the device's own blend between levels had as few as 4 bits
                (Vulkan's mipmapPrecisionBits): 240 / 32 */
-            const int tol = linear ? 8 : 1;
+            const int tol = 1;
             if (abs((int)p[0] - want[0]) > tol || abs((int)p[1] - want[1]) > tol ||
                 abs((int)p[2] - want[2]) > tol) {
                 char what[96];
@@ -1222,9 +1249,41 @@ static void testGsLod(void)
             }
         }
     }
-    /* levels that are reductions of the base: no GS levels, and the bytes
-       of the same strips from the base alone (rd_create_texture) under a
-       TEX1 that does not mipmap */
+    /* The PCSX2 oracle (software renderer, per-draw dump of the opening's
+       forest shot, PCSX2 draw 588 = the port's dump 432, list 5's first
+       fog1 light shaft): TEX1 LCM 0, MXL 2, MMAG linear, MMIN 5
+       (LINEAR_MIPMAP_LINEAR), L 0, K -110 (-6.875) and Q 0x3B3C4700
+       (0.002873) at every vertex, so the LOD is log2(1 / Q) - 6.875 = 1.568:
+       levels 1 and 2 blended 0.432 / 0.568.  The shaft's base level is
+       near black (mean 0.7, at most 4) and its levels 1 and 2 bright (mean
+       19.5 and 19.2, up to 80); PCSX2 adds up to +150 per channel on the
+       scene there (draws 588-604 take the forest from 55 to 86 mean), a
+       base-only draw adds nothing.  The strip must have the blend of the
+       two levels, not the base. */
+    {
+        static const double oq[1] = {0.0028729439};
+        gsLodStrips(t, gsTex1(5, 0, 0, -110), 1, oq, 1);
+        uint32_t ow, oh;
+        const uint8_t *oimg = readTarget(RD_TARGET_WORK1, &ow, &oh);
+        if (oimg) {
+            const double lod = gsLodRef(oq[0], 0, 0, -110);
+            int want[4];
+            gsLodWant(lod, 5, 2, lv, want);
+            CHECK(lod > 1.55 && lod < 1.59, "gs lod: the PCSX2 shaft's LOD is 1.568");
+            const uint8_t *p = oimg + ((size_t)7 * ow + 32) * 4;
+            if (abs((int)p[0] - want[0]) > 1 || abs((int)p[1] - want[1]) > 1 ||
+                abs((int)p[2] - want[2]) > 1) {
+                pixFail("gs lod: PCSX2 oracle, the fog1 shaft (K -110, Q 0.002873)", 32, 7, p,
+                        want);
+            }
+        }
+    }
+    /* levels that are reductions of the base: no GS levels kept; under a
+       TEX1 that mipmaps the Original preset draws them at the GS's level
+       too, over the chain built from the base (PCSX2 draws the title's
+       castle at levels 1 to 3): the magnified strip (Q 2, LOD -1) is the
+       base's bytes as under a TEX1 that does not mipmap, the strips at a
+       LOD of 1 or more the checker's box average, 120 */
     RdTex red = gsLodStore(9002, reduced, "gs lod reduced");
     CHECK(rd__tex_rec(red.id) && rd__tex_rec(red.id)->gsLevels == 0,
           "gs lod: reductions of the base keep no GS levels");
@@ -1235,16 +1294,30 @@ static void testGsLod(void)
     RdTex one = rd_create_texture_src(8, 8, base, RD_TEXSRC_RGBA32, "gs lod one");
     static uint8_t ref[512 * 512 * 4];
     uint32_t w = 0, h = 0, w2 = 0, h2 = 0;
-    gsLodStrips(one, 0, 0);
+    gsLodStrips(one, 0, 0, qs, 10);
     const uint8_t *img = readTarget(RD_TARGET_WORK1, &w, &h);
     if (img) {
         memcpy(ref, img, (size_t)w * h * 4);
     }
-    gsLodStrips(red, gsTex1(5, 0, 0, 0), 1);
+    gsLodStrips(red, gsTex1(5, 0, 0, 0), 1, qs, 10);
     img = readTarget(RD_TARGET_WORK1, &w2, &h2);
-    CHECK(img && w == w2 && h == h2 && memcmp(ref, img, (size_t)w * h * 4) == 0,
-          "gs lod: a texture whose levels are reductions draws its base's bytes whatever TEX1 "
-          "says");
+    if (img && w == w2 && h == h2) {
+        int bad = 0;
+        for (int i = 0; i < 10; i++) {
+            const int y = 7 + 8 * i;
+            const uint8_t *p = img + ((size_t)y * w + 32) * 4;
+            const uint8_t *q = ref + ((size_t)y * w + 32) * 4;
+            if (qs[i] >= 1.0) {
+                bad += memcmp(p, q, 4) != 0;
+            } else if (qs[i] <= 0.5) {
+                bad += abs((int)p[0] - 120) > 1 || p[1] != 0 || p[2] != 0;
+            }
+        }
+        CHECK(bad == 0,
+              "gs lod: reductions of the base at the GS's level (%d of the strips differ)", bad);
+    } else {
+        CHECK(0, "gs lod: read the reductions' strips");
+    }
     rd_destroy_texture(one);
     rdtex_drop(9001);
     rdtex_drop(9002);
@@ -2119,15 +2192,15 @@ static void testReduction(const char *dir)
             const int inside = px >= 2 && px <= 509 && py >= 8 && py <= 247;
             if (inside) {
                 /* GS sample point (px, py): u = px + 0.75, v = 2py + 1 (texels);
-                 * the GS bilinear between texels px, px+1 (4-bit weights 12
-                 * and 4) and rows 2py, 2py+1 (8 and 8), the sum >> 8 */
+                 * the GS bilinear between texels px, px+1 (fraction 4) and
+                 * rows 2py, 2py+1 (fraction 8), across then down (gsBilerp) */
                 for (int k = 0; k < 4; k++) {
                     const int x0 = px, x1 = px + 1, y0 = 2 * py, y1 = 2 * py + 1;
-                    const int v = 12 * 8 * scene[((size_t)y0 * 512 + x0) * 4 + k] +
-                                  4 * 8 * scene[((size_t)y0 * 512 + x1) * 4 + k] +
-                                  12 * 8 * scene[((size_t)y1 * 512 + x0) * 4 + k] +
-                                  4 * 8 * scene[((size_t)y1 * 512 + x1) * 4 + k];
-                    want[k] = (int)gs_tfx_mod((uint32_t)(v >> 8), k < 3 ? tint[k] : 0x80);
+                    const int v = gsBilerp(scene[((size_t)y0 * 512 + x0) * 4 + k],
+                                           scene[((size_t)y0 * 512 + x1) * 4 + k],
+                                           scene[((size_t)y1 * 512 + x0) * 4 + k],
+                                           scene[((size_t)y1 * 512 + x1) * 4 + k], 4, 8);
+                    want[k] = (int)gs_tfx_mod((uint32_t)v, k < 3 ? tint[k] : 0x80);
                 }
             }
             int bad = 0;
@@ -2518,6 +2591,10 @@ static void testNoDual(void)
     static uint8_t scene[2][FRAMES][512 * 512 * 4], disp[2][FRAMES][512 * 256 * 4];
     static float depth[2][FRAMES][512 * 512];
     const bool was = rd_no_dual();
+    /* the fixed-function blend both ways: the exact blend (rd_dst_read.c)
+     * blends in the shader with neither output (testExactModes) */
+    const RdBlendExact exact = rd_blend_exact();
+    rd_set_blend_exact(RD_BLEND_EXACT_OFF);
     uint32_t noDualKeys = 0;
     for (int mode = 0; mode < 2; mode++) {
         CHECK(rd_set_no_dual(mode != 0), "rd_set_no_dual(%d) refused", mode);
@@ -2544,6 +2621,7 @@ static void testNoDual(void)
         }
     }
     rd_set_no_dual(was);
+    rd_set_blend_exact(exact);
     CHECK(noDualKeys > 0, "nodual: no *_nodual pipeline was created");
     int bad = 0, badZ = 0, badD = 0, shown = 0;
     for (int f = 0; f < FRAMES; f++) {
@@ -2593,20 +2671,244 @@ static void testNoDual(void)
     rd__pipeline_cache_clear();
 }
 
+/* ------------------------------------------------------------ exact blend */
+
+/* The forest's tint sprite as PCSX2 2.8.2's software renderer draws it (the
+ * godrays oracle, build-host/tmp/pcsx2cmp/godrays/gs/552, GS draw 480: an
+ * untextured SPRITE over the 512 x 512 SCENE, RGBA 223 219 205 4, ALPHA
+ * 0x44 = (Cs - Cd) * As >> 7 + Cd, ABE, COLCLAMP 1, FBA 0, PABE 0, FBMSK 0,
+ * Z ALWAYS without write), over eight destination pixels of its rt0 dump,
+ * each painted over a 32 x 32 cell, then the sprite: under every exact
+ * mode the device has (rd_dst_read.c) each cell is PCSX2's rt1 pixel to
+ * the bit, alpha 4; under the fixed-function blend it is within 1 and the
+ * cells that round up are counted (the bias the exact blend removes: the
+ * port measured the pass at +5.50 +5.36 +4.74 against PCSX2's +4.98 +4.77
+ * +4.68). */
+static const struct {
+    uint8_t dst[3], pcsx2[3];
+} kTint[8] = {
+    {{15, 22, 8}, {21, 28, 14}},  {{12, 17, 14}, {18, 23, 19}}, {{37, 40, 31}, {42, 45, 36}},
+    {{66, 84, 38}, {70, 88, 43}}, {{23, 31, 16}, {29, 36, 21}}, {{9, 9, 9}, {15, 15, 15}},
+    {{79, 89, 56}, {83, 93, 60}}, {{25, 31, 24}, {31, 36, 29}},
+};
+
+static void tintFrame(void)
+{
+    static const uint8_t black[4] = {0, 0, 0, 0}, tint[4] = {223, 219, 205, 4};
+    rd_begin_frame();
+    rd_select_list(4);
+    rd_clear_target(rd_target(RD_TARGET_SCENE), black, 0, 0);
+    rd_set_target(rd_target(RD_TARGET_SCENE), (RdTarget){0}, 512, 512, 0);
+    opaque2D();
+    rd_texture_off();
+    for (int i = 0; i < 8; i++) {
+        const uint8_t c[4] = {kTint[i].dst[0], kTint[i].dst[1], kTint[i].dst[2], 0x80};
+        sprite(512, 512, i * 32 * 16, 0, (i * 32 + 32) * 16, 32 * 16, c, 0, 0, 0, 0);
+    }
+    rd_test_gs(RD_TEST_Z_ALWAYS);
+    rd_z_write(0);
+    rd_blend(RD_BLEND_LERP_AS, 0x80, 1);
+    rd_pabe(0);
+    rd_fba(0);
+    sprite(512, 512, 0, 0, 512 * 16, 512 * 16, tint, 0, 0, 0, 0);
+    rd_end_frame(0);
+}
+
+static void testForestTint(void)
+{
+    const RdBlendExact was = rd_blend_exact();
+    for (int m = 0; m < RD_BLEND_EXACT_COUNT; m++) {
+        if (!rd_set_blend_exact((RdBlendExact)m)) {
+            printf("  forest tint: %s not on this device\n", rd__blend_exact_name(m));
+            continue;
+        }
+        tintFrame();
+        uint32_t w = 0, h = 0;
+        uint8_t *img = readTarget(RD_TARGET_SCENE, &w, &h);
+        if (!img) {
+            continue;
+        }
+        int bad = 0, up = 0, worst = 0;
+        for (int i = 0; i < 8; i++) {
+            for (int y = 0; y < 32; y++) {
+                for (int x = i * 32; x < i * 32 + 32; x++) {
+                    const uint8_t *g = &img[((size_t)y * w + (size_t)x) * 4];
+                    const int want[4] = {kTint[i].pcsx2[0], kTint[i].pcsx2[1], kTint[i].pcsx2[2],
+                                         4};
+                    for (int ch = 0; ch < 3; ch++) {
+                        const int d = (int)g[ch] - want[ch];
+                        worst = abs(d) > worst ? abs(d) : worst;
+                        up += x == i * 32 && y == 0 && d > 0;
+                    }
+                    const int off =
+                        memcmp((const int[4]){g[0], g[1], g[2], g[3]}, want, sizeof(want)) != 0;
+                    if (off && m != RD_BLEND_EXACT_OFF && bad == 0) {
+                        pixFail("forest tint", x, y, g, want);
+                    }
+                    bad += off;
+                }
+            }
+        }
+        printf("  forest tint (%s): %d of %d pixels off PCSX2's, %d of 24 channels a level up, "
+               "worst %d\n",
+               rd__blend_exact_name(m), bad, 8 * 32 * 32, up, worst);
+        if (m == RD_BLEND_EXACT_OFF) {
+            /* the blender's rounding: within a level, and the table's
+             * pixels are ones it rounds up (gs_math_test) */
+            CHECK(worst <= 1, "forest tint (fixed-function): %d levels off PCSX2's", worst);
+        } else {
+            CHECK(bad == 0, "forest tint (%s): %d pixels are not PCSX2's", rd__blend_exact_name(m),
+                  bad);
+        }
+    }
+    rd_set_blend_exact(was);
+    rhi_wait_idle();
+    rd__pipeline_cache_clear(); /* the other modes' keys are outside the reachable set */
+}
+
+/* testNoDual's matrix (every RdBlend x PABE x FBA x DATE x alpha test x
+ * colour mask x Z test x Z write, two overlapping gouraud quads in one
+ * command over noise, SCENE with its depth and DISPLAY without) under each
+ * exact mode the device has and under the fixed-function blend:
+ *   - the depth is the same in every mode, everywhere (the storage path's
+ *     split and early tests leave the Z the fixed-function draw leaves);
+ *   - the cells whose fixed-function blend is the GS's (the premultiplied
+ *     forms without PABE: modes 0, 1, 5, 6) are the same in every mode;
+ *   - the two exact modes (the attachment read and the storage path) give
+ *     the same bytes, but in the cells the storage path leaves on the
+ *     fixed-function blend (Z write under Z GEQUAL with the alpha test or
+ *     DATE, rd_dst_read.c);
+ *   - each exact mode differs from the fixed-function blend somewhere (the
+ *     rounding, FIX 0xA0 past 1.0, PABE, the Ad and mode 11 forms). */
+static void testExactModes(void)
+{
+    enum { FRAMES = 3, BLENDS_PER = RD_BLEND_COUNT / FRAMES };
+
+    static uint8_t noiseTex[64 * 64 * 4];
+    for (uint32_t i = 0; i < 64 * 64; i++) {
+        const uint32_t h = hash(i + 0x5EEDu);
+        memcpy(&noiseTex[i * 4], &h, 4);
+    }
+    RdTex noise = rd_create_texture(64, 64, noiseTex, RD_TEXA_80_80, "exact noise");
+    static uint8_t scene[RD_BLEND_EXACT_COUNT][FRAMES][512 * 512 * 4];
+    static uint8_t disp[RD_BLEND_EXACT_COUNT][FRAMES][512 * 256 * 4];
+    static float depth[RD_BLEND_EXACT_COUNT][FRAMES][512 * 512];
+    int have[RD_BLEND_EXACT_COUNT] = {0};
+    const RdBlendExact was = rd_blend_exact();
+    for (int m = 0; m < RD_BLEND_EXACT_COUNT; m++) {
+        if (!rd_set_blend_exact((RdBlendExact)m)) {
+            continue;
+        }
+        have[m] = 1;
+        for (int f = 0; f < FRAMES; f++) {
+            ndFrame(noise, f * BLENDS_PER, BLENDS_PER);
+            uint32_t w = 0, h = 0, dw = 0, dh = 0;
+            CHECK(rd__read_target(rd_target(RD_TARGET_SCENE), scene[m][f], sizeof(scene[0][0]), &w,
+                                  &h) &&
+                      w == 512 && h == 512,
+                  "exact: SCENE readback");
+            CHECK(rd__read_target_depth(rd_target(RD_TARGET_SCENE), depth[m][f],
+                                        sizeof(depth[0][0]), &dw, &dh) &&
+                      dw == 512 && dh == 512,
+                  "exact: SCENE depth readback");
+            CHECK(rd__read_target(rd_target(RD_TARGET_DISPLAY), disp[m][f], sizeof(disp[0][0]), &w,
+                                  &h) &&
+                      w == 512 && h == 256,
+                  "exact: DISPLAY readback");
+        }
+    }
+    rd_set_blend_exact(was);
+    const uint32_t perBlend = 2 * 2 * 2 * ND_AFAILS * 3 * 4; /* SCENE cells a blend */
+    int badZ = 0, badSame = 0, badModes = 0, differ[RD_BLEND_EXACT_COUNT] = {0}, shown = 0;
+    for (int m = 1; m < RD_BLEND_EXACT_COUNT; m++) {
+        if (!have[m]) {
+            continue;
+        }
+        for (int f = 0; f < FRAMES; f++) {
+            for (uint32_t i = 0; i < 512 * 512; i++) {
+                const uint32_t cell = (i / 512 / ND_CELL) * 64 + (i % 512) / ND_CELL;
+                const uint32_t b = (uint32_t)(f * BLENDS_PER) + cell / perBlend;
+                const uint32_t k = cell % perBlend;
+                const uint32_t pabe = k / (perBlend / 2);
+                const int exactInHw = (b == 0 || b == 1 || b == 5 || b == 6) && !pabe;
+                if (b >= RD_BLEND_COUNT) {
+                    continue; /* the cells past the frame's blends: background */
+                }
+                const int mz = memcmp(&depth[0][f][i], &depth[m][f][i], sizeof(float)) != 0;
+                const int mc = memcmp(&scene[0][f][i * 4], &scene[m][f][i * 4], 4) != 0;
+                badZ += mz;
+                differ[m] += mc;
+                if (exactInHw && mc) {
+                    badSame++;
+                    if (shown++ < 8) {
+                        printf("FAIL exact (%s): SCENE (%u,%u) blend %u differs from the "
+                               "fixed-function draw\n",
+                               rd__blend_exact_name(m), i % 512, i / 512, b);
+                    }
+                }
+            }
+        }
+    }
+    if (have[RD_BLEND_EXACT_STORAGE] && have[RD_BLEND_EXACT_ATTACHMENT]) {
+        const int S = RD_BLEND_EXACT_STORAGE, A = RD_BLEND_EXACT_ATTACHMENT;
+        for (int f = 0; f < FRAMES; f++) {
+            for (uint32_t i = 0; i < 512 * 512; i++) {
+                const uint32_t cell = (i / 512 / ND_CELL) * 64 + (i % 512) / ND_CELL;
+                const uint32_t k = cell % perBlend;
+                /* k = ((((pabe * 2 + fba) * 2 + date) * ND_AFAILS + af) * 3 + mask) * 4 + zz */
+                const uint32_t zz = k % 4, af = (k / 12) % ND_AFAILS,
+                               date = (k / (12 * ND_AFAILS)) % 2;
+                const int fallback = (zz & 1) && (zz >> 1) && (af > 0 || date);
+                if (fallback) {
+                    continue; /* the storage path's fixed-function cells */
+                }
+                if (memcmp(&scene[S][f][i * 4], &scene[A][f][i * 4], 4) != 0) {
+                    badModes++;
+                    if (shown++ < 16) {
+                        const uint8_t *a = &scene[S][f][i * 4], *c = &scene[A][f][i * 4];
+                        printf(
+                            "FAIL exact: SCENE (%u,%u): storage %u %u %u %u, attachment %u %u %u "
+                            "%u\n",
+                            i % 512, i / 512, a[0], a[1], a[2], a[3], c[0], c[1], c[2], c[3]);
+                    }
+                }
+            }
+            badModes += memcmp(disp[S][f], disp[A][f], sizeof(disp[0][0])) != 0;
+        }
+    }
+    printf("  exact modes: fixed-function%s%s; pixels off the fixed-function draw %d (storage), %d "
+           "(attachment); depth %d, hardware-exact cells %d, storage against attachment %d "
+           "differ\n",
+           have[RD_BLEND_EXACT_STORAGE] ? ", storage" : "",
+           have[RD_BLEND_EXACT_ATTACHMENT] ? ", attachment read" : "",
+           differ[RD_BLEND_EXACT_STORAGE], differ[RD_BLEND_EXACT_ATTACHMENT], badZ, badSame,
+           badModes);
+    CHECK(badZ == 0, "exact: the depth differs from the fixed-function draw's (%d pixels)", badZ);
+    CHECK(badSame == 0, "exact: %d pixels of blends the hardware does exactly differ", badSame);
+    CHECK(badModes == 0, "exact: the storage path and the attachment read differ (%d)", badModes);
+    for (int m = 1; m < RD_BLEND_EXACT_COUNT; m++) {
+        CHECK(!have[m] || differ[m] > 0,
+              "exact (%s): nothing differs from the fixed-function blend", rd__blend_exact_name(m));
+    }
+    rd_destroy_texture(noise);
+    rhi_wait_idle();
+    rd__pipeline_cache_clear(); /* outside the reachable set, as testNoDual's */
+}
+
 /* -------------------------------------------------------------- pipelines */
 
 static void testPipelines(void)
 {
-    static RdPipeKeyInt keys[512], keysNd[512];
+    static RdPipeKeyInt keys[RD_PIPELINE_REACHABLE_MAX], keysNd[RD_PIPELINE_REACHABLE_MAX];
     /* both sets, with dual-source blending (keys) and with the
      * two-pass fallback (keysNd); the created keys are in the set of the
      * mode the test runs in */
     const bool was = rd_no_dual();
     rd_set_no_dual(false);
-    const uint32_t ns = rd__enumerate_reachable_screen(keys, 512);
-    const uint32_t n = rd__enumerate_reachable(keys, 512);
+    const uint32_t ns = rd__enumerate_reachable_screen(keys, RD_PIPELINE_REACHABLE_MAX);
+    const uint32_t n = rd__enumerate_reachable(keys, RD_PIPELINE_REACHABLE_MAX);
     rd_set_no_dual(true);
-    const uint32_t nNd = rd__enumerate_reachable(keysNd, 512);
+    const uint32_t nNd = rd__enumerate_reachable(keysNd, RD_PIPELINE_REACHABLE_MAX);
     rd_set_no_dual(was);
     const RdPipeKeyInt *mine = was ? keysNd : keys;
     const uint32_t nMine = was ? nNd : n;
@@ -2681,7 +2983,7 @@ static void testPipelines(void)
     for (uint32_t i = 0; i < c; i++) {
         const RdPipeKeyInt *k = rd__pipeline_key_at(i);
         int found = 0;
-        for (uint32_t j = 0; j < nMine && j < 512; j++) {
+        for (uint32_t j = 0; j < nMine && j < RD_PIPELINE_REACHABLE_MAX; j++) {
             found |= rd__pipe_key_equal(k, &mine[j]);
         }
         CHECK(found,
@@ -3846,9 +4148,12 @@ int main(int argc, char **argv)
         printf("SKIP rd_pixel_test: no usable Vulkan device\n");
         return 77;
     }
-    printf("rd_pixel_test: adapter %s%s\n", rhi_adapter_name(),
-           rd_no_dual() ? " (two-pass blend fallback)" : "");
+    printf("rd_pixel_test: adapter %s%s, blend %s\n", rhi_adapter_name(),
+           rd_no_dual() ? " (two-pass blend fallback)" : "",
+           rd__blend_exact_name(rd_blend_exact()));
     testNoDual(); /* first: it clears the pipeline cache */
+    testForestTint();
+    testExactModes(); /* these two clear it too */
     testOrder();
     testHalfOffset();
     testRailing(0);

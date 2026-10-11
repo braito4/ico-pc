@@ -2,7 +2,7 @@
  * rd_core fills these; the static asserts pin each offset to the HLSL
  * cbuffer packing (every member is a 16-byte register or a 64-byte matrix,
  * so there is no packing ambiguity). Change this file and common.hlsli
- * together. The constants mirrored from an .hlsli (ICO_DF_*, ICO_SPACE_*:
+ * together. The constants mirrored from an .hlsli (ICO_DF_*:
  * common.hlsli; ICO_TEXFMT_*: gs_math.hlsli; ICO_VU_*: vu_common.hlsli;
  * ICO_SHEET_*: sheet_text.hlsli) hold the same values as their HLSL twins;
  * ICO_SHEET_* and ICO_TEXFMT_* are static-asserted (port/render/test/
@@ -22,12 +22,25 @@ typedef struct IcoFrameCB {
     float clip[4];      /* near, far, zoom, aspect */
     float target[4];    /* w, h of the bound target in GS pixels, 1/w, 1/h */
     float origin[4];    /* xy GS window coordinate of the target's top-left, zw added after */
-    float space[2][4];  /* [0] WORLD, [1] UI: ndc = ndc * xy + zw */
-    float z[4];         /* x = 1 / 2^24 (PSMZ24 scale); yz the bound target's
-                         * texels per GS pixel (1 in Original); w = 1: the VU
-                         * programs output unquantised X, Y (only the developer
-                         * switch ICO_RD_VU_OFFGRID; Enhanced, a scaled target) */
-    float misc[4];      /* x frame counter, y preset */
+
+    /* The native frame (common.hlsli g_frame): frame[0] the region
+     * scale, 512 / W on a target as wide as the native frame W, exactly 1
+     * on every other target and at 4:3 (rd_replay.c rd__frame_group_ex; no
+     * shader reads it).  frame[1], frame[2] the drawing camera's picture,
+     * its half-width and half-height in GS pixels about (2048, 2048): 256 by
+     * half the native height for the frame's camera, a reflection camera's
+     * own (RdCamera.pictureW/H); the VU programs' rule for a triangle the
+     * region test drops reads them (vu_common.hlsli vu_picture_half).  The
+     * rest, and frameReserved, reserved (0).  No position is transformed. */
+    float frame[4];
+    float frameReserved[4];
+
+    /* x = 1 / 2^24 (PSMZ24 scale); yz the bound target's texels per GS
+     * pixel (1 in Original); w = 1: the VU programs output unquantised X, Y
+     * (only the developer switch ICO_RD_VU_OFFGRID; Enhanced, a scaled
+     * target) */
+    float z[4];
+    float misc[4]; /* x frame counter, y preset */
 } IcoFrameCB;
 
 /* DrawCB: group 1, slot 1 (register b1, space1). */
@@ -40,8 +53,7 @@ typedef struct IcoDrawCB {
     float tex[4];      /* w, h of t1 in texels, 1/w, 1/h */
     float param[4];    /* kind specific */
     float scale[4];    /* xy t1 texels per GS texel (1, or a scaled target's
-                        * scale); zw a widened block's x addressing, u' = u z + w
-                        * (0 0: none; common.hlsli gs_block_uv) */
+                        * scale); zw reserved (0) */
 } IcoDrawCB;
 
 /* crt.hlsl's CrtCB, group 1, slot 1 (register b1, space1),
@@ -95,11 +107,15 @@ enum {
     ICO_DF_GS_LOD = 262144
 };
 
+/* DrawCB.mode[0] bits 19..22 on a destination-read pass (the *_dstrov and
+ * *_dstatt entries, port/render/rd_dst_read.c): the channels the pass
+ * writes, R G B A = bits 19..22 (FRAME.FBMSK by whole channels, the key's
+ * colorMask).  The storage path writes the target itself, so the shader
+ * applies the mask (common.hlsli gs_dst_out). */
+#define ICO_DF_WMASK_SHIFT 19u
+
 /* DrawCB.mode[1] bits 8..: TEXFMT_* in gs_math.hlsli. */
 enum { ICO_TEXFMT_RGBA32 = 0, ICO_TEXFMT_RGB24 = 1, ICO_TEXFMT_RGBA16 = 2 };
-
-#define ICO_SPACE_WORLD 0
-#define ICO_SPACE_UI 1
 
 /* font_sheet_ps's constants, SHEET_* in
  * sheet_text.hlsli (the same values; port/render/test/sheet_ref.c
@@ -194,7 +210,9 @@ _Static_assert(offsetof(IcoFrameCB, target) == 224, "target");
 
 _Static_assert(offsetof(IcoFrameCB, origin) == 240, "origin");
 
-_Static_assert(offsetof(IcoFrameCB, space) == 256, "space");
+_Static_assert(offsetof(IcoFrameCB, frame) == 256, "frame");
+
+_Static_assert(offsetof(IcoFrameCB, frameReserved) == 272, "frameReserved");
 
 _Static_assert(offsetof(IcoFrameCB, z) == 288, "z");
 
@@ -261,25 +279,30 @@ typedef struct IcoVuBoneCB {
 
 /* IcoVuCB.draw[2] (VU_* in vu_common.hlsli). */
 enum {
-    ICO_VU_CLIP_REGION = 0,  /* region test: a failing triangle is dropped in the 4:3
-                              * picture and, with all w > 0, GPU-clipped beside it */
+    ICO_VU_CLIP_REGION = 0,  /* region test: a failing triangle whose clipped extent
+                              * reaches the camera's picture (FrameCB frame[1], [2]) is dropped,
+                              * one wholly beside it GPU-clipped at the native frustum, in
+                              * either preset; every one GPU-clipped under
+                              * ICO_VU_BEHIND_EYE */
     ICO_VU_CLIP_NONE = 1,    /* normal_c code 34: no test, X/Y wrap to 16 bits */
     ICO_VU_CLIP_SCISSOR = 2, /* code 36: clip-space flags, trivial reject, GPU clipping */
     ICO_VU_CLIP_MASK = 3,
     ICO_VU_PROBE = 16,      /* tests: one value per pixel of a 16-wide RGBA8_UINT target */
     ICO_VU_CUT_ONLY = 32,   /* scissor: only the triangles SCISSOR_COMMON draws (first draw) */
     ICO_VU_KICK_ONLY = 64,  /* scissor: only the triangles the strip kicks (second draw) */
-    ICO_VU_DROP_WIDE = 128, /* the triangles marked ICO_VU_INDEX_WIDE are not drawn (the
-                             * parts of a wide target outside the 4:3 picture) */
     ICO_VU_BEHIND_EYE = 256 /* region test and particle window: a failing triangle or
-                             * sprite is GPU-clipped everywhere, not dropped (photo
-                             * mode's free camera, RdCamera.freeCamera) */
+                               * sprite is GPU-clipped, not dropped, in either preset
+                               * (photo mode's free camera, RdCamera.freeCamera) */
 };
 
-/* The region test's centre on a wide screen (vu_common.hlsli VU_REGION_CX,
- * vu_region_pos): the test compares x squeezed by the frame's world x scale
- * about GS X 2048, the middle of the scene's GS window. */
-#define ICO_VU_REGION_CX 2048.0f
+/* The native frame's constants (port/include/ico_frame.h ICO_FRAME_BASE_W,
+ * ICO_FRAME_K_MAX, ICO_FRAME_W_MAX), for the shaders' side: the 4:3 width
+ * the projection and the 2D layer are sized by, the widest frame as a
+ * multiple of it, and its width in GS pixels.  rd_present_test
+ * static-asserts they equal the header's. */
+#define ICO_SH_FRAME_BASE_W 512
+#define ICO_SH_FRAME_K_MAX 5
+#define ICO_SH_FRAME_W_MAX 2560
 
 /* The index value of an indexed VU draw: kick * 4 + corner (corner 0..2 =
  * vertex kick - 2 + corner); vertexOffset must be 0. */
@@ -288,14 +311,18 @@ enum {
  * triangle of its mesh in the same plane (RdMeshRec.drawIndex; static
  * prelit and lit meshes only), which vu_later_out draws in front of it;
  * vu_common.hlsli's VU_INDEX_LATER and VU_INDEX_MASK.  The kick stays
- * below 2^27 for either mark (rd_mesh.c marks no larger mesh) */
+ * below ICO_VU_INDEX_KICK_LIMIT for any mark (rd_mesh.c marks no larger
+ * mesh) */
 #define ICO_VU_INDEX_LATER 0x40000000u
-/* Set on the three indices of a triangle of a stage closing plane
- * (rd_mesh.c markWideHidden): a draw with ICO_VU_DROP_WIDE skips it, which
- * rd_replay.c does only beside the 4:3 picture of a wide target;
- * vu_common.hlsli's VU_INDEX_WIDE */
-#define ICO_VU_INDEX_WIDE 0x20000000u
-#define ICO_VU_INDEX_MASK 0x1FFFFFFFu
+/* The content table (port/render/rd_content_hide.c, rd_mesh.c
+ * markContentHidden), set on the three indices of a triangle of a listed
+ * artist trick: HIDE, drawn nowhere.  vu_common.hlsli's VU_INDEX_HIDE.
+ * Bit 28 is unused */
+#define ICO_VU_INDEX_HIDE 0x20000000u
+#define ICO_VU_INDEX_MASK 0x0FFFFFFFu
+/* kick * 4 + corner below 2^28: the meshes rd_mesh.c marks have fewer
+ * vertices */
+#define ICO_VU_INDEX_KICK_LIMIT (1u << 26)
 #define ICO_VU_PROBE_FIELDS 16
 
 _Static_assert(offsetof(IcoVuCB, mem) == 0, "vu mem");

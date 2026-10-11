@@ -3,11 +3,20 @@
  * backend, before against after).
  *
  *   rd_replay_tool <dump> <out.png> [--target NAME] [--present WxH]
- *                  [--backend vulkan|d3d12]
+ *                  [--pass-dump DIR] [--backend vulkan|d3d12]
+ *
+ * <dump> is an .rddump, or the .zip F12 writes: its first .rddump entry is
+ * taken (extracted to a temporary file in the temp folder, deleted at exit).
  *
  * NAME is a named target (SCENE, DISPLAY (default), SHADOW0..2, WORK0..3,
  * AA0, AA1, FEED128, AURA_WORK, AURA_TAP, WORK2_PAD, FEED_HELD,
- * DISPLAY_HELD).  --present renders the Original presenter into a W x H
+ * DISPLAY_HELD); an unknown name is an error (exit 1, the names listed).
+ * --pass-dump DIR renders the frame once and writes every one of those
+ * targets to DIR/<NAME>.png (DIR must exist; <out.png> is unused, give -),
+ * and with --present WxH the presented picture to DIR/PRESENT.png (a second
+ * replay in a fresh context, so it equals a run of its own); a target that
+ * cannot be read back is named on stderr and the exit is 1, the others are
+ * still written.  --present renders the Original presenter into a W x H
  * output and writes that instead.  Commands the replayer does not model are
  * skipped with a message (the final line counts them).
  *
@@ -22,9 +31,16 @@
  *                         the four options below apply without it, but a
  *                         replay at a scale above 1x still wants it for the
  *                         game's picture
- *   --aspect A            4:3 (default), 16:10, 16:9, 21:9 (64/27), 32:9, 48:9
+ *   --aspect A            the dump's own aspect (default; 4:3 before dump
+ *                         version 10), 16:10, 16:9, 21:9 (64/27), 32:9, 48:9
  *                         (the widest the game allows is 20:3) or a number
- *                         (w / h)
+ *                         (w / h).  A dump holds the picture as drawn at
+ *                         its aspect: a narrower A crops it (the --present
+ *                         picture is the recorded one cut to the box of A,
+ *                         the centre columns; a target is the whole
+ *                         recorded frame), a wider A is an error ("a dump
+ *                         drawn at 4:3 cannot show 16:9: capture an aspect
+ *                         sweep"); a dump before version 10 is a 4:3 dump
  *   --resolution R        the scene's resolution: WxH or Nx (default: the
  *                         --present box with --enhanced, else the GS size)
  *   --full-height         the full-height scene
@@ -74,7 +90,9 @@
  *   --dump-textures DIR   writes every image texture of the dump to
  *                         DIR/tex-<id>-<w>x<h>.png as decoded (RGBA8, the
  *                         alpha byte as stored: GS 0x80 = 1.0; an R8
- *                         texture as grey, its byte in each channel)
+ *                         texture as grey, its byte in each channel), and
+ *                         a texture's GS levels (RdTexRec.gsChain) as
+ *                         tex-<id>-<w>x<h>-gslevel<N>.png
  *   --stats               prints the replay's counts from its performance
  *                         record (rd.h RdPerfRecord): draws, passes, bind
  *                         groups created (rd's uniform and texture groups
@@ -87,6 +105,15 @@
  *                         printed: the uploads, each list, each picture
  *                         effect (rd.h RD_PERF_POST_*, inside the lists'
  *                         times) and the present
+ *   --prev DUMP           (repeatable, oldest first) replays DUMP in the same
+ *                         context before <dump>, so the targets a frame
+ *                         reads back from the frame before (the motion
+ *                         blur's previous picture, FEED128) hold the run's
+ *                         pictures instead of zero; give the dumps of the
+ *                         ticks just before <dump>
+ *   --no-half             every TARGET command without the field's half
+ *                         pixel (RD_TARGET_HALF_Y): the frame as the flip
+ *                         of the other field draws it
  *   --no-aa1              replays with PRIM.AA1 off: every RDC_AA1 a NOP and
  *                         the start state's bit clear, the frame as the
  *                         renderer drew it before AA1 was decoded (a
@@ -113,10 +140,12 @@
  *                         before/after pair from one build
  *
  * Exit: 0 written (or, with --no-device, listed), 1 error, 77 no device or no dump file. */
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "../../include/ico_endian.h"
+#include "dump_zip.h" /* port/platform: the F12 zip */
 #include "rd_internal.h"
 #include "rd_mesh.h"
 #include "font.h" /* port/ui: the overlay test's text */
@@ -482,25 +511,151 @@ static void dumpTextures(const char *dir)
                 printf("%s\n", path);
             }
             free(grey);
-        } else if (rd_write_png(path, t->pixels, t->w, t->h, t->w * 4, 0)) {
+        } else if (rd_write_png(path, t->pixels, t->w, t->h, t->w * 4, 1)) {
             printf("%s\n", path);
+        }
+        /* the GS levels (gsChain: levels 1.. as RGBA8, each half the one before) */
+        const uint8_t *lv = t->gsLevels > 1 ? t->gsChain : NULL;
+        uint32_t w = t->w, h = t->h;
+        for (uint32_t l = 1; lv && l < t->gsLevels; l++) {
+            w = w > 1 ? w / 2 : 1;
+            h = h > 1 ? h / 2 : 1;
+            snprintf(path, sizeof(path), "%s/tex-%u-%ux%u-gslevel%u.png", dir, id, t->w, t->h, l);
+            if (rd_write_png(path, lv, w, h, w * 4, 1)) {
+                printf("%s\n", path);
+            }
+            lv += (size_t)w * h * 4;
         }
     }
 }
 
-static bool peekSize(const char *path, uint32_t *w, uint32_t *h)
+static char s_zipTemp[1100];
+
+static void removeZipTemp(void)
 {
-    FILE *fp = fopen(path, "rb");
-    if (!fp) {
+    if (s_zipTemp[0] != '\0') {
+        remove(s_zipTemp);
+    }
+}
+
+/* a .zip given as the dump: its .rddump goes to a temporary file (the
+   loader takes a path) and *dump names that file; false with a message when
+   it cannot */
+static bool unzipDump(const char **dump)
+{
+    const char *path = *dump;
+    const size_t n = strlen(path);
+
+    if (n < 4 || (strcmp(path + n - 4, ".zip") != 0 && strcmp(path + n - 4, ".ZIP") != 0)) {
+        return true;
+    }
+    size_t size = 0;
+    void *data = ico_dump_zip_extract(path, &size, NULL, 0);
+
+    if (data == NULL) {
+        fprintf(stderr, "%s: no .rddump in this zip\n", path);
         return false;
     }
-    uint8_t b[32];
-    bool ok = fread(b, 1, sizeof(b), fp) == sizeof(b) && memcmp(b, RD_DUMP_MAGIC, 8) == 0;
-    fclose(fp);
-    if (ok) {
-        *w = ico_le32(b + 24);
-        *h = ico_le32(b + 28);
+    const char *dir = getenv("TMPDIR");
+
+    if (dir == NULL) {
+        dir = getenv("TEMP");
     }
+    if (dir == NULL) {
+        dir = getenv("TMP");
+    }
+    if (dir == NULL) {
+        dir = "/tmp";
+    }
+    snprintf(s_zipTemp, sizeof(s_zipTemp), "%s/rd_replay_%u.rddump", dir,
+             (unsigned)(uintptr_t)data & 0xFFFFFFu);
+    FILE *fp = fopen(s_zipTemp, "wb");
+    const bool ok = fp != NULL && fwrite(data, 1, size, fp) == size;
+
+    if (fp != NULL && fclose(fp) != 0) {
+        s_zipTemp[0] = '\0';
+        free(data);
+        return false;
+    }
+    free(data);
+    if (!ok) {
+        fprintf(stderr, "%s: cannot write the temporary dump\n", s_zipTemp);
+        removeZipTemp();
+        s_zipTemp[0] = '\0';
+        return false;
+    }
+    atexit(removeZipTemp);
+    *dump = s_zipTemp;
+    return true;
+}
+
+#define kAspect43 (4.0f / 3.0f)
+
+/* an aspect as the options name it (16:9) or its number */
+static const char *aspectName(float a, char buf[16])
+{
+    static const struct {
+        float v;
+        const char *n;
+    } known[] = {{4.0f / 3.0f, "4:3"},    {16.0f / 10.0f, "16:10"}, {16.0f / 9.0f, "16:9"},
+                 {64.0f / 27.0f, "21:9"}, {32.0f / 9.0f, "32:9"},   {48.0f / 9.0f, "48:9"},
+                 {60.0f / 9.0f, "60:9"}};
+
+    for (size_t k = 0; k < sizeof(known) / sizeof(known[0]); k++) {
+        if (fabsf(a - known[k].v) < 1e-3f) {
+            snprintf(buf, 16, "%s", known[k].n);
+            return buf;
+        }
+    }
+    snprintf(buf, 16, "%.3f", (double)a);
+    return buf;
+}
+
+/* a named target's picture to path (--target, --pass-dump) */
+static bool writeTarget(int k, const char *path)
+{
+    const size_t cap = (size_t)4096 * 4096 * 4;
+    static uint8_t *px;
+    uint32_t w = 0, h = 0;
+
+    if (!px) {
+        px = malloc(cap);
+    }
+    return px && rd__read_target(rd_target((RdTargetId)k), px, cap, &w, &h) &&
+           rd_write_png(path, px, w, h, w * 4, 1);
+}
+
+/* The presented picture (an ow x oh output) to path as a pw x ph picture.
+ * When the output is the whole picture (ow x oh = pw x ph) that is the
+ * readback; when --aspect asked for less than the dump holds (a crop) the
+ * output is the recorded aspect's box at the requested box's height, and the
+ * picture is the centre columns of it that the requested box (want, in the
+ * pw x ph picture) covers, on black. */
+static bool writePresent(const char *path, uint32_t ow, uint32_t oh, RhiRect want, uint32_t pw,
+                         uint32_t ph)
+{
+    uint32_t w = 0, h = 0;
+    uint8_t *px = malloc((size_t)ow * oh * 4);
+    bool ok = px && rd_read_presented(px, &w, &h) && w == ow && h == oh;
+
+    if (ok && (ow != pw || oh != ph)) {
+        uint8_t *canvas = calloc((size_t)pw * ph, 4);
+        const uint32_t cx = (ow - (uint32_t)want.w) / 2;
+
+        ok = canvas != NULL && (uint32_t)want.w <= ow && (uint32_t)want.h <= oh;
+        for (uint32_t y = 0; ok && y < (uint32_t)want.h; y++) {
+            memcpy(canvas + (((size_t)want.y + y) * pw + (size_t)want.x) * 4,
+                   px + ((size_t)y * ow + cx) * 4, (size_t)want.w * 4);
+        }
+        for (size_t k = 3; ok && k < (size_t)pw * ph * 4; k += 4) {
+            canvas[k] = 0xFF;
+        }
+        ok = ok && rd_write_png(path, canvas, pw, ph, pw * 4, 1);
+        free(canvas);
+    } else if (ok) {
+        ok = rd_write_png(path, px, w, h, w * 4, 1);
+    }
+    free(px);
     return ok;
 }
 
@@ -543,6 +698,121 @@ static void overlayTest(const RdOverlayCtx *ctx, void *user)
     ui_end_overlay();
 }
 
+/* the replay's frame edits and the interpolation (prepareFrame) */
+static struct {
+    unsigned l, a, b;
+} nops[64];
+
+static int nopCount;
+static bool noAa1, interpAny;
+static const char *interpPrev;
+static float interpT = 1.0f;
+/* --prev DUMP (repeatable, oldest first): frames replayed in this context
+ * before <dump>, so the retained targets (the motion blur's previous
+ * picture, FEED128, keep) hold what the game's run left there */
+static const char *prevDumps[16];
+static int prevCount;
+static bool noHalf;
+
+/* --no-half: every TARGET command without the field's half pixel
+   (RD_TARGET_HALF_Y), as a flip in the other field sends the frame */
+static void dropHalf(RdFrame *f)
+{
+    for (int l = 0; noHalf && l < RD_LIST_COUNT; l++) {
+        for (uint32_t c = 0; c < f->lists[l].count; c++) {
+            if (f->lists[l].cmds[c].type == RDC_TARGET) {
+                f->lists[l].cmds[c].b[0] &= (uint8_t)~RD_TARGET_HALF_Y;
+            }
+        }
+    }
+}
+
+/* replays the --prev dumps in order; false on a load failure */
+static bool replayPrev(void)
+{
+    for (int k = 0; k < prevCount; k++) {
+        RdFrame q;
+        memset(&q, 0, sizeof(q));
+        if (!rd__load_frame(prevDumps[k], &q)) {
+            fprintf(stderr, "%s: --prev load failed\n", prevDumps[k]);
+            return false;
+        }
+        dropHalf(&q);
+        const bool ok = rd__replay_frame(&q, (int)q.keep, false);
+        rhi_wait_frame();
+        printf("prev %s: frame %u replayed%s\n", prevDumps[k], q.number, ok ? "" : " (failed)");
+        rd__frame_free(&q);
+    }
+    return true;
+}
+
+/* Loads <dump> (and the --interp PREV) into the current context, applies
+ * --nop and --no-aa1, and returns the frame to replay: <dump> itself, or the
+ * interpolated frame.  NULL after shutting the renderer down on failure.
+ * Called again after a re-init (--pass-dump's present pass). */
+static const RdFrame *prepareFrame(const char *dump, RdFrame *pf, RdFrame *f)
+{
+    memset(pf, 0, sizeof(*pf));
+    if (interpPrev && !rd__load_frame(interpPrev, pf)) {
+        rd_shutdown();
+        return NULL;
+    }
+    if (!rd__load_frame(dump, f)) {
+        rd__frame_free(pf);
+        rd_shutdown();
+        return NULL;
+    }
+    for (int k = 0; k < nopCount; k++) {
+        const RdCmdList *cl = &f->lists[nops[k].l];
+        for (uint32_t c = nops[k].a; c <= nops[k].b && c < cl->count; c++) {
+            if (!rd__cmd_is_state(cl->cmds[c].type)) {
+                cl->cmds[c].type = RDC_NOP;
+            }
+        }
+    }
+    dropHalf(f);
+    if (noAa1) {
+        f->startState.aa1 = 0;
+        for (int l = 0; l < RD_LIST_COUNT; l++) {
+            for (uint32_t c = 0; c < f->lists[l].count; c++) {
+                if (f->lists[l].cmds[c].type == RDC_AA1) {
+                    f->lists[l].cmds[c].type = RDC_NOP;
+                }
+            }
+        }
+    }
+    const RdFrame *rf = f;
+    if (interpPrev) {
+        /* the presenter's frame between the two */
+        RdInterpStats ist;
+        if (interpAny) {
+            pf->number = f->number - 1; /* the tick before, whatever was saved between */
+        }
+        rf = rd__interp_frame(pf, f, interpT, 1, &ist);
+        if (!rf) {
+            fprintf(stderr, "rd__interp_frame failed\n");
+            rd__frame_free(pf);
+            rd__frame_free(f);
+            rd_shutdown();
+            return NULL;
+        }
+        printf("interp %u -> %u at %g: snap %u, %u keyed draws: %u blended, %u unmatched, %u "
+               "mismatched, %u jumped; %u mesh streams blended; %u blended as rotations; %u lights "
+               "re-paired; %u paired by place; %u grid STs blended, %u through the blended "
+               "camera\n",
+               pf->number, f->number, (double)interpT, ist.snap, ist.keyed, ist.lerped, ist.missing,
+               ist.mismatch, ist.jump, ist.morph, ist.rotated, ist.lightPaired, ist.placed,
+               ist.gridSt, ist.gridStCamera);
+        printf("interp: unmatched %u not drawn before, %u fewer before, %u left by the place "
+               "pairing, %u payload; %u paired with another place; %u of the tick before kept, "
+               "%u held; %u CPU-projected draws re-projected\n",
+               ist.unmatchedWhy[RD_UNMATCHED_ABSENT], ist.unmatchedWhy[RD_UNMATCHED_FEWER],
+               ist.unmatchedWhy[RD_UNMATCHED_UNPLACED], ist.unmatchedWhy[RD_UNMATCHED_PAYLOAD],
+               ist.apart, ist.prevKept, ist.prevHeld, ist.reprojected);
+    }
+    return rf;
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 3) {
@@ -550,10 +820,11 @@ int main(int argc, char **argv)
                 "usage: %s <dump> <out.png> [--target NAME] [--present WxH] [--enhanced] "
                 "[--aspect A] [--resolution WxH|Nx] [--full-height] [--full-pixel] [--filter F] "
                 "[--mirror] [--overlay-test] [--backend vulkan|d3d12] [--list] [--nop L:A[-B]] "
-                "[--mesh NAME] [--dump-textures DIR] [--no-aa1] [--stats] [--interp T PREV "
-                "[--interp-any] [--no-reproject]]\n"
+                "[--mesh NAME] [--dump-textures DIR] [--no-aa1] [--stats] [--pass-dump DIR] "
+                "[--prev DUMP]... [--no-half] [--interp T PREV [--interp-any] [--no-reproject]]\n"
                 "       [--no-device (with --list, --mesh or --dump-textures; <out.png> unused)]\n"
-                "       [--crt scanlines|consumer|trinitron|pvm|shadow [--crt-strength K]]\n",
+                "       [--crt scanlines|consumer|trinitron|pvm|shadow [--crt-strength K]]\n"
+                "       [--aa off|ssaa2|ssaa4|msaa2|msaa4|msaa8 (with --enhanced)]\n",
                 argv[0]);
         return 1;
     }
@@ -562,17 +833,10 @@ int main(int argc, char **argv)
     uint32_t pw = 0, ph = 0;
     /* the display options */
     RdSettings s;
-    bool list = false, overlay = false, noAa1 = false, stats = false;
-    bool noDevice = false;
-    const char *texDir = NULL, *meshName = NULL, *interpPrev = NULL;
-    float interpT = 1.0f;
-    bool interpAny = false;
-
-    struct {
-        unsigned l, a, b;
-    } nops[64];
-
-    int nopCount = 0;
+    bool list = false, overlay = false, stats = false;
+    bool noDevice = false, aspectGiven = false;
+    const char *passDir = NULL;
+    const char *texDir = NULL, *meshName = NULL;
     memset(&s, 0, sizeof(s));
     s.preset = RD_PRESET_ORIGINAL;
     s.aspect = 4.0f / 3.0f;
@@ -581,12 +845,16 @@ int main(int argc, char **argv)
             const char *n = argv[++i];
             target = -1;
             for (int k = 0; k < (int)(sizeof(kNames) / sizeof(kNames[0])); k++) {
-                if (strcmp(n, kNames[k]) == 0) {
+                if (kNames[k][0] != '\0' && strcmp(n, kNames[k]) == 0) {
                     target = k;
                 }
             }
             if (target < 0) {
-                fprintf(stderr, "unknown target %s\n", n);
+                fprintf(stderr, "unknown target \"%s\": the targets are", n);
+                for (int k = 0; k < (int)(sizeof(kNames) / sizeof(kNames[0])); k++) {
+                    fprintf(stderr, "%s%s", kNames[k][0] ? " " : "", kNames[k]);
+                }
+                fprintf(stderr, "\n");
                 return 1;
             }
         } else if (strcmp(argv[i], "--backend") == 0 && i + 1 < argc) {
@@ -602,8 +870,11 @@ int main(int argc, char **argv)
             s.fullPixel = 1;
         } else if (strcmp(argv[i], "--mirror") == 0) {
             s.mirror = 1;
+        } else if (strcmp(argv[i], "--pass-dump") == 0 && i + 1 < argc) {
+            passDir = argv[++i];
         } else if (strcmp(argv[i], "--aspect") == 0 && i + 1 < argc) {
             unsigned a = 0, b = 0;
+            aspectGiven = true;
             const char *v = argv[++i];
             if (sscanf(v, "%u:%u", &a, &b) == 2 && a == 21 && b == 9) {
                 /* "21:9" is the game's 64:27 (2560x1080), as the Aspect
@@ -642,6 +913,10 @@ int main(int argc, char **argv)
             interpAny = true;
         } else if (strcmp(argv[i], "--no-reproject") == 0) {
             rd__interp_set_reproject(false);
+        } else if (strcmp(argv[i], "--no-half") == 0) {
+            noHalf = true;
+        } else if (strcmp(argv[i], "--prev") == 0 && i + 1 < argc && prevCount < 16) {
+            prevDumps[prevCount++] = argv[++i];
         } else if (strcmp(argv[i], "--interp") == 0 && i + 2 < argc) {
             char *end = NULL;
             interpT = strtof(argv[++i], &end);
@@ -674,6 +949,23 @@ int main(int argc, char **argv)
                 return 1;
             }
             s.crtStrength = k;
+        } else if (strcmp(argv[i], "--aa") == 0 && i + 1 < argc) {
+            /* the anti-aliasing (RdSettings.antiAlias; off under the Original
+               preset, an MSAA count the device lacks drawn as off) */
+            static const char *const aas[RD_AA_COUNT] = {"off",   "ssaa2", "ssaa4",
+                                                         "msaa2", "msaa4", "msaa8"};
+            const char *v = argv[++i];
+            int a = -1;
+            for (int k = 0; k < RD_AA_COUNT; k++) {
+                if (strcmp(v, aas[k]) == 0) {
+                    a = k;
+                }
+            }
+            if (a < 0) {
+                fprintf(stderr, "bad --aa (off, ssaa2, ssaa4, msaa2, msaa4 or msaa8)\n");
+                return 1;
+            }
+            s.antiAlias = (uint8_t)a;
         } else if (strcmp(argv[i], "--list") == 0) {
             list = true;
         } else if (strcmp(argv[i], "--no-device") == 0) {
@@ -703,6 +995,9 @@ int main(int argc, char **argv)
         }
     }
     uint32_t gw = 0, gh = 0;
+    if (!unzipDump(&dump)) {
+        return 1;
+    }
     FILE *probe = fopen(dump, "rb");
     if (!probe) {
         /* rd_pixel writes the dump; without a Vulkan device it skipped */
@@ -710,12 +1005,54 @@ int main(int argc, char **argv)
         return 77;
     }
     fclose(probe);
-    if (!peekSize(dump, &gw, &gh) || !gw || !gh || gw > 4096 || gh > 4096) {
+    RdDumpInfo info;
+    if (!rd__dump_peek(dump, &info) || !info.gsW || !info.gsH || info.gsW > 4096 ||
+        info.gsH > 4096) {
         fprintf(stderr, "%s: not an rd dump\n", dump);
         return 1;
     }
-    s.outputWidth = pw;
-    s.outputHeight = ph;
+    gw = info.gsW;
+    gh = info.gsH;
+    /* The aspect: a dump holds the picture as drawn at its own width (4:3
+     * before version 10).  Replaying narrower crops it in the present;
+     * wider has nothing to show.  The renderer is built at the dump's
+     * aspect; --aspect (default: the dump's) only chooses the crop. */
+    const float recAspect = info.aspect;
+    float reqAspect = aspectGiven ? s.aspect : recAspect;
+    if (reqAspect < kAspect43) {
+        reqAspect = kAspect43; /* the box is 4:3 at least (rd__present_box) */
+    }
+    if (reqAspect > recAspect + 1e-3f) {
+        char a[16], b[16];
+        fprintf(stderr,
+                "%s: a dump drawn at %s cannot show %s: capture an aspect sweep (Shift+F12 in "
+                "photo mode)\n",
+                dump, aspectName(recAspect, a), aspectName(reqAspect, b));
+        return 1;
+    }
+    const bool crop = reqAspect < recAspect - 1e-3f;
+    s.aspect = recAspect;
+    if (crop && !pw && !list) {
+        printf("note: --aspect crops the --present picture only; a target is the recorded frame "
+               "(%s)\n",
+               aspectName(recAspect, (char[16]){0}));
+    }
+    /* the output the present renders into: the box of the requested aspect
+     * in --present WxH is filled by the recorded picture cropped to it, so
+     * the present draws the whole recorded picture at the same scale into
+     * an output as high as that box (the recorded aspect's box), and the
+     * centre columns the box takes are cut out after (cropPresent) */
+    RhiRect want = {0, 0, (int32_t)pw, (int32_t)ph};
+    uint32_t ow = pw, oh = ph;
+    if (pw && crop) {
+        rd__present_box(pw, ph, reqAspect, &want);
+        oh = (uint32_t)want.h;
+        ow = (uint32_t)((float)oh * recAspect + 0.5f);
+    }
+    /* --pass-dump renders the targets with no output, as --target did, and
+     * the present in a second context */
+    s.outputWidth = passDir ? 0 : ow;
+    s.outputHeight = passDir ? 0 : oh;
     /* --no-device (or --list without a device) loads the dump into a
        record-only renderer, lists it and renders nothing */
     if (noDevice && !list && !texDir && !meshName) {
@@ -738,68 +1075,22 @@ int main(int argc, char **argv)
     if (overlay) {
         rd_set_present_overlay(overlayTest, NULL);
     }
+    if (!noDevice && prevCount && !replayPrev()) {
+        rd_shutdown();
+        return 1;
+    }
     RdFrame pf, f;
-    memset(&pf, 0, sizeof(pf));
-    if (interpPrev && !rd__load_frame(interpPrev, &pf)) {
-        rd_shutdown();
+    const RdFrame *rf = prepareFrame(dump, &pf, &f);
+    if (!rf) {
         return 1;
-    }
-    if (!rd__load_frame(dump, &f)) {
-        rd__frame_free(&pf);
-        rd_shutdown();
-        return 1;
-    }
-    for (int k = 0; k < nopCount; k++) {
-        const RdCmdList *cl = &f.lists[nops[k].l];
-        for (uint32_t c = nops[k].a; c <= nops[k].b && c < cl->count; c++) {
-            if (!rd__cmd_is_state(cl->cmds[c].type)) {
-                cl->cmds[c].type = RDC_NOP;
-            }
-        }
-    }
-    if (noAa1) {
-        f.startState.aa1 = 0;
-        for (int l = 0; l < RD_LIST_COUNT; l++) {
-            for (uint32_t c = 0; c < f.lists[l].count; c++) {
-                if (f.lists[l].cmds[c].type == RDC_AA1) {
-                    f.lists[l].cmds[c].type = RDC_NOP;
-                }
-            }
-        }
-    }
-    const RdFrame *rf = &f;
-    if (interpPrev) {
-        /* the presenter's frame between the two */
-        RdInterpStats ist;
-        if (interpAny) {
-            pf.number = f.number - 1; /* the tick before, whatever was saved between */
-        }
-        rf = rd__interp_frame(&pf, &f, interpT, 1, &ist);
-        if (!rf) {
-            fprintf(stderr, "rd__interp_frame failed\n");
-            rd__frame_free(&pf);
-            rd__frame_free(&f);
-            rd_shutdown();
-            return 1;
-        }
-        printf("interp %u -> %u at %g: snap %u, %u keyed draws: %u blended, %u unmatched, %u "
-               "mismatched, %u jumped; %u mesh streams blended; %u blended as rotations; %u lights "
-               "re-paired; %u paired by place; %u grid STs blended, %u through the blended "
-               "camera\n",
-               pf.number, f.number, (double)interpT, ist.snap, ist.keyed, ist.lerped, ist.missing,
-               ist.mismatch, ist.jump, ist.morph, ist.rotated, ist.lightPaired, ist.placed,
-               ist.gridSt, ist.gridStCamera);
-        printf("interp: unmatched %u not drawn before, %u fewer before, %u left by the place "
-               "pairing, %u payload; %u paired with another place; %u of the tick before kept, "
-               "%u held; %u CPU-projected draws re-projected\n",
-               ist.unmatchedWhy[RD_UNMATCHED_ABSENT], ist.unmatchedWhy[RD_UNMATCHED_FEWER],
-               ist.unmatchedWhy[RD_UNMATCHED_UNPLACED], ist.unmatchedWhy[RD_UNMATCHED_PAYLOAD],
-               ist.apart, ist.prevKept, ist.prevHeld, ist.reprojected);
     }
     if (list) {
         RdStateBlock st = rf->startState;
         s_listed = 0;
         rd__walk(rf, (int)rf->keep, &st, listCmd, (void *)rf);
+        printf("dump: version %u, GS %ux%u, aspect %.4f (%s), visible width %g, cull width %u\n",
+               info.version, info.gsW, info.gsH, (double)info.aspect,
+               aspectName(info.aspect, (char[16]){0}), (double)info.wExact, info.cullW);
         printf("listed %u commands of frame %u (%ux%u, fba/pabe/texa/date per action)\n", s_listed,
                rf->number, rf->gsW, rf->gsH);
     }
@@ -816,7 +1107,7 @@ int main(int argc, char **argv)
         rd_shutdown();
         return 0;
     }
-    const bool replayed = rd__replay_frame(rf, (int)rf->keep, pw != 0);
+    const bool replayed = rd__replay_frame(rf, (int)rf->keep, pw != 0 && !passDir);
     if (replayed && stats) {
         /* the record rd__perf_end just closed (rd_perf_pop hands it out only
          * once its timestamps are in, RHI_FRAMES_IN_FLIGHT replays later) */
@@ -829,13 +1120,74 @@ int main(int argc, char **argv)
                (unsigned long long)pr->uploadBytes, pr->barriers, pr->copies, pr->screenCmds,
                pr->screenDraws);
     }
-    if (replayed) {
+    if (replayed && passDir) {
+        /* One frame, every target: the renderer keeps each target's contents
+         * after the replay (the readback of --target does the same), so
+         * the one replay serves them all.  The present picture is another
+         * replay, in a fresh context (output size, a retained target that a
+         * frame with keep reads back as the first replay left it), so each
+         * picture equals the one a process of its own would write. */
+        rc = 0;
+        int written = 0;
+        for (int k = 0; k < (int)(sizeof(kNames) / sizeof(kNames[0])); k++) {
+            if (kNames[k][0] == '\0') {
+                continue;
+            }
+            char name[1024];
+            snprintf(name, sizeof(name), "%s/%s.png", passDir, kNames[k]);
+            /* each readback may open a command list for its barrier and the
+             * Vulkan backend allows 8 a frame (VKR_MAX_CMD_LISTS): a new
+             * frame slot per target (the targets keep their contents) */
+            rhi_wait_frame();
+            if (writeTarget(k, name)) {
+                written++;
+            } else {
+                fprintf(stderr, "%s: readback or PNG write failed\n", kNames[k]);
+                rc = 1;
+            }
+        }
+        printf("%s: frame %u, %d targets -> %s (%u commands skipped)\n", dump, f.number, written,
+               passDir, rd__not_implemented_count());
+        if (pw) {
+            rd__frame_free(&f);
+            rd__frame_free(&pf);
+            rd_shutdown();
+            s.outputWidth = ow;
+            s.outputHeight = oh;
+            if (!rd_init(gw, gh, &s, NULL)) {
+                fprintf(stderr, "no usable device for the present\n");
+                return 1;
+            }
+            rd__set_not_implemented_fatal(false);
+            if (overlay) {
+                rd_set_present_overlay(overlayTest, NULL);
+            }
+            rf = prepareFrame(dump, &pf, &f);
+            if (!rf) {
+                return 1;
+            }
+            char name[1024];
+            snprintf(name, sizeof(name), "%s/PRESENT.png", passDir);
+            if (!rd__replay_frame(rf, (int)rf->keep, true) ||
+                !writePresent(name, ow, oh, want, pw, ph)) {
+                fprintf(stderr, "PRESENT: readback or PNG write failed\n");
+                rc = 1;
+            }
+        }
+    } else if (replayed) {
         uint32_t w = 0, h = 0;
         size_t cap = pw ? (size_t)pw * ph * 4 : (size_t)4096 * 4096 * 4;
         uint8_t *px = malloc(cap);
-        bool ok = px && (pw ? rd_read_presented(px, &w, &h)
-                            : rd__read_target(rd_target((RdTargetId)target), px, cap, &w, &h));
-        if (ok && rd_write_png(png, px, w, h, w * 4, 1)) {
+        bool ok = false;
+        if (pw) {
+            ok = writePresent(png, ow, oh, want, pw, ph);
+            w = pw;
+            h = ph;
+        } else if (px) {
+            ok = rd__read_target(rd_target((RdTargetId)target), px, cap, &w, &h) &&
+                 rd_write_png(png, px, w, h, w * 4, 1);
+        }
+        if (ok) {
             printf("%s: frame %u, %ux%u -> %s (%u commands skipped)\n", dump, f.number, w, h, png,
                    rd__not_implemented_count());
             rc = 0;

@@ -6,6 +6,11 @@
  *   F12   the frame shown: an rd dump of the last closed frame and a PNG of
  *         the picture, <pref>/dumps/frame-<time>-v<vsync>.rddump and .png,
  *         both paths logged (window_host.c, rd_dump_on_demand)
+ *   Shift+F12  in photo mode, the aspect sweep: the paused frame re-rendered
+ *         at 4:3, 16:9, 32:9, 48:9 and 60:9 into one zip,
+ *         <pref>/dumps/sweep-<time>.zip holding <aspect>.rddump and
+ *         <aspect>.png for each (window_host.c; PC only, there is no key
+ *         on Android)
  *   F11   the window: stats lines every second for 30 s instead of every
  *         10 s; again turns it off
  *
@@ -24,12 +29,23 @@
 
 typedef enum IcoHotkey {
     ICO_HOTKEY_NONE,
-    ICO_HOTKEY_FRAME_DUMP, /* F12 */
-    ICO_HOTKEY_STATS_FAST  /* F11 */
+    ICO_HOTKEY_FRAME_DUMP,  /* F12 */
+    ICO_HOTKEY_STATS_FAST,  /* F11 */
+    ICO_HOTKEY_ASPECT_SWEEP /* Shift+F12 */
 } IcoHotkey;
 
-/* The action of a key-down event (SDL keycode, whether it is a repeat). */
+/* The action of a key-down event (SDL keycode, whether it is a repeat), no
+   modifier held. */
 IcoHotkey ico_hotkey_for(unsigned int key, int repeat);
+/* The same with Shift held or not: Shift+F12 is the aspect sweep, Shift
+   changes nothing for the other keys. */
+IcoHotkey ico_hotkey_for_mod(unsigned int key, int repeat, int shift);
+
+/* The aspect sweep's files in dir: sweep-<stamp>.zip, and the prefix of the
+   loose files dump_zip.h ico_sweep_zip takes in (dir/sweep-<stamp>-).  0, or
+   -1 when a path does not fit (both then ""). */
+int ico_sweep_paths(const char *dir, const char *stamp, char *prefix, size_t prefix_size, char *zip,
+                    size_t zip_size);
 
 /* The stats line's period: ICO_STATS_FAST_PERIOD_NS while now is before
    fast_until, else ICO_STATS_PERIOD_NS. */
@@ -40,9 +56,10 @@ unsigned long long ico_stats_period_ns(unsigned long long now, unsigned long lon
 /* F11: the new fast_until (now + the span, or 0 when it was running). */
 unsigned long long ico_stats_fast_toggle(unsigned long long now, unsigned long long fast_until);
 
-/* F12's two files in dir: frame-<stamp>-v<vsync>.rddump and .png. 0, or -1
-   when either path does not fit (both then ""). */
+/* F12's three files in dir: frame-<stamp>-v<vsync>.rddump, .png and .zip
+   (the zip holds the rddump and the log, dump_zip.h). 0, or -1 when any
+   path does not fit (all three then ""). */
 int ico_frame_dump_paths(const char *dir, const char *stamp, unsigned int vsync, char *dump,
-                         size_t dump_size, char *png, size_t png_size);
+                         size_t dump_size, char *png, size_t png_size, char *zip, size_t zip_size);
 
 #endif /* ICO_PLATFORM_HOTKEYS_H */

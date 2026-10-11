@@ -1,10 +1,16 @@
-/* pan_test.c: the mirror mode's pan swap.
+/* pan_test.c: the mirror mode's pan swap, and the per-vsync block size.
  *
  *   swap    ico_audio_pan_mirror swaps left and right of every frame when
  *           mirror is set, in place, and leaves the block alone when not
  *   twice   swapping twice gives the block back byte for byte
  *   option  ico_opt_set_mirror / ico_opt_mirror, the value ico_audio_host_vsync
  *           reads per block
+ *   cadence the frames ico_audio_host_vsync renders per vsync depend on the
+ *           rate and the vsync count alone: 960 every vsync at 50 Hz;
+ *           800 801 801 801 801 (4004 a five) at 59.94 Hz from vsync 0,
+ *           the same on even and odd vsyncs.  The GS field (GS_CSR.FIELD,
+ *           host_loop.c) is no input: the audio service has no field
+ *           parity to fall out of phase with
  */
 #include <stdio.h>
 #include <string.h>
@@ -63,6 +69,22 @@ int main(void)
     CHECK(ico_opt_mirror() == 1, "the option on");
     ico_opt_set_mirror(0);
     CHECK(ico_opt_mirror() == 0, "the option off");
+
+    /* the cadence: the block sizes over 6000 vsyncs from vsync 0 */
+    {
+        static const int five[5] = {800, 801, 801, 801, 801};
+        int bad50 = 0, bad60 = 0;
+        long long sum60 = 0;
+        for (unsigned int i = 0; i < 6000; i++) {
+            bad50 += ico_audio_host_frames(50, i) != 960;
+            bad60 += ico_audio_host_frames(60, i) != five[i % 5];
+            sum60 += ico_audio_host_frames(60, i);
+        }
+        CHECK(bad50 == 0, "cadence 50 Hz: %d vsyncs not 960 frames", bad50);
+        CHECK(bad60 == 0, "cadence 59.94 Hz: %d vsyncs off the 800 801 801 801 801 cycle", bad60);
+        CHECK(sum60 == 6000LL * 48000 * 1001 / 60000,
+              "cadence 59.94 Hz: %lld frames over 6000 vsyncs (want 4804800)", sum60);
+    }
 
     if (failures) {
         printf("pan_test: %d failures\n", failures);

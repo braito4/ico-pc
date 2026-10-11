@@ -664,6 +664,10 @@ void rhi_cmd_copy_texture(RhiCommandList cl, RhiTexture src, RhiRect srcRegion, 
     if (!c || !s || !d) {
         return;
     }
+    if (s->samples > 1u || d->samples > 1u) {
+        DX_LOG("rhi_cmd_copy_texture: a multisampled texture is not copied (resolve it)");
+        return;
+    }
     dx_texture_copy_begin(c, d);
     const DxFormatMap *fm = &dx_formatMap[s->rhiFormat];
     D3D12_TEXTURE_COPY_LOCATION sl, dl;
@@ -696,6 +700,34 @@ void rhi_cmd_copy_texture(RhiCommandList cl, RhiTexture src, RhiRect srcRegion, 
                      (UINT)srcRegion.y + srcRegion.h,
                      1};
     ID3D12GraphicsCommandList_CopyTextureRegion(c->cl, &dl, (UINT)dstX, (UINT)dstY, 0, &sl, &box);
+}
+
+/* D3D12_RESOURCE_STATE_RESOLVE_DEST and _RESOLVE_SOURCE */
+#define DX_STATE_RESOLVE_DEST 0x1000u
+#define DX_STATE_RESOLVE_SOURCE 0x2000u
+
+void rhi_cmd_resolve_color(RhiCommandList cl, RhiTexture src, RhiTexture dst)
+{
+    DxCmdList *c = dx_get_cmd(cl);
+    DxTexture *s = dx_get_texture(src);
+    DxTexture *d = dx_get_texture(dst);
+    if (!c || !s || !d) {
+        return;
+    }
+    const DxFormatMap *fm = &dx_formatMap[s->rhiFormat];
+    if (s->samples <= 1u || d->samples > 1u || s->width != d->width || s->height != d->height ||
+        s->rhiFormat != d->rhiFormat || fm->depth || fm->isInteger) {
+        DX_LOG("rhi_cmd_resolve_color: needs a multisampled colour texture and a "
+               "single-sampled one of its size and format");
+        return;
+    }
+    /* the caller's COPY_SRC / COPY_DST (rhi.h), the resolve states around
+     * the resolve, and back: the tracked states stay the copy states */
+    dx_transition(c->cl, s->res, D3DP_STATE_COPY_SOURCE, DX_STATE_RESOLVE_SOURCE);
+    dx_transition(c->cl, d->res, D3DP_STATE_COPY_DEST, DX_STATE_RESOLVE_DEST);
+    ID3D12GraphicsCommandList_ResolveSubresource(c->cl, d->res, 0, s->res, 0, fm->view);
+    dx_transition(c->cl, s->res, DX_STATE_RESOLVE_SOURCE, D3DP_STATE_COPY_SOURCE);
+    dx_transition(c->cl, d->res, DX_STATE_RESOLVE_DEST, D3DP_STATE_COPY_DEST);
 }
 
 void rhi_cmd_copy_texture_to_buffer(RhiCommandList cl, RhiTexture src, RhiViewAspect aspect,
@@ -762,8 +794,8 @@ bool rhi_readback_texture(RhiTexture h, RhiViewAspect aspect, void *dst, size_t 
                           uint32_t *outRowPitch)
 {
     DxTexture *t = dx_get_texture(h);
-    if (!t || !dst) {
-        return false;
+    if (!t || !dst || t->samples > 1u) {
+        return false; /* a multisampled texture is resolved first (rhi.h) */
     }
     const DxFormatMap *fm = &dx_formatMap[t->rhiFormat];
     if (aspect == RHI_ASPECT_DEPTH && !fm->depth) {

@@ -105,7 +105,10 @@
 #include "pad_script.h"
 #include "tables.h"
 #include "trace_host.h"
-#include "options.h" /* the recording's effective stick_fix */
+#include "options.h"       /* the recording's effective stick_fix */
+#include "video_options.h" /* the recording's frame: ico_video_frame */
+
+extern int ScreenHeight; /* ico2/seki/include/GsBase.h */
 #ifdef __ANDROID__
 #include "host_android.h" /* port/platform/android: the version line */
 #include "iso_import.h"   /* the first start's copy of the chosen image */
@@ -118,7 +121,6 @@
 #include "modelpack.h" /* model packs */
 #include "settings.h"  /* port/ui: Display > Model pack's "None installed" */
 #include "texpack.h"   /* PCSX2 texture packs */
-#include "video_options.h"
 #include "window_host.h"
 
 #endif
@@ -377,8 +379,9 @@ static void timestamp(char *out, size_t size, const char *fmt)
 /* The config values the simulation depends on, written into the recording's
    header and compared when a recording is replayed as the pad script. */
 static const char *const record_keys[] = {
-    "video.video_mode",    "game.language",           "gameplay.mirror", "gameplay.stick_fix",
-    "gameplay.yorda_safe", "gameplay.developer_mode", "dev.start_stage",
+    "video.video_mode",   "game.language",       "gameplay.mirror",
+    "gameplay.stick_fix", "gameplay.yorda_safe", "gameplay.developer_mode",
+    "dev.start_stage",    "gameplay.door_fix",   "video.anti_aliasing",
 };
 
 #define RECORD_MAGIC "# ico-pc input recording"
@@ -413,6 +416,16 @@ static void record_header(char *out, size_t size, const char *stamp)
     /* gameplay.stick_fix's default differs by platform (on under Android):
        the value the run used, for a phone's recording played on a computer */
     PUT("# effective stick_fix = %d\n", ico_opt_stick_fix());
+    {
+        /* the frame the run starts with: the simulation's cull and the bird's
+           on-screen test read its width (gsFrame.w), so a replay needs the same */
+        IcoFrame fr;
+        char fl[96];
+
+        ico_video_frame(&fr, ScreenHeight);
+        ico_input_record_frame_lines(fl, sizeof(fl), fr.w, fr.aspect);
+        PUT("%s", fl);
+    }
     PUT("# the game's memory card folder at the start also decides the run (a Continue loads "
         "from it)\n");
     PUT("# <tick> <buttons-hex> lx ly rx ry: one line for each Main tick whose read differs "
@@ -474,10 +487,13 @@ static void record_check(const char *path)
     int first = 1;
     int recording = 0;
     int diffs = 0;
+    IcoFrame frame_now;
+    char fixmsg[96];
 
     if (f == NULL) {
         return;
     }
+    ico_video_frame(&frame_now, ScreenHeight);
     while (fgets(line, sizeof(line), f) != NULL && line[0] == '#') {
         char key[128], value[256], fixbuf[8];
         const char *now = NULL;
@@ -500,6 +516,10 @@ static void record_check(const char *path)
                    strcmp(key, "stick_fix") == 0) {
             snprintf(fixbuf, sizeof(fixbuf), "%d", ico_opt_stick_fix());
             now = fixbuf;
+        } else if (ico_input_record_frame_diff(line, frame_now.w, frame_now.aspect, fixmsg,
+                                               sizeof(fixmsg))) {
+            fprintf(stderr, "ico_pc: pad script recorded with %s\n", fixmsg);
+            diffs++;
         } else if (sscanf(line, "# build %255s", value) == 1) {
             strcpy(key, "build");
             now = ICO_BUILD_COMMIT;
@@ -1520,6 +1540,7 @@ static int host_main(int argc, char **argv)
     unsigned long ticks = 0;
     unsigned long watchdog;
     int have_ticks = 0;
+    int logs_ready;
     int picked;
     int warned = 0;
     int r;
@@ -1540,6 +1561,8 @@ static int host_main(int argc, char **argv)
         logs_dir[0] = '\0';
         log_path[0] = '\0';
     }
+    /* Traces and pad recordings still use the logs folder with --console. */
+    logs_ready = logs_dir[0] != '\0' && ico_make_dir(logs_dir) == 0;
     if (a.console && !have_console) {
         ico_host_message_box("--console: there is no console to log to (start ico_pc from a "
                              "command prompt); the log goes to logs\\ico-pc.log instead",
@@ -1548,7 +1571,7 @@ static int host_main(int argc, char **argv)
     }
     if (a.console) {
         log_path[0] = '\0';
-    } else if (log_path[0] == '\0' || ico_make_dir(logs_dir) != 0 ||
+    } else if (log_path[0] == '\0' || !logs_ready ||
                (keep_previous_log(logs_dir, log_path), ico_host_redirect_output(log_path) != 0)) {
         fprintf(stderr, "ico_pc: cannot write %s; logging to the console\n", log_path);
         log_path[0] = '\0';
@@ -1713,6 +1736,12 @@ static int host_main(int argc, char **argv)
         /* the pad recording's lines, then the log: on Windows
            stdout and stderr are fully buffered (host_config.h), so this is
            one write a vsync at most */
+        {
+            IcoFrame fr;
+
+            ico_video_frame(&fr, ScreenHeight);
+            ico_input_record_note_width(ico_host_main_ticks(), fr.w);
+        }
         ico_input_record_poll(ico_host_main_ticks());
         ico_host_log_flush();
 #ifndef ICO_HEADLESS

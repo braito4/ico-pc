@@ -56,6 +56,9 @@ void rd_frame_head(const RdFrameHead *head)
         return;
     }
     const int cur = rd_current_list();
+    f->aspect = head->aspect > 0.0f ? head->aspect : 4.0f / 3.0f;
+    f->wExact = head->wExact > 0.0f ? head->wExact : (float)head->gsW;
+    f->cullW = head->gsW;
     recordHead(f, 0, 0, head);
     recordHead(f, 1, 11, head);
     rd_select_list(cur);
@@ -240,28 +243,19 @@ void rd__fill_camera_cb(void *cbv, const RdCamera *cam)
         return;
     }
     memcpy(cb->view, cam->view, sizeof(cb->view));
-    memcpy(cb->proj, cam->proj43, sizeof(cb->proj));
-    /* widescreen: the renderer's projection is proj43 with its
-     * GS X compressed about the screen centre (2048) by (4/3) / aspect,
-     * X' = f X + (1 - f) 2048 W: the visible screen then shows aspect /
-     * (4/3) times as much horizontally (the cull side is GsBase.c
-     * gsbHostWidenCull).  The mesh and screen-prim shaders apply the same
-     * compression after their projection (g_space, rd_replay.c), so g_proj
-     * and g_viewProj agree with what is drawn.  Original: f = 1, untouched. */
-    const float f = g_rd.wideX > 0.0f ? g_rd.wideX : 1.0f;
-    if (f != 1.0f) {
-        for (int c = 0; c < 4; c++) {
-            cb->proj[c * 4 + 0] =
-                f * cam->proj43[c * 4 + 0] + (1.0f - f) * 2048.0f * cam->proj43[c * 4 + 3];
-        }
-    }
+    /* the game's screen matrix as it is: the native frame keeps the
+     * projection at every aspect (a world point lands on the same GS X, about
+     * 2048), only the window is wider (GsBase.c gsb_SetVSMatrixSub), so
+     * g_proj and g_viewProj are what the meshes and screen prims draw with */
+    memcpy(cb->proj, cam->proj, sizeof(cb->proj));
     mul44(cb->viewProj, cb->proj, cam->view);
     eyeOf(cam->view, cb->cameraPos);
     cb->cameraPos[3] = cam->cut ? 1.0f : 0.0f;
     cb->clip[0] = cam->nearZ;
     cb->clip[1] = cam->farZ;
     cb->clip[2] = cam->zoom;
-    /* Original: 4:3; Enhanced: the aspect option (proj above).  The
-     * gameplay matrices (matrixptr+0x80/+0xC0) never change. */
-    cb->clip[3] = cam->aspect43 / f;
+    /* the display aspect the game built the frame for (GsBase.c
+     * gsFrame.aspect: 4/3 at 4:3 and in older dumps).  The gameplay
+     * matrices (matrixptr+0x80/+0xC0) never change. */
+    cb->clip[3] = cam->aspect;
 }

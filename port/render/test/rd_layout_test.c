@@ -16,6 +16,19 @@
  *     texture-seam placeholder bound, TEX1 96 (linear/linear), FST UVs;
  *   - the glow sprite's gif_SetAlpha(1, 5, 0) is ALPHA 0x48;
  *   - nothing was written to a register the decoder does not decode;
+ *   - the full-frame decision (v0.6.0): the primary sprite and an item whose
+ *     grid rect spans 0 .. 640 (lt_rect_spans_grid: the pause and End Game
+ *     bars) are drawn inside gif_FullFrameBegin / End, RD_SPACE_FULLFRAME,
+ *     x scaled by the native frame's width / 640 (688 at 16:9: the item
+ *     covers GS 2048 -+ 344); an item that does not span (a menu row) stays
+ *     UI, 512 / 640 of the grid about the centre, whatever the frame's width;
+ *   - a full-frame item's sparkle points (gif_PointOffset in the item's
+ *     full-frame scope) are scaled by the native frame's width / 640 and
+ *     full-frame-tagged, reaching past the 4:3 box as the item does;
+ *   - the boot signs' backdrop (common/src/kanban.c, compiled in:
+ *     kanbanExec on a layout with no items): the 640 x 224 grid sprite is
+ *     full-frame, covering GS 2048 -+ 1024 at W = 2048 (48:9) in the
+ *     layout's colour, and the UI box's numbers (2048 -+ 256) at 512;
  *   - a row sprite under gif_HostDrawKey carries the key, blends half
  *     way between two frames (rd__interp_frame), and the sprite after the
  *     key ends is unkeyed and the current frame's.
@@ -38,6 +51,11 @@
 #include "DmaPacket.h"
 #include "GifHost.h"
 #include "GifPacket.h"
+#include "layout_texture.h"
+#include "kanban.h"
+#include "main.h"
+#include "charFileManager.h"
+#include "Texture.h"
 
 static int failures;
 
@@ -115,6 +133,56 @@ void sceDmaSend(void *ch, void *addr)
     (void)addr;
 }
 
+/* -------------------------------------------- what kanban.c imports */
+LtProperty texProperty[1];
+LtProp texLayout[4];
+TexRec texFile[1];
+const StgPre stageData[1];
+int systemStatus[12];
+PadState pad[16];
+
+TexData *tex_GetTextureData(int idx)
+{
+    (void)idx;
+    return NULL;
+}
+
+int tex_GetTextureNo(const char *name)
+{
+    (void)name;
+    return 0;
+}
+
+void tex_SetSamplingType(TexData *tex, int mag, int min)
+{
+    (void)tex;
+    (void)mag;
+    (void)min;
+}
+
+int tex_TransTexture(int no, int pri)
+{
+    (void)no;
+    (void)pri;
+    return 0;
+}
+
+int lt_ext_is_text_row(const LtProperty *e)
+{
+    (void)e;
+    return 0;
+}
+
+void lt_ext_draw_text_row(const LtProperty *e, const int box[4], const int uv[4],
+                          const unsigned char col[4], int prim)
+{
+    (void)e;
+    (void)box;
+    (void)uv;
+    (void)col;
+    (void)prim;
+}
+
 /* ------------------------------------------------------ the layout calls */
 
 /* layout_texture.c's SprRect / SprCol are GifRect / GifColor */
@@ -143,7 +211,9 @@ static void ltDrawPrimarySprite(void)
     gif_SetZTest(0);
     gif_SetZWrite(0);
     gif_SetAlpha(1, 7, 0);
+    gif_FullFrameBegin(); /* lt_draw_primary_sprite: the backdrop is a full-frame item */
     gif_SpriteSensitive(&r, 0xFFFFFFFF, (void *)0, &col, 1);
+    gif_FullFrameEnd();
     gif_SetZWrite(1);
     gif_SetZTest(1);
     gif_EndPacket();
@@ -153,20 +223,22 @@ static void ltDrawPrimarySprite(void)
    tex 0,0 128x64, display size from the texture, selected with the glow on */
 static GifRect s_box, s_ofs;
 
-static void displayTexture(void)
+static void displayItem(int dispX, int dispW)
 {
     GifRect ofs, box;
     GifColor col = {128, 128, 128, 0x80};
-    const int texU = 0, texV = 0, texW = 128, texH = 64, dispX = 100, dispY = 40;
+    const int texU = 0, texV = 0, texW = 128, texH = 64, dispY = 40;
+    int full;
 
     ofs.x = (texU << 4) + 8;
     ofs.y = (texV << 4) + 8;
     ofs.w = texW << 4;
     ofs.h = texH << 4;
-    box.w = ofs.w;
+    box.w = dispW != 0 ? dispW << 4 : ofs.w;
     box.h = ofs.h >> 1;
     box.x = (dispX - 320) * 16;
     box.y = (dispY - 113) * 16;
+    full = lt_rect_spans_grid(box.x, box.w); /* layout_texture.c: decided on the layout data */
 
     gif_StartPacketPri(11);
     gif_SetZTest(0);
@@ -179,7 +251,13 @@ static void displayTexture(void)
     ofs.h = ofs.h - 16;
     box.w = box.w - 16;
     ofs.w = ofs.w - 16;
+    if (full) {
+        gif_FullFrameBegin();
+    }
     gif_SpriteSensitiveOffset(&box, 0xFFFFFF9B, &ofs, &col, 1);
+    if (full) {
+        gif_FullFrameEnd();
+    }
     /* lt_glow_sprite with s = 0.5 */
     {
         GifRect rr = box;
@@ -190,12 +268,23 @@ static void displayTexture(void)
         rr.w = rr.w + 32;
         rr.h = rr.h + 32;
         gif_SetAlpha(1, 5, 0);
+        if (full) {
+            gif_FullFrameBegin();
+        }
         gif_SpriteSensitiveOffset(&rr, 0xFFFFFF9B, &ofs, &c, 1);
+        if (full) {
+            gif_FullFrameEnd();
+        }
     }
     gif_SetZWrite(1);
     gif_EndPacket();
     s_box = box;
     s_ofs = ofs;
+}
+
+static void displayTexture(void)
+{
+    displayItem(100, 0); /* a menu row: does not span the grid */
 }
 
 /* the head GsBase.c's hook records, then the frame */
@@ -251,7 +340,7 @@ static void checkRecording(const RdFrame *f)
     /* 1: lt_draw_primary_sprite, untextured */
     v = (const RdScreenVtx *)(f->payload + w.scr[0]->u[0]);
     CHECK(w.scr[0]->b[0] == RD_PRIM_SPRITES && w.scr[0]->u[1] == 2, "primary: one sprite");
-    CHECK(w.scr[0]->b[1] == RD_SPACE_UI, "primary: UI space");
+    CHECK(w.scr[0]->b[1] == RD_SPACE_FULLFRAME, "primary: full-frame space");
     {
         /* gif_SpriteSensitive: x * 512 / 640 in 1/16 px, + 0x8000 */
         int x0 = kPrimaryRect.x * 512 / 640 + 0x8000, y0 = kPrimaryRect.y * 512 / 224 + 0x8000;
@@ -321,6 +410,208 @@ static void checkPixels(void)
     CHECK(out[0] == 0 && out[1] == 0 && out[2] == 0, "pixel outside %u,%u,%u", out[0], out[1],
           out[2]);
     free(px);
+}
+
+/* ----------------------------------------- the full-frame decision, 16:9 */
+
+/* the frame at 16:9 (688 GS pixels across; gif_HostSetFrameWidth as
+   GsBase.c's latch calls it): the primary sprite at its real size, a menu
+   row and a bar whose grid rect spans 0 .. 640 */
+static void recordWide(void)
+{
+    static const uint8_t black[4] = {0, 0, 0, 0x80};
+    GifRect r = {-5120, -1808, 10240, 3616};
+    GifColor col = kPrimaryCol;
+
+    dl_SetDLPriority(0);
+    rd_set_target(rd_target(RD_TARGET_SCENE), rd_target(RD_TARGET_SCENE), 512, 512, 1);
+    rd_clear_target(rd_target(RD_TARGET_SCENE), black, 1, 0);
+    texSetTexReg(11);
+    gif_StartPacketPri(11);
+    gif_SetZTest(0);
+    gif_SetZWrite(0);
+    gif_SetAlpha(1, 7, 0);
+    gif_FullFrameBegin();
+    gif_SpriteSensitive(&r, 0xFFFFFFFF, (void *)0, &col, 1);
+    gif_FullFrameEnd();
+    gif_SetZWrite(1);
+    gif_SetZTest(1);
+    gif_EndPacket();
+    displayItem(100, 0); /* the row: UI */
+    displayItem(0, 640); /* the bar: spans */
+    dl_Swap();
+}
+
+static void checkWide(void)
+{
+    const int FW = 688;
+    Walk w;
+    gif_HostSetFrameWidth(FW);
+    CHECK(lt_rect_spans_grid(-320 * 16, 640 * 16) &&
+              !lt_rect_spans_grid((100 - 320) * 16, 128 * 16) &&
+              !lt_rect_spans_grid(-320 * 16 + 4, 640 * 16) &&
+              !lt_rect_spans_grid(-320 * 16, 640 * 16 - 1) &&
+              lt_rect_spans_grid(-330 * 16, 700 * 16),
+          "the bars span the grid, a menu row does not, a rect 1/16 short does not");
+    recordWide();
+    const RdFrame *f = rd__last_frame();
+    memset(&w, 0, sizeof(w));
+    if (!f) {
+        CHECK(0, "a closed wide frame");
+        gif_HostSetFrameWidth(512);
+        return;
+    }
+    RdStateBlock s = f->startState;
+    rd__walk(f, 0, &s, collect, &w);
+    CHECK(w.screens == 5, "wide: %d screen batches, expected 5 (primary, row, glow, bar, glow)",
+          w.screens);
+    if (w.screens == 5) {
+        const RdScreenVtx *v = (const RdScreenVtx *)(f->payload + w.scr[0]->u[0]);
+        const int c0 = 0x8000, half = FW / 2 * 16;
+        CHECK(w.scr[0]->b[1] == RD_SPACE_FULLFRAME, "wide: the primary sprite is full-frame");
+        CHECK(v[0].x == gs16(c0 - half) && v[1].x == gs16(c0 + half),
+              "wide: the primary sprite covers the native width, GS 2048 -+ 344 (%d, %d)", v[0].x,
+              v[1].x);
+        /* the menu row: UI, the 512 / 640 box about the centre at any width */
+        v = (const RdScreenVtx *)(f->payload + w.scr[1]->u[0]);
+        CHECK(w.scr[1]->b[1] == RD_SPACE_UI && w.scr[2]->b[1] == RD_SPACE_UI,
+              "wide: a menu row and its glow stay UI-tagged");
+        {
+            const int x0 = 0x8000 + ((100 - 320) * 16 + 4) * 512 / 640;
+            CHECK(v[0].x == gs16(x0), "wide: the row stays in the centred 4:3 box (%d, want %d)",
+                  v[0].x, gs16(x0));
+        }
+        /* the bar: full-frame, x scaled by the frame's width over 640 */
+        v = (const RdScreenVtx *)(f->payload + w.scr[3]->u[0]);
+        CHECK(w.scr[3]->b[1] == RD_SPACE_FULLFRAME && w.scr[4]->b[1] == RD_SPACE_FULLFRAME,
+              "wide: the spanning bar and its glow are full-frame-tagged");
+        {
+            const int bx = -320 * 16 + 4, bw = 640 * 16 - 16;
+            const int x0 = 0x8000 + bx * FW / 640, x1 = x0 + bw * FW / 640;
+            CHECK(v[0].x == gs16(x0) && v[1].x == gs16(x1),
+                  "wide: the bar is scaled by 688 / 640 (%d, %d, want %d, %d)", v[0].x, v[1].x,
+                  gs16(x0), gs16(x1));
+            CHECK(x0 <= c0 - half + 12 && x1 >= c0 + half - 12 * FW / 640 - 12,
+                  "wide: the bar reaches within its inset of both edges");
+        }
+    }
+    gif_HostSetFrameWidth(512);
+}
+
+/* a selected full-frame item's sparkle points (display_texture's
+   gif_PointOffset loop, inside the item's gif_FullFrameBegin scope) at a
+   native frame 688 wide: the grid's 0 and its right end 640 - 1 land at
+   2048 and 2048 + 319 * 688 / 640 GS pixels (past the 4:3 box's 2048 + 256),
+   full-frame-tagged, as the item they sparkle on is */
+static void checkSparkleWide(void)
+{
+    static const uint8_t black[4] = {0, 0, 0, 0x80};
+    const int FW = 688;
+    GifColor pcol = {0, 0, 0, 100};
+    int pt0[2] = {0, 0}, pt1[2] = {319 * 16, 0};
+    Walk w;
+
+    gif_HostSetFrameWidth(FW);
+    dl_SetDLPriority(0);
+    rd_set_target(rd_target(RD_TARGET_SCENE), rd_target(RD_TARGET_SCENE), 512, 512, 1);
+    rd_clear_target(rd_target(RD_TARGET_SCENE), black, 1, 0);
+    gif_StartPacketPri(11);
+    gif_SetZTest(0);
+    gif_FullFrameBegin();
+    gif_PointOffset(pt0, 0x800000, (unsigned char *)&pcol, 1);
+    gif_PointOffset(pt1, 0x800000, (unsigned char *)&pcol, 1);
+    gif_FullFrameEnd();
+    gif_EndPacket();
+    dl_Swap();
+    const RdFrame *f = rd__last_frame();
+    memset(&w, 0, sizeof(w));
+    if (!f) {
+        CHECK(0, "sparkle: a closed wide frame");
+        gif_HostSetFrameWidth(512);
+        return;
+    }
+    RdStateBlock s = f->startState;
+    rd__walk(f, 0, &s, collect, &w);
+    int xs[2], n = 0, full = 1;
+    for (int i = 0; i < w.screens; i++) {
+        const RdScreenVtx *v = (const RdScreenVtx *)(f->payload + w.scr[i]->u[0]);
+        full &= w.scr[i]->b[0] == RD_PRIM_POINTS && w.scr[i]->b[1] == RD_SPACE_FULLFRAME;
+        for (uint32_t k = 0; k < w.scr[i]->u[1] && n < 2; k++) {
+            xs[n++] = v[k].x;
+        }
+    }
+    CHECK(n == 2 && full, "sparkle: %d points, full-frame-tagged points %d", n, full);
+    if (n == 2) {
+        const int x1 = 0x8000 + 319 * 16 * FW / 640;
+        CHECK(xs[0] == gs16(0x8000) && xs[1] == gs16(x1) && x1 > 0x8000 + 256 * 16,
+              "sparkle: the grid's 0 and 319 at %d and %d (want %d and %d: the native frame's "
+              "width over 640)",
+              xs[0], xs[1], gs16(0x8000), gs16(x1));
+    }
+    gif_HostSetFrameWidth(512);
+}
+
+/* ------------------------------------------ the boot signs' backdrop */
+
+/* kanbanExec's backdrop (common/src/kanban.c, compiled into this test) at a
+   native frame W GS pixels wide: sign 2, a layout with no items, black at
+   colA 1 (the presents sign's backdrop in the v289 dump: 0, 0, 0, 127).
+   The sprite is the 640 x 224 grid, the PS2's whole picture, so it is a
+   full-frame item: x is 2048 -+ W / 2 (at 512 the UI box's numbers), y the
+   grid's 224 lines over the 512-line test frame. */
+static void checkKanbanBackdrop(int fw)
+{
+    static const uint8_t black[4] = {0, 0, 0, 0x80};
+    Walk w;
+    const RdFrame *f;
+    Kanban *k;
+
+    memset(texLayout, 0, sizeof(texLayout));
+    texLayout[2].first = texLayout[2].last = 0;
+    texLayout[2].fadeInTime = 1.0f;
+    texLayout[2].colA = 1.0f;
+    texLayout[2].defaultItem = -1;
+    systemStatus[0] = 0;
+    systemStatus[1] = 1;
+    kanbanReqAllDel();
+    k = kanbanReqAdd(2, 1);
+    CHECK(k != NULL, "kanban %d: the sign is added", fw);
+    gif_HostSetFrameWidth(fw);
+    dl_SetDLPriority(0);
+    rd_set_target(rd_target(RD_TARGET_SCENE), rd_target(RD_TARGET_SCENE), 512, 512, 1);
+    rd_clear_target(rd_target(RD_TARGET_SCENE), black, 1, 0);
+    kanbanExec();
+    dl_Swap();
+    gif_HostSetFrameWidth(512);
+    kanbanReqAllDel();
+    f = rd__last_frame();
+    if (!f) {
+        CHECK(0, "kanban %d: a closed frame", fw);
+        return;
+    }
+    memset(&w, 0, sizeof(w));
+    RdStateBlock s = f->startState;
+    rd__walk(f, 0, &s, collect, &w);
+    CHECK(w.screens == 1, "kanban %d: %d screen batches, expected 1 (the backdrop)", fw, w.screens);
+    if (w.screens != 1) {
+        return;
+    }
+    const RdScreenVtx *v = (const RdScreenVtx *)(f->payload + w.scr[0]->u[0]);
+    const int c0 = 0x8000, half = fw / 2 * 16;
+    const int y0 = c0 - 1792 * 512 / 224, y1 = y0 + 3584 * 512 / 224;
+    CHECK(w.scr[0]->b[0] == RD_PRIM_SPRITES && w.scr[0]->u[1] == 2, "kanban %d: one sprite", fw);
+    CHECK(w.scr[0]->b[1] == RD_SPACE_FULLFRAME, "kanban %d: the backdrop is full-frame (space %d)",
+          fw, w.scr[0]->b[1]);
+    CHECK(v[0].x == gs16(c0 - half) && v[1].x == gs16(c0 + half),
+          "kanban %d: the backdrop covers the native width, GS 2048 -+ %d (%d, %d, want %d, %d)",
+          fw, fw / 2, v[0].x, v[1].x, gs16(c0 - half), gs16(c0 + half));
+    CHECK(v[0].y == gs16(y0) && v[1].y == gs16(y1), "kanban %d: the grid's 224 lines (%d, %d)", fw,
+          v[0].y, v[1].y);
+    CHECK(v[1].rgba[0] == 0 && v[1].rgba[1] == 0 && v[1].rgba[2] == 0 && v[1].rgba[3] == 127,
+          "kanban %d: black at alpha 127 (%u,%u,%u,%u)", fw, v[1].rgba[0], v[1].rgba[1],
+          v[1].rgba[2], v[1].rgba[3]);
+    CHECK(w.st[0].ds.abe == 1 && w.st[0].ds.blend == RD_BLEND_LERP_AS && !w.st[0].ds.texEnabled,
+          "kanban %d: untextured, ALPHA 0x44", fw);
 }
 
 /* ------------------------------------------------- keyed layout rows */
@@ -414,6 +705,10 @@ int main(void)
         checkRecording(f);
     }
     checkKeyedRow();
+    checkWide();
+    checkSparkleWide();
+    checkKanbanBackdrop(2048);
+    checkKanbanBackdrop(512);
     rd_shutdown();
     if (failures) {
         printf("rd_layout_test: %d failures\n", failures);

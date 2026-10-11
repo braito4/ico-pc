@@ -16,7 +16,8 @@
 //       binds no depth attachment), where the GS reads a copy of the Z buffer
 //   t2  the 256x1 RGBA8 LUT in index order (ZFog.c's CLUT unswizzled from
 //       its CSM1 storage order)
-//   g_tex.xy   size of the depth source in GS pixels (the UV's texel units)
+//   g_tex.xy   size of the depth source in GS pixels (the UV's texel units;
+//              the native frame's width, rd_replay.c doFog)
 //   g_col.x    the sprite's GS Z
 //   g_col.y    the Z test (RdZTest: ALWAYS 1, GEQUAL 2, GREATER 3, NEVER 0)
 //   g_param.x  the depth source's GS Z scale (PSMZ32: 2^-33 on a float
@@ -31,6 +32,10 @@
 // texture (rd_fog_path.c), for a device whose depth reads fail.  The words
 // are the depth's bits: a float on D32S8, and on D24S8 the 24-bit step in
 // the low bits with the top byte undefined, so it is masked off.
+// fog_lut_ms_ps (FOG_MS, the MSAA epoch with sample-rate shading): t1 is
+// the multisampled scene depth (Texture2DMS) and the shader runs per sample
+// (SV_SampleIndex), reading that sample's depth, so the fog of each sample
+// is the fog of its own surface (rd_replay.c doFog).
 // The Z test is done here because the depth buffer being read cannot also be
 // the bound attachment; it compares the same depth values the pipeline
 // would (gs_z_to_depth of the sprite Z against the stored depth).
@@ -42,9 +47,14 @@ struct FogPSIn
     float4 pos : SV_Position;
     VK_LOC(0) float4 col : COLOR0;   // 0..255
     VK_LOC(1) float2 uv : TEXCOORD0; // normalised by g_tex.zw
+#ifdef FOG_MS
+    uint sampleIndex : SV_SampleIndex;
+#endif
 };
 
-#ifdef FOG_BUFFER
+#ifdef FOG_MS
+Texture2DMS<float> g_fogDepth : register(t1, space2);
+#elif defined(FOG_BUFFER)
 Texture2D<uint> g_fogDepth : register(t1, space2);
 #else
 Texture2D<float> g_fogDepth : register(t1, space2);
@@ -69,7 +79,7 @@ uint fog_gs_z(float d, float scale)
     return (uint)zf;
 }
 
-DualOut fog_lut_ps(FogPSIn i)
+GS_PS_ATTR GS_PS_OUT fog_lut_ps(FogPSIn i)
 {
     // the texel the sprite's UV addresses, nearest (ZFog.c writes TEX1 0);
     // in the depth target's own texels (g_scale, 1 in Original)
@@ -77,7 +87,9 @@ DualOut fog_lut_ps(FogPSIn i)
     float2 fsize = g_tex.xy * sc;
     int2 size = int2(round(fsize));
     int2 tc = clamp(int2(floor(i.uv * fsize)), int2(0, 0), size - 1);
-#ifdef FOG_BUFFER
+#ifdef FOG_MS
+    float d = g_fogDepth.Load(tc, int(i.sampleIndex));
+#elif defined(FOG_BUFFER)
     uint raw = g_fogDepth.Load(int3(tc, 0));
     // the step as the sampled UNORM depth gives it (raw / (2^24 - 1)), or
     // the float's own bits
@@ -120,5 +132,5 @@ DualOut fog_lut_ps(FogPSIn i)
     if (gs_alpha_discard(g_mode.z, g_mode.w, col.a)) {
         discard;
     }
-    return gs_dual_out(col, g_mode.x, g_blend.y);
+    GS_RETURN(col, i.pos);
 }

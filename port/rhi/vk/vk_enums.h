@@ -155,6 +155,7 @@ static const VkrLoadOpMap vkr_loadOpMap[RHI_LOAD_COUNT] = {
 #define VKR_SHIFT_B 0u
 #define VKR_SHIFT_T 16u
 #define VKR_SHIFT_S 32u
+#define VKR_SHIFT_U 48u /* -fvk-u-shift 48: the u registers (storage images) */
 
 typedef struct VkrBindTypeMap {
     bool set;
@@ -170,6 +171,10 @@ static const VkrBindTypeMap vkr_bindTypeMap[RHI_BIND_COUNT] = {
     /* offsets at bind time (vkCmdBindDescriptorSets) */
     [RHI_BIND_UNIFORM_BUFFER_DYNAMIC] = {true, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
                                          VKR_SHIFT_B},
+    /* the destination read: a RasterizerOrderedTexture2D (u register) and
+     * a SubpassInput (declared with the t register's binding) */
+    [RHI_BIND_STORAGE_TEXTURE] = {true, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VKR_SHIFT_U},
+    [RHI_BIND_INPUT_ATTACHMENT] = {true, VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, VKR_SHIFT_T},
 };
 
 /* Resource states: the image layout, and the pipeline stages and accesses
@@ -221,6 +226,17 @@ static const VkrStateMap vkr_stateMap[RHI_STATE_COUNT] = {
                             VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT},
     [RHI_STATE_PRESENT] = {true, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
                            VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0},
+    /* the destination read: a storage image the fragment shaders read and
+     * write (interlock), and a colour attachment they read as an input
+     * attachment (dynamic rendering local read) */
+    [RHI_STATE_STORAGE] = {true, VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                           VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT},
+    [RHI_STATE_RENDER_TARGET_READ] = {true, VK_IMAGE_LAYOUT_RENDERING_LOCAL_READ_KHR,
+                                      VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                          VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                                      VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+                                          VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                                          VK_ACCESS_INPUT_ATTACHMENT_READ_BIT},
 };
 
 /* RHI_FMT_D32F_S8 is the logical scene depth-stencil format; the device

@@ -1118,9 +1118,109 @@ static void testPointer(void)
     ui_mouse_reset();
 }
 
-/* Achievements > Achievement pop-ups: the list's item before Back, not on
-   Gameplay; Up from the first slot wraps to Back and Up again lands on it,
-   On by default, its value clicks as a step; Right flips the pop-ups live,
+/* the memory card file select (layout 14) with files 1, 2 and 5 used: the
+   proc records the item a Cross lands on */
+static int s_slotCross;
+
+static int slotProc(int first, int item)
+{
+    (void)first;
+    (void)item;
+    if (pad[0].flags & 0x40) {
+        s_slotCross = texLayout[14].curItem;
+    }
+    return -1;
+}
+
+/* the Save screen's empty slots: the game masks an empty slot's item row
+   62 + i and shows its picture row 52 + i in the same place.  On Save the
+   mouse picks the picture as the item (the pad can reach and save in it); on
+   Load it does not (the pad steps past it) */
+static void testSaveSlotPointer(void)
+{
+    static const int slotX[5] = {210, 260, 310, 360, 410};
+
+    ui_mouse_reset();
+    ui_mouse_set_view(640, 480, 0, 0, 640, 480);
+    useConfig("version = 1\n");
+    fakeTables();
+    lt_ext_reset();
+    ui_settings_reset();
+    memset(pad, 0, sizeof(pad));
+    pad[0].ana[0] = pad[0].ana[1] = pad[0].ana[2] = pad[0].ana[3] = 128;
+    init_layout_texture(2);
+    settle(54, 4);
+    for (int r = 52; r < 74; r++) {
+        setRow(r, -1, -1, -1, -1, -1, -1, 0);
+        texProperty[r].masked = texProperty[r].defaultMask = 1;
+        texProperty[r].selectable = 0;
+    }
+    for (int i = 0; i < 10; i++) {
+        const int used = i == 0 || i == 1 || i == 4;
+        LtProperty *item = &texProperty[62 + i];
+        LtProperty *pic = &texProperty[52 + i];
+        setRow(62 + i, -1, -1, -1, -1, -1, -1, i < 5 ? 70 : 90);
+        setRow(52 + i, -1, -1, -1, -1, -1, -1, i < 5 ? 70 : 90);
+        item->dispX = pic->dispX = slotX[i % 5];
+        item->dispW = pic->dispW = 40;
+        item->dispH = pic->dispH = 30;
+        item->leftItem = i % 5 > 0 ? 62 + i - 1 : -1;
+        item->rightItem = i % 5 < 4 ? 62 + i + 1 : -1;
+        item->upItem = i >= 5 ? 62 + i - 5 : -1;
+        item->downItem = i < 5 ? 62 + i + 5 : -1;
+        pic->selectable = 0;
+        item->masked = item->defaultMask = used ? 0 : 1;
+        pic->masked = pic->defaultMask = used ? 1 : 0;
+    }
+    setLayout(14, 52, 74, 62, -1);
+    texLayout[14].fadeInTime = 0.0f;
+    texLayout[14].proc = slotProc;
+    lt_switch_layout(14);
+    CHECK(settle(14, 60), "save slots: the screen (%d)", current_layout_id);
+    mouseFrame();
+    mouseFrame();
+
+    /* Save: the empty slot 4's picture is item 65 */
+    s_mcSaveSlots = 1;
+    s_slotCross = -1;
+    pointAt(55);
+    mouseFrame();
+    CHECK(texLayout[14].curItem == 65, "save: the cursor on the empty slot (%d)",
+          texLayout[14].curItem);
+    click();
+    mouseFrame();
+    CHECK(s_slotCross == 65, "save: a click is Cross on it (%d)", s_slotCross);
+    s_slotCross = -1;
+    pointAt(63);
+    mouseFrame();
+    CHECK(texLayout[14].curItem == 63, "save: a used slot still lands on its item (%d)",
+          texLayout[14].curItem);
+
+    /* Load: the empty slot gives nothing, the used one works */
+    s_mcSaveSlots = 0;
+    texLayout[14].curItem = 62;
+    s_slotCross = -1;
+    pointAt(55);
+    click();
+    mouseFrame();
+    CHECK(texLayout[14].curItem == 62 && s_slotCross == -1,
+          "load: the empty slot is no target (%d, %d)", texLayout[14].curItem, s_slotCross);
+    pointAt(63);
+    click();
+    mouseFrame();
+    CHECK(texLayout[14].curItem == 63 && s_slotCross == 63, "load: the used slot works (%d, %d)",
+          texLayout[14].curItem, s_slotCross);
+
+    texLayout[14].proc = NULL;
+    s_mcSaveSlots = 0;
+    ui_settings_reset();
+    ui_mouse_reset();
+}
+
+/* Achievements > Achievement pop-ups: the list's first item, not on
+   Gameplay; the page opens on it, Up wraps to Back and Down from Back
+   lands on it again, On by default, its value clicks as a step; Right
+   flips the pop-ups live,
    leaving the page writes [game] achievements only after a change, and Left
    reads On again */
 static void testAchievementPopups(void)
@@ -1140,19 +1240,21 @@ static void testAchievementPopups(void)
     const int c = ui_settings_page_rows(UI_PAGE_ACHIEVEMENTS, labels, NULL, values, 16);
     CHECK(c == UI_LIST_SLOTS && lt_ext_layout(achL)->curItem == labels[0],
           "pop-ups: the page opens on its first slot (%d slots)", c);
+    CHECK(strcmp(lt_ext_row_text(labels[0]), ui_str(UI_STR_OPT_ACH_POPUPS)) == 0,
+          "pop-ups: the first slot is the switch (\"%s\")", lt_ext_row_text(labels[0]));
     press(LT_PAD_UP);
     CHECK(lt_ext_layout(achL)->curItem == labels[UI_LIST_SLOTS - 1] &&
               strcmp(lt_ext_row_text(labels[UI_LIST_SLOTS - 1]), ui_str(UI_STR_BACK)) == 0,
           "pop-ups: Up wraps to Back (\"%s\")", lt_ext_row_text(labels[UI_LIST_SLOTS - 1]));
-    press(LT_PAD_UP);
-    const int s = UI_LIST_SLOTS - 2;
+    press(LT_PAD_DOWN);
+    const int s = 0;
     CHECK(lt_ext_layout(achL)->curItem == labels[s] &&
               strcmp(lt_ext_row_text(labels[s]), ui_str(UI_STR_OPT_ACH_POPUPS)) == 0 &&
               strcmp(lt_ext_row_text(values[s]), "On") == 0,
-          "pop-ups: Up again, the switch before Back (\"%s\" \"%s\")", lt_ext_row_text(labels[s]),
+          "pop-ups: Down from Back, the switch first (\"%s\" \"%s\")", lt_ext_row_text(labels[s]),
           lt_ext_row_text(values[s]));
     CHECK(lt_ext_pointer_role(values[s]) == LT_POINTER_STEP &&
-              lt_ext_pointer_role(values[0]) == LT_POINTER_AUTO,
+              lt_ext_pointer_role(values[1]) == LT_POINTER_AUTO,
           "pop-ups: its value steps on a click, an achievement's does not");
     CHECK(strcmp(ui_settings_value_text(UI_OPT_ACH_POPUPS), "On") == 0, "pop-ups: On by default");
     CHECK(ui_settings_save() == 0, "pop-ups: save without a change");
@@ -1184,8 +1286,6 @@ static void testAchievementPopups(void)
     openPage(mainL, iAch, UI_PAGE_ACHIEVEMENTS);
     CHECK(lt_ext_layout(achL)->curItem == labels[0],
           "pop-ups: the page opens on its first slot again");
-    press(LT_PAD_UP);
-    press(LT_PAD_UP);
     press(LT_PAD_LEFT);
     CHECK(strcmp(lt_ext_row_text(values[s]), "On") == 0 &&
               strcmp(ui_settings_value_text(UI_OPT_ACH_POPUPS), "On") == 0,
@@ -1368,6 +1468,250 @@ static void testResolutionCycle(void)
     CHECK(o.aspect == ICO_ASPECT_48_9, "Left from Auto is 48:9");
 }
 
+/* Display > Anti-aliasing ([video] anti_aliasing): a row on Display (the
+   rows that moved to Effects are no longer there), Off by default, stepping
+   only through the values the renderer's mask lists, saved as its name,
+   greyed and Off under the Original preset, with its note; both pages fit
+   with and without the game finished */
+static unsigned s_aaMask;
+
+static unsigned fakeAaMask(void)
+{
+    return s_aaMask;
+}
+
+static int rowDimmed(UiSettingsPage page, UiSettingsOpt opt)
+{
+    const int row = ui_settings_row_of(page, opt);
+    return row >= 0 && lt_ext_row_dim(row);
+}
+
+static void testAntiAlias(void)
+{
+    IcoVideoOptions o;
+    char p[1100];
+
+    ui_settings_set_aa_mask_query(fakeAaMask);
+    s_aaMask =
+        (1u << ICO_AA_OFF) | (1u << ICO_AA_SSAA2) | (1u << ICO_AA_SSAA4) | (1u << ICO_AA_MSAA4);
+
+    /* the pages */
+    for (int title = 1; title >= 0; title--) {
+        useConfig("version = 1\n[video]\npreset = \"enhanced\"\n");
+        stage_no = title ? 1 : 11;
+        const int mainL = enterMainKeep(title);
+        openPage(mainL, 0, UI_PAGE_DISPLAY);
+        const int row = ui_settings_row_of(UI_PAGE_DISPLAY, UI_OPT_ANTI_ALIAS);
+        CHECK(row >= 0 && !lt_ext_prop(row)->defaultMask && !lt_ext_prop(row)->masked,
+              "title %d: the Anti-aliasing row is on Display", title);
+        CHECK(row >= 0 && strcmp(lt_ext_row_text(row), "Anti-aliasing") == 0,
+              "title %d: its label \"%s\"", title, row >= 0 ? lt_ext_row_text(row) : "");
+        {
+            int l[16], op[16];
+            const int n = ui_settings_page_rows(UI_PAGE_DISPLAY, l, op, NULL, 16);
+            CHECK(n > 4 && op[2] == UI_OPT_ASPECT && op[3] == UI_OPT_ANTI_ALIAS &&
+                      op[4] == UI_OPT_WINDOW_MODE,
+                  "title %d: Anti-aliasing sits between Aspect ratio and Window mode", title);
+        }
+        CHECK(ui_settings_row_of(UI_PAGE_EFFECTS, UI_OPT_ANTI_ALIAS) < 0,
+              "title %d: not on Effects", title);
+        CHECK(ui_settings_row_of(UI_PAGE_DISPLAY, UI_OPT_FILTER) < 0 &&
+                  ui_settings_row_of(UI_PAGE_DISPLAY, UI_OPT_FULL_HEIGHT) < 0 &&
+                  ui_settings_row_of(UI_PAGE_DISPLAY, UI_OPT_BRIGHTNESS) < 0,
+              "title %d: Texture filtering, Full-height picture and Brightness left Display",
+              title);
+        CHECK(ui_settings_row_of(UI_PAGE_EFFECTS, UI_OPT_FILTER) >= 0 &&
+                  ui_settings_row_of(UI_PAGE_EFFECTS, UI_OPT_FULL_HEIGHT) >= 0 &&
+                  ui_settings_row_of(UI_PAGE_EFFECTS, UI_OPT_BRIGHTNESS) >= 0,
+              "title %d: they are on Effects", title);
+        for (int cleared = 0; cleared < 2; cleared++) {
+            gFlagGameClear = cleared;
+            frame(0);
+            checkPageFits(UI_PAGE_DISPLAY, cleared ? "Display (game finished)" : "Display");
+            press(0x10);
+            CHECK(settle(mainL, 60), "Display: back");
+            openPage(mainL, 1, UI_PAGE_EFFECTS);
+            checkPageFits(UI_PAGE_EFFECTS, cleared ? "Effects (game finished)" : "Effects");
+            press(0x10);
+            CHECK(settle(mainL, 60), "Effects: back");
+            openPage(mainL, 0, UI_PAGE_DISPLAY);
+        }
+        gFlagGameClear = 0;
+        press(0x10);
+        CHECK(settle(mainL, 60), "Display: back");
+    }
+
+    /* the note, on the cursor */
+    {
+        useConfig("version = 1\n[video]\npreset = \"enhanced\"\n");
+        const int mainL = enterMainKeep(1);
+        const int dispL = openPage(mainL, 0, UI_PAGE_DISPLAY);
+        const int note = noteStarting(UI_PAGE_DISPLAY, "Smooths jagged edges.");
+        CHECK(note >= 0 && strstr(lt_ext_row_text(note),
+                                  "Supersampling draws the picture larger and shrinks it") != NULL,
+              "the note text");
+        lt_ext_layout(dispL)->curItem = ui_settings_row_of(UI_PAGE_DISPLAY, UI_OPT_ANTI_ALIAS);
+        frame(0);
+        CHECK(note >= 0 && !lt_ext_prop(note)->masked, "the note shows on the cursor");
+        lt_ext_layout(dispL)->curItem = ui_settings_row_of(UI_PAGE_DISPLAY, UI_OPT_PRESET);
+        frame(0);
+        CHECK(note >= 0 && lt_ext_prop(note)->masked == 1, "the note hides elsewhere");
+        press(0x10);
+    }
+
+    /* Enhanced: Off by default; Right steps through the mask only */
+    useConfig("version = 1\n[video]\npreset = \"enhanced\"\n");
+    enterMainKeep(1);
+    CHECK(strcmp(ui_settings_value_text(UI_OPT_ANTI_ALIAS), "Off") == 0, "default: Off (%s)",
+          ui_settings_value_text(UI_OPT_ANTI_ALIAS));
+    CHECK(!rowDimmed(UI_PAGE_DISPLAY, UI_OPT_ANTI_ALIAS), "Enhanced: the row is not greyed");
+
+    static const struct {
+        int aa;
+        const char *text;
+        const char *name;
+    } kUp[] = {{ICO_AA_SSAA2, "2x supersampling", "ssaa2"},
+               {ICO_AA_SSAA4, "4x supersampling", "ssaa4"},
+               {ICO_AA_MSAA4, "MSAA 4x", "msaa4"},
+               {ICO_AA_OFF, "Off", "off"}};
+
+    for (unsigned i = 0; i < sizeof(kUp) / sizeof(kUp[0]); i++) {
+        ui_settings_step(UI_OPT_ANTI_ALIAS, 1);
+        ico_video_get(&o);
+        CHECK(o.antiAlias == kUp[i].aa && ico_video_anti_alias() == kUp[i].aa &&
+                  strcmp(ui_settings_value_text(UI_OPT_ANTI_ALIAS), kUp[i].text) == 0,
+              "Right, step %u: %s (%d, \"%s\")", i, kUp[i].name, o.antiAlias,
+              ui_settings_value_text(UI_OPT_ANTI_ALIAS));
+        CHECK(ui_settings_save() == 0, "save");
+        path(p, sizeof(p), "settings_test.toml");
+        IcoToml *t = ico_toml_load(p);
+        const char *s = t ? ico_toml_get(t, "video.anti_aliasing") : NULL;
+        CHECK(s != NULL && strcmp(s, kUp[i].name) == 0, "saved: video.anti_aliasing = \"%s\" (%s)",
+              kUp[i].name, s ? s : "(none)");
+        if (t != NULL) {
+            ico_toml_free(t);
+        }
+    }
+    /* Left from Off wraps to the last listed value, skipping the clear bits */
+    ui_settings_step(UI_OPT_ANTI_ALIAS, -1);
+    ico_video_get(&o);
+    CHECK(o.antiAlias == ICO_AA_MSAA4, "Left from Off is MSAA 4x (%d)", o.antiAlias);
+    ui_settings_step(UI_OPT_ANTI_ALIAS, -1);
+    ico_video_get(&o);
+    CHECK(o.antiAlias == ICO_AA_SSAA4, "Left from MSAA 4x is 4x supersampling (%d)", o.antiAlias);
+    /* a mask that lists everything: all six in order; MSAA 8x included */
+    s_aaMask = (1u << ICO_AA_COUNT) - 1;
+    for (int aa = ICO_AA_MSAA2; aa <= ICO_AA_MSAA8; aa++) {
+        ui_settings_step(UI_OPT_ANTI_ALIAS, 1);
+        ico_video_get(&o);
+        CHECK(o.antiAlias == aa, "full mask: Right gives %d (%d)", aa, o.antiAlias);
+    }
+    CHECK(strcmp(ui_settings_value_text(UI_OPT_ANTI_ALIAS), "MSAA 8x") == 0, "MSAA 8x reads so");
+    /* a mask with only the always-there values: MSAA from the file is stepped away */
+    s_aaMask = (1u << ICO_AA_OFF) | (1u << ICO_AA_SSAA2) | (1u << ICO_AA_SSAA4);
+    ui_settings_step(UI_OPT_ANTI_ALIAS, 1);
+    ico_video_get(&o);
+    CHECK(o.antiAlias == ICO_AA_OFF, "no MSAA listed: Right from 8x wraps to Off (%d)",
+          o.antiAlias);
+    ui_settings_step(UI_OPT_ANTI_ALIAS, -1);
+    ico_video_get(&o);
+    CHECK(o.antiAlias == ICO_AA_SSAA4, "no MSAA listed: Left from Off is 4x supersampling (%d)",
+          o.antiAlias);
+
+    /* the value from the file */
+    useConfig("version = 1\n[video]\npreset = \"enhanced\"\nanti_aliasing = \"msaa2\"\n");
+    enterMainKeep(1);
+    CHECK(strcmp(ui_settings_value_text(UI_OPT_ANTI_ALIAS), "MSAA 2x") == 0, "msaa2 from the file");
+
+    /* Original: Off, greyed, no step.  Loading preset "original" applies the
+       Original shortcut, which puts the stored option off too (options_test
+       test_video_anti_alias), so the stored ssaa2 is set at run time under
+       the Original rows: kept, off in force */
+    useConfig("version = 1\n[video]\npreset = \"original\"\n");
+    {
+        const int mainL = enterMainKeep(1);
+        ico_video_get(&o);
+        o.antiAlias = ICO_AA_SSAA2;
+        ico_video_set(&o);
+        const int dispL = openPage(mainL, 0, UI_PAGE_DISPLAY);
+        frame(0);
+        CHECK(strcmp(ui_settings_value_text(UI_OPT_ANTI_ALIAS), "Off") == 0,
+              "Original: reads Off (%s)", ui_settings_value_text(UI_OPT_ANTI_ALIAS));
+        CHECK(rowDimmed(UI_PAGE_DISPLAY, UI_OPT_ANTI_ALIAS), "Original: the row is greyed");
+        lt_ext_layout(dispL)->curItem = ui_settings_row_of(UI_PAGE_DISPLAY, UI_OPT_ANTI_ALIAS);
+        press(0x2000);
+        ico_video_get(&o);
+        CHECK(o.antiAlias == ICO_AA_SSAA2 && ico_video_anti_alias() == ICO_AA_OFF,
+              "Original: Right does not step (%d)", o.antiAlias);
+        ui_settings_step(UI_OPT_ANTI_ALIAS, 1);
+        ico_video_get(&o);
+        CHECK(o.antiAlias == ICO_AA_SSAA2, "Original: the step call does not change it");
+        /* the Preset to Enhanced frees it */
+        ui_settings_step(UI_OPT_PRESET, 1);
+        frame(0);
+        CHECK(!rowDimmed(UI_PAGE_DISPLAY, UI_OPT_ANTI_ALIAS), "Enhanced preset: not greyed");
+        press(0x10);
+    }
+    ui_settings_set_aa_mask_query(NULL);
+}
+
+/* Gameplay > East Reflector door fix ([gameplay] door_fix): a row from the title and
+   the pause menu, Off by default; a step turns it on and sets the key, the
+   saved file has it, its note shows on the cursor, and the page with the
+   game finished (every row shown) still fits */
+static void testDoorFix(void)
+{
+    char p[1100];
+
+    gFlagGameClear = 0;
+    for (int title = 1; title >= 0; title--) {
+        stage_no = title ? 1 : 11;
+        const int mainL = enterMain(title);
+        openPage(mainL, 5, UI_PAGE_GAMEPLAY);
+        const int row = ui_settings_row_of(UI_PAGE_GAMEPLAY, UI_OPT_DOOR_FIX);
+        CHECK(row >= 0 && !lt_ext_prop(row)->defaultMask && !lt_ext_prop(row)->masked,
+              "title %d: the East Reflector door fix row", title);
+        CHECK(row >= 0 && strcmp(lt_ext_row_text(row), "East Reflector door fix") == 0,
+              "title %d: its label \"%s\"", title, row >= 0 ? lt_ext_row_text(row) : "");
+        CHECK(ico_opt_door_fix() == 0 &&
+                  strcmp(ui_settings_value_text(UI_OPT_DOOR_FIX), "Off") == 0,
+              "title %d: Off by default", title);
+        press(0x10);
+        CHECK(settle(mainL, 60), "Gameplay: back");
+    }
+
+    /* the game finished, from the pause menu: all six rows and Back */
+    gFlagGameClear = 1;
+    stage_no = 11;
+    const int mainL = enterMain(0);
+    const int gameL = openPage(mainL, 5, UI_PAGE_GAMEPLAY);
+    checkPageFits(UI_PAGE_GAMEPLAY, "Gameplay (cleared, with East Reflector door fix)");
+    const int row = ui_settings_row_of(UI_PAGE_GAMEPLAY, UI_OPT_DOOR_FIX);
+    lt_ext_layout(gameL)->curItem = row;
+    press(0x2000);
+    CHECK(ico_opt_door_fix() == 1 && strcmp(ui_settings_value_text(UI_OPT_DOOR_FIX), "On") == 0 &&
+              ico_config_get_bool("gameplay.door_fix", 0) == 1,
+          "Right: East Reflector door fix On and the key set");
+    const int note = noteStarting(UI_PAGE_GAMEPLAY, "Holding hands");
+    CHECK(note >= 0 && !lt_ext_prop(note)->masked,
+          "the East Reflector door fix note on the cursor");
+    CHECK(ui_settings_save() == 0, "save");
+    path(p, sizeof(p), "settings_test.toml");
+    IcoToml *t = ico_toml_load(p);
+    CHECK(t != NULL && ico_toml_get_bool(t, "gameplay.door_fix", 0) == 1,
+          "saved: gameplay.door_fix = true");
+    if (t != NULL) {
+        ico_toml_free(t);
+    }
+    press(0x8000);
+    CHECK(ico_opt_door_fix() == 0 && ico_config_get_bool("gameplay.door_fix", 1) == 0,
+          "Left: East Reflector door fix Off again");
+    press(0x10);
+    CHECK(settle(mainL, 60), "Gameplay: back");
+    ico_opt_set_door_fix(0);
+    gFlagGameClear = 0;
+}
+
 int main(int argc, char **argv)
 {
     snprintf(s_dir, sizeof(s_dir), "%s", argc > 1 ? argv[1] : ".");
@@ -1389,6 +1733,7 @@ int main(int argc, char **argv)
     testTitleReturn();
     /* the mouse pointer in the menus */
     testPointer();
+    testSaveSlotPointer();
     /* Gameplay > Achievement pop-ups */
     testAchievementPopups();
     /* Remap controls: swap on conflict, the menu note */
@@ -1398,6 +1743,10 @@ int main(int argc, char **argv)
     testEscapeNewGame();
     /* Display > Resolution and Aspect ratio cycles */
     testResolutionCycle();
+    /* Display > Anti-aliasing, the Display/Effects split */
+    testAntiAlias();
+    /* Gameplay > East Reflector door fix */
+    testDoorFix();
     if (failures) {
         printf("settings_extra_test: %d failure(s)\n", failures);
         return 1;

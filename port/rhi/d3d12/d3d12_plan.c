@@ -23,6 +23,12 @@ uint32_t d3dp_texture_state(RhiState s, bool depthFormat)
         return D3DP_STATE_COPY_DEST;
     case RHI_STATE_PRESENT:
         return D3DP_STATE_PRESENT;
+    case RHI_STATE_STORAGE:
+        return D3DP_STATE_UNORDERED_ACCESS;
+    case RHI_STATE_RENDER_TARGET_READ:
+        /* no attachment read on D3D12 (RhiLimits.rasterOrderAttachment is
+         * false): an ordinary render target */
+        return D3DP_STATE_RENDER_TARGET;
     case RHI_STATE_UNDEFINED:
     case RHI_STATE_COUNT:
     default:
@@ -123,6 +129,8 @@ D3dpRegClass d3dp_reg_class(RhiBindType t)
         return D3DP_REG_B;
     case RHI_BIND_SAMPLER:
         return D3DP_REG_S;
+    case RHI_BIND_STORAGE_TEXTURE:
+        return D3DP_REG_U;
     case RHI_BIND_STORAGE_BUFFER:
     case RHI_BIND_SAMPLED_TEXTURE:
     default:
@@ -138,8 +146,8 @@ bool d3dp_layout_build(const RhiBindSlot *slots, uint32_t count, D3dpLayout *out
     }
     for (uint32_t i = 0; i < count; i++) {
         const RhiBindSlot *s = &slots[i];
-        if ((uint32_t)s->type >= RHI_BIND_COUNT) {
-            return false;
+        if ((uint32_t)s->type >= RHI_BIND_COUNT || s->type == RHI_BIND_INPUT_ATTACHMENT) {
+            return false; /* no input attachments on D3D12 (rhi.h) */
         }
         for (uint32_t j = 0; j < i; j++) {
             if (slots[j].slot == s->slot &&

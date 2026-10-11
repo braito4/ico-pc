@@ -23,16 +23,45 @@ static const char *const expected[] = {
     "yuv_ps",          "yuv_vs",
 };
 
+/* the anti-aliasing's (rd_present.c, rd_replay.c's MSAA epoch) */
+static const char *const expectedAa[] = {"aa_reduce_ps", "depth_resolve_ps", "depth_upsample_ps"};
+
 /* the same entries compiled with other macros: the fog reading the
- * depth's words (FOG_BUFFER, rd_fog_path.c), with and without the second
- * output */
-static const char *const expectedVariants[] = {"fog_lut_buffer_ps", "fog_lut_buffer_ps_nodual"};
+ * depth's words (FOG_BUFFER, rd_fog_path.c) and the multisampled depth per
+ * sample (FOG_MS, the MSAA epoch), with and without the second output */
+static const char *const expectedVariants[] = {"fog_lut_buffer_ps", "fog_lut_buffer_ps_nodual",
+                                               "fog_lut_ms_ps", "fog_lut_ms_ps_nodual"};
 
 /* the gs_dual_out entries without the second output (ICO_NO_DUAL) */
 static const char *const expectedNoDual[] = {
     "sprite_ps_nodual",     "sprite_texa_ps_nodual", "sprite_aa1_ps_nodual",
     "sprite_stq_ps_nodual", "fog_lut_ps_nodual",     "font_ps_nodual",
     "vu_ps_nodual",         "vu_texa_ps_nodual",     "font_sheet_ps_nodual",
+};
+
+/* the gs_dual_out entries computing the GS blend from the destination
+ * (ICO_DST_READ: rasterizer-ordered view, attachment read) */
+static const char *const expectedDst[] = {
+    "sprite_ps_dstrov",
+    "sprite_ps_dstatt",
+    "sprite_texa_ps_dstrov",
+    "sprite_texa_ps_dstatt",
+    "sprite_aa1_ps_dstrov",
+    "sprite_aa1_ps_dstatt",
+    "sprite_stq_ps_dstrov",
+    "sprite_stq_ps_dstatt",
+    "fog_lut_ps_dstrov",
+    "fog_lut_ps_dstatt",
+    "fog_lut_buffer_ps_dstrov",
+    "fog_lut_buffer_ps_dstatt",
+    "font_ps_dstrov",
+    "font_ps_dstatt",
+    "font_sheet_ps_dstrov",
+    "font_sheet_ps_dstatt",
+    "vu_ps_dstrov",
+    "vu_ps_dstatt",
+    "vu_texa_ps_dstrov",
+    "vu_texa_ps_dstatt",
 };
 
 int main(void)
@@ -87,6 +116,13 @@ int main(void)
             failures++;
         }
     }
+    const size_t nAa = sizeof(expectedAa) / sizeof(expectedAa[0]);
+    for (size_t i = 0; i < nAa; i++) {
+        if (!ico_find_shader(expectedAa[i])) {
+            printf("FAIL %s: not in the table\n", expectedAa[i]);
+            failures++;
+        }
+    }
     const size_t nNoDual = sizeof(expectedNoDual) / sizeof(expectedNoDual[0]);
     for (size_t i = 0; i < nNoDual; i++) {
         if (!ico_find_shader(expectedNoDual[i])) {
@@ -101,9 +137,17 @@ int main(void)
             failures++;
         }
     }
-    if (g_icoShaderCount != sizeof(expected) / sizeof(expected[0]) + nNoDual + nVariants) {
+    const size_t nDst = sizeof(expectedDst) / sizeof(expectedDst[0]);
+    for (size_t i = 0; i < nDst; i++) {
+        if (!ico_find_shader(expectedDst[i])) {
+            printf("FAIL %s: not in the table\n", expectedDst[i]);
+            failures++;
+        }
+    }
+    if (g_icoShaderCount !=
+        sizeof(expected) / sizeof(expected[0]) + nAa + nNoDual + nVariants + nDst) {
         printf("FAIL table has %u entries, expected %zu\n", g_icoShaderCount,
-               sizeof(expected) / sizeof(expected[0]) + nNoDual + nVariants);
+               sizeof(expected) / sizeof(expected[0]) + nAa + nNoDual + nVariants + nDst);
         failures++;
     }
     printf("shaders_table_test: %s\n", failures ? "FAILED" : "ok");

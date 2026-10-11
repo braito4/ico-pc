@@ -371,6 +371,67 @@ static bool dx_create_heaps(void)
            d3dp_slots_init(&g_dx.dsvSlots, DX_DSV_SLOTS);
 }
 
+/* The sample counts (2, 4, 8) every multisampled target the renderer makes
+ * takes (RhiLimits.msaaCounts): a quality level for RGBA8 UNORM and UINT
+ * and the scene's depth-stencil */
+static uint32_t dx_msaa_counts(void)
+{
+    static const DXGI_FORMAT fmts[3] = {DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UINT,
+                                        DXGI_FORMAT_D32_FLOAT_S8X24_UINT};
+    uint32_t counts = 1u;
+    for (uint32_t n = 2u; n <= 8u; n *= 2u) {
+        bool all = true;
+        for (int i = 0; i < 3 && all; i++) {
+            D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS q;
+            memset(&q, 0, sizeof(q));
+            q.Format = fmts[i];
+            q.SampleCount = n;
+            q.Flags = D3D12_MULTISAMPLE_QUALITY_LEVELS_FLAG_NONE;
+            all = SUCCEEDED(ID3D12Device_CheckFeatureSupport(
+                      g_dx.device, D3D12_FEATURE_MULTISAMPLE_QUALITY_LEVELS, &q, sizeof(q))) &&
+                  q.NumQualityLevels > 0;
+        }
+        if (all) {
+            counts |= n;
+        }
+    }
+    DX_LOG("multisampling: sample counts 0x%x", counts);
+    return counts;
+}
+
+/* The destination read (RhiLimits.rov): rasterizer-ordered views
+ * (D3D12_OPTIONS.ROVsSupported) and typed UAV loads and stores of
+ * R8G8B8A8_UNORM (the read-modify-write of the target: a UAV typed load of
+ * it is one of the "additional formats", TypedUAVLoadAdditionalFormats,
+ * confirmed by the format's own support bits).  ICO_DX_FAKE_NO_DST=1
+ * reports none. */
+static bool dx_rov_supported(void)
+{
+    const char *noDst = getenv("ICO_DX_FAKE_NO_DST");
+    if (noDst && noDst[0] && noDst[0] != '0') {
+        DX_LOG("destination read: off (ICO_DX_FAKE_NO_DST)");
+        return false;
+    }
+    D3D12_FEATURE_DATA_D3D12_OPTIONS o;
+    memset(&o, 0, sizeof(o));
+    if (FAILED(ID3D12Device_CheckFeatureSupport(g_dx.device, D3D12_FEATURE_D3D12_OPTIONS, &o,
+                                                sizeof(o)))) {
+        return false;
+    }
+    D3D12_FEATURE_DATA_FORMAT_SUPPORT fs;
+    memset(&fs, 0, sizeof(fs));
+    fs.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    const bool fmt = SUCCEEDED(ID3D12Device_CheckFeatureSupport(
+                         g_dx.device, D3D12_FEATURE_FORMAT_SUPPORT, &fs, sizeof(fs))) &&
+                     (fs.Support1 & D3D12_FORMAT_SUPPORT1_TYPED_UNORDERED_ACCESS_VIEW) &&
+                     (fs.Support2 & D3D12_FORMAT_SUPPORT2_UAV_TYPED_LOAD) &&
+                     (fs.Support2 & D3D12_FORMAT_SUPPORT2_UAV_TYPED_STORE);
+    const bool ok = o.ROVsSupported && o.TypedUAVLoadAdditionalFormats && fmt;
+    DX_LOG("destination read: ROVs %s, typed UAV loads of RGBA8 %s", o.ROVsSupported ? "yes" : "no",
+           o.TypedUAVLoadAdditionalFormats && fmt ? "yes" : "no");
+    return ok;
+}
+
 static void dx_fill_limits(void)
 {
     RhiLimits *o = &g_dx.limits;
@@ -400,6 +461,14 @@ static void dx_fill_limits(void)
     /* texture packs: BC1/2/3/7 are required of every D3D12 device
      * (feature level 11_0) */
     o->bcTextures = true;
+    /* multisampling: the counts every format takes; a shader reading
+     * SV_SampleIndex runs per sample on every device */
+    o->msaaCounts = dx_msaa_counts();
+    o->sampleRateShading = true;
+    /* the destination read: ROVs (no interlock or attachment read here) */
+    o->rov = dx_rov_supported();
+    o->fragmentInterlock = false;
+    o->rasterOrderAttachment = false;
 }
 
 /* ------------------------------------------------------------- lifecycle */

@@ -54,6 +54,19 @@ void ico_input_record_flush(void);
 /* Writes the last sample and the closing comment and closes the file
    (idempotent; atexit-safe). */
 void ico_input_record_close(void);
+/* The header's two frame lines for a native frame width and display aspect:
+   "# effective gs_width = W" and "# effective aspect = A" (A with four
+   decimals), each with its newline; the length, as snprintf returns it. */
+int ico_input_record_frame_lines(char *out, size_t size, int gs_width, float aspect);
+/* A recording header line against this run's frame: 1 and a message
+   ("gs_width = 688; this run has 512") in msg when line is a gs_width or
+   aspect line that differs, else 0. */
+int ico_input_record_frame_diff(const char *line, int gs_width, float aspect, char *msg,
+                                size_t size);
+/* The native frame width in force at `tick` (once per vsync, main_host.c):
+   the first call only remembers it (the header carries it); a change writes
+   the comment "# tick N gs_width W". Does nothing without a recording. */
+void ico_input_record_note_width(unsigned int tick, int gs_width);
 /* Lines written so far, not counting comments (tests). */
 unsigned int ico_input_record_lines(void);
 

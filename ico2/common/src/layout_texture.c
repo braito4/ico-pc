@@ -113,21 +113,36 @@ static const SprRect primarySpriteRect = {-5120, -1808, 10240, 3616}; /* derived
 
 #ifdef ICO_RD
 
-/* PC port (renderer wave 7, R7a): the primary sprite is a full-screen
-   backdrop, so a widescreen presentation stretches it across the width
-   instead of keeping it in the centred 4:3 box with the rest of the layout
-   (rd.h rd_set_space_override, RD_SPACE_FULLSCREEN = 2; GifHost.h
-   gif_HostFlush emits what the decoder holds on either side). */
-extern int rd_set_space_override(int space);
-extern void gif_HostFlush(void);
+/* PC port (v0.6.0, W3-UI): the 2D layer is a centred 4:3 box, but a layout's
+   primary sprite is a full-frame backdrop and so is an item whose 640-grid
+   rect spans the grid (the pause and End Game bars).  Both are drawn between
+   gif_FullFrameBegin and gif_FullFrameEnd (GifPacket.h): the 640-grid helpers
+   then scale x by the native frame width / 640 and the window build tags the
+   primitives RD_SPACE_FULLFRAME.  Decided on the layout's data, never on
+   pixels.  Only x is scaled and the UV kept, which is the picture
+   extended: every spanning item of the shipped tables (the bars at grid
+   lines 0 and 200, 640 x 70 and 640 x 60, texProperty 178/179 to 431/432
+   in layouts 17 to 64) samples the single texel (10, 110) of
+   text/menu_*_01.tm2 (texW = texH = 1), a flat colour, so stretching it
+   is drawing more of it; the primary sprite is untextured. */
+extern void gif_FullFrameBegin(void);
+extern void gif_FullFrameEnd(void);
 /* renderer R7d: GifHost.h's key of the decoder's primitives, so the
    presenter matches a row's sprites between ticks by the row (its
    texProperty entry) and blends their moves and fades */
 extern void gif_HostDrawKey(const void *obj, int part, int ordinal);
 
 #define LT_HOST_KEY(obj, part) gif_HostDrawKey((obj), (part), 0)
+#define LT_FULL_BEGIN(full)                                                                        \
+    if (full)                                                                                      \
+    gif_FullFrameBegin()
+#define LT_FULL_END(full)                                                                          \
+    if (full)                                                                                      \
+    gif_FullFrameEnd()
 #else
 #define LT_HOST_KEY(obj, part) ((void)0)
+#define LT_FULL_BEGIN(full) ((void)0)
+#define LT_FULL_END(full) ((void)0)
 #endif
 
 static void display_texture_fade_cancel_chk(int from, int to)
@@ -458,7 +473,7 @@ static LtProperty *ltHostTextRow;
 
 /* the pulsing highlight sprite, inlined three times by display_texture */
 static inline void lt_glow_sprite(SprRect *box, SprRect *ofs, int r, int g, int b, float t, int dx,
-                                  int dy) /* derived name */
+                                  int dy, int full) /* derived name */
 {
     SprRect rr = *box;
     SprCol c = {r, g, b, 127};
@@ -478,7 +493,9 @@ static inline void lt_glow_sprite(SprRect *box, SprRect *ofs, int r, int g, int 
                              (const unsigned char *)&c, 1);
         return;
     }
+    LT_FULL_BEGIN(full);
     gif_SpriteSensitiveOffset(&rr, 0xFFFFFF9B, ofs, &c, 1);
+    LT_FULL_END(full);
 }
 
 /* a file static */
@@ -494,6 +511,7 @@ static void display_texture(int no, LtProperty *e)
 
     int sel;
     int i;
+    int full; /* the item spans the grid: a full-frame item */
     /* PC port (6C): a port row in a layout chained after the current one
        with no cursor of its own (the Settings entry rows after the Options
        and title rows) is selected and dimmed by the current layout's
@@ -520,6 +538,7 @@ static void display_texture(int no, LtProperty *e)
         box.x = (e->dispX - 320) * 16;
     }
     box.y = (e->dispY - 113) * 16;
+    full = lt_rect_spans_grid(box.x, box.w);
 
     sel = (e == &LT_PROP(LT_LAYOUT(LT_CUR_NO).curItem));
     if (sel && lt_item_select_disable == 0 && fadeState == 2 && e->selectable == 0) {
@@ -529,12 +548,17 @@ static void display_texture(int no, LtProperty *e)
         pcol.a = 127;
         gif_StartPacketPri(11);
         gif_SetZTest(0);
+        /* PC port: a full-frame item's sparkle points are scattered over
+           the item as it is drawn, the native frame's width (the same
+           count; at 4:3 the frame is the 4:3 box) */
+        LT_FULL_BEGIN(full);
         for (i = 0; i < box.w * box.h / 1200; i++) {
             u.pt[0] = box.x + rand() % box.w;
             u.pt[1] = box.y + rand() % box.h;
             pcol.a = rand() % 127;
             gif_PointOffset(u.pt, 0x800000, &pcol, 1);
         }
+        LT_FULL_END(full);
         gif_EndPacket();
     }
     if (e->masked == 0) {
@@ -603,18 +627,22 @@ static void display_texture(int no, LtProperty *e)
         if (ltHostTextRow != 0) {
             lt_ext_draw_text_row(e, (const int *)&box, (const int *)&ofs,
                                  (const unsigned char *)&u.col, 0);
-        } else
+        } else {
+            LT_FULL_BEGIN(full);
             gif_SpriteSensitiveOffset(&box, 0xFFFFFF9B, &ofs, &u.col, 1);
+            LT_FULL_END(full);
+        }
         LT_HOST_KEY(e, 1); /* the glow sprites */
 
 #undef LT_CUR_NO
         if (e->selectable != 0 && sel != 0 && fadeState == 8) {
             float t = (float)fadeCount / (float)fadeLength;
 
-            lt_glow_sprite(&box, &ofs, 80, 80, 80, t, 55, 50);
-            lt_glow_sprite(&box, &ofs, 30, 30, 30, t, 110, 100);
+            lt_glow_sprite(&box, &ofs, 80, 80, 80, t, 55, 50, full);
+            lt_glow_sprite(&box, &ofs, 30, 30, 30, t, 110, 100, full);
         } else if (e->selectable != 0 && sel != 0 && glowOn != 0) {
-            lt_glow_sprite(&box, &ofs, 54, 80, 115, (float)glowCount / (float)glowLength, 32, 32);
+            lt_glow_sprite(&box, &ofs, 54, 80, 115, (float)glowCount / (float)glowLength, 32, 32,
+                           full);
         }
         ltHostTextRow = 0;
         LT_HOST_KEY(0, 0);
@@ -626,9 +654,6 @@ static void display_texture(int no, LtProperty *e)
 static inline void lt_draw_primary_sprite(SprCol *col) /* derived name */
 {
     SprRect r;
-#ifdef ICO_RD
-    int space;
-#endif
 
     gif_StartPacketPri(11);
     gif_SetZTest(0);
@@ -636,15 +661,13 @@ static inline void lt_draw_primary_sprite(SprCol *col) /* derived name */
     gif_SetAlpha(1, 7, 0);
     r = primarySpriteRect;
 #ifdef ICO_RD
-    gif_HostFlush();
-    space = rd_set_space_override(2);
+    gif_FullFrameBegin();
 #endif
     LT_HOST_KEY(&primarySpriteRect, 0);
     gif_SpriteSensitive(&r, 0xFFFFFFFF, (void *)0, col, 1);
     LT_HOST_KEY(0, 0);
 #ifdef ICO_RD
-    gif_HostFlush();
-    rd_set_space_override(space);
+    gif_FullFrameEnd();
 #endif
     gif_SetZWrite(1);
     gif_SetZTest(1);

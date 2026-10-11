@@ -119,7 +119,7 @@ OFF(Kanban, next, 0x18);
 OFF(Kanban, prev, 0x1C);
 #endif
 
-/* LtProperty: runtime, ico2/common/include/layout_texture.h:42 */
+/* LtProperty: runtime, ico2/common/include/layout_texture.h:41 */
 #if ICO_LAYOUT_EE
 OFF(LtProperty, word0, 0x0);
 OFF(LtProperty, word4, 0x4);
@@ -151,7 +151,7 @@ OFF(LtProperty, texV, 0x68);
 SIZE(LtProperty, 0x70); /* comment */
 #endif
 
-/* LtProp: runtime, ico2/common/include/layout_texture.h:87 */
+/* LtProp: runtime, ico2/common/include/layout_texture.h:86 */
 #if ICO_LAYOUT_EE
 OFF(LtProp, first, 0x0);
 OFF(LtProp, last, 0x4);

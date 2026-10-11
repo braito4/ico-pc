@@ -43,18 +43,23 @@ static void copyToWork(int pri);
    target (no depth buffer); on the GS the scene copy, the refracting
    surface's texture, the reflection pass (with work1Vram as its Z buffer)
    and the reflecting surface's texture all use that one block.  The host
-   binds a per-frame 256 x 256 target with its own depth in AA0's place in
+   binds a per-frame 256 x 256 target (poolBlockW() x 256 on a wide frame)
+   with its own depth in AA0's place in
    the list from the allocation to the last draw that samples it, and
    records the reflection camera of dispPool's gsb_SetVSMatrix(0xCC, ...)
    for the reflection draws.  The register writes are unchanged. */
 static RdTarget poolHostAlias; /* the named target the block is bound over */
 
+static int poolBlockW(void);
+
 static void poolHostBlockBegin(int tbp)
 {
+    const unsigned int bw = (unsigned int)poolBlockW();
+
     gif_HostFlush();
-    poolHostAlias = rd_gs_named_block((unsigned int)tbp, 0x100, 0x100);
+    poolHostAlias = rd_gs_named_block((unsigned int)tbp, bw, 0x100);
     if (poolHostAlias.id != 0) {
-        rd_alias_target(poolHostAlias, rd_block_target((unsigned int)tbp, 0x100, 0x100, 1));
+        rd_alias_target(poolHostAlias, rd_block_target((unsigned int)tbp, bw, 0x100, 1));
     }
 }
 
@@ -75,10 +80,20 @@ static void poolHostCamera(int push)
 
         memset(&cam, 0, sizeof(cam));
         CopyMatrix(cam.view, (char *)(matrixptr + 0x80));
-        CopyMatrix(cam.proj43, (char *)(matrixptr + 0xC0));
-        cam.aspect43 = 4.0f / 3.0f;
+        CopyMatrix(cam.proj, (char *)(matrixptr + 0xC0));
+        cam.aspect = gsFrame.aspect; /* the frame's display aspect, 4/3 at 4:3 */
         cam.nearZ = 2.0f;
         cam.farZ = 262144.0f;
+        /* the reflection camera's picture: the part of the block the frame
+           shows at 4:3, which a triangle the VU's region test drops must not
+           be drawn in (vu_common.hlsli vu_picture_half).  The 204 x 204 view
+           is 2048 -+ 102 of the 256 x 256 block, but the reflecting grid's
+           STs (updatePoolGeo: 0.8 / W of the screen offset plus the
+           reflected ray's 1000-unit step, uv2) reach past it, anywhere in
+           the block, so the picture is the whole block at 4:3: 2048 -+ 128
+           both ways */
+        cam.pictureW = 128;
+        cam.pictureH = 128;
         rd_push_camera(&cam);
     } else {
         rd_pop_camera();
@@ -94,7 +109,7 @@ static void poolHostCamera(int push)
    next grid draw only, so it is cleared after the draw. */
 static void poolHostGridSt(RdGridSt kind)
 {
-    rd_grid_screen_st(kind, 1.0f / (float)ScreenWidth, 1.0f / (float)ScreenHeight);
+    rd_grid_screen_st(kind, 1.0f / (float)gsFrame.w, 1.0f / (float)ScreenHeight); /* FRAME */
 }
 
 /* the formula SetLimitedPoolReflactionMesh or SetLayoutedPoolReflactionMesh
@@ -117,6 +132,33 @@ static int workVram = 0; /* derived name */
 
 static int work1Vram = 0; /* derived name */
 
+/* PC port: every frame extent in this file is FRAME, the native width
+   gsFrame.w (512 at 4:3): the frame's draw environments, the scene copy's
+   UV, TBW and TW (the whole frame into the block) and the grids' ST scales
+   per pixel of it.  The reflection's 204 x 204 view is SCALE
+   (gsb_SetVSMatrix's w and h: the frame's view at 204 / 512 of its size
+   about the block's centre, at every aspect).  The block is the frame's
+   half across (poolBlockW: 256 at 4:3, W / 2 on a frame W wide, 256 high),
+   so the scene copy keeps the PS2's two screen pixels per block texel and
+   the reflection of the whole native picture lands in it; the grids' STs
+   span the frame over 0 .. 1, which the renderer reads over the block's
+   own width (a render target is sampled whole: no power of two).  The
+   block's VRAM address is the PS2's (ADDRESS). */
+static int poolBlockW(void) /* port name */
+{
+    return ico_frame_x(&gsFrame, 0x100);
+}
+
+/* workRect across the block */
+static GifRect poolWorkRect(void) /* port name */
+{
+    GifRect r = workRect;
+
+    r.x = -ico_frame_x(&gsFrame, -workRect.x);
+    r.w = ico_frame_x(&gsFrame, workRect.w);
+    return r;
+}
+
 static void copyToWork(int pri)
 {
     GifRect rect;
@@ -126,17 +168,17 @@ static void copyToWork(int pri)
 #ifdef ICO_RD
     poolHostBlockBegin(workVram);
 #endif
-    gif_SetGsReg(6, ((long long)(ScreenWidth / 64) << 14) | 0x664000800LL);
-    gif_SetDrawEnviroment(workVram, 0, 0x100, 0x100, 0, 0);
+    gif_SetGsReg(6, ico_frame_tex0_w(&gsFrame, 512) | 0x640000800LL);
+    gif_SetDrawEnviroment(workVram, 0, poolBlockW(), 0x100, 0, 0);
     gif_SetZTest(0);
     gif_SetZWrite(0);
     gif_SetAlpha(0, 4, 0);
     gif_SetGsReg(0x47, 0x30000);
     gif_SetGsReg(0x14, 0x60);
-    rect = workRect;
+    rect = poolWorkRect();
     /* the frame, through the work rectangle, at full colour */
     {
-        GifRect uv = {8, 8, ScreenWidth * 16, ScreenHeight * 16};
+        GifRect uv = {8, 8, gsFrame.w * 16, ScreenHeight * 16};
         GifColor col = {128, 128, 128, 128};
 
         gif_SpriteSensitiveOrg(&rect, 0, &uv, &col, 0);
@@ -157,11 +199,11 @@ static void flushWork(int pri)
 #ifdef ICO_RD
     poolHostBlockBegin(workVram);
 #endif
-    gif_SetDrawEnviroment(workVram, 0, 0x100, 0x100, 0, 0);
+    gif_SetDrawEnviroment(workVram, 0, poolBlockW(), 0x100, 0, 0);
     gif_SetZTest(0);
     gif_SetGsReg(0x4E, 0x30000000 | (work1Vram / 32));
     gif_SetAlpha(0, 4, 0);
-    rect = workRect;
+    rect = poolWorkRect();
     col = (GifColor){255, 255, 255, 128};
     gif_SpriteSensitiveOrg(&rect, 0, 0, &col, 0);
     gif_SetZTest(1);
@@ -517,7 +559,7 @@ static void updatePoolGeo(GObj *self)
     int j;
 
     org = screenOrigin;
-    sx = 1.0f / (float)ScreenWidth;
+    sx = 1.0f / (float)gsFrame.w;
     sy = 1.0f / (float)ScreenHeight;
 
     pc = (float *)(matrixptr + 0x4C0);
@@ -577,7 +619,7 @@ static void updatePoolGeo(GObj *self)
     memset(nrm, 0, 16);
     nrm[1] = -1.0f;
 
-    usc = 1.0f / (float)ScreenWidth * 0.8f;
+    usc = 1.0f / (float)gsFrame.w * 0.8f;
     vsc = 1.0f / (float)ScreenHeight * 0.8f;
 
     MatrixDrive_SetTransposeMatrix(mat, (char *)(matrixptr + 0x80));
@@ -674,9 +716,9 @@ static void dispPool(GObj *self)
 
     gif_StartPacketPri(4);
     copyToWork(4);
-    gif_SetGsReg(6, workVram | 0x20010000 | 0x600000000LL);
+    gif_SetGsReg(6, workVram | ico_frame_tex0_w(&gsFrame, 0x100) | 0x600000000LL);
 
-    gif_SetDrawEnviroment(0x800, 0, ScreenWidth, ScreenHeight, 1, 0);
+    gif_SetDrawEnviroment(0x800, 0, gsFrame.w, ScreenHeight, 1, 0);
 
     gif_SetGsReg(0x14, 0x60);
     gif_SetZWrite(0);
@@ -759,12 +801,12 @@ static void dispPool(GObj *self)
 #ifdef ICO_RD
     poolHostCamera(0);
 #endif
-    vsWidth = ScreenWidth;
+    vsWidth = ScreenWidth; /* SCALE: gsb_SetVSMatrix's full-screen record */
     vsHeight = ScreenHeight;
 
-    gif_SetGsReg(6, workVram | 0x20010000 | 0x600000000LL);
+    gif_SetGsReg(6, workVram | ico_frame_tex0_w(&gsFrame, 0x100) | 0x600000000LL);
 
-    gif_SetDrawEnviroment(0x800, 0, ScreenWidth, ScreenHeight, 1, 0);
+    gif_SetDrawEnviroment(0x800, 0, gsFrame.w, ScreenHeight, 1, 0);
 
     gif_SetGsReg(0x14, 0x60);
     gif_SetZWrite(0);
@@ -784,7 +826,7 @@ static void dispPool(GObj *self)
 #endif
 
     gif_StartPacketPri(4);
-    gif_SetDrawEnviroment(0x800, 0, ScreenWidth, ScreenHeight, 1, 0);
+    gif_SetDrawEnviroment(0x800, 0, gsFrame.w, ScreenHeight, 1, 0);
 
     gif_SetGsReg(0x14, 0x60);
     gif_SetZWrite(0);
@@ -867,7 +909,7 @@ void SetLayoutedPoolReflactionMesh(PoolMesh *refl)
 
     mesh = refl->mesh;
     vec = screenOrigin;
-    sx = 1.0f / (float)ScreenWidth;
+    sx = 1.0f / (float)gsFrame.w;
     sy = 1.0f / (float)ScreenHeight;
     tmp = (char *)(matrixptr + 0x4C0);
     base = (char *)(matrixptr + 0x440);
@@ -952,7 +994,7 @@ void SetLimitedPoolReflactionMesh(PoolMesh *refl, GObj *pool, GObj *obj)
 
     mesh = refl->mesh;
     vec = screenOrigin;
-    sx = 1.0f / (float)ScreenWidth;
+    sx = 1.0f / (float)gsFrame.w;
     sy = 1.0f / (float)ScreenHeight;
     tmp = (char *)(matrixptr + 0x4C0);
     base = (char *)(matrixptr + 0x440);
@@ -996,8 +1038,8 @@ void DispLimitedPoolReflactionMesh(PoolMesh *refl)
 {
     gif_StartPacketPri(4);
     copyToWork(4);
-    gif_SetGsReg(6, workVram | 0x20010000 | 0x600000000LL);
-    gif_SetDrawEnviroment(0x800, 0, ScreenWidth, ScreenHeight, 1, 0);
+    gif_SetGsReg(6, workVram | ico_frame_tex0_w(&gsFrame, 0x100) | 0x600000000LL);
+    gif_SetDrawEnviroment(0x800, 0, gsFrame.w, ScreenHeight, 1, 0);
     gif_SetGsReg(0x14, 0x60);
     gif_SetZWrite(0);
     gif_SetZTest(1);

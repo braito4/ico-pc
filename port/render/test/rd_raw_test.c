@@ -118,6 +118,7 @@
 #include "matrixDrive.h"
 #include "particleEffect.h"
 #include "ico_math.h"
+#include "../../include/ico_frame.h"
 
 static int failures;
 
@@ -136,6 +137,9 @@ static int failures;
 
 /* ------------------------------------------------- what the files import */
 int ScreenWidth = W, ScreenHeight = H;
+/* GsBase.c's native frame: 4:3 (darkVolume.c's frame; checkParticleGateWide
+   widens it to show particleEffect.c's gates do not follow it) */
+IcoFrame gsFrame = {W, H, W / 64, (float)W, 4.0f / 3.0f};
 float center_X = 2048.0f, center_Y = 2048.0f;
 float vsWidth = 640.0f, vsHeight = 448.0f;
 int screenOffsetX, screenOffsetY;
@@ -313,13 +317,6 @@ void apply_matrix_w1(void *out, void *m, void *in)
 void InitTableSin(void) {}
 
 void InitQuaternionDrive(void) {}
-
-/* port/game/video_options.c: the picture's width over 4:3, 1 here
-   (particleEffect.c's draw gate) */
-float ico_video_wide_x(void)
-{
-    return 1.0f;
-}
 
 /* GsBase.c: lineManager.c _getLine's x clip, the 4:3 half-width here */
 float gsb_HostLineHalfWidth(void)
@@ -646,6 +643,54 @@ static void checkParticleRecording(void)
               rd__alpha_register(s_ev[i].st.ds.blend) == 0x44 && s_ev[i].st.ds.pabe == 0;
     }
     CHECK(ok == 1, "enemy.c: gif_SetAlpha(1, 4, 128) then prim_DispParticle: ALPHA 0x44 (%d)", ok);
+}
+
+/* particleEffect.c's gates on a wide frame (gsFrame.w 1376, 32:9): both
+   at the GS window 0..4095, unscaled.  An effect whose origin lies at GS X
+   4448 (view x 6 at z 1: 2048 + 400 * 6) is past the window and neither
+   updated nor drawn, as on the PS2; a draw gate scaled by 512 / W put it
+   at 2941 and drew it frozen.  One at X 2848, beside the 4:3 picture
+   inside the window, is drawn. */
+static int recordedBatches(float x, float z)
+{
+    static const uint8_t bg[4] = {40, 40, 60, 0x80};
+    static float pos[4], quat[4] = {0, 0, 0, 1};
+    pos[0] = x;
+    pos[1] = 0.0f;
+    pos[2] = z;
+    pos[3] = 1.0f;
+    if (s_effect >= 0) {
+        DeleteParticleEffect(s_effect);
+    }
+    setPackage(0);
+    s_effect = SetParticleEffect(0, pos, quat);
+    for (int i = 0; i < 12; i++) {
+        ExecParticleEffects();
+    }
+    recordParticles(0, 0, bg);
+    collect();
+    int n = 0;
+    for (int i = 0; i < s_nev; i++) {
+        n += s_ev[i].cmd->type == RDC_PARTICLES;
+    }
+    return n;
+}
+
+static void checkParticleGateWide(void)
+{
+    const IcoFrame saved = gsFrame;
+    gsFrame.w = 1376;
+    gsFrame.fbw = (1376 + 63) / 64;
+    gsFrame.wExact = 1376.0f;
+    gsFrame.aspect = 32.0f / 9.0f;
+    const int past = recordedBatches(6.0f, 1.0f);
+    const int beside = recordedBatches(40.0f, 20.0f);
+    gsFrame = saved;
+    const int past43 = recordedBatches(6.0f, 1.0f);
+    CHECK(past == 0, "particles: an origin past the GS window at 32:9 is not drawn (%d batches)",
+          past);
+    CHECK(beside == 1, "particles: an origin beside the 4:3 picture at 32:9 is drawn (%d)", beside);
+    CHECK(past43 == 0, "particles: an origin past the GS window at 4:3 is not drawn (%d)", past43);
 }
 
 /* ------------------------------------------------------ the lightning */
@@ -1162,11 +1207,19 @@ static void darkPixel(void *user, int x, int y, double z, int tie)
     s_cnt[i * 4 + 3] = v[2].rgba[3];
 }
 
+/* The GS's bilinear blend with its 4-bit fractions (common.hlsli
+ * gs_bilerp): across first, then down, each step truncated */
+static int gsBilerp(int a, int b, int c, int d, int fu, int fv)
+{
+    const int top = a + (((b - a) * fu) >> 4), bot = c + (((d - c) * fu) >> 4);
+    return top + (((bot - top) * fv) >> 4);
+}
+
 /* bilinear of the count at the composite's sample of pixel (x, y): texels
    x - 1 and x weighted 1/4 and 3/4 in each axis (UV 4 + 16 x in 12.4); the
    GS (and rd) expands TEXA (AEM: A = 0x80 where RGB is not 0) per texel
-   and floors the weighted sum (expandFirst); the sampler's order filters
-   RGB, rounds, and expands after */
+   and blends across then down, each step truncated (expandFirst,
+   gsBilerp); the sampler's order filters RGB, rounds, and expands after */
 static void compositeRef(int x, int y, int expandFirst, uint8_t out[4], const uint8_t *before)
 {
     static const int wq[2] = {4, 12}; /* 16ths */
@@ -1184,7 +1237,23 @@ static void compositeRef(int x, int y, int expandFirst, uint8_t out[4], const ui
     }
     int tex[4];
     for (int c = 0; c < 4; c++) {
-        tex[c] = expandFirst ? acc[c] >> 8 : (acc[c] + 128) >> 8;
+        tex[c] = (acc[c] + 128) >> 8;
+    }
+    if (expandFirst) {
+        int q[4][4];
+        for (int j = 0; j < 2; j++) {
+            for (int i = 0; i < 2; i++) {
+                const int tx = x - 1 + i < 0 ? 0 : x - 1 + i, ty = y - 1 + j < 0 ? 0 : y - 1 + j;
+                const uint8_t *t = &s_cnt[(ty * W + tx) * 4];
+                for (int c = 0; c < 3; c++) {
+                    q[j * 2 + i][c] = t[c];
+                }
+                q[j * 2 + i][3] = (t[0] | t[1] | t[2]) ? 0x80 : 0;
+            }
+        }
+        for (int c = 0; c < 4; c++) {
+            tex[c] = gsBilerp(q[0][c], q[1][c], q[2][c], q[3][c], wq[1], wq[1]);
+        }
     }
     if (!expandFirst) {
         tex[3] = (tex[0] | tex[1] | tex[2]) ? 0x80 : 0;
@@ -1813,6 +1882,7 @@ int main(void)
     InitMatrixDrive();
     setup();
     checkParticleRecording();
+    checkParticleGateWide();
     checkLightningRecording();
     checkLineRecording();
     checkDarkRecording();

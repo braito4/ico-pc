@@ -32,6 +32,10 @@ void ico_credits_engine_install(void);
 
 static unsigned int vsyncs;
 
+/* GS_CSR.FIELD of the next vsync, alternating from 0 (the vblank
+   handler's odd_even, the movie's field pacing).  The flip's half-pixel
+   decision does not read it: a progressive display never applies the
+   interlace half pixel (GsBase.c, gsbHostField). */
 static int field;
 
 static IcoStepProfile profile;

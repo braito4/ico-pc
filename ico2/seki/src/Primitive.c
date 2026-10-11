@@ -129,6 +129,9 @@ void prim_SetFan2D(Fan2D *f, float r, float *pos, unsigned int cc, unsigned int 
     q++;
 
     first = q;
+    /* PC port: ScreenWidth below is SCALE (the pixel aspect 4/3 * H / 512 of
+       the fan's y, the projection's, which does not change with the frame's
+       width) */
     for (i = 0; i < f->n; i++) {
         q->x = r * GetTableCos((short)(int)((float)i * 6.2831855f / (float)f->n * 10430.3779f)) +
                pos[0] + center_X;
@@ -859,6 +862,10 @@ PrimParticle *prim_InitParticleByPartition(int num, float x, float y, float z, i
                                            int a3, void *heap)
 {
     PrimQw hd = {{0x5000400000000000LL, 0x52521}};
+    /* PC port: the particle microcode's window, the PS2's 1024 .. 3071 at
+       every frame width: the shaders apply the native window test to it
+       (x scaled by 512 / gsFrame.w about 2048) and decide drop (the
+       Original preset, as the PS2) or GPU clip (Enhanced), so it stays */
     Prim3DVec cl0 = {1024.0f, 1024.0f, 0.0f, 1.0f};
     Prim3DVec cl1 = {3071.0f, 3071.0f, 0.0f, 16777215.0f};
     PrimParticle *p;
