@@ -2113,11 +2113,23 @@ int gsb_HostDotVisible(const int *ip, const float *pos)
    / 2 = 256 whenever a line is clipped (the reflections' 230 and 204 wide
    views, puddle.c and pool.c, set vsWidth and put ScreenWidth back within
    one display function, with no line drawn between), so at 4:3 this is
-   256.0f as it was.  The widest frame reaches 2048 +- 1280, inside the
-   GS's 0..4095. */
+   256.0f as it was.  When pictures are blended between ticks
+   (ico_video_interpolate, the condition gsbHostCullMargin widens the cull
+   under) the half-width carries the same 1 + GSB_CULL_MARGIN: a blended
+   picture draws a line through cameras between two ticks', so a line cut
+   at the frame's edge showed its cut end inside the picture while the
+   camera turned; with the margin the cut lies past the edge (the scissor
+   keeps the rest off the picture).  With the Original framerate it is
+   gsFrame.w / 2 exactly (256.0f at 4:3).  The widest frame reaches 2048
+   +- 1433.6 with the margin, inside the GS's 0..4095. */
 float gsb_HostLineHalfWidth(void)
 {
-    return (float)gsFrame.w * 0.5f;
+    float hw = (float)gsFrame.w * 0.5f;
+
+    if (ico_video_interpolate()) {
+        hw = hw * (1.0f + GSB_CULL_MARGIN);
+    }
+    return hw;
 }
 
 /* PC port: Shadow.c's edge clip: +-ScreenWidth (512) about the centre on

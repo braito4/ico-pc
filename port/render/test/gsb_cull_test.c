@@ -59,8 +59,10 @@
  *            outside the window but inside 16 bits, kept while the
  *            camera moves, and not past 16 bits.
  *   lines    lineManager.c's x clip (gsb_HostLineHalfWidth): W / 2 pixels,
- *            exactly 256 at 4:3, and the same after a reflection's
- *            gsb_SetVSMatrix(230, 230) (the frame's width, not vsWidth).
+ *            exactly 256 at 4:3, with the Original framerate; times 1.12
+ *            (1 + GSB_CULL_MARGIN, the cull's) while pictures are blended;
+ *            the same after a reflection's gsb_SetVSMatrix(230, 230) (the
+ *            frame's width, not vsWidth).
  *   shadows  Shadow.c's edge clip (gsb_HostShadowClipX): W pixels, at most
  *            2047 (2560 at the widest would leave the 16-bit window).
  */
@@ -1193,17 +1195,20 @@ static void checkDotEarlier(void)
     CHECK(found, "dots: a turn that puts the dot outside the window (%d)", best[0]);
 }
 
-static void checkLines(const char *what, int winW, int winH, float want)
+static void checkLines(const char *what, int framerate, int winW, int winH, float want)
 {
-    setOptions(ICO_FRAMERATE_UNCAPPED, winW, winH);
+    setOptions(framerate, winW, winH);
     gsb_SetVSMatrix(ScreenWidth, ScreenHeight, 512.0f);
+    /* exact with the Original framerate; within float rounding of the
+     * margin's product otherwise */
+    const float tol = framerate == ICO_FRAMERATE_ORIGINAL ? 0.0f : 1e-4f * want;
     const float hw = gsb_HostLineHalfWidth();
-    CHECK(hw == want && 2048.0f + hw <= 4095.0f, "lines %s: half-width %g, want %g", what,
-          (double)hw, (double)want);
+    CHECK(fabsf(hw - want) <= tol && 2048.0f + hw <= 4095.0f, "lines %s: half-width %g, want %g",
+          what, (double)hw, (double)want);
     gsb_SetVSMatrix(0xE6, 0xE6, 512.0f); /* puddle.c's reflection view */
     const float hr = gsb_HostLineHalfWidth();
-    CHECK(hr == want, "lines %s: half-width %g under a 230 x 230 view, want %g", what, (double)hr,
-          (double)want);
+    CHECK(fabsf(hr - want) <= tol, "lines %s: half-width %g under a 230 x 230 view, want %g", what,
+          (double)hr, (double)want);
     gsb_SetVSMatrix(ScreenWidth, ScreenHeight, 512.0f);
 }
 
@@ -1253,9 +1258,14 @@ int main(void)
     checkDotWindow("32:9", 3200, 900, (688 + 144) * 16);
     checkDotWindow("the widest", 8000, 900, 22784);
     checkDotEarlier();
-    checkLines("4:3", 640, 480, 256.0f);
-    checkLines("32:9", 3200, 900, 688.0f);
-    checkLines("the widest", 8000, 900, 1280.0f);
+    /* blended pictures: W / 2 times 1 + GSB_CULL_MARGIN (1.12), so a
+     * line's cut end lies past the frame's edge while frames blend */
+    checkLines("4:3", ICO_FRAMERATE_UNCAPPED, 640, 480, 256.0f * 1.12f);
+    checkLines("32:9", ICO_FRAMERATE_UNCAPPED, 3200, 900, 688.0f * 1.12f);
+    checkLines("the widest", ICO_FRAMERATE_UNCAPPED, 8000, 900, 1280.0f * 1.12f);
+    /* the Original framerate: W / 2 exactly, 256 at 4:3 (the PS2's) */
+    checkLines("4:3 Original", ICO_FRAMERATE_ORIGINAL, 640, 480, 256.0f);
+    checkLines("32:9 Original", ICO_FRAMERATE_ORIGINAL, 3200, 900, 688.0f);
     checkShadows("4:3", 640, 480, 512.0f);
     checkShadows("32:9", 3200, 900, 1376.0f);
     checkShadows("48:9", 4800, 900, 2047.0f);
