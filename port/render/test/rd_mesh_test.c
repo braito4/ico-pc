@@ -25,10 +25,13 @@
  *            deleted, the rest never drawn again)
  *   full-frame  the prelit model named a full-frame title model
  *            (title_logo.c ico_title_fullframe_model, stubbed): reg_DispObj
- *            widens its nodes' x scale by the frame's width / 512 for the
- *            draw (the VuCB's matrices change at 688, not at 512) and puts
- *            it back; on the device at 4:3 its picture is byte-identical to
- *            the unflagged draw's; at 16:9 on the native frame (688 x 512)
+ *            widens its nodes' x axis (nodeMtx's x row) by the frame's
+ *            width / 512 for the draw (the VuCB's matrices change at 688,
+ *            not at 512) and puts it back; as a camera-locked node (flag 2,
+ *            title_back's kind) its model-to-screen x row is the width /
+ *            512 times the 4:3 one at 688 and 2048, the other rows
+ *            unchanged; on the device at 4:3 its picture is byte-identical
+ *            to the unflagged draw's; at 16:9 on the native frame (688 x 512)
  *            the unflagged draw is the Enhanced 1x 4:3 picture at its GS X
  *            (columns 88..599, nothing compressed), the full-frame one is
  *            wider than it, and a full-frame item the game draws at the
@@ -724,7 +727,8 @@ static void checkStretchRecording(void)
     float a[12 * 4], b[12 * 4], c[12 * 4], d[12 * 4];
     Found fd;
     const float *mem;
-    const float scale0 = s_objA.nodes[0].scale[0];
+    float node0[16];
+    memcpy(node0, s_modelA.nodeMtx[0], sizeof(node0));
 
 #define RECORD_MATRICES(dst, model, width)                                                         \
     do {                                                                                           \
@@ -743,11 +747,64 @@ static void checkStretchRecording(void)
     CHECK(memcmp(a, b, sizeof(a)) == 0, "full-frame: at 4:3 the model's matrices are unchanged");
     RECORD_MATRICES(c, "test_prelit", 688);
     CHECK(memcmp(a, c, sizeof(a)) != 0, "full-frame: at 688 the model is widened");
-    CHECK(s_objA.nodes[0].scale[0] == scale0, "full-frame: the node's x scale is put back (%g)",
-          (double)s_objA.nodes[0].scale[0]);
+    CHECK(memcmp(s_modelA.nodeMtx[0], node0, sizeof(node0)) == 0,
+          "full-frame: the node matrix is put back");
     RECORD_MATRICES(d, NULL, 688);
     CHECK(memcmp(a, d, sizeof(a)) == 0, "full-frame: another model at 688 is not widened");
     RECORD_MATRICES(d, NULL, 512);
+
+    /* the camera-locked node (flag 2) title_back is (its draw's matrix is
+       +0x640, the 500-unit projection, times the node's lengths and its
+       position; the dumps' title frames): reg_setMMatrixPacket takes the
+       scale from the lengths of nodeMtx's rows and never reads the node
+       scale, so the widening is on nodeMtx's x row.  The model-to-screen
+       matrix's x row (VuCB 16) is the frame's width / 512 times the 4:3
+       one at 688 and at 2048 (48:9), the other rows unchanged, and the
+       node matrix is put back */
+    {
+        static const int widths[] = {688, 2048};
+        float saved640[32];
+        float ref[12 * 4], wide[12 * 4];
+        memcpy(saved640, matrixptr + 0x640, sizeof(saved640));
+        memcpy(matrixptr + 0x640, matrixptr + 0x100, 64);
+        identity((float *)(matrixptr + 0x680));
+        s_objA.dispType = 2;
+        s_modelA.nodes[0].flags.ll = 2;
+        s_modelA.nodes[0].alpha = 1.0f; /* drawn: 1 - (1 - fade) x alpha = 0 */
+        qw4(s_modelA.nodes[0].pos, 0.0f, 0.0f, 6.4f, 1.0f);
+        RECORD_MATRICES(ref, NULL, 512);
+        RECORD_MATRICES(wide, "test_prelit", 512);
+        CHECK(memcmp(ref, wide, sizeof(ref)) == 0,
+              "full-frame, camera-locked: at 4:3 the model's matrices are unchanged");
+        CHECK(ref[0] != 0.0f && ref[1] == 0.0f && ref[2] == 0.0f,
+              "full-frame, camera-locked: the model's x is the screen's x (%g %g %g)",
+              (double)ref[0], (double)ref[1], (double)ref[2]);
+        for (unsigned i = 0; i < sizeof(widths) / sizeof(widths[0]); i++) {
+            const float k = (float)widths[i] / 512.0f;
+            RECORD_MATRICES(wide, "test_prelit", widths[i]);
+            int rowX = 1;
+            for (int e = 0; e < 4; e++) {
+                rowX &= fabsf(wide[e] - ref[e] * k) <= 1e-4f * fabsf(ref[e] * k) + 1e-6f;
+            }
+            CHECK(rowX,
+                  "full-frame, camera-locked at %d: the x row is %g times the 4:3 one "
+                  "(%g, expected %g)",
+                  widths[i], (double)k, (double)wide[0], (double)(ref[0] * k));
+            CHECK(memcmp(wide + 4, ref + 4, 12 * sizeof(float)) == 0,
+                  "full-frame, camera-locked at %d: the y, z and position rows are unchanged",
+                  widths[i]);
+            CHECK(memcmp(s_modelA.nodeMtx[0], node0, sizeof(node0)) == 0,
+                  "full-frame, camera-locked at %d: the node matrix is put back", widths[i]);
+        }
+        RECORD_MATRICES(wide, NULL, 2048);
+        CHECK(memcmp(ref, wide, 16 * sizeof(float)) == 0,
+              "full-frame, camera-locked: another model at 2048 is not widened");
+        s_objA.dispType = 0;
+        s_modelA.nodes[0].flags.ll = 0;
+        s_modelA.nodes[0].alpha = 0.0f;
+        qw4(s_modelA.nodes[0].pos, 0.0f, 0.0f, 0.0f, 0.0f);
+        memcpy(matrixptr + 0x640, saved640, sizeof(saved640));
+    }
 #undef RECORD_MATRICES
     s_fullFrameModel = NULL;
     gsFrame.w = 512;

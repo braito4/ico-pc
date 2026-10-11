@@ -19,7 +19,9 @@
  * picture behind the logo as it brightens, is built for the 4:3 screen.
  * Drawn like the rest of the scene on a wide picture it would cover only a
  * centred part of it, so RegistPacket.c widens it to the native frame (its
- * x scale by the frame width / 512), as it does for a full-frame item.
+ * node matrices' x row by the frame width / 512: it is a camera-locked
+ * node, whose draw never reads the node scale), as it does for a
+ * full-frame item.
  */
 #ifndef PORT_GAME_TITLE_LOGO_H
 #define PORT_GAME_TITLE_LOGO_H
@@ -40,8 +42,9 @@ int ico_title_logo_skip(const char *model);
 /* seki/src/RegistPacket.c reg_DispObj, for every object it draws: nonzero
    when the object's model (its name) is one of the title stage's
    full-frame models: built to cover the 4:3 screen, they are widened by the
-   game to the native frame (RegistPacket.c reg_DispObj scales their x by
-   gsFrame.w / 512, nothing at 4:3) instead of the renderer detecting them. */
+   game to the native frame (RegistPacket.c reg_DispObj scales their node
+   matrices' x row by gsFrame.w / 512, nothing at 4:3) instead of the
+   renderer detecting them. */
 int ico_title_fullframe_model(const char *model);
 
 /* The parts, for the test: whether `model` names one of the logo's nine

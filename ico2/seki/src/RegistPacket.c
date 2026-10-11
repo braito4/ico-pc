@@ -2246,18 +2246,26 @@ void reg_DispMultiPri(Sub15C *o, int pri)
 extern int ico_title_logo_skip(const char *model);
 /* PC port (v0.6.0, W3-UI): the title's darkening plane is a model built to
    cover the 4:3 screen, so it is a full-frame item the game widens itself:
-   its x scale (every node's, the place the node scale multiplies the model's
-   own x) is the native frame's width over 512 for the draw, so it covers the
-   frame at every aspect, and a 4:3 frame (512) leaves it alone
-   (port/game/title_logo.c names the model, by name alone). */
+   its local x axis is stretched by the native frame's width over 512 for the
+   draw, so it covers the frame at every aspect, and a 4:3 frame (512) leaves
+   it alone (port/game/title_logo.c names the model, by name alone).  The
+   stretch goes on the node matrices' x row (nodeMtx row 0), not the node
+   scale: title_back is a camera-locked node (flag 2, reg_setMMatrixPacket),
+   whose matrix takes its scale from the lengths of nodeMtx's rows and never
+   reads nodes[].scale; the other paths multiply nodeMtx (or the node scale
+   times it) in, so the row is the one place every path reads.  Its x is
+   the screen's x: the draw's model-to-screen matrix is +0x640 (the
+   500-unit projection, no rotation) times the node's lengths and position. */
 extern int ico_title_fullframe_model(const char *model);
 
 void reg_DispObj(Sub15C *o)
 {
 #ifdef ICO_RD
     int widen = 0;
-    float savedX[32];
+    float savedX[32][3];
+    float *row;
     int n;
+    int k;
 #endif
 
     if (ico_title_logo_skip(o->model->name)) {
@@ -2268,8 +2276,11 @@ void reg_DispObj(Sub15C *o)
         ico_title_fullframe_model(o->model->name)) {
         widen = 1;
         for (n = 0; n < o->nodeNum; n++) {
-            savedX[n] = o->nodes[n].scale[0];
-            o->nodes[n].scale[0] *= (float)gsFrame.w / (float)ICO_FRAME_BASE_W;
+            row = (float *)((char *)o->nodeMtx + n * 64);
+            for (k = 0; k < 3; k++) {
+                savedX[n][k] = row[k];
+                row[k] *= (float)gsFrame.w / (float)ICO_FRAME_BASE_W;
+            }
         }
     }
 #endif
@@ -2299,7 +2310,10 @@ void reg_DispObj(Sub15C *o)
 #ifdef ICO_RD
     if (widen) {
         for (n = 0; n < o->nodeNum; n++) {
-            o->nodes[n].scale[0] = savedX[n];
+            row = (float *)((char *)o->nodeMtx + n * 64);
+            for (k = 0; k < 3; k++) {
+                row[k] = savedX[n][k];
+            }
         }
     }
 #endif
