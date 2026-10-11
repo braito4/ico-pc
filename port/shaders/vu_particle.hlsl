@@ -107,12 +107,13 @@ VuVSOut vu_particle_vs(uint vid : SV_VertexID)
     }
     // A sprite the PS2 skips for its x/y window, as the region test's
     // triangles (vu_triangle_out): not drawn when its quad reaches into the
-    // camera's picture, drawn whole (the GPU clips the quad) when wholly
-    // beside it and under photo mode's free camera, in both presets
+    // camera's picture (its columns and its rows: vu_rect_reaches_picture),
+    // drawn whole (the GPU clips the quad) when wholly beside it and under
+    // photo mode's free camera, in both presets
     if (!s.drawn && (vu_draw.z & VU_F_BEHIND_EYE) == 0u) {
-        float x0 = vu_ndc(float2(s.c0.xy) * (1.0 / 16.0)).x;
-        float x1 = vu_ndc(float2(s.c1.xy) * (1.0 / 16.0)).x;
-        if (vu_reaches_picture(min(x0, x1), max(x0, x1))) {
+        float2 p0 = vu_ndc(float2(s.c0.xy) * (1.0 / 16.0));
+        float2 p1 = vu_ndc(float2(s.c1.xy) * (1.0 / 16.0));
+        if (vu_rect_reaches_picture(min(p0, p1), max(p0, p1))) {
             return o;
         }
     }

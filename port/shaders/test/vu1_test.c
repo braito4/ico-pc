@@ -22,11 +22,13 @@
  *           presets: a triangle the region test drops (the probe's region
  *           field still says outside, as the reference) is not drawn when
  *           what the GPU would draw of it reaches the camera's picture (GS
- *           X 2048 -+ 256: the whole 64 x 64 target around 2048, so there
- *           every preset draws the PS2's picture) and drawn, clipped by the
- *           GPU at the native frustum, when wholly beside it (a target
- *           placed right of the picture) and under photo mode's free
- *           camera; the content table's HIDE mark hides triangles. The
+ *           2048 -+ 256 across by 2048 -+ 224, FrameCB frame[1] and [2]:
+ *           the whole 64 x 64 target around 2048, so there every preset
+ *           draws the PS2's picture; a reflection camera's 2048 -+ 116) and
+ *           drawn, clipped by the GPU at the native frustum, when wholly
+ *           beside it (a target placed right of the picture; a triangle
+ *           whose part within the picture's columns lies wholly above it)
+ *           and under photo mode's free camera; the content table's HIDE mark hides triangles. The
  *           strip in (2) is drawn
  *           with the triangles the port draws exactly and must match the
  *           reference; the others are drawn on their own into a third
@@ -858,12 +860,20 @@ typedef struct Case {
     int depart; /* DEPART_*: input made to show the port's departure from the VU */
     int preset; /* VU1REF_ORIGINAL (0, FrameCB misc[1] 0) or VU1REF_ENHANCED */
     int mark;   /* MARK_*: the content table's index bits on every triangle */
+    /* the camera's picture's half-width and half-height (FrameCB frame[1],
+     * frame[2]): 0, the frame's camera's, 256 by PICTURE_HALF_H; a
+     * reflection camera's (puddle.c's 116) */
+    int pictureHalf;
 } Case;
+
+/* half the native height (448), the frame's camera's picture's half-height */
+#define PICTURE_HALF_H 224.0f
 
 /* The port's rule (vu1ref_region_draw), one camera in both presets: a
  * triangle the region test drops is not drawn when what the GPU would
- * draw of it reaches the camera's picture (GS X 1792..2304; the 64-pixel
- * target around 2048 lies inside it) and drawn clipped by the GPU at the
+ * draw of it reaches the camera's picture (GS X 1792..2304 by Y
+ * 1824..2272, cut to its rows first; the 64-pixel target around 2048 lies
+ * inside it) and drawn clipped by the GPU at the
  * native frustum when wholly beside it, and under photo mode's free
  * camera. DEPART_EYE: vertex 7 of each batch behind the eye (model (0, 0,
  * -1), w = -1): the VU drops its three triangles; they reach the picture,
@@ -878,6 +888,19 @@ typedef struct Case {
  * picture (GS X 2320..2384), the strip at GS X 2330..2378 and vertex 7 at
  * X 8000: its failing triangles lie wholly beside the picture, drawn
  * clipped in both presets (the walls and the sea of issue 29).
+ * DEPART_ABOVE: the target right of the picture as DEPART_BESIDE, vertex 7
+ * at GS (2000, -60000), far above the picture, in front of the eye: within
+ * the picture's columns its triangles lie wholly above the picture (only
+ * sky there), on the target beside it they cover pixels: wholly beside
+ * the picture once cut to its rows, drawn clipped in both presets (an
+ * x-only test dropped them, a hole beside the picture). DEPART_ABOVE_IN:
+ * the same vertex 7 with the strip on the target around 2048, inside the
+ * picture: they reach it, not drawn (the PS2's picture at 4:3).
+ * DEPART_REFL_BESIDE: a reflection camera's picture, 2048 -+ 116
+ * (puddle.c), the target at GS X 2168..2232, right of it and inside the
+ * frame camera's 2048 -+ 256, the strip at X 2178..2226 and vertex 7 at X
+ * 8000: wholly beside the reflection's picture, drawn clipped (the frame
+ * camera's picture dropped them, holes in a wide reflection).
  * DEPART_SPRITE: particle 0 is a 1040-pixel sprite from X 2040 (inside the
  * target) to 3080 (past the window's 3071): the VU skips it; it reaches
  * the picture, not drawn. DEPART_SPRITE_BESIDE: the same sprite from X
@@ -894,7 +917,10 @@ enum {
     DEPART_SPRITE_FREE,
     DEPART_CARD,
     DEPART_BESIDE,
-    DEPART_SPRITE_BESIDE
+    DEPART_SPRITE_BESIDE,
+    DEPART_ABOVE,
+    DEPART_ABOVE_IN,
+    DEPART_REFL_BESIDE
 };
 
 /* The content table's mark (rd_content_hide.c; vu_content_hidden):
@@ -916,27 +942,48 @@ static uint32_t markBit(const Case *c)
  * camera's picture, or right of the picture for the beside cases */
 static float targetLeft(const Case *c)
 {
-    return c->depart == DEPART_BESIDE || c->depart == DEPART_SPRITE_BESIDE ? 2320.0f
-                                                                           : 2048.0f - RT / 2;
+    if (c->depart == DEPART_REFL_BESIDE) {
+        return 2168.0f;
+    }
+    return c->depart == DEPART_BESIDE || c->depart == DEPART_SPRITE_BESIDE ||
+                   c->depart == DEPART_ABOVE
+               ? 2320.0f
+               : 2048.0f - RT / 2;
 }
 
-/* the camera's picture, GS X 1792..2304 (vu_common.hlsli VU_PICTURE_X0,
- * X1), in pixels of the target */
-static void picture(const Case *c, float *lo, float *hi)
+/* the camera's picture's half-width and half-height in GS pixels, as the
+ * case's FrameCB carries them (frame[1], frame[2]) */
+static float pictureHalfW(const Case *c)
 {
-    *lo = 1792.0f - targetLeft(c);
-    *hi = 2304.0f - targetLeft(c);
+    return c->pictureHalf ? (float)c->pictureHalf : 256.0f;
+}
+
+static float pictureHalfH(const Case *c)
+{
+    return c->pictureHalf ? (float)c->pictureHalf : PICTURE_HALF_H;
+}
+
+/* the camera's picture, GS (2048, 2048) -+ its half-size (vu_common.hlsli
+ * vu_picture_half), in pixels of the target: left, right, top, bottom
+ * (vu1_ref.h vu1ref_polygon_reaches_picture's pic) */
+static void picture(const Case *c, float pic[4])
+{
+    pic[0] = 2048.0f - pictureHalfW(c) - targetLeft(c);
+    pic[1] = 2048.0f + pictureHalfW(c) - targetLeft(c);
+    pic[2] = RT / 2 - pictureHalfH(c);
+    pic[3] = RT / 2 + pictureHalfH(c);
 }
 
 typedef struct CaseRef CaseRef;
 static int portPolygon(const Case *c, const CaseRef *cr, int k, float poly[4][2]);
 
 /* Whether what the GPU draws of strip triangle k (portPolygon, cut at the
- * near plane) reaches the camera's picture (vu_cut_reaches_picture); -1
+ * near plane, then to the picture's rows) reaches the camera's picture
+ * (vu_cut_reaches_picture, vu1ref_polygon_reaches_picture); -1
  * when it cannot be predicted. */
 static int triReaches(const Case *c, const CaseRef *cr, int k)
 {
-    float poly[4][2], cl, ch;
+    float poly[4][2], pic[4];
     const int n = portPolygon(c, cr, k, poly);
     if (n < 0) {
         return -1;
@@ -944,13 +991,8 @@ static int triReaches(const Case *c, const CaseRef *cr, int k)
     if (n < 3) {
         return 0;
     }
-    float lo = poly[0][0], hi = poly[0][0];
-    for (int i = 1; i < n; i++) {
-        lo = poly[i][0] < lo ? poly[i][0] : lo;
-        hi = poly[i][0] > hi ? poly[i][0] : hi;
-    }
-    picture(c, &cl, &ch);
-    return lo < ch && hi > cl;
+    picture(c, pic);
+    return vu1ref_polygon_reaches_picture((const float (*)[2])poly, n, pic);
 }
 
 /* What the port draws of strip triangle k (vertices k-2..k): the oracle's
@@ -1010,7 +1052,9 @@ static float rnd(float lo, float hi)
  * out 5 (DEPART_BAND_IN): (0, 600, 2), Y 6848, below the window. out 6
  * (DEPART_CARD): GS X 2088..2128, right of the target's centre. out 8
  * (DEPART_CARD): x = -744 (X -3904), z = 2, past the window on the left.
- * out 9 (DEPART_BESIDE): GS X 2330..2378, right of the camera's picture. */
+ * out 9 (DEPART_BESIDE): GS X 2330..2378, right of the camera's picture.
+ * out 10 (DEPART_ABOVE): (-6, -7756, 2), GS (2000, -60000), far above the
+ * picture. out 11 (DEPART_REFL_BESIDE): GS X 2178..2226. */
 static void makeVertex(int prog, float (*v)[4], int k, int start, int out, int zmode, int scissor)
 {
     float z = zmode == 2 ? (k & 1 ? 0.5f : 2.0f) : zmode == 1 ? 2.0f : rnd(1.8f, 2.4f);
@@ -1030,6 +1074,12 @@ static void makeVertex(int prog, float (*v)[4], int k, int start, int out, int z
         z = 2.0f;
     } else if (out == 9) {
         x = rnd(282.0f, 330.0f) * z / 16.0f;
+    } else if (out == 10) {
+        x = -6.0f;
+        y = -7756.0f;
+        z = 2.0f;
+    } else if (out == 11) {
+        x = rnd(130.0f, 178.0f) * z / 16.0f;
     } else if (out) {
         x = scissor ? 150.0f : out == 2 ? 255.875f : out == 3 ? 744.0f : 600.0f;
         z = 2.0f;
@@ -1129,6 +1179,15 @@ static int makeInput(const Case *c, float (*in)[4])
             }
             if (c->depart == DEPART_BESIDE) {
                 out = k == 7 ? 3 : 9;
+            }
+            if (c->depart == DEPART_ABOVE) {
+                out = k == 7 ? 10 : 9;
+            }
+            if (c->depart == DEPART_ABOVE_IN) {
+                out = k == 7 ? 10 : 0;
+            }
+            if (c->depart == DEPART_REFL_BESIDE) {
+                out = k == 7 ? 3 : 11;
             }
             int zmode = c->measured ? 2 : scissor ? 1 : 0;
             makeVertex(c->prog, v, k, start, out, zmode, scissor);
@@ -1253,11 +1312,14 @@ static void runRef(const Case *c, const float (*in)[4], int nq, CaseRef *cr)
             const VuGsSprite *s = 0;
             cr->shown[k] = portSprite(in, k, &added);
             const int drawn = pi < cr->po.count && cr->po.s[pi].index == k;
-            float cl, ch;
-            picture(c, &cl, &ch);
-            const float x0 = (float)added.xyz[0][0] / 16.0f - targetLeft(c);
-            const float x1 = (float)added.xyz[1][0] / 16.0f - targetLeft(c);
-            const int reaches = (x0 < x1 ? x0 : x1) < ch && (x0 > x1 ? x0 : x1) > cl;
+            float pic[4];
+            picture(c, pic);
+            const float top = 2048.0f - RT / 2;
+            const int reaches =
+                vu1ref_rect_reaches_picture((float)added.xyz[0][0] / 16.0f - targetLeft(c),
+                                            (float)added.xyz[0][1] / 16.0f - top,
+                                            (float)added.xyz[1][0] / 16.0f - targetLeft(c),
+                                            (float)added.xyz[1][1] / 16.0f - top, pic);
             const int d =
                 vu1ref_particle_draw(c->preset, freeCamera(c), drawn, cr->shown[k], reaches);
             if (drawn) {
@@ -1583,116 +1645,132 @@ static int checkPortTriangles(const Case *c, const CaseRef *cr, const uint32_t *
 
 static const Case kCases[] = {
     {"prelit 32", "vu_prelit_vs", P_NORMALC, 32, ICO_VU_CLIP_REGION, 3, 1, 2, 12, 0, 0, 0, 1.0f,
-     DEPART_NONE, VU1REF_ORIGINAL, MARK_NONE},
+     DEPART_NONE, VU1REF_ORIGINAL, MARK_NONE, 0},
     {"prelit 34", "vu_prelit_vs", P_NORMALC, 34, ICO_VU_CLIP_NONE, 3, 1, 1, 12, 0, 0, 0, 1.0f,
-     DEPART_NONE, VU1REF_ORIGINAL, MARK_NONE},
+     DEPART_NONE, VU1REF_ORIGINAL, MARK_NONE, 0},
     {"prelit 36", "vu_prelit_vs", P_NORMALC, 36, ICO_VU_CLIP_SCISSOR, 3, 1, 1, 12, 0, 0, 0, 1.0f,
-     DEPART_NONE, VU1REF_ORIGINAL, MARK_NONE},
+     DEPART_NONE, VU1REF_ORIGINAL, MARK_NONE, 0},
     {"prelit 36 near", "vu_prelit_vs", P_NORMALC, 36, ICO_VU_CLIP_SCISSOR, 3, 1, 1, 8, 1, 0, 0,
-     1.0f, DEPART_NONE, VU1REF_ORIGINAL, MARK_NONE},
+     1.0f, DEPART_NONE, VU1REF_ORIGINAL, MARK_NONE, 0},
     {"lit 32 tagless", "vu_lit_vs", P_NORMALL, 32, ICO_VU_CLIP_REGION, 4, 1, 2, 12, 0, 0, 1, 1.0f,
-     DEPART_NONE, VU1REF_ORIGINAL, MARK_NONE},
+     DEPART_NONE, VU1REF_ORIGINAL, MARK_NONE, 0},
     {"lit 36", "vu_lit_vs", P_NORMALL, 36, ICO_VU_CLIP_SCISSOR, 4, 1, 1, 12, 0, 0, 0, 1.0f,
-     DEPART_NONE, VU1REF_ORIGINAL, MARK_NONE},
+     DEPART_NONE, VU1REF_ORIGINAL, MARK_NONE, 0},
     {"lit spec 34", "vu_lit_spec_vs", P_NORMALL, 34, ICO_VU_CLIP_REGION, 4, 1, 1, 12, 0, 0, 0, 1.0f,
-     DEPART_NONE, VU1REF_ORIGINAL, MARK_NONE},
+     DEPART_NONE, VU1REF_ORIGINAL, MARK_NONE, 0},
     {"reflect 38", "vu_reflect_vs", P_NORMALL, 38, ICO_VU_CLIP_REGION, 4, 1, 1, 12, 0, 0, 0, 1.0f,
-     DEPART_NONE, VU1REF_ORIGINAL, MARK_NONE},
+     DEPART_NONE, VU1REF_ORIGINAL, MARK_NONE, 0},
     {"skin 20 tagless", "vu_skin_vs", P_CLUSTER, 20, ICO_VU_CLIP_REGION, 5, 1, 2, 12, 0, 0, 1, 1.0f,
-     DEPART_NONE, VU1REF_ORIGINAL, MARK_NONE},
+     DEPART_NONE, VU1REF_ORIGINAL, MARK_NONE, 0},
     {"skin 22", "vu_skin_spec_vs", P_CLUSTER, 22, ICO_VU_CLIP_REGION, 5, 1, 1, 12, 0, 0, 0, 1.0f,
-     DEPART_NONE, VU1REF_ORIGINAL, MARK_NONE},
+     DEPART_NONE, VU1REF_ORIGINAL, MARK_NONE, 0},
     {"skin 24", "vu_skin_debug_vs", P_CLUSTER, 24, ICO_VU_CLIP_REGION, 5, 1, 1, 12, 0, 0, 0, 1.0f,
-     DEPART_NONE, VU1REF_ORIGINAL, MARK_NONE},
+     DEPART_NONE, VU1REF_ORIGINAL, MARK_NONE, 0},
     {"grid 20", "vu_grid_vs", P_MESH, 20, ICO_VU_CLIP_REGION, 2, 2, 3, 10, 0, 0, 0, 1.0f,
-     DEPART_NONE, VU1REF_ORIGINAL, MARK_NONE},
+     DEPART_NONE, VU1REF_ORIGINAL, MARK_NONE, 0},
     /* as prim_makePacketMesh3D lays the buffer out: VIF qword, tag, colour,
      * vertices, MSCNT */
     {"grid 22 raw", "vu_grid_lit_vs", P_MESH, 22, ICO_VU_CLIP_REGION, 3, 3, 3, 10, 0, 1, 0, 1.0f,
-     DEPART_NONE, VU1REF_ORIGINAL, MARK_NONE},
+     DEPART_NONE, VU1REF_ORIGINAL, MARK_NONE, 0},
     {"grid 24", "vu_grid_spec_vs", P_MESH, 24, ICO_VU_CLIP_REGION, 3, 2, 2, 10, 0, 0, 0, 1.0f,
-     DEPART_NONE, VU1REF_ORIGINAL, MARK_NONE},
+     DEPART_NONE, VU1REF_ORIGINAL, MARK_NONE, 0},
     {"particle", "vu_particle_vs", P_PARTICLE, 18, 0, 2, 6, 1, 12, 0, 0, 0, 1.0f, DEPART_NONE,
-     VU1REF_ORIGINAL, MARK_NONE},
+     VU1REF_ORIGINAL, MARK_NONE, 0},
     /* Enhanced: the triangles past the window (vertex 7 of each batch)
      * reach the picture, not drawn, as in Original; the particle outside
      * it lies wholly beside the picture, drawn whole in both presets
      * (nothing of it on the target) */
     {"prelit 32 enh", "vu_prelit_vs", P_NORMALC, 32, ICO_VU_CLIP_REGION, 3, 1, 2, 12, 0, 0, 0, 1.0f,
-     DEPART_NONE, VU1REF_ENHANCED, MARK_NONE},
+     DEPART_NONE, VU1REF_ENHANCED, MARK_NONE, 0},
     {"skin 20 enh", "vu_skin_vs", P_CLUSTER, 20, ICO_VU_CLIP_REGION, 5, 1, 1, 12, 0, 0, 0, 1.0f,
-     DEPART_NONE, VU1REF_ENHANCED, MARK_NONE},
+     DEPART_NONE, VU1REF_ENHANCED, MARK_NONE, 0},
     {"grid 20 enh", "vu_grid_vs", P_MESH, 20, ICO_VU_CLIP_REGION, 2, 2, 2, 10, 0, 0, 0, 1.0f,
-     DEPART_NONE, VU1REF_ENHANCED, MARK_NONE},
+     DEPART_NONE, VU1REF_ENHANCED, MARK_NONE, 0},
     {"particle enh", "vu_particle_vs", P_PARTICLE, 18, 0, 2, 6, 1, 12, 0, 0, 0, 1.0f, DEPART_NONE,
-     VU1REF_ENHANCED, MARK_NONE},
+     VU1REF_ENHANCED, MARK_NONE, 0},
     /* a frame-wide target at 32:9 (frame[0] 0.375): the region test is the
      * program's own, so the vertices at X 4095 and 8000 fail at every
      * aspect; their triangles cross the camera's picture, not drawn in
      * either preset */
     {"prelit 32 wide", "vu_prelit_vs", P_NORMALC, 32, ICO_VU_CLIP_REGION, 3, 1, 2, 12, 0, 0, 0,
-     0.375f, DEPART_NONE, VU1REF_ORIGINAL, MARK_NONE},
+     0.375f, DEPART_NONE, VU1REF_ORIGINAL, MARK_NONE, 0},
     {"prelit wide enh", "vu_prelit_vs", P_NORMALC, 32, ICO_VU_CLIP_REGION, 3, 1, 2, 12, 0, 0, 0,
-     0.375f, DEPART_NONE, VU1REF_ENHANCED, MARK_NONE},
+     0.375f, DEPART_NONE, VU1REF_ENHANCED, MARK_NONE, 0},
     {"lit 32 wide enh", "vu_lit_vs", P_NORMALL, 32, ICO_VU_CLIP_REGION, 4, 1, 1, 12, 0, 0, 0,
-     0.375f, DEPART_NONE, VU1REF_ENHANCED, MARK_NONE},
+     0.375f, DEPART_NONE, VU1REF_ENHANCED, MARK_NONE, 0},
     {"grid 20 wide enh", "vu_grid_vs", P_MESH, 20, ICO_VU_CLIP_REGION, 2, 2, 2, 10, 0, 0, 0, 0.375f,
-     DEPART_NONE, VU1REF_ENHANCED, MARK_NONE},
+     DEPART_NONE, VU1REF_ENHANCED, MARK_NONE, 0},
     /* a vertex behind the eye: what of its triangles is in front of the
      * near plane reaches the picture, not drawn in either preset */
     {"prelit 32 eye", "vu_prelit_vs", P_NORMALC, 32, ICO_VU_CLIP_REGION, 3, 1, 2, 12, 0, 0, 0, 1.0f,
-     DEPART_EYE, VU1REF_ORIGINAL, MARK_NONE},
+     DEPART_EYE, VU1REF_ORIGINAL, MARK_NONE, 0},
     {"lit 32 eye", "vu_lit_vs", P_NORMALL, 32, ICO_VU_CLIP_REGION, 4, 1, 1, 12, 0, 0, 0, 1.0f,
-     DEPART_EYE, VU1REF_ORIGINAL, MARK_NONE},
+     DEPART_EYE, VU1REF_ORIGINAL, MARK_NONE, 0},
     {"prelit eye enh", "vu_prelit_vs", P_NORMALC, 32, ICO_VU_CLIP_REGION, 3, 1, 2, 12, 0, 0, 0,
-     1.0f, DEPART_EYE, VU1REF_ENHANCED, MARK_NONE},
+     1.0f, DEPART_EYE, VU1REF_ENHANCED, MARK_NONE, 0},
     {"lit eye wide enh", "vu_lit_vs", P_NORMALL, 32, ICO_VU_CLIP_REGION, 4, 1, 1, 12, 0, 0, 0,
-     0.375f, DEPART_EYE, VU1REF_ENHANCED, MARK_NONE},
+     0.375f, DEPART_EYE, VU1REF_ENHANCED, MARK_NONE, 0},
     /* photo mode's free camera: drawn, GPU-clipped, in either preset */
     {"prelit 32 free", "vu_prelit_vs", P_NORMALC, 32, ICO_VU_CLIP_REGION, 3, 1, 2, 12, 0, 0, 0,
-     1.0f, DEPART_EYE_FREE, VU1REF_ORIGINAL, MARK_NONE},
+     1.0f, DEPART_EYE_FREE, VU1REF_ORIGINAL, MARK_NONE, 0},
     {"lit 32 free", "vu_lit_vs", P_NORMALL, 32, ICO_VU_CLIP_REGION, 4, 1, 1, 12, 0, 0, 0, 1.0f,
-     DEPART_EYE_FREE, VU1REF_ORIGINAL, MARK_NONE},
+     DEPART_EYE_FREE, VU1REF_ORIGINAL, MARK_NONE, 0},
     {"lit wide free", "vu_lit_vs", P_NORMALL, 32, ICO_VU_CLIP_REGION, 4, 1, 1, 12, 0, 0, 0, 0.375f,
-     DEPART_EYE_FREE, VU1REF_ENHANCED, MARK_NONE},
+     DEPART_EYE_FREE, VU1REF_ENHANCED, MARK_NONE, 0},
     /* past the window below the picture; a card across the picture (the
      * opening's tree card, issue 59): they reach the picture, not drawn
      * in either preset, at 4:3 and wide */
     {"prelit band enh", "vu_prelit_vs", P_NORMALC, 32, ICO_VU_CLIP_REGION, 3, 1, 2, 12, 0, 0, 0,
-     0.375f, DEPART_BAND_IN, VU1REF_ENHANCED, MARK_NONE},
+     0.375f, DEPART_BAND_IN, VU1REF_ENHANCED, MARK_NONE, 0},
     {"prelit card", "vu_prelit_vs", P_NORMALC, 32, ICO_VU_CLIP_REGION, 3, 1, 2, 12, 0, 0, 0, 0.375f,
-     DEPART_CARD, VU1REF_ORIGINAL, MARK_NONE},
+     DEPART_CARD, VU1REF_ORIGINAL, MARK_NONE, 0},
     {"prelit card enh", "vu_prelit_vs", P_NORMALC, 32, ICO_VU_CLIP_REGION, 3, 1, 2, 12, 0, 0, 0,
-     0.375f, DEPART_CARD, VU1REF_ENHANCED, MARK_NONE},
+     0.375f, DEPART_CARD, VU1REF_ENHANCED, MARK_NONE, 0},
     {"prelit card 43 enh", "vu_prelit_vs", P_NORMALC, 32, ICO_VU_CLIP_REGION, 3, 1, 2, 12, 0, 0, 0,
-     1.0f, DEPART_CARD, VU1REF_ENHANCED, MARK_NONE},
+     1.0f, DEPART_CARD, VU1REF_ENHANCED, MARK_NONE, 0},
     /* a strip wholly right of the camera's picture with a vertex past the
      * window: its failing triangles are drawn clipped beside the picture
      * in both presets (issue 29's walls and sea) */
     {"prelit beside", "vu_prelit_vs", P_NORMALC, 32, ICO_VU_CLIP_REGION, 3, 1, 2, 12, 0, 0, 0,
-     0.375f, DEPART_BESIDE, VU1REF_ORIGINAL, MARK_NONE},
+     0.375f, DEPART_BESIDE, VU1REF_ORIGINAL, MARK_NONE, 0},
     {"prelit beside enh", "vu_prelit_vs", P_NORMALC, 32, ICO_VU_CLIP_REGION, 3, 1, 2, 12, 0, 0, 0,
-     0.375f, DEPART_BESIDE, VU1REF_ENHANCED, MARK_NONE},
+     0.375f, DEPART_BESIDE, VU1REF_ENHANCED, MARK_NONE, 0},
     {"lit beside enh", "vu_lit_vs", P_NORMALL, 32, ICO_VU_CLIP_REGION, 4, 1, 1, 12, 0, 0, 0, 0.375f,
-     DEPART_BESIDE, VU1REF_ENHANCED, MARK_NONE},
+     DEPART_BESIDE, VU1REF_ENHANCED, MARK_NONE, 0},
     /* a particle past the window: across the camera's picture neither
      * preset draws it; wholly beside it both draw its whole quad, which the
      * GPU clips; the free camera draws it */
     {"particle past", "vu_particle_vs", P_PARTICLE, 18, 0, 2, 6, 1, 12, 0, 0, 0, 1.0f,
-     DEPART_SPRITE, VU1REF_ORIGINAL, MARK_NONE},
+     DEPART_SPRITE, VU1REF_ORIGINAL, MARK_NONE, 0},
     {"particle past enh", "vu_particle_vs", P_PARTICLE, 18, 0, 2, 6, 1, 12, 0, 0, 0, 0.375f,
-     DEPART_SPRITE, VU1REF_ENHANCED, MARK_NONE},
+     DEPART_SPRITE, VU1REF_ENHANCED, MARK_NONE, 0},
     {"particle free", "vu_particle_vs", P_PARTICLE, 18, 0, 2, 6, 1, 12, 0, 0, 0, 1.0f,
-     DEPART_SPRITE_FREE, VU1REF_ORIGINAL, MARK_NONE},
+     DEPART_SPRITE_FREE, VU1REF_ORIGINAL, MARK_NONE, 0},
     {"particle beside enh", "vu_particle_vs", P_PARTICLE, 18, 0, 2, 6, 1, 12, 0, 0, 0, 0.375f,
-     DEPART_SPRITE_BESIDE, VU1REF_ENHANCED, MARK_NONE},
+     DEPART_SPRITE_BESIDE, VU1REF_ENHANCED, MARK_NONE, 0},
     {"particle beside", "vu_particle_vs", P_PARTICLE, 18, 0, 2, 6, 1, 12, 0, 0, 0, 0.375f,
-     DEPART_SPRITE_BESIDE, VU1REF_ORIGINAL, MARK_NONE},
+     DEPART_SPRITE_BESIDE, VU1REF_ORIGINAL, MARK_NONE, 0},
     /* the content table's mark: HIDE drawn nowhere, the free camera too */
     {"prelit hide", "vu_prelit_vs", P_NORMALC, 32, ICO_VU_CLIP_REGION, 3, 1, 2, 12, 0, 0, 0, 1.0f,
-     DEPART_NONE, VU1REF_ENHANCED, MARK_HIDE},
+     DEPART_NONE, VU1REF_ENHANCED, MARK_HIDE, 0},
     {"lit hide free", "vu_lit_vs", P_NORMALL, 32, ICO_VU_CLIP_REGION, 4, 1, 1, 12, 0, 0, 0, 1.0f,
-     DEPART_EYE_FREE, VU1REF_ENHANCED, MARK_HIDE},
+     DEPART_EYE_FREE, VU1REF_ENHANCED, MARK_HIDE, 0},
+    /* a vertex far above the picture: on a target beside the picture its
+     * triangles cover pixels while within the picture's columns they lie
+     * wholly above it: drawn clipped (Enhanced wide); on the target inside
+     * the picture they reach it, not drawn (Original, 4:3: the PS2's) */
+    {"prelit above enh", "vu_prelit_vs", P_NORMALC, 32, ICO_VU_CLIP_REGION, 3, 1, 2, 12, 0, 0, 0,
+     0.375f, DEPART_ABOVE, VU1REF_ENHANCED, MARK_NONE, 0},
+    {"prelit above 43", "vu_prelit_vs", P_NORMALC, 32, ICO_VU_CLIP_REGION, 3, 1, 2, 12, 0, 0, 0,
+     1.0f, DEPART_ABOVE_IN, VU1REF_ORIGINAL, MARK_NONE, 0},
+    /* a reflection camera's picture, 2048 -+ 116 (puddle.c): a strip right
+     * of it, inside the frame camera's picture, with a vertex past the
+     * window, drawn clipped; the target around 2048 inside it, the
+     * triangles past the window reach it, not drawn */
+    {"prelit refl beside", "vu_prelit_vs", P_NORMALC, 32, ICO_VU_CLIP_REGION, 3, 1, 2, 12, 0, 0, 0,
+     0.375f, DEPART_REFL_BESIDE, VU1REF_ENHANCED, MARK_NONE, 116},
+    {"prelit refl", "vu_prelit_vs", P_NORMALC, 32, ICO_VU_CLIP_REGION, 3, 1, 2, 12, 0, 0, 0, 1.0f,
+     DEPART_NONE, VU1REF_ORIGINAL, MARK_NONE, 116},
 };
 
 #define NCASES ((int)(sizeof(kCases) / sizeof(kCases[0])))
@@ -1904,6 +1982,9 @@ static int gpuTests(void)
         /* the frame register as rd sets it on a frame-wide target (no VU
          * shader reads it) and the preset (g_misc.y) */
         fProbe.frame[0] = fDraw.frame[0] = wide;
+        /* the camera's picture (rd_replay.c rd__frame_group_ex) */
+        fProbe.frame[1] = fDraw.frame[1] = pictureHalfW(c);
+        fProbe.frame[2] = fDraw.frame[2] = pictureHalfH(c);
         fProbe.misc[1] = fDraw.misc[1] = (float)c->preset;
         IcoDrawCB dcb;
         memset(&dcb, 0, sizeof(dcb));
@@ -2089,12 +2170,17 @@ static int gpuTests(void)
                 FAILF("%s: %d pixels drawn of triangles the port drops\n", c->name, pcov);
             }
             /* the rule per case, the same in both presets: HIDE hides; the
-             * free camera clips; DEPART_BESIDE's failing triangles lie
-             * wholly beside the camera's picture and are clipped; every
+             * free camera clips; DEPART_BESIDE's, DEPART_ABOVE's and
+             * DEPART_REFL_BESIDE's failing triangles lie wholly beside the
+             * camera's picture (DEPART_ABOVE's once cut to its rows,
+             * DEPART_REFL_BESIDE's the reflection camera's) and are
+             * clipped; every
              * other case's reach it (the target lies inside it) and are
              * not drawn, but for any wholly beside it, off the target */
             const int hidden = c->mark == MARK_HIDE;
-            const int clips = !hidden && (freeCamera(c) || c->depart == DEPART_BESIDE);
+            const int clips =
+                !hidden && (freeCamera(c) || c->depart == DEPART_BESIDE ||
+                            c->depart == DEPART_ABOVE || c->depart == DEPART_REFL_BESIDE);
             if (c->clip == ICO_VU_CLIP_REGION && (hidden  ? nclip != 0
                                                   : clips ? nnone != 0
                                                           : nnone == 0)) {

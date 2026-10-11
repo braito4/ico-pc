@@ -43,11 +43,14 @@ cbuffer FrameCB : register(b0, space0)
                         // convention; 0 puts GS integer coordinates on pixel edges)
     // The native frame (port/include/ico_frame.h). g_frameRegs[0] (g_frame):
     // x the region scale, 512 / W on a target as wide as the native frame W,
-    // exactly 1 on every other target and at 4:3; yzw reserved.
-    // g_frameRegs[1] reserved. Nothing transforms a position: a GS X is
-    // drawn where the game put it, at every aspect, and the VU programs'
-    // region test reads the position as computed (vu_common.hlsli
-    // vu_triangle_out), so no shader reads either register.
+    // exactly 1 on every other target and at 4:3 (no shader reads it);
+    // y, z the drawing camera's picture, its half-width and half-height in
+    // GS pixels about (2048, 2048) (vu_common.hlsli vu_picture_half: 256 by
+    // half the native height for the frame's camera, a reflection camera's
+    // own); w reserved. g_frameRegs[1] reserved. Nothing transforms a
+    // position: a GS X is drawn where the game put it, at every aspect, and
+    // the VU programs' region test reads the position as computed
+    // (vu_common.hlsli vu_triangle_out).
     float4 g_frameRegs[2];
     float4 g_z;         // x scale (1 / 2^24), yz the bound target's texels per GS
                         // pixel (1 in Original), w 1: the VU programs output

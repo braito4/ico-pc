@@ -84,6 +84,16 @@ static void poolHostCamera(int push)
         cam.aspect = gsFrame.aspect; /* the frame's display aspect, 4/3 at 4:3 */
         cam.nearZ = 2.0f;
         cam.farZ = 262144.0f;
+        /* the reflection camera's picture: the part of the block the frame
+           shows at 4:3, which a triangle the VU's region test drops must not
+           be drawn in (vu_common.hlsli vu_picture_half).  The 204 x 204 view
+           is 2048 -+ 102 of the 256 x 256 block, but the reflecting grid's
+           STs (updatePoolGeo: 0.8 / W of the screen offset plus the
+           reflected ray's 1000-unit step, uv2) reach past it, anywhere in
+           the block, so the picture is the whole block at 4:3: 2048 -+ 128
+           both ways */
+        cam.pictureW = 128;
+        cam.pictureH = 128;
         rd_push_camera(&cam);
     } else {
         rd_pop_camera();

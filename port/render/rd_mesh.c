@@ -1358,10 +1358,21 @@ static RdCmd *pushVu(uint8_t type, RdKey key, const RdVuPayload *p, const RdVuBl
         }
         at += sizes[i];
     }
+    /* the camera the draw is recorded under: a reflection camera's picture
+     * (rd.h RdCamera.pictureW/H; rd_push_camera's scope), 0 under the
+     * frame's camera */
+    const int l = rd_current_list();
+    const RdCamera *cam =
+        l >= 0 && l < RD_LIST_COUNT ? rd__camera_at(f, l, f->lists[l].count) : NULL;
     RdCmd *c = rd__push(type);
     c->b[0] = p->prog;
     c->b[1] = p->code;
     c->b[2] = p->clip;
+    /* b[3], b[6]: the camera's picture, half-width and half-height in GS
+     * pixels, 0 for the full screen's (and in older dumps); rd_replay.c
+     * puts it in FrameCB (vu_common.hlsli vu_picture_half) */
+    c->b[3] = cam ? cam->pictureW : 0;
+    c->b[6] = cam ? cam->pictureH : 0;
     c->u[1] = off;
     c->u[2] = total;
     c->keyLo = (uint32_t)key;

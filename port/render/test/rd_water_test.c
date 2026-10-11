@@ -1590,6 +1590,17 @@ static void checkPuddleRecording(void)
           "puddle: the reflection draw's camera scope holds the 230 x 230 screen matrix");
     CHECK(cf && memcmp(cf, &s_frameCam, sizeof(*cf)) == 0,
           "puddle: the surface draw sees the frame camera");
+    /* the reflection camera's picture (puddle.c puddleHostCamera: the part of
+     * the block the frame shows at 4:3, 2048 -+ 116) rides on the VU draw
+     * (rd_mesh.c pushVu, b[3] and b[6]) into FrameCB (rd_replay.c); the
+     * surface draw under the frame camera carries 0, the full screen's */
+    CHECK(cs && cs->pictureW == 116 && cs->pictureH == 116,
+          "puddle: the reflection camera's picture is 116 x 116 (%d x %d)", cs ? cs->pictureW : -1,
+          cs ? cs->pictureH : -1);
+    CHECK(vu[1]->c->b[3] == 116 && vu[1]->c->b[6] == 116 && vu[0]->c->b[3] == 0 &&
+              vu[0]->c->b[6] == 0,
+          "puddle: the draws carry their camera's picture (%u %u, %u %u)", vu[1]->c->b[3],
+          vu[1]->c->b[6], vu[0]->c->b[3], vu[0]->c->b[6]);
     CHECK(f->hasCamera && memcmp(&f->camera, &s_frameCam, sizeof(s_frameCam)) == 0,
           "puddle: the frame camera is untouched");
     CHECK(rd__camera_scopes(f, NULL) == 1, "puddle: one camera scope (%u)",
@@ -1728,6 +1739,15 @@ static void checkPoolRecording(void)
     CHECK(rd__camera_at(f, 4, vu[0]->index) == &f->camera &&
               rd__camera_at(f, 4, vu[2]->index) == &f->camera,
           "pool: the grids see the frame camera");
+    /* the reflection camera's picture (pool.c poolHostCamera: the whole
+     * block, which the reflecting grid's STs reach at 4:3) */
+    CHECK(cs && cs->pictureW == 128 && cs->pictureH == 128,
+          "pool: the reflection camera's picture is 128 x 128 (%d x %d)", cs ? cs->pictureW : -1,
+          cs ? cs->pictureH : -1);
+    CHECK(vu[1]->c->b[3] == 128 && vu[1]->c->b[6] == 128 && vu[0]->c->b[3] == 0 &&
+              vu[2]->c->b[3] == 0,
+          "pool: the draws carry their camera's picture (%u %u, %u %u)", vu[1]->c->b[3],
+          vu[1]->c->b[6], vu[0]->c->b[3], vu[2]->c->b[3]);
     CHECK(vu[1]->st.ds.zwrite == RD_ZWRITE_ON && vu[1]->st.ds.test.ztst == RD_ZTST_GEQUAL,
           "pool: the reflection pass writes and tests Z");
     CHECK(vu[2]->st.ds.blend == RD_BLEND_CS_FIX_ADD_CD && vu[2]->st.ds.blendFix == 0x40 &&

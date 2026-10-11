@@ -56,6 +56,10 @@
  *   (RDC_GRID's b[5], f[0] and f[1], rd.h rd_grid_screen_st: 0 in the dumps
  *   from before them, whose pool grids blend their STs as they always did;
  *   the version is unchanged)
+ *   (the VU draws' b[3] and b[6], RdCamera.pictureW/H of a reflection
+ *   camera, rd_mesh.c pushVu: 0 in the dumps from before them, which
+ *   replay with the full screen's picture as they did; the version is
+ *   unchanged)
  *   u32      VU mesh count (from version 3); per mesh: u32 id, vertexCount,
  *            qwPerVertex, indexCount, batchCount, char[24] name, then the
  *            stream (vertexCount * qwPerVertex * 16 bytes), the index list

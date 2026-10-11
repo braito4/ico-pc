@@ -159,3 +159,57 @@ int vu1ref_particle_draw(int preset, int freeCamera, int drawn, int shown, int r
     }
     return reaches ? VU1REF_DRAW_NONE : VU1REF_DRAW_CLIPPED;
 }
+
+/* vu_clip_corners in two dimensions: poly[0..n) cut to s * (p[axis] - at)
+ * >= 0; returns the corner count (at most n + 1) */
+static int cutPolygon(float (*poly)[2], int n, int axis, float at, float sgn)
+{
+    float q[VU1REF_POLY_MAX][2];
+    int m = 0;
+    for (int i = 0; i < n; i++) {
+        const float *a = poly[i], *b = poly[i + 1 < n ? i + 1 : 0];
+        const float da = sgn * (a[axis] - at), db = sgn * (b[axis] - at);
+        if (da >= 0.0f && m < VU1REF_POLY_MAX) {
+            q[m][0] = a[0];
+            q[m][1] = a[1];
+            m++;
+        }
+        if ((da >= 0.0f) != (db >= 0.0f) && m < VU1REF_POLY_MAX) {
+            const float t = da / (da - db);
+            q[m][0] = a[0] + (b[0] - a[0]) * t;
+            q[m][1] = a[1] + (b[1] - a[1]) * t;
+            m++;
+        }
+    }
+    memcpy(poly, q, (size_t)m * sizeof(q[0]));
+    return m;
+}
+
+int vu1ref_polygon_reaches_picture(const float (*poly)[2], int n, const float pic[4])
+{
+    float p[VU1REF_POLY_MAX][2];
+    if (n < 3 || n > VU1REF_POLY_MAX - 2) {
+        return n >= 3; /* not a polygon this cuts: counted as reaching */
+    }
+    memcpy(p, poly, (size_t)n * sizeof(p[0]));
+    /* vu_cut_reaches_picture: the picture's rows first, then the columns */
+    n = cutPolygon(p, n, 1, pic[2], 1.0f);
+    n = cutPolygon(p, n, 1, pic[3], -1.0f);
+    if (n < 3) {
+        return 0;
+    }
+    float lo = p[0][0], hi = p[0][0];
+    for (int i = 1; i < n; i++) {
+        lo = p[i][0] < lo ? p[i][0] : lo;
+        hi = p[i][0] > hi ? p[i][0] : hi;
+    }
+    return lo < pic[1] && hi > pic[0];
+}
+
+int vu1ref_rect_reaches_picture(float x0, float y0, float x1, float y1, const float pic[4])
+{
+    /* vu_rect_reaches_picture */
+    const float xl = x0 < x1 ? x0 : x1, xh = x0 < x1 ? x1 : x0;
+    const float yl = y0 < y1 ? y0 : y1, yh = y0 < y1 ? y1 : y0;
+    return xl < pic[1] && xh > pic[0] && yl < pic[3] && yh > pic[2];
+}

@@ -318,42 +318,67 @@ float4 vu_cut_position(VuVtx v)
 
 static const float4 VU_CULLED = float4(2.0, 2.0, 2.0, 1.0); // outside x <= w: clipped away
 
-// The camera's picture: the GS X range the game's camera projects its 4:3
-// picture into, 2048 -+ 256 GS pixels (gsb_SetVSMatrix's centre and the
-// 512-pixel screen). The projection is the same at every aspect, so this
-// is the same part of the camera's view on every frame; a frame wider
-// than 4:3 shows more of the view beside it.
-static const float VU_PICTURE_X0 = 1792.0;
-static const float VU_PICTURE_X1 = 2304.0;
+// The camera's picture: the part of the drawing camera's view the PS2
+// showed, about GS (2048, 2048) (gsb_SetVSMatrix's centre): g_frame.y GS
+// pixels either side across, g_frame.z up and down (rd_replay.c
+// rd__frame_group_ex). The frame's camera: 256 (the 512-pixel screen) by
+// half the native height. A reflection camera's (puddle.c, pool.c, through
+// RdCamera.pictureW/H and the VU draw's command): the part of its block
+// the frame shows at 4:3. The projection is the same at every aspect, so
+// this is the same part of the camera's view on every frame; a frame wider
+// than 4:3 shows more of the view beside it. A FrameCB without it (0) is
+// read as 256 across and no bound up and down.
+float2 vu_picture_half()
+{
+    return float2(g_frame.y > 0.0 ? g_frame.y : 256.0, g_frame.z > 0.0 ? g_frame.z : 1e6);
+}
 
-// Whether a clip-space x range lo .. hi (positions, x / w, as vu_ndc maps
-// GS pixels) meets the camera's picture. Conservative at its edges: a
-// range that ends exactly on an edge covers no pixel centre inside, but
-// counts as reaching it.
+// The picture's edges in clip-space positions (x / w, y / w as vu_ndc maps
+// GS pixels): x left, y right, z top, w bottom (top > bottom: clip y grows
+// upwards).
+float4 vu_picture_ndc()
+{
+    float2 h = vu_picture_half();
+    float2 a = vu_ndc(float2(2048.0, 2048.0) - h);
+    float2 b = vu_ndc(float2(2048.0, 2048.0) + h);
+    return float4(a.x, b.x, a.y, b.y);
+}
+
+// Whether a clip-space x range lo .. hi meets the camera's picture's
+// columns. Conservative at its edges: a range that ends exactly on an edge
+// covers no pixel centre inside, but counts as reaching it.
 bool vu_reaches_picture(float lo, float hi)
 {
-    float l = vu_ndc(float2(VU_PICTURE_X0, 0.0)).x;
-    float r = vu_ndc(float2(VU_PICTURE_X1, 0.0)).x;
-    return lo < r && hi > l;
+    float4 e = vu_picture_ndc();
+    return lo < e.y && hi > e.x;
+}
+
+// Whether a clip-space rectangle lo .. hi (a sprite's corners) meets the
+// camera's picture, edges counted as above.
+bool vu_rect_reaches_picture(float2 lo, float2 hi)
+{
+    float4 e = vu_picture_ndc();
+    return lo.x < e.y && hi.x > e.x && lo.y < e.z && hi.y > e.w;
 }
 
 // Corners p[0..n) of a convex polygon in clip space cut to
-// dot(plane, v) >= 0 (Sutherland-Hodgman). A triangle cut by two planes has
-// at most five corners.
-void vu_clip_corners(inout float4 p[5], inout uint n, float4 plane)
+// dot(plane, v) >= 0 (Sutherland-Hodgman). A triangle cut by four planes
+// has at most seven corners.
+#define VU_CUT_CORNERS 7u
+void vu_clip_corners(inout float4 p[VU_CUT_CORNERS], inout uint n, float4 plane)
 {
-    float4 q[5] = p;
+    float4 q[VU_CUT_CORNERS] = p;
     uint m = 0u;
     for (uint i = 0u; i < n; i++) {
         float4 a = p[i];
         float4 b = p[i + 1u < n ? i + 1u : 0u];
         float da = dot(plane, a);
         float db = dot(plane, b);
-        if (da >= 0.0 && m < 5u) {
+        if (da >= 0.0 && m < VU_CUT_CORNERS) {
             q[m] = a;
             m++;
         }
-        if ((da >= 0.0) != (db >= 0.0) && m < 5u) {
+        if ((da >= 0.0) != (db >= 0.0) && m < VU_CUT_CORNERS) {
             q[m] = lerp(a, b, da / (da - db));
             m++;
         }
@@ -364,15 +389,22 @@ void vu_clip_corners(inout float4 p[5], inout uint n, float4 plane)
 
 // Whether what the GPU draws of the triangle with clip-space corners a, b
 // and c (vu_cut_position) reaches into the camera's picture: the triangle
-// cut to 0 <= z <= w as the GPU clips it, its x extent met with the
-// picture's (vu_reaches_picture). A triangle cut away whole reaches
-// nothing.
+// cut to 0 <= z <= w as the GPU clips it and to the picture's top and
+// bottom, its x extent met with the picture's columns (vu_reaches_picture).
+// Cut to the rows first: a triangle whose part within the picture's
+// columns lies wholly above or below the picture (only sky over it) but
+// that covers frame pixels beside the picture lies wholly beside it, and
+// is drawn there. A triangle cut away whole reaches nothing. The corners
+// keep w >= 0 after the z cut, so the row planes cut in homogeneous form.
 bool vu_cut_reaches_picture(float4 a, float4 b, float4 c)
 {
-    float4 p[5] = {a, b, c, c, c};
+    float4 p[VU_CUT_CORNERS] = {a, b, c, c, c, c, c};
     uint n = 3u;
+    float4 e = vu_picture_ndc();
     vu_clip_corners(p, n, float4(0.0, 0.0, 1.0, 0.0));
     vu_clip_corners(p, n, float4(0.0, 0.0, -1.0, 1.0));
+    vu_clip_corners(p, n, float4(0.0, -1.0, 0.0, e.z)); // y <= top * w
+    vu_clip_corners(p, n, float4(0.0, 1.0, 0.0, -e.w)); // y >= bottom * w
     float lo = 1e30;
     float hi = -1e30;
     for (uint i = 0u; i < n; i++) {
@@ -432,7 +464,8 @@ VuVSOut vu_triangle_out(VuVtx a, VuVtx b, VuVtx c, VuVtx me, uint mode)
         //   frustum (a walkway low under the camera left a hole);
         // - a failing triangle whose GPU-clipped extent (0 <= z <= w, a
         //   vertex behind the eye or not) reaches into the camera's
-        //   picture (GS X 2048 -+ 256, vu_cut_reaches_picture) is not
+        //   picture (GS 2048 -+ 256 across by the native height, the
+        //   drawing camera's, vu_cut_reaches_picture) is not
         //   drawn, as the PS2 does not draw it: the opening's cliff
         //   (st26a_p1, filmed from inside, vertices behind the eye) and the
         //   forest's tree card (st26a_near, a vertex past the window, every

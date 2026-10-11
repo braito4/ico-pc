@@ -301,7 +301,15 @@ typedef struct RdCamera {
      * (vu_common.hlsli VU_F_BEHIND_EYE); 0 in the game's cameras and in older
      * dumps (the byte was padding, always zero) */
     uint8_t freeCamera;
-    uint8_t _pad[2];
+    /* The camera's picture, the part of its view the frame shows at 4:3,
+     * as half-width and half-height in GS pixels about (2048, 2048), for a
+     * camera that is not the full screen's: the reflection cameras
+     * rd_push_camera records (puddle.c 116, pool.c 128).  0: the full
+     * screen's picture, 256 by half the native height (the frame's camera,
+     * and every dump from before them: the bytes were padding).  The VU
+     * draws recorded under the camera carry it (rd_mesh.c pushVu, RdCmd
+     * b[3] and b[6]) into FrameCB (vu_common.hlsli vu_picture_half). */
+    uint8_t pictureW, pictureH;
 } RdCamera;
 
 typedef enum RdPreset { RD_PRESET_ORIGINAL = 0, RD_PRESET_ENHANCED = 1 } RdPreset;

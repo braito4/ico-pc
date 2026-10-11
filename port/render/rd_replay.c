@@ -570,6 +570,10 @@ RdUniform rd__frame_group_z(uint32_t targetW, uint32_t targetH, float originX, f
  * texel edges instead of texel centres */
 static bool s_frameNoHalf;
 
+/* the camera's picture of the frame group being made (Replay.picture), and
+ * the height of the frame it is drawn on (0: the native height) */
+static uint32_t s_framePicture, s_framePictureFrameH;
+
 RdUniform rd__frame_group_ex(uint32_t targetW, uint32_t targetH, float originX, float originY,
                              float zScale, float regionScale, float scaleX, float scaleY)
 {
@@ -596,6 +600,18 @@ RdUniform rd__frame_group_ex(uint32_t targetW, uint32_t targetH, float originX, 
      * exactly 1 at 4:3 and on every target that is not frame-wide; no
      * shader reads it) */
     cb.frame[0] = regionScale;
+    /* frame[1], frame[2]: the drawing camera's picture, half-width and
+     * half-height in GS pixels about (2048, 2048), which the VU programs'
+     * rule for the triangles their region test drops reads
+     * (vu_common.hlsli vu_picture_half): a reflection camera's from its
+     * draw's command (rd.h RdCamera.pictureW/H), else the full screen's,
+     * 256 (gsb_SetVSMatrix's 512-pixel screen) by half the native height
+     * (never less than half the frame drawn on: at 4:3 the picture is the
+     * whole frame, so a triangle wholly beside it is off the frame) */
+    const uint32_t pw = s_framePicture & 255u, ph = (s_framePicture >> 8) & 255u;
+    const uint32_t fh = s_framePictureFrameH > g_rd.gsH ? s_framePictureFrameH : g_rd.gsH;
+    cb.frame[1] = pw ? (float)pw : 256.0f;
+    cb.frame[2] = ph ? (float)ph : (float)(fh >> 1);
     /* the GS Z scale of the bound depth buffer: 2^-32 for the game's PSMZ32
      * so UI Z values above 2^24 keep their order */
     cb.z[0] = zScale;
@@ -735,9 +751,12 @@ typedef struct Replay {
     int passOpen;
     uint32_t passColor, passDepth;
     RdUniform frameBG;
-    uint32_t frameKey[5]; /* colour, gsW, gsH, useOffset, pass serial */
-    int mirror;           /* the draw being bound is a flipped UI draw (scissor too) */
-    int halfAdded;        /* sceneKeepsHalf gave the target in force the frame head's half pixel */
+    uint32_t frameKey[6]; /* colour, gsW, gsH, useOffset, pass serial, picture */
+    /* the VU draw being bound: its camera's picture (RdCmd b[3] | b[6] << 8,
+     * rd_mesh.c pushVu), 0 for the full screen's and every other draw */
+    uint32_t picture;
+    int mirror;    /* the draw being bound is a flipped UI draw (scissor too) */
+    int halfAdded; /* sceneKeepsHalf gave the target in force the frame head's half pixel */
     uint32_t passSerial;
     uint32_t writeSerial; /* bumped by every action that may change a target's alpha */
     uint32_t dateFor;     /* target id the DATE snapshot holds, 0 = none */
@@ -2335,7 +2354,8 @@ static RhiBindGroup bindDrawEx(Replay *r, const DrawSetup *ds, RhiRect *scOut, u
                   RHI_LOAD_LOAD, NULL, RHI_LOAD_LOAD, 0.0f);
     }
     const uint32_t useOffset = drawOffset(r, ds);
-    const uint32_t fk[5] = {r->st.color, r->st.gsW, r->st.gsH, useOffset, r->passSerial};
+    const uint32_t fk[6] = {r->st.color, r->st.gsW,     r->st.gsH,
+                            useOffset,   r->passSerial, r->picture};
     if (memcmp(fk, r->frameKey, sizeof(fk)) != 0) {
         /* XYOFFSET = (2048 - w/2, 2048 - h/2), w the native frame's width
          * (+ the preset's field offset when useOffset; zero in Original) */
@@ -2344,8 +2364,11 @@ static RhiBindGroup bindDrawEx(Replay *r, const DrawSetup *ds, RhiRect *scOut, u
         if (useOffset & RD_TARGET_HALF_Y) {
             oy += 0.5f; /* the flip's sceGsSetHalfOffset */
         }
+        s_framePicture = r->picture;
+        s_framePictureFrameH = r->st.gsH;
         r->frameBG = rd__frame_group_ex(tc->w, tc->h, ox, oy, rd__target_z_scale(ds->tdId),
                                         rd__region_scale(tc), tc->sx, tc->sy);
+        s_framePicture = s_framePictureFrameH = 0;
         memcpy(r->frameKey, fk, sizeof(fk));
     }
     if (scOut) {
@@ -3655,7 +3678,18 @@ static void vuDraw(Replay *r, const RdStateBlock *s, const DrawSetup *ds, RhiBin
     r->st = saved;
 }
 
+static void doVuDraw(Replay *r, const RdFrame *f, const RdCmd *c);
+
+/* A VU draw under its camera's picture (Replay.picture: the frame group's
+ * g_frame.yz) */
 static void doVu(Replay *r, const RdFrame *f, const RdCmd *c)
+{
+    r->picture = (uint32_t)c->b[3] | ((uint32_t)c->b[6] << 8);
+    doVuDraw(r, f, c);
+    r->picture = 0;
+}
+
+static void doVuDraw(Replay *r, const RdFrame *f, const RdCmd *c)
 {
     RdVuPayload p;
     const uint8_t *at = f->payload + c->u[1];

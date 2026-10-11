@@ -161,6 +161,16 @@ static void puddleHostCamera(int push)
         cam.aspect = gsFrame.aspect; /* the frame's display aspect, 4/3 at 4:3 */
         cam.nearZ = 2.0f;
         cam.farZ = 262144.0f;
+        /* the reflection camera's picture: the part of the block the frame
+           shows at 4:3, which a triangle the VU's region test drops must not
+           be drawn in (vu_common.hlsli vu_picture_half).  The 230 x 230 view
+           is 2048 -+ 115 of the 256 x 256 block; copy reads texels 13.25 ..
+           243.625 (2048 -+ 115.2) and the ripples' STs 0.5 -+ 0.45 of the
+           block, both filtered (TEX1 0x60, bilinear), so one texel more:
+           2048 -+ 116 both ways.  At 4:3 the block shows nothing beyond it,
+           at every aspect the 230 view is the same part of the camera's */
+        cam.pictureW = 116;
+        cam.pictureH = 116;
         rd_push_camera(&cam);
     } else {
         rd_pop_camera();

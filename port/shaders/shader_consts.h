@@ -25,10 +25,13 @@ typedef struct IcoFrameCB {
 
     /* The native frame (common.hlsli g_frame): frame[0] the region
      * scale, 512 / W on a target as wide as the native frame W, exactly 1
-     * on every other target and at 4:3 (rd_replay.c rd__frame_group_ex).
-     * The rest, and frameReserved, reserved (0).  No position is
-     * transformed, and no shader reads them (the VU region test reads the
-     * position as computed, vu_common.hlsli). */
+     * on every other target and at 4:3 (rd_replay.c rd__frame_group_ex; no
+     * shader reads it).  frame[1], frame[2] the drawing camera's picture,
+     * its half-width and half-height in GS pixels about (2048, 2048): 256 by
+     * half the native height for the frame's camera, a reflection camera's
+     * own (RdCamera.pictureW/H); the VU programs' rule for a triangle the
+     * region test drops reads them (vu_common.hlsli vu_picture_half).  The
+     * rest, and frameReserved, reserved (0).  No position is transformed. */
     float frame[4];
     float frameReserved[4];
 
@@ -270,7 +273,7 @@ typedef struct IcoVuBoneCB {
 /* IcoVuCB.draw[2] (VU_* in vu_common.hlsli). */
 enum {
     ICO_VU_CLIP_REGION = 0,  /* region test: a failing triangle whose clipped extent
-                              * reaches the camera's picture (GS X 2048 -+ 256) is dropped,
+                              * reaches the camera's picture (FrameCB frame[1], [2]) is dropped,
                               * one wholly beside it GPU-clipped at the native frustum, in
                               * either preset; every one GPU-clipped under
                               * ICO_VU_BEHIND_EYE */
