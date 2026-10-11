@@ -22,6 +22,10 @@
  *     x scaled by the native frame's width / 640 (688 at 16:9: the item
  *     covers GS 2048 -+ 344); an item that does not span (a menu row) stays
  *     UI, 512 / 640 of the grid about the centre, whatever the frame's width;
+ *   - the boot signs' backdrop (common/src/kanban.c, compiled in:
+ *     kanbanExec on a layout with no items): the 640 x 224 grid sprite is
+ *     full-frame, covering GS 2048 -+ 1024 at W = 2048 (48:9) in the
+ *     layout's colour, and the UI box's numbers (2048 -+ 256) at 512;
  *   - a row sprite under gif_HostDrawKey carries the key, blends half
  *     way between two frames (rd__interp_frame), and the sprite after the
  *     key ends is unkeyed and the current frame's.
@@ -45,6 +49,10 @@
 #include "GifHost.h"
 #include "GifPacket.h"
 #include "layout_texture.h"
+#include "kanban.h"
+#include "main.h"
+#include "charFileManager.h"
+#include "Texture.h"
 
 static int failures;
 
@@ -120,6 +128,56 @@ void sceDmaSend(void *ch, void *addr)
 {
     (void)ch;
     (void)addr;
+}
+
+/* -------------------------------------------- what kanban.c imports */
+LtProperty texProperty[1];
+LtProp texLayout[4];
+TexRec texFile[1];
+const StgPre stageData[1];
+int systemStatus[12];
+PadState pad[16];
+
+TexData *tex_GetTextureData(int idx)
+{
+    (void)idx;
+    return NULL;
+}
+
+int tex_GetTextureNo(const char *name)
+{
+    (void)name;
+    return 0;
+}
+
+void tex_SetSamplingType(TexData *tex, int mag, int min)
+{
+    (void)tex;
+    (void)mag;
+    (void)min;
+}
+
+int tex_TransTexture(int no, int pri)
+{
+    (void)no;
+    (void)pri;
+    return 0;
+}
+
+int lt_ext_is_text_row(const LtProperty *e)
+{
+    (void)e;
+    return 0;
+}
+
+void lt_ext_draw_text_row(const LtProperty *e, const int box[4], const int uv[4],
+                          const unsigned char col[4], int prim)
+{
+    (void)e;
+    (void)box;
+    (void)uv;
+    (void)col;
+    (void)prim;
 }
 
 /* ------------------------------------------------------ the layout calls */
@@ -437,6 +495,69 @@ static void checkWide(void)
     gif_HostSetFrameWidth(512);
 }
 
+/* ------------------------------------------ the boot signs' backdrop */
+
+/* kanbanExec's backdrop (common/src/kanban.c, compiled into this test) at a
+   native frame W GS pixels wide: sign 2, a layout with no items, black at
+   colA 1 (the presents sign's backdrop in the v289 dump: 0, 0, 0, 127).
+   The sprite is the 640 x 224 grid, the PS2's whole picture, so it is a
+   full-frame item: x is 2048 -+ W / 2 (at 512 the UI box's numbers), y the
+   grid's 224 lines over the 512-line test frame. */
+static void checkKanbanBackdrop(int fw)
+{
+    static const uint8_t black[4] = {0, 0, 0, 0x80};
+    Walk w;
+    const RdFrame *f;
+    Kanban *k;
+
+    memset(texLayout, 0, sizeof(texLayout));
+    texLayout[2].first = texLayout[2].last = 0;
+    texLayout[2].fadeInTime = 1.0f;
+    texLayout[2].colA = 1.0f;
+    texLayout[2].defaultItem = -1;
+    systemStatus[0] = 0;
+    systemStatus[1] = 1;
+    kanbanReqAllDel();
+    k = kanbanReqAdd(2, 1);
+    CHECK(k != NULL, "kanban %d: the sign is added", fw);
+    gif_HostSetFrameWidth(fw);
+    dl_SetDLPriority(0);
+    rd_set_target(rd_target(RD_TARGET_SCENE), rd_target(RD_TARGET_SCENE), 512, 512, 1);
+    rd_clear_target(rd_target(RD_TARGET_SCENE), black, 1, 0);
+    kanbanExec();
+    dl_Swap();
+    gif_HostSetFrameWidth(512);
+    kanbanReqAllDel();
+    f = rd__last_frame();
+    if (!f) {
+        CHECK(0, "kanban %d: a closed frame", fw);
+        return;
+    }
+    memset(&w, 0, sizeof(w));
+    RdStateBlock s = f->startState;
+    rd__walk(f, 0, &s, collect, &w);
+    CHECK(w.screens == 1, "kanban %d: %d screen batches, expected 1 (the backdrop)", fw, w.screens);
+    if (w.screens != 1) {
+        return;
+    }
+    const RdScreenVtx *v = (const RdScreenVtx *)(f->payload + w.scr[0]->u[0]);
+    const int c0 = 0x8000, half = fw / 2 * 16;
+    const int y0 = c0 - 1792 * 512 / 224, y1 = y0 + 3584 * 512 / 224;
+    CHECK(w.scr[0]->b[0] == RD_PRIM_SPRITES && w.scr[0]->u[1] == 2, "kanban %d: one sprite", fw);
+    CHECK(w.scr[0]->b[1] == RD_SPACE_FULLFRAME, "kanban %d: the backdrop is full-frame (space %d)",
+          fw, w.scr[0]->b[1]);
+    CHECK(v[0].x == gs16(c0 - half) && v[1].x == gs16(c0 + half),
+          "kanban %d: the backdrop covers the native width, GS 2048 -+ %d (%d, %d, want %d, %d)",
+          fw, fw / 2, v[0].x, v[1].x, gs16(c0 - half), gs16(c0 + half));
+    CHECK(v[0].y == gs16(y0) && v[1].y == gs16(y1), "kanban %d: the grid's 224 lines (%d, %d)", fw,
+          v[0].y, v[1].y);
+    CHECK(v[1].rgba[0] == 0 && v[1].rgba[1] == 0 && v[1].rgba[2] == 0 && v[1].rgba[3] == 127,
+          "kanban %d: black at alpha 127 (%u,%u,%u,%u)", fw, v[1].rgba[0], v[1].rgba[1],
+          v[1].rgba[2], v[1].rgba[3]);
+    CHECK(w.st[0].ds.abe == 1 && w.st[0].ds.blend == RD_BLEND_LERP_AS && !w.st[0].ds.texEnabled,
+          "kanban %d: untextured, ALPHA 0x44", fw);
+}
+
 /* ------------------------------------------------- keyed layout rows */
 
 /* display_texture's row sprite under gif_HostDrawKey (layout_texture.c's
@@ -529,6 +650,8 @@ int main(void)
     }
     checkKeyedRow();
     checkWide();
+    checkKanbanBackdrop(2048);
+    checkKanbanBackdrop(512);
     rd_shutdown();
     if (failures) {
         printf("rd_layout_test: %d failures\n", failures);

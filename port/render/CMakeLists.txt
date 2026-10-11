@@ -178,16 +178,18 @@ target_link_libraries(rd_native_test PRIVATE ico_render)
 
 # rd_layout_test: the seki layer's host path (GifPacket.c, DisplayList.c,
 # DmaPacket.c compiled with ICO_HOST and ICO_RD, as the window build has
-# them) fed layout_texture.c's call sequence for a synthetic layout; the
+# them) fed layout_texture.c's call sequence for a synthetic layout and
+# kanban.c (compiled in) for the boot signs' backdrop; the
 # recording is checked without a device, one sprite's pixels on one.
 add_executable(rd_layout_test test/rd_layout_test.c
     "${CMAKE_SOURCE_DIR}/ico2/seki/src/GifPacket.c"
     "${CMAKE_SOURCE_DIR}/ico2/seki/src/DisplayList.c"
-    "${CMAKE_SOURCE_DIR}/ico2/seki/src/DmaPacket.c")
+    "${CMAKE_SOURCE_DIR}/ico2/seki/src/DmaPacket.c"
+    "${CMAKE_SOURCE_DIR}/ico2/common/src/kanban.c")
 ico_include_dirs(seki _ico_seki_incs)
 target_include_directories(rd_layout_test PRIVATE ${_ico_seki_incs}
                            "${CMAKE_SOURCE_DIR}/port/shaders" "${CMAKE_SOURCE_DIR}/port/math"
-                           "${CMAKE_SOURCE_DIR}/port/rhi")
+                           "${CMAKE_SOURCE_DIR}/port/rhi" "${CMAKE_SOURCE_DIR}/port/ui")
 target_compile_definitions(rd_layout_test PRIVATE ICO_HOST=1 ICO_RD=1)
 target_compile_options(rd_layout_test PRIVATE ${ICO_SEMANTIC_OPTIONS} ${ICO_GAME_LAYOUT_OPTIONS}
                        ${ICO_GAME_WARNINGS})
