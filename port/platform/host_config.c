@@ -15,6 +15,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
+
 /* ICO_HOST_FORCE_PORTABLE (the Android build of ico_pc, and
    host_config_portable_test): the user folder is always the executable's
    folder itself, whatever portable= says. On Android that folder is the
@@ -100,6 +104,18 @@ int ico_host_exe_dir(char *out, size_t size)
     if (strrchr(buf, '/') > slash) {
         slash = strrchr(buf, '/');
     }
+#elif defined(__APPLE__)
+    {
+        uint32_t n = (uint32_t)sizeof(buf);
+        char resolved[ICO_PATH_MAX];
+
+        if (_NSGetExecutablePath(buf, &n) != 0 || realpath(buf, resolved) == NULL) {
+            copy(out, size, ".");
+            return -1;
+        }
+        copy(buf, sizeof(buf), resolved);
+    }
+    slash = strrchr(buf, '/');
 #else
     long n = (long)readlink("/proc/self/exe", buf, sizeof(buf) - 1);
 
@@ -1860,7 +1876,11 @@ int ico_host_pref_dir(char *out, size_t size)
 int ico_host_ini_path(char *out, size_t size)
 {
     char dir[ICO_PATH_MAX];
+#if defined(__APPLE__) && !defined(ICO_IOS) && defined(ICO_HOST_SDL_PREFPATH)
+    int r = ico_host_pref_dir(dir, sizeof(dir));
+#else
     int r = ico_host_exe_dir(dir, sizeof(dir));
+#endif
 
     if (ico_path_join(out, size, dir, "ico-pc.ini") != 0) {
         return -1;

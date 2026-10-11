@@ -1535,9 +1535,22 @@ static int host_main(int argc, char **argv)
 
     /* the log first, so everything after it is recorded */
     ico_host_exe_dir(exe_dir, sizeof(exe_dir));
-    if (ico_path_join(logs_dir, sizeof(logs_dir), exe_dir, "logs") != 0 ||
-        ico_path_join(log_path, sizeof(log_path), logs_dir, "ico-pc.log") != 0) {
+#if defined(__APPLE__) && !defined(ICO_IOS)
+    {
+        char user_dir[ICO_PATH_MAX];
+
+        if (ico_host_pref_dir(user_dir, sizeof(user_dir)) != 0 ||
+            ico_path_join(logs_dir, sizeof(logs_dir), user_dir, "logs") != 0) {
+            logs_dir[0] = '\0';
+        }
+    }
+#else
+    if (ico_path_join(logs_dir, sizeof(logs_dir), exe_dir, "logs") != 0) {
         logs_dir[0] = '\0';
+    }
+#endif
+    if (logs_dir[0] == '\0' ||
+        ico_path_join(log_path, sizeof(log_path), logs_dir, "ico-pc.log") != 0) {
         log_path[0] = '\0';
     }
     if (a.console && !have_console) {
@@ -1570,7 +1583,7 @@ static int host_main(int argc, char **argv)
         fprintf(stderr, "ico_pc: argument %s\n", argv[r]);
     }
 
-    if (ico_path_join(ini_path, sizeof(ini_path), exe_dir, "ico-pc.ini") != 0) {
+    if (ico_host_ini_path(ini_path, sizeof(ini_path)) != 0) {
         ico_host_fatal(log_file(),
                        "The path of the folder %s is too long. Move the game to a folder with "
                        "a shorter path.",

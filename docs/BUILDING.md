@@ -150,10 +150,10 @@ cmake --build --preset ios-moltenvk
 ```
 
 Use `macos` and the `macos-moltenvk` preset for a native Apple silicon
-renderer build. These presets build `ico_rhi`, with the existing Vulkan
-backend linked to MoltenVK; they do not produce an app or IPA. The iOS
-package targets ARM64 devices, iOS 15 or newer; the macOS target is ARM64,
-macOS 12 or newer. The pinned iOS package has no simulator slice.
+renderer build. That preset builds `ico_rhi`, with the existing Vulkan
+backend linked to MoltenVK. The iOS package targets ARM64 devices, iOS 15
+or newer; the macOS target is ARM64, macOS 12 or newer. The pinned iOS
+package has no simulator slice.
 
 To compile the shared renderer and its existing HLSL shaders too, supply
 a **macOS host** DXC executable (it runs during the build, even for iOS):
@@ -170,6 +170,29 @@ backend enables portability enumeration and the device's portability
 subset. No custom Metal backend is used. `ICO_MOLTENVK_ROOT` can override
 the extracted release root. Apple package notices can be generated with
 `tools/gen_notices.py --platform ios --out NOTICES.txt` (or `macos`).
+
+### macOS application
+
+After building a macOS host DXC as described below, build the native Apple
+silicon application bundle with:
+
+```sh
+tools/fetch_moltenvk.sh macos
+cmake --preset macos-app
+cmake --build --preset macos-app
+```
+
+The result is `build-host/macos-app/ICO.app`. It is an unsigned ARM64 app
+bundle and may be launched from Finder or the command line. On first launch
+choose your own PAL SCES-50760 disc image; the verified game data is copied
+to the user's Application Support folder and the image is not bundled with
+the app.
+
+For a distributable ad-hoc-signed bundle, notices, ZIP and DMG, run
+`tools/package_macos.sh`. It writes `dist/ICO.app`,
+`dist/ico-pc-macos-arm64.zip`, `dist/ico-pc-macos-arm64.dmg` and the separate
+link map used to interpret crash offsets. The package is not notarized for
+distribution outside the building Mac.
 
 ### iPhone IPA for LiveContainer
 
