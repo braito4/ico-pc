@@ -559,6 +559,8 @@ bool rd__target_create_gpu(RdTargetRec *t, const char *name)
         return true;
     }
     uint32_t usage = RHI_TEX_RENDER_TARGET | RHI_TEX_SAMPLED | RHI_TEX_COPY_SRC | RHI_TEX_COPY_DST;
+    /* the exact blend's destination read (rd_dst_read.c) */
+    usage |= rd__dst_target_usage(t->format, &t->dstUsage);
     t->color = rhi_create_texture(&(RhiTextureDesc){t->tw, t->th, 1, t->format, usage, name, 0});
     t->colorState = RHI_STATE_UNDEFINED;
     if (t->withDepth) {
@@ -1313,6 +1315,9 @@ bool rd_init(uint32_t gsWidth, uint32_t gsHeight, const RdSettings *settings, vo
     if (g_rd.noDual) {
         rd__log("blend: two-pass fallback (no dualSrcBlend)");
     }
+    /* the exact GS blend (rd_dst_read.c): the destination read the device
+     * has, before the targets are made with its usage */
+    rd__dst_init();
     /* the fog's depth path (RdContext.fogPath, depthCopy) */
     rd__fog_path_init();
     rd__apply_display(); /* the scales the named targets take */

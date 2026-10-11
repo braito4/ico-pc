@@ -642,6 +642,26 @@ bool rd_mirror_active(void);
 bool rd_set_no_dual(bool on);
 bool rd_no_dual(void);
 
+/* The exact GS blend (rd_dst_read.c): the blends the GPU's blender rounds
+ * (the LERPs, Cd*FIX + Cs, the Ad forms, Cd*As + Cd, PABE on the
+ * premultiplied forms) computed in the fragment shader from the
+ * destination, as the GS computes them, through the device's destination
+ * read.  rd_init picks the mode from the device (RhiLimits) and logs it:
+ * "blend: exact (attachment read)", "exact (interlock)", "exact (rov)" or
+ * "fixed-function (rounds up)"; ICO_RD_BLEND=fixed|storage|attachment
+ * overrides the choice (one the device lacks is refused and logged).
+ * rd_set_blend_exact switches it for the next draws (tests: the same frame
+ * both ways) and returns false for a mode the device or its targets lack. */
+typedef enum RdBlendExact {
+    RD_BLEND_EXACT_OFF = 0,        /* the fixed-function blend (dual source) */
+    RD_BLEND_EXACT_STORAGE = 1,    /* interlock (Vulkan) or ROV (D3D12) */
+    RD_BLEND_EXACT_ATTACHMENT = 2, /* rasterization-order attachment read (Vulkan) */
+    RD_BLEND_EXACT_COUNT
+} RdBlendExact;
+
+bool rd_set_blend_exact(RdBlendExact mode);
+RdBlendExact rd_blend_exact(void);
+
 /* -------------------------------------------------- presentation overlay
  * The port's own UI (port/ui's popups) drawn on the output itself, after the
  * presenter's box

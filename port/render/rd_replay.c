@@ -184,6 +184,22 @@ bool rd__gpu_init(void *sdlWindow)
     g_rd.layoutVu = rhi_create_bind_group_layout(&(RhiBindGroupLayoutDesc){s4, 4, "rd vu"});
     bool ok = g_rd.layoutFrame.id && g_rd.layoutDraw.id && g_rd.layoutTex.id && g_rd.layoutInt.id &&
               g_rd.layoutVu.id;
+    /* the exact blend's group 3 (rd_dst_read.c): the target as a storage
+     * texture (interlock, ROV) or as the pass's input attachment; made only
+     * where the device has the destination read (a missing piece leaves
+     * that mode out, rd__dst_init, never the renderer) */
+    const bool dstStorage = lim->fragmentInterlock || lim->rov;
+    const bool dstAttach = lim->rasterOrderAttachment;
+    if (dstStorage) {
+        const RhiBindSlot sd[1] = {{0, RHI_BIND_STORAGE_TEXTURE, FS}};
+        g_rd.layoutDstStorage =
+            rhi_create_bind_group_layout(&(RhiBindGroupLayoutDesc){sd, 1, "rd dst storage"});
+    }
+    if (dstAttach) {
+        const RhiBindSlot sa[1] = {{0, RHI_BIND_INPUT_ATTACHMENT, FS}};
+        g_rd.layoutDstAttach =
+            rhi_create_bind_group_layout(&(RhiBindGroupLayoutDesc){sa, 1, "rd dst attachment"});
+    }
     for (int i = 0; i < RD_VS_COUNT; i++) {
         g_rd.vs[i] = rd__make_shader(s_vsNames[i]);
         ok = ok && g_rd.vs[i].id;
@@ -197,6 +213,19 @@ bool rd__gpu_init(void *sdlWindow)
         /* without dual-source blending the gs_dual_out entries are not
          * created (their second output needs the feature); their *_nodual
          * twins always are (rd_set_no_dual) */
+        /* the exact blend's twins (rd_dst_read.c), for the destination
+         * reads the device has; their absence only leaves the mode out */
+        if (rd__fs_has_dst((uint8_t)i)) {
+            char name[64];
+            if (dstStorage) {
+                snprintf(name, sizeof(name), "%s_dstrov", s_fsNames[i]);
+                g_rd.fsDstRov[i] = rd__make_shader(name);
+            }
+            if (dstAttach) {
+                snprintf(name, sizeof(name), "%s_dstatt", s_fsNames[i]);
+                g_rd.fsDstAtt[i] = rd__make_shader(name);
+            }
+        }
         if (rd__fs_has_no_dual((uint8_t)i)) {
             char name[64];
             snprintf(name, sizeof(name), "%s_nodual", s_fsNames[i]);
@@ -281,10 +310,17 @@ void rd__gpu_shutdown(void)
         if (g_rd.fsNoDual[i].id) {
             rhi_destroy_shader(g_rd.fsNoDual[i]);
         }
+        if (g_rd.fsDstRov[i].id) {
+            rhi_destroy_shader(g_rd.fsDstRov[i]);
+        }
+        if (g_rd.fsDstAtt[i].id) {
+            rhi_destroy_shader(g_rd.fsDstAtt[i]);
+        }
     }
-    RhiBindGroupLayout ls[5] = {g_rd.layoutFrame, g_rd.layoutDraw, g_rd.layoutTex, g_rd.layoutInt,
-                                g_rd.layoutVu};
-    for (int i = 0; i < 5; i++) {
+    RhiBindGroupLayout ls[7] = {g_rd.layoutFrame,    g_rd.layoutDraw, g_rd.layoutTex,
+                                g_rd.layoutInt,      g_rd.layoutVu,   g_rd.layoutDstStorage,
+                                g_rd.layoutDstAttach};
+    for (int i = 0; i < 7; i++) {
         if (ls[i].id) {
             rhi_destroy_bind_group_layout(ls[i]);
         }
@@ -750,6 +786,15 @@ typedef struct Replay {
     RdStateBlock st;
     int passOpen;
     uint32_t passColor, passDepth;
+    /* the exact blend (rd_dst_read.c): the open pass is a storage pass (the
+     * colour target bound as a storage texture, no colour attachment) or
+     * its colour attachment is readable (the attachment read); the scissor
+     * last set, which a pass begun again for the other kind takes back;
+     * group 3 of the open pass */
+    int passStorage, passReadable;
+    RhiRect sc;
+    RhiBindGroup dstGroup;
+    uint32_t dstGroupSerial;
     RdUniform frameBG;
     uint32_t frameKey[6]; /* colour, gsW, gsH, useOffset, pass serial, picture */
     /* the VU draw being bound: its camera's picture (RdCmd b[3] | b[6] << 8,
@@ -773,7 +818,7 @@ static void flushScreenRun(Replay *r);
 
 static void beginPass(Replay *r, RdTargetRec *c, RdTargetRec *d, uint32_t cid, uint32_t did,
                       RhiLoadOp colorLoad, const float clear[4], RhiLoadOp depthLoad,
-                      float clearDepth);
+                      float clearDepth, bool storage);
 static bool msaaPass(Replay *r, RdTargetRec *c, RdTargetRec *d, uint32_t cid, uint32_t did);
 static void msaaAttach(RdTargetRec *c, RdTargetRec *d, RhiLoadOp colorLoad, RhiLoadOp depthLoad,
                        RhiTexture *colorTex, RhiTexture *depthTex);
@@ -784,7 +829,14 @@ static void endPass(Replay *r)
     if (r->passOpen) {
         rhi_cmd_end_render_pass(s_cl);
         r->passOpen = 0;
+        /* a storage pass's target goes back to its attachment state, so a
+         * later storage pass on it starts behind a barrier (rd_dst_read.c) */
+        RdTargetRec *tc = r->passStorage ? rd__target_rec(r->passColor) : NULL;
+        if (tc) {
+            rd__transition(s_cl, tc->color, &tc->colorState, RHI_STATE_RENDER_TARGET);
+        }
     }
+    r->passStorage = r->passReadable = 0;
     g_rd.passSamples = 1;
     /* whoever ends a pass is about to record something else (a copy,
      * another pass): a pending clear goes first, unless beginPass took it */
@@ -930,21 +982,30 @@ static void flushClear(void)
         return;
     }
     beginPass(r, t, p.depth ? t : NULL, p.target, p.depth ? p.target : 0, RHI_LOAD_CLEAR, p.color,
-              RHI_LOAD_CLEAR, p.clearDepth);
+              RHI_LOAD_CLEAR, p.clearDepth, false);
     endPass(r);
 }
 
 static void beginPass(Replay *r, RdTargetRec *c, RdTargetRec *d, uint32_t cid, uint32_t did,
                       RhiLoadOp colorLoad, const float clear[4], RhiLoadOp depthLoad,
-                      float clearDepth)
+                      float clearDepth, bool storage)
 {
     /* the MSAA epoch: whether this pass draws into SCENE_MS (msaaPass may
-     * close the epoch instead, recording what is open first) */
-    bool ms = s_ms.want > 1u && msaaPass(r, c, d, cid, did);
+     * close the epoch instead, recording what is open first).  A storage
+     * pass (the exact blend, rd_dst_read.c) is never in it: its draws come
+     * from a single-sampled pass */
+    bool ms = !storage && s_ms.want > 1u && msaaPass(r, c, d, cid, did);
+    /* the exact blend's attachment read: every pass on an RGBA8 target made
+     * for it is begun readable (outside the epoch) */
+    const bool wantReadable = !storage && g_rd.dstMode == RD_BLEND_EXACT_ATTACHMENT &&
+                              (c->dstUsage & 2u) != 0 && c->format == RHI_FMT_RGBA8_UNORM;
     /* the pending clear as this pass's load op when it can take it
-     * (the same clear values, the same render area: the whole target) */
+     * (the same clear values, the same render area: the whole target); a
+     * storage pass has no colour attachment and a readable one does not
+     * read the attachment a load op cleared (rd_dst_read.c): their clear is
+     * a pass of its own (endPass below records it) */
     float pendColor[4];
-    if (s_pend.p.target &&
+    if (s_pend.p.target && !storage && !wantReadable &&
         rd__take_pending_clear(&s_pend.p, cid, d ? did : 0, &colorLoad, &depthLoad)) {
         memcpy(pendColor, s_pend.p.color, sizeof(pendColor));
         clear = pendColor;
@@ -977,10 +1038,14 @@ static void beginPass(Replay *r, RdTargetRec *c, RdTargetRec *d, uint32_t cid, u
         }
     }
     RhiTexture colorTex = c->color, depthTex = d ? d->depth : (RhiTexture){0};
+    const bool readable = wantReadable && !ms;
     if (ms) {
         msaaAttach(c, d, colorLoad, depthLoad, &colorTex, &depthTex);
     } else {
-        rd__transition(s_cl, c->color, &c->colorState, RHI_STATE_RENDER_TARGET);
+        rd__transition(s_cl, c->color, &c->colorState,
+                       storage    ? RHI_STATE_STORAGE
+                       : readable ? RHI_STATE_RENDER_TARGET_READ
+                                  : RHI_STATE_RENDER_TARGET);
         if (d) {
             rd__transition(s_cl, d->depth, &d->depthState, RHI_STATE_DEPTH_WRITE);
         }
@@ -989,10 +1054,13 @@ static void beginPass(Replay *r, RdTargetRec *c, RdTargetRec *d, uint32_t cid, u
     memset(&p, 0, sizeof(p));
     p.color[0].texture = colorTex;
     p.color[0].load = colorLoad;
+    p.color[0].readable = readable;
     if (clear) {
         memcpy(p.color[0].clear, clear, sizeof(p.color[0].clear));
     }
-    p.colorCount = 1;
+    /* a storage pass: the target is the shaders' storage texture, no
+     * attachment (its contents are kept: they are the texture's) */
+    p.colorCount = storage ? 0u : 1u;
     if (d) {
         p.depth.texture = depthTex;
         p.depth.depthLoad = depthLoad;
@@ -1010,6 +1078,8 @@ static void beginPass(Replay *r, RdTargetRec *c, RdTargetRec *d, uint32_t cid, u
     r->passColor = cid;
     r->passDepth = did;
     r->passSerial++;
+    r->passStorage = storage;
+    r->passReadable = readable;
     g_rd.passSamples = ms ? (uint8_t)s_ms.samples : 1;
 }
 
@@ -2343,7 +2413,8 @@ static RdWrap drawWrap(const Replay *r, const DrawSetup *ds, RdWrap w)
  * the scissor leaves nothing to draw.  With scOut the scissor is returned
  * (doScreen sets it when it draws) instead of set, and the sampler's id
  * with it. */
-static RhiBindGroup bindDrawEx(Replay *r, const DrawSetup *ds, RhiRect *scOut, uint32_t *smpOut)
+static RhiBindGroup bindDrawEx(Replay *r, const DrawSetup *ds, RhiRect *scOut, uint32_t *smpOut,
+                               bool keepStorage)
 {
     RdTargetRec *tc = ds->tc;
     /* scissor (SCISSOR_1, inclusive) clipped to the target, in texels */
@@ -2359,9 +2430,13 @@ static RhiBindGroup bindDrawEx(Replay *r, const DrawSetup *ds, RhiRect *scOut, u
                          drawWrap(r, ds, (RdWrap)r->st.ds.wrap.t), ds->mipmapped, ds->replacement);
     RhiBindGroup g2 = rd__tex_group_date(ds->tex, smp, ds->dateTex);
 
-    if (!r->passOpen || r->passColor != r->st.color || r->passDepth != ds->tdId) {
+    /* a storage pass (the exact blend) stays open for the callers that
+     * choose the pass kind per draw (keepStorage: doScreen, the VU draws,
+     * the fog); every other draw needs the colour attachment */
+    if (!r->passOpen || r->passColor != r->st.color || r->passDepth != ds->tdId ||
+        (r->passStorage && !keepStorage)) {
         beginPass(r, tc, ds->tdId ? rd__target_rec(ds->tdId) : NULL, r->st.color, ds->tdId,
-                  RHI_LOAD_LOAD, NULL, RHI_LOAD_LOAD, 0.0f);
+                  RHI_LOAD_LOAD, NULL, RHI_LOAD_LOAD, 0.0f, false);
     }
     const uint32_t useOffset = drawOffset(r, ds);
     const uint32_t fk[6] = {r->st.color, r->st.gsW,     r->st.gsH,
@@ -2385,6 +2460,7 @@ static RhiBindGroup bindDrawEx(Replay *r, const DrawSetup *ds, RhiRect *scOut, u
         *scOut = sc;
         *smpOut = smp.id;
     } else {
+        r->sc = sc;
         rhi_cmd_set_scissor(s_cl, &sc);
     }
     return g2;
@@ -2392,7 +2468,103 @@ static RhiBindGroup bindDrawEx(Replay *r, const DrawSetup *ds, RhiRect *scOut, u
 
 static RhiBindGroup bindDraw(Replay *r, const DrawSetup *ds)
 {
-    return bindDrawEx(r, ds, NULL, NULL);
+    return bindDrawEx(r, ds, NULL, NULL, false);
+}
+
+/* bindDraw for a draw that picks its pass kind per pass (dstPassMode) */
+static RhiBindGroup bindDrawKeep(Replay *r, const DrawSetup *ds)
+{
+    return bindDrawEx(r, ds, NULL, NULL, true);
+}
+
+/* ------------------------------------------------- the exact blend's passes
+ * rd_dst_read.c.  The destination-read mode a draw into the open pass takes:
+ * the one in force, on a single-sampled RGBA8 target made for it, and for
+ * the attachment read a pass begun readable; RD_BLEND_EXACT_OFF otherwise
+ * (the fixed-function blend). */
+static int dstModeFor(const Replay *r)
+{
+    const int m = g_rd.dstMode;
+    if (m == RD_BLEND_EXACT_OFF || !r->passOpen || g_rd.passSamples > 1) {
+        return RD_BLEND_EXACT_OFF;
+    }
+    const RdTargetRec *tc = rd__target_rec(r->passColor);
+    if (!tc || tc->format != RHI_FMT_RGBA8_UNORM) {
+        return RD_BLEND_EXACT_OFF;
+    }
+    if (m == RD_BLEND_EXACT_ATTACHMENT) {
+        return r->passReadable ? m : RD_BLEND_EXACT_OFF;
+    }
+    return (tc->dstUsage & 1u) ? m : RD_BLEND_EXACT_OFF;
+}
+
+/* The planned passes as drawn into the open pass: the exact blend's images
+ * (rd__expand_dst), then the two-pass fallback's (rd__expand_no_dual); at
+ * most 4 for a plan of 2 (each pass becomes at most two). */
+static int expandPasses(const Replay *r, const RdDrawPass *in, int n, RdDrawPass out[8])
+{
+    const int mode = dstModeFor(r);
+    if (mode == RD_BLEND_EXACT_OFF && g_rd.dstMode != RD_BLEND_EXACT_OFF) {
+        for (int i = 0; i < n; i++) {
+            if (in[i].dstWant) {
+                rd__log_once(RD_ONCE_DST_FIXED,
+                             "blend: a draw in the MSAA epoch or on a target of another format "
+                             "keeps the fixed-function blend");
+            }
+        }
+    }
+    RdDrawPass dx[4];
+    int m = 0;
+    for (int i = 0; i < n && i < 2; i++) {
+        const int nd = rd__expand_dst(&in[i], 1, mode, dx);
+        m += rd__expand_no_dual(dx, nd, out + m);
+    }
+    return m;
+}
+
+/* The open pass as the kind a pass's key draws in: a storage pass for a
+ * storage destination read, else one with the colour attached.  Begun
+ * again on the same targets (loaded) when it is the other kind, the
+ * scissor set again. */
+static void dstPassMode(Replay *r, const RdPipeKeyInt *k)
+{
+    const bool storage = k->dst == RHI_DST_READ_STORAGE;
+    if (!r->passOpen || (r->passStorage != 0) == storage) {
+        return;
+    }
+    const uint32_t cid = r->passColor, did = r->passDepth;
+    RdTargetRec *c = rd__target_rec(cid);
+    if (!c) {
+        return;
+    }
+    /* the draw's scissor (a screen run the switch draws first sets its own) */
+    const RhiRect sc = r->sc;
+    beginPass(r, c, did ? rd__target_rec(did) : NULL, cid, did, RHI_LOAD_LOAD, NULL, RHI_LOAD_LOAD,
+              0.0f, storage);
+    r->sc = sc;
+    rhi_cmd_set_scissor(s_cl, &sc);
+}
+
+/* group 3 of a destination-read key: the open pass's target, as a storage
+ * texture or as its input attachment; nothing for the other keys */
+static void dstBind(Replay *r, const RdPipeKeyInt *k)
+{
+    if (k->dst == RHI_DST_READ_NONE || !r->passOpen) {
+        return;
+    }
+    if (!r->dstGroup.id || r->dstGroupSerial != r->passSerial) {
+        RdTargetRec *c = rd__target_rec(r->passColor);
+        RhiBinding b;
+        memset(&b, 0, sizeof(b));
+        b.slot = 0;
+        b.type =
+            k->dst == RHI_DST_READ_STORAGE ? RHI_BIND_STORAGE_TEXTURE : RHI_BIND_INPUT_ATTACHMENT;
+        b.texture = c ? c->color : (RhiTexture){0};
+        r->dstGroup = bindGroup(
+            k->dst == RHI_DST_READ_STORAGE ? g_rd.layoutDstStorage : g_rd.layoutDstAttach, &b, 1);
+        r->dstGroupSerial = r->passSerial;
+    }
+    rhi_cmd_set_bind_group(s_cl, 3, r->dstGroup);
 }
 
 static RhiSampler gsLodSampler(const Replay *r, const DrawSetup *ds)
@@ -2706,12 +2878,16 @@ static void flushScreenRun(Replay *r)
     const uint64_t off = rd__ring_alloc(bytes, 16);
     if (off != ~0ull) {
         memcpy(g_rd.ringMap[s_slot] + off, s_runVx, (size_t)bytes);
+        /* the open pass is the kind the run was recorded in (doScreen
+         * switches before it records a run of the other kind) */
+        r->sc = q->sc;
         rhi_cmd_set_scissor(s_cl, &q->sc);
         rhi_cmd_set_vertex_buffer(s_cl, 0, g_rd.ring[s_slot], off);
         rhi_cmd_set_pipeline(s_cl, q->pipe);
         rd__bind_uniform(s_cl, 0, q->frame);
         rd__bind_uniform(s_cl, 1, rd__draw_group(&q->cb));
         rhi_cmd_set_bind_group(s_cl, 2, q->g2);
+        dstBind(r, &q->key);
         rhi_cmd_draw(s_cl, q->count, 0, 1);
         if (q->passes == 2 && q->pipe2.id) {
             /* the two-pass fallback's alpha pass over the same vertices */
@@ -2719,6 +2895,7 @@ static void flushScreenRun(Replay *r)
             rd__bind_uniform(s_cl, 0, q->frame);
             rd__bind_uniform(s_cl, 1, rd__draw_group(&q->cb2));
             rhi_cmd_set_bind_group(s_cl, 2, q->g2);
+            dstBind(r, &q->key2);
             rhi_cmd_draw(s_cl, q->count, 0, 1);
         }
         g_rdPerf.screenDraws++; /* one draw of the run, however many passes */
@@ -2844,8 +3021,8 @@ static bool joinsRun(const Replay *r, const ScreenRun *n)
 static bool drawExpanded(Replay *r, const RdDrawPass *pass, const DrawSetup *ds, RhiBindGroup g2,
                          uint32_t count, uint32_t first)
 {
-    RdDrawPass ex[4];
-    const int ne = rd__expand_no_dual(pass, 1, ex);
+    RdDrawPass ex[8];
+    const int ne = expandPasses(r, pass, 1, ex); /* the exact blend, the two-pass fallback */
     bool any = false;
     for (int j = 0; j < ne; j++) {
         RhiPipeline p = rd__get_pipeline(&ex[j].key);
@@ -2858,10 +3035,12 @@ static bool drawExpanded(Replay *r, const RdDrawPass *pass, const DrawSetup *ds,
         }
         IcoDrawCB cb;
         fillDrawCB(r, &ex[j], ds, &cb);
+        dstPassMode(r, &ex[j].key); /* a storage pass for a storage destination read */
         rhi_cmd_set_pipeline(s_cl, p);
         rd__bind_uniform(s_cl, 0, r->frameBG);
         rd__bind_uniform(s_cl, 1, rd__draw_group(&cb));
         rhi_cmd_set_bind_group(s_cl, 2, g2);
+        dstBind(r, &ex[j].key);
         rhi_cmd_draw(s_cl, count, first, 1);
     }
     return any;
@@ -2999,7 +3178,7 @@ static void doScreen(Replay *r, const RdFrame *f, const RdCmd *c)
         stride = sizeof(*ax);
     }
     ScreenRun nr;
-    nr.g2 = bindDrawEx(r, &ds, &nr.sc, &nr.sampler);
+    nr.g2 = bindDrawEx(r, &ds, &nr.sc, &nr.sampler, true);
     if (!nr.g2.id) {
         return;
     }
@@ -3018,13 +3197,24 @@ static void doScreen(Replay *r, const RdFrame *f, const RdCmd *c)
             /* AA1 lines: all fringe, drawn with Z write off */
             one.key.gs.zwrite = RD_ZWRITE_OFF;
         }
-        /* the two-pass fallback's colour and alpha passes */
-        RdDrawPass ex[4];
-        const int ne = rd__expand_no_dual(&one, 1, ex);
+        /* the exact blend's pass and the two-pass fallback's colour and
+         * alpha passes; a run draws its passes in one pass kind, so the
+         * storage path's split (a storage colour pass and a depth pass
+         * with the colour attached) draws below, as the split passes do */
+        RdDrawPass ex[8];
+        const int ne = expandPasses(r, &one, 1, ex);
+        const bool runnable = ne == 1 || (ne == 2 && (ex[0].key.dst == RHI_DST_READ_STORAGE) ==
+                                                         (ex[1].key.dst == RHI_DST_READ_STORAGE));
+        if (!runnable) {
+            goto immediate;
+        }
         RhiPipeline p = rd__get_pipeline(&ex[0].key);
         if (!p.id) {
             return;
         }
+        /* the open pass of the kind the run draws in (a run of the other
+         * kind is drawn by the switch, in its own) */
+        dstPassMode(r, &ex[0].key);
         nr.key = ex[0].key;
         nr.count = nDraw;
         nr.stride = stride;
@@ -3073,12 +3263,14 @@ static void doScreen(Replay *r, const RdFrame *f, const RdCmd *c)
         return;
     }
 
+immediate:
     flushScreenRun(r);
     const uint64_t drawOff = rd__ring_alloc((uint64_t)nDraw * stride, 16);
     if (drawOff == ~0ull) {
         return;
     }
     memcpy(g_rd.ringMap[s_slot] + drawOff, vb, (size_t)nDraw * stride);
+    r->sc = nr.sc; /* a pass begun again for the exact blend takes it back */
     rhi_cmd_set_scissor(s_cl, &nr.sc);
     rhi_cmd_set_vertex_buffer(s_cl, 0, g_rd.ring[s_slot], drawOff);
     const RdUniform frameKept = r->frameBG;
@@ -3487,7 +3679,7 @@ static void doScreenWrap(Replay *r, const RdFrame *f, const RdCmd *c)
     rd__transition(s_cl, s_wrapAcc, &s_wrapAccState, RHI_STATE_SHADER_READ);
 
     /* 2. (Cd + acc) mod 256 into the target */
-    beginPass(r, tc, NULL, r->st.color, 0, RHI_LOAD_LOAD, NULL, RHI_LOAD_LOAD, 0.0f);
+    beginPass(r, tc, NULL, r->st.color, 0, RHI_LOAD_LOAD, NULL, RHI_LOAD_LOAD, 0.0f, false);
     rhi_cmd_set_scissor(s_cl, &sc);
     IcoDrawCB rb;
     memset(&rb, 0, sizeof(rb));
@@ -3646,7 +3838,7 @@ static void vuDraw(Replay *r, const RdStateBlock *s, const DrawSetup *ds, RhiBin
         return;
     }
     const uint64_t ua = rhi_limits()->uniformAlign;
-    RdDrawPass pl[2], dp[4];
+    RdDrawPass pl[2], dp[8];
     const int npl = rd__plan_screen_draw(s, RD_PRIM_TRIANGLES, RD_SPACE_WORLD, ds->tc->format,
                                          ds->depthFmt, pl);
     for (int i = 0; i < npl; i++) {
@@ -3655,7 +3847,8 @@ static void vuDraw(Replay *r, const RdStateBlock *s, const DrawSetup *ds, RhiBin
         /* the planner's sprite_texa_ps becomes vu_texa_ps */
         pl[i].key.fs = pl[i].key.fs == RD_FS_SPRITE_TEXA ? RD_FS_VU_TEXA : RD_FS_VU;
     }
-    const int np = rd__expand_no_dual(pl, npl, dp); /* two passes without dual-source blend */
+    /* the exact blend's passes, two passes without dual-source blend */
+    const int np = expandPasses(r, pl, npl, dp);
     const RdStateBlock saved = r->st;
     r->st = *s; /* fillDrawCB reads the state the passes were planned from */
     for (int i = 0; i < np; i++) {
@@ -3671,10 +3864,12 @@ static void vuDraw(Replay *r, const RdStateBlock *s, const DrawSetup *ds, RhiBin
             continue;
         }
         const uint32_t offs[3] = {(uint32_t)dOff, (uint32_t)vOff, (uint32_t)bonesOff};
+        dstPassMode(r, &dp[i].key); /* a storage pass for a storage destination read */
         rhi_cmd_set_pipeline(s_cl, p);
         rd__bind_uniform(s_cl, 0, r->frameBG);
         rhi_cmd_set_bind_group_offsets(s_cl, 1, g1, offs, 3);
         rhi_cmd_set_bind_group(s_cl, 2, g2);
+        dstBind(r, &dp[i].key);
         if (indexed) {
             rhi_cmd_draw_indexed(s_cl, count, first, 0, 1);
         } else {
@@ -3803,7 +3998,7 @@ static void doVuDraw(Replay *r, const RdFrame *f, const RdCmd *c)
                 }
             }
         }
-        RhiBindGroup g2 = bindDraw(r, &ds);
+        RhiBindGroup g2 = bindDrawKeep(r, &ds);
         if (!g2.id) {
             return;
         }
@@ -3813,7 +4008,7 @@ static void doVuDraw(Replay *r, const RdFrame *f, const RdCmd *c)
         return;
     }
     if (c->type == RDC_PARTICLES) {
-        RhiBindGroup g2 = bindDraw(r, &ds);
+        RhiBindGroup g2 = bindDrawKeep(r, &ds);
         if (!g2.id) {
             return;
         }
@@ -3822,7 +4017,7 @@ static void doVuDraw(Replay *r, const RdFrame *f, const RdCmd *c)
         return;
     }
     /* static and skinned meshes */
-    RhiBindGroup g2 = bindDraw(r, &ds);
+    RhiBindGroup g2 = bindDrawKeep(r, &ds);
     if (!g2.id) {
         return;
     }
@@ -4190,7 +4385,8 @@ static void doShadowResolve(Replay *r)
     }
     static const float zero[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     r->writeSerial++;
-    beginPass(r, tc, td, r->st.color, r->st.depth, RHI_LOAD_CLEAR, zero, RHI_LOAD_LOAD, 0.0f);
+    beginPass(r, tc, td, r->st.color, r->st.depth, RHI_LOAD_CLEAR, zero, RHI_LOAD_LOAD, 0.0f,
+              false);
     const RhiRect all = {0, 0, tc->tw, tc->th};
     rhi_cmd_set_scissor(s_cl, &all);
     RdUniform g0 = rd__frame_group(tc->tw, tc->th, 0.0f, 0.0f);
@@ -4289,10 +4485,10 @@ static void doFog(Replay *r, const RdFrame *f, const RdCmd *c)
         rd__log_once(RD_ONCE_FOG, "fog without a LUT, a depth source or a colour target: skipped");
         return;
     }
-    RdDrawPass pl[2], dp[4];
+    RdDrawPass pl[2], dp[8];
     const int buffer = g_rd.fogPath == RD_FOG_BUFFER;
-    const int np = rd__expand_no_dual(pl, rd__fog_plan(&r->st, tc->format, buffer, pl), dp);
-    if (np == 0) {
+    const int npl = rd__fog_plan(&r->st, tc->format, buffer, pl);
+    if (npl == 0) {
         return;
     }
 
@@ -4350,8 +4546,8 @@ static void doFog(Replay *r, const RdFrame *f, const RdCmd *c)
         src.tex = s_ms.depth;
         src.state = &s_ms.depthState;
         src.aspect = RHI_ASPECT_DEPTH;
-        for (int i = 0; i < np; i++) {
-            dp[i].key.fs = RD_FS_FOG_MS;
+        for (int i = 0; i < npl; i++) {
+            pl[i].key.fs = RD_FS_FOG_MS;
         }
     } else if (!rd__fog_source(s_cl, tz, &s_fogDepth, &src) || src.buffer != buffer) {
         return;
@@ -4375,9 +4571,12 @@ static void doFog(Replay *r, const RdFrame *f, const RdCmd *c)
      * the previous draw's mirror (scissorRect) is not inherited.  The fog
      * sprite covers the native frame as drawn */
     r->mirror = 0;
-    if (!bindDraw(r, &ds).id) {
+    if (!bindDrawKeep(r, &ds).id) {
         return;
     }
+    /* the planned passes as drawn in this pass: the exact blend's (the fog
+     * is a LERP, ALPHA 0x44), the two-pass fallback's */
+    const int np = expandPasses(r, pl, npl, dp);
     /* per sample in the epoch the sprite covers whole pixels, as doScreen's
      * integer-aligned sprites (msaaSpriteExpand): drawn as is, its top and
      * left edges would lie on the pixel centres of the frame's first row
@@ -4418,10 +4617,12 @@ static void doFog(Replay *r, const RdFrame *f, const RdCmd *c)
         cb.param[2] = src.sabotaged ? 1.0f : 0.0f; /* ICO_RD_FOG_SABOTAGE: reads give 0 */
         cb.scale[0] = tz->sx;                      /* the depth's texels per GS pixel */
         cb.scale[1] = tz->sy;
+        dstPassMode(r, &dp[i].key); /* a storage pass for a storage destination read */
         rhi_cmd_set_pipeline(s_cl, pipe);
         rd__bind_uniform(s_cl, 0, frame);
         rd__bind_uniform(s_cl, 1, rd__draw_group(&cb));
         rhi_cmd_set_bind_group(s_cl, 2, g2);
+        dstBind(r, &dp[i].key);
         rhi_cmd_draw(s_cl, nv, 0, 1);
         if (!rd__no_dual_second(dp, i)) {
             g_rd.stats.draws++;

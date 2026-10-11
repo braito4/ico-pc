@@ -342,6 +342,9 @@ typedef struct RdTargetRec {
      * (rd_replay.c clearNewTargets: colour 0, depth 1.0) at the next replay
      * (clearPending) */
     uint8_t parked, clearPending;
+    /* the destination reads the colour texture was made for
+     * (rd__dst_target_usage: 1 storage, 2 input attachment), 0 none */
+    uint8_t dstUsage;
 } RdTargetRec;
 
 /* The texels a screen-prim command can touch on the bound target tc: the
@@ -821,6 +824,9 @@ typedef struct RdPipeKeyInt {
     uint8_t vs, fs;
     uint8_t colorFmt; /* RhiFormat */
     uint8_t depthFmt; /* RhiFormat, RHI_FMT_UNKNOWN = no depth attachment */
+    /* RhiDstRead: the exact blend's destination read (rd_dst_read.c); the
+     * fragment entry is its _dstrov or _dstatt twin, blending off */
+    uint8_t dst;
 } RdPipeKeyInt;
 
 /* One hardware draw of a screen-prim command (the AFAIL split makes two). */
@@ -830,6 +836,12 @@ typedef struct RdDrawPass {
     uint32_t modeZ; /* atst | ate << 8 | split << 16 */
     uint32_t aref;
     uint32_t fix; /* FIX as the shader gets it (clamped where the path needs it) */
+    /* the exact blend (rd_dst_read.c): FIX as the GS has it (never
+     * clamped), and whether the fixed-function blend of this pass is not
+     * the GS's (dstWant: a LERP, Cd*FIX + Cs, an Ad form, Cd*As + Cd, PABE
+     * on a premultiplied form, COLCLAMP 0) */
+    uint32_t fixGs;
+    uint8_t dstWant;
 } RdDrawPass;
 
 RdBlendPath rd__blend_path(uint8_t keyBlend);
@@ -861,6 +873,35 @@ int rd__expand_no_dual(const RdDrawPass *in, int n, RdDrawPass out[4]);
 bool rd__no_dual_second(const RdDrawPass *ex, int i);
 /* Whether fragment entry fs has a *_nodual twin (it calls gs_dual_out). */
 bool rd__fs_has_no_dual(uint8_t fs);
+
+/* ------------------------------------------------ the exact blend
+ * rd_dst_read.c (the design is at its top).  rd__dst_init at rd_init
+ * picks g_rd.dstMode (RdBlendExact) from the device and ICO_RD_BLEND and
+ * logs it.  rd__dst_target_usage: the RhiTextureUsage bits a colour
+ * target of format fmt is made with (the destination reads the device has)
+ * and *dstUsage its RdTargetRec.dstUsage.  rd__fs_has_dst: whether entry fs
+ * has the _dstrov / _dstatt twins (the gs_dual_out entries).
+ * rd__expand_dst: the passes in[0..n) as drawn under destination read
+ * mode (RdBlendExact; RD_BLEND_EXACT_OFF copies them), into out (at most 2
+ * per pass: give out[4] for 2): a pass with dstWant on an RGBA8 target
+ * whose entry has the twins and whose mask writes RGB becomes a
+ * destination-read pass (key.dst, blending off, FIX unclamped, the write
+ * mask in DF bits 19..22); under the storage mode a pass that both writes
+ * Z and can discard (alpha test, DATE) is drawn as that colour pass
+ * without Z write and then a depth-only pass when its Z test is ALWAYS or
+ * NEVER, else left on the fixed-function blend (logged once).  Returns the
+ * number of passes written. */
+void rd__dst_init(void);
+uint32_t rd__dst_target_usage(RhiFormat fmt, uint8_t *dstUsage);
+bool rd__fs_has_dst(uint8_t fs);
+int rd__expand_dst(const RdDrawPass *in, int n, int mode, RdDrawPass out[4]);
+/* The keys the exact blend adds to a reachable set: for each of in[0..n)
+ * its rd__expand_dst images under every mode the device has (a pass whose
+ * flags and alpha test the key does not keep is taken both ways), added
+ * to out (rd__add_pipe_key); returns the new count. */
+uint32_t rd__enumerate_dst(const RdPipeKeyInt *in, uint32_t n, RdPipeKeyInt *out, uint32_t max,
+                           uint32_t count);
+const char *rd__blend_exact_name(int mode);
 /* Turns a planned pass of a command whose prims carry Q != 1
  * into the STQ shaders (IcoSpriteStqVertex); 0 when the pass keeps its own. */
 int rd__stq_pass(RdDrawPass *dp);
@@ -1302,6 +1343,14 @@ typedef struct RdContext {
      * ICO_RD_NO_DUAL or rd_set_no_dual) */
     RhiShader fsNoDual[RD_FS_COUNT];
     bool noDual;
+    /* the exact blend (rd_dst_read.c): the mode in force (RdBlendExact),
+     * the modes the device has (bit 1 << mode), the _dstrov and _dstatt
+     * twins of the gs_dual_out entries, and group 3's layout per mode (the
+     * target as a storage texture or an input attachment) */
+    uint8_t dstMode;
+    uint8_t dstModes;
+    RhiShader fsDstRov[RD_FS_COUNT], fsDstAtt[RD_FS_COUNT];
+    RhiBindGroupLayout layoutDstStorage, layoutDstAttach;
     /* The scene depth is read through a copy (rd__sampled_depth) and every
      * pass keeps its stencil (loaded and stored), as up to v0.4.4: whenever
      * the fog's depth path (fogPath) is not RD_FOG_INPLACE.  Off, the fog
@@ -1422,6 +1471,8 @@ enum {
     RD_ONCE_NODUAL_KEY,     /* a LERP or Cd*FIX + Cs key reached rd__get_pipeline unexpanded */
     RD_ONCE_EFFECTS_DEPTH_CRT, /* RdSettings.effectsDepth under the CRT filter: none */
     RD_ONCE_POST_RESERVED,     /* rd_post with a reserved kind: not recorded */
+    RD_ONCE_DST_ZWRITE, /* exact blend, storage: a Z-writing draw that can discard under Z GEQUAL */
+    RD_ONCE_DST_FIXED,  /* exact blend: a draw left on the fixed-function blend (MSAA, format) */
     RD_ONCE_COUNT
 };
 

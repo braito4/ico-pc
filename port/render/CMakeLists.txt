@@ -97,6 +97,7 @@ add_library(ico_render STATIC
     rd_blur.c # staticBlur.c's sprites
     rd_core.c
     rd_crt.c # the CRT filter at present time
+    rd_dst_read.c # the exact GS blend: the destination read
     rd_dump.c
     rd_fog_path.c # how the fog reads the depth: the paths, the probe, the self-test
     rd_frame.c
@@ -755,6 +756,30 @@ if(ICO_RUN_TESTS)
                          rd_msaa_nodual
                          PROPERTIES SKIP_RETURN_CODE 77 WORKING_DIRECTORY "${_nd}"
                                     ENVIRONMENT "${_env_nodual}")
+    # the exact GS blend (rd_dst_read.c) by each path: lavapipe has both
+    # destination reads and takes the attachment read by default, so the
+    # storage path (fragment shader interlock, the Deck's and the desktop
+    # drivers') and the fixed-function blend (devices without either) are
+    # forced; the fixed-function runs also compare rd_present's and rd_crt's
+    # recorded hashes, which are that blend's
+    set(_env_blend_storage ${_env} "ICO_RD_BLEND=storage")
+    set(_env_blend_fixed ${_env} "ICO_RD_BLEND=fixed")
+    set(_bs "${CMAKE_CURRENT_BINARY_DIR}/blend_storage")
+    set(_bf "${CMAKE_CURRENT_BINARY_DIR}/blend_fixed")
+    file(MAKE_DIRECTORY "${_bs}" "${_bf}")
+    add_test(NAME rd_pixel_storage COMMAND rd_pixel_test "${_bs}")
+    add_test(NAME rd_fog_storage COMMAND rd_fog_test)
+    add_test(NAME rd_present_storage COMMAND rd_present_test "${_bs}")
+    set_tests_properties(rd_pixel_storage rd_fog_storage rd_present_storage
+                         PROPERTIES SKIP_RETURN_CODE 77 WORKING_DIRECTORY "${_bs}"
+                                    ENVIRONMENT "${_env_blend_storage}")
+    add_test(NAME rd_pixel_fixed COMMAND rd_pixel_test "${_bf}")
+    add_test(NAME rd_fog_fixed COMMAND rd_fog_test)
+    add_test(NAME rd_present_fixed COMMAND rd_present_test "${_bf}")
+    add_test(NAME rd_crt_fixed COMMAND rd_crt_test "${_bf}")
+    set_tests_properties(rd_pixel_fixed rd_fog_fixed rd_present_fixed rd_crt_fixed
+                         PROPERTIES SKIP_RETURN_CODE 77 WORKING_DIRECTORY "${_bf}"
+                                    ENVIRONMENT "${_env_blend_fixed}")
     # the fog on the 24-bit depth buffer a phone GPU without a sampled
     # D32S8 gets (ICO_VK_FAKE_D24S8=1, port/rhi/vk/vk_device.c): the same
     # pixels as on D32S8, one-pass and two-pass blends

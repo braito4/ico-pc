@@ -268,6 +268,16 @@ int rd__plan_screen_draw_ex(const RdStateBlock *s, uint8_t prim, int aa1, uint8_
         base.flags |= ICO_DF_DATE | ICO_DF_DATM;
     }
     base.fix = d->blendFix;
+    /* the exact blend (rd_dst_read.c): FIX as the GS has it, and whether
+     * the hardware path below is not the GS's arithmetic: the LERPs and
+     * Cd*FIX + Cs round, the Ad forms read Ad/255, Cd*As + Cd is not
+     * representable, PABE cannot drop Cd from a premultiplied form, COLCLAMP
+     * 0 wraps where the blender clamps */
+    base.fixGs = d->blendFix;
+    base.dstWant = (uint8_t)(blend < RD_BLEND_COUNT &&
+                             (bp == RD_BP_LERP || bp == RD_BP_DST_FIX || bp >= RD_BP_AD_ADD ||
+                              (d->pabe && (bp == RD_BP_PREMUL_ADD || bp == RD_BP_PREMUL_REVSUB)) ||
+                              !d->colclamp));
     if (blend < RD_BLEND_COUNT) {
         if (usesFix(blend)) {
             base.flags |= ICO_DF_FIX_FACTOR;
@@ -445,7 +455,9 @@ int rd__expand_no_dual(const RdDrawPass *in, int n, RdDrawPass out[4])
     int m = 0;
     for (int i = 0; i < n; i++) {
         RdDrawPass p = in[i];
-        if (!g_rd.noDual || !rd__fs_has_no_dual(p.key.fs)) {
+        /* a destination-read pass (rd_dst_read.c) has no second output to
+         * split: the shader blends */
+        if (!g_rd.noDual || !rd__fs_has_no_dual(p.key.fs) || p.key.dst != RHI_DST_READ_NONE) {
             out[m++] = p;
             continue;
         }
@@ -625,15 +637,27 @@ static RhiPipeline createPipeline(const RdPipeKeyInt *k)
     const int vu = k->vs >= RD_VS_VU_FIRST && k->vs <= RD_VS_VU_LAST;
     /* the VU program shaders read the stream, VuCB and
      * VuBoneCB from group 1 next to DrawCB, and have no vertex input */
-    RhiBindGroupLayout layouts[3] = {g_rd.layoutFrame, vu ? g_rd.layoutVu : g_rd.layoutDraw,
-                                     k->fs == RD_FS_BLEND_INT ? g_rd.layoutInt : g_rd.layoutTex};
+    /* the exact blend's destination read (rd_dst_read.c): group 3 holds the
+     * target, the fragment entry is the _dstrov or _dstatt twin */
+    const bool dstStorage = k->dst == RHI_DST_READ_STORAGE;
+    const bool dstAttach = k->dst == RHI_DST_READ_ATTACHMENT;
+    RhiBindGroupLayout layouts[4] = {g_rd.layoutFrame, vu ? g_rd.layoutVu : g_rd.layoutDraw,
+                                     k->fs == RD_FS_BLEND_INT ? g_rd.layoutInt : g_rd.layoutTex,
+                                     dstStorage ? g_rd.layoutDstStorage : g_rd.layoutDstAttach};
     RhiPipelineDesc d;
     memset(&d, 0, sizeof(d));
     d.vertex = g_rd.vs[k->vs];
     /* no dual-source blending: the *_nodual twin (c0 alone) */
     d.fragment = k->gs.nodual && g_rd.fsNoDual[k->fs].id ? g_rd.fsNoDual[k->fs] : g_rd.fs[k->fs];
+    if (dstStorage || dstAttach) {
+        d.fragment = dstStorage ? g_rd.fsDstRov[k->fs] : g_rd.fsDstAtt[k->fs];
+        if (!d.fragment.id || !layouts[3].id) {
+            return (RhiPipeline){0};
+        }
+        d.dstRead = dstStorage ? RHI_DST_READ_STORAGE : RHI_DST_READ_ATTACHMENT;
+    }
     d.layouts = layouts;
-    d.layoutCount = 3;
+    d.layoutCount = dstStorage || dstAttach ? 4u : 3u;
     if (k->vs == RD_VS_SPRITE_UI || k->vs == RD_VS_SPRITE_WORLD) {
         d.vertexBindings = &vb;
         d.vertexBindingCount = 1;
@@ -660,8 +684,10 @@ static RhiPipeline createPipeline(const RdPipeKeyInt *k)
         shadowStencil(k->gs.stencil, &d.depthStencil); /* the shadow count */
     }
     d.colorFormats[0] = (RhiFormat)k->colorFmt;
-    /* no colour format: a depth-only pass (the MSAA depth resolve) */
-    d.colorCount = k->colorFmt != RHI_FMT_UNKNOWN ? 1u : 0u;
+    /* no colour format: a depth-only pass (the MSAA depth resolve); the
+     * storage destination read writes the target itself, in a pass without
+     * a colour attachment */
+    d.colorCount = k->colorFmt != RHI_FMT_UNKNOWN && !dstStorage ? 1u : 0u;
     d.depthFormat = (RhiFormat)k->depthFmt;
     d.debugName = "rd";
     d.samples = k->gs.msaa; /* 0: single-sampled */
@@ -699,7 +725,7 @@ RhiPipeline rd__get_pipeline(const RdPipeKeyInt *k)
      * as its *_nodual twin; the planned passes come through rd__expand_no_dual,
      * the single keys (the shadow count's volumes) are turned here */
     RdPipeKeyInt nk;
-    if (g_rd.noDual && !k->gs.nodual && rd__fs_has_no_dual(k->fs)) {
+    if (g_rd.noDual && !k->gs.nodual && rd__fs_has_no_dual(k->fs) && k->dst == RHI_DST_READ_NONE) {
         nk = *k;
         nk.gs.nodual = 1;
         const RdBlendPath bp = keyBlendPath(k);
@@ -881,16 +907,20 @@ static uint32_t enumerateAll(RdPipeKeyInt *out, uint32_t max)
 /* In the two-pass fallback every key is what rd__expand_no_dual
  * makes of it (the families above plan with dual-source blending), so the
  * set precreated is the set the draws reach (rd_mesh.c's VU and rd_water.c's
- * families among them). */
+ * families among them).  With the exact blend (rd_dst_read.c) the
+ * destination-read images of the blended keys join them (the plain keys
+ * stay: the MSAA epoch, other formats and the storage path's Z-writing
+ * discarding draws keep the fixed-function blend). */
 uint32_t rd__enumerate_reachable(RdPipeKeyInt *out, uint32_t max)
 {
-    if (!g_rd.noDual) {
+    if (!g_rd.noDual && g_rd.dstMode == RD_BLEND_EXACT_OFF) {
         return enumerateAll(out, max);
     }
     static RdPipeKeyInt raw[RD_PIPELINE_CACHE_MAX];
     const uint32_t nr = enumerateAll(raw, RD_PIPELINE_CACHE_MAX);
+    const uint32_t nk = nr < RD_PIPELINE_CACHE_MAX ? nr : RD_PIPELINE_CACHE_MAX;
     uint32_t n = 0;
-    for (uint32_t i = 0; i < nr && i < RD_PIPELINE_CACHE_MAX; i++) {
+    for (uint32_t i = 0; i < nk; i++) {
         RdDrawPass in, ex[4];
         memset(&in, 0, sizeof(in));
         in.key = raw[i];
@@ -899,7 +929,7 @@ uint32_t rd__enumerate_reachable(RdPipeKeyInt *out, uint32_t max)
             n = rd__add_pipe_key(out, max, n, &ex[j].key);
         }
     }
-    return n;
+    return rd__enumerate_dst(raw, nk, out, max, n);
 }
 
 /* the CRT filter (rd_crt.c): the glow passes into RGBA16F, the composite on
