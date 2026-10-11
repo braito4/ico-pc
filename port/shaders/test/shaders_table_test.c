@@ -39,6 +39,31 @@ static const char *const expectedNoDual[] = {
     "vu_ps_nodual",         "vu_texa_ps_nodual",     "font_sheet_ps_nodual",
 };
 
+/* the gs_dual_out entries computing the GS blend from the destination
+ * (ICO_DST_READ: rasterizer-ordered view, attachment read) */
+static const char *const expectedDst[] = {
+    "sprite_ps_dstrov",
+    "sprite_ps_dstatt",
+    "sprite_texa_ps_dstrov",
+    "sprite_texa_ps_dstatt",
+    "sprite_aa1_ps_dstrov",
+    "sprite_aa1_ps_dstatt",
+    "sprite_stq_ps_dstrov",
+    "sprite_stq_ps_dstatt",
+    "fog_lut_ps_dstrov",
+    "fog_lut_ps_dstatt",
+    "fog_lut_buffer_ps_dstrov",
+    "fog_lut_buffer_ps_dstatt",
+    "font_ps_dstrov",
+    "font_ps_dstatt",
+    "font_sheet_ps_dstrov",
+    "font_sheet_ps_dstatt",
+    "vu_ps_dstrov",
+    "vu_ps_dstatt",
+    "vu_texa_ps_dstrov",
+    "vu_texa_ps_dstatt",
+};
+
 int main(void)
 {
     int failures = 0;
@@ -112,9 +137,17 @@ int main(void)
             failures++;
         }
     }
-    if (g_icoShaderCount != sizeof(expected) / sizeof(expected[0]) + nAa + nNoDual + nVariants) {
+    const size_t nDst = sizeof(expectedDst) / sizeof(expectedDst[0]);
+    for (size_t i = 0; i < nDst; i++) {
+        if (!ico_find_shader(expectedDst[i])) {
+            printf("FAIL %s: not in the table\n", expectedDst[i]);
+            failures++;
+        }
+    }
+    if (g_icoShaderCount !=
+        sizeof(expected) / sizeof(expected[0]) + nAa + nNoDual + nVariants + nDst) {
         printf("FAIL table has %u entries, expected %zu\n", g_icoShaderCount,
-               sizeof(expected) / sizeof(expected[0]) + nAa + nNoDual + nVariants);
+               sizeof(expected) / sizeof(expected[0]) + nAa + nNoDual + nVariants + nDst);
         failures++;
     }
     printf("shaders_table_test: %s\n", failures ? "FAILED" : "ok");

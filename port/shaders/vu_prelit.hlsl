@@ -57,14 +57,16 @@ VuVSOut vu_prelit_vs(uint vid : SV_VertexID)
     return o;
 }
 
-DualOut vu_ps(VuVSOut i)
+GS_PS_ATTR GS_PS_OUT vu_ps(VuVSOut i)
 {
-    return vu_pixel(i);
+    const uint4 col = vu_pixel(i);
+    GS_RETURN(col, i.pos);
 }
 
-DualOut vu_texa_ps(VuVSOut i)
+GS_PS_ATTR GS_PS_OUT vu_texa_ps(VuVSOut i)
 {
-    return vu_pixel_texa(i);
+    const uint4 col = vu_pixel_texa(i);
+    GS_RETURN(col, i.pos);
 }
 
 uint4 vu_probe_ps(VuVSOut i) : SV_Target0

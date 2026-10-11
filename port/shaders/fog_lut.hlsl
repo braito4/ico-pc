@@ -79,7 +79,7 @@ uint fog_gs_z(float d, float scale)
     return (uint)zf;
 }
 
-DualOut fog_lut_ps(FogPSIn i)
+GS_PS_ATTR GS_PS_OUT fog_lut_ps(FogPSIn i)
 {
     // the texel the sprite's UV addresses, nearest (ZFog.c writes TEX1 0);
     // in the depth target's own texels (g_scale, 1 in Original)
@@ -132,5 +132,5 @@ DualOut fog_lut_ps(FogPSIn i)
     if (gs_alpha_discard(g_mode.z, g_mode.w, col.a)) {
         discard;
     }
-    return gs_dual_out(col, g_mode.x, g_blend.y);
+    GS_RETURN(col, i.pos);
 }

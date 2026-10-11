@@ -63,7 +63,7 @@ SamplerState g_sampler : register(s1, space2);
 // 1x1 dummy is bound and never fetched.
 Texture2D<float> g_dateSnap : register(t2, space2);
 
-DualOut sprite_ps(SpriteVSOut i)
+GS_PS_ATTR GS_PS_OUT sprite_ps(SpriteVSOut i)
 {
     if ((g_mode.x & DF_DATE) != 0u) {
         if (gs_date_discard(g_mode.x, g_dateSnap.Load(int3(int2(i.pos.xy), 0)))) {
@@ -81,7 +81,7 @@ DualOut sprite_ps(SpriteVSOut i)
     if (gs_alpha_discard(g_mode.z, g_mode.w, col.a)) {
         discard;
     }
-    return gs_dual_out(col, g_mode.x, g_blend.y);
+    GS_RETURN(col, i.pos);
 }
 
 // sprite_texa_ps: sprite_ps for a PSMCT24 or PSMCT16 texture
@@ -89,7 +89,7 @@ DualOut sprite_ps(SpriteVSOut i)
 // the planner (rd_pipeline.c rd__texa_per_texel) gives this entry: TEXA per
 // texel before the bilinear weights, as the GS (gs_texa_texture). sprite_ps
 // itself is unchanged.
-DualOut sprite_texa_ps(SpriteVSOut i)
+GS_PS_ATTR GS_PS_OUT sprite_texa_ps(SpriteVSOut i)
 {
     if ((g_mode.x & DF_DATE) != 0u) {
         if (gs_date_discard(g_mode.x, g_dateSnap.Load(int3(int2(i.pos.xy), 0)))) {
@@ -106,7 +106,7 @@ DualOut sprite_texa_ps(SpriteVSOut i)
     if (gs_alpha_discard(g_mode.z, g_mode.w, col.a)) {
         discard;
     }
-    return gs_dual_out(col, g_mode.x, g_blend.y);
+    GS_RETURN(col, i.pos);
 }
 
 // ------------------------------------------------------------------- PRIM.AA1
@@ -181,7 +181,7 @@ SpriteAa1VSOut sprite_aa1_world_vs(SpriteAa1VSIn i)
 // alpha; with ABE 1 it replaces it only where that alpha is exactly 0x80.
 // This happens before the alpha test, and the alpha that results is the
 // blend's As and the alpha written.
-DualOut sprite_aa1_ps(SpriteAa1VSOut i)
+GS_PS_ATTR GS_PS_OUT sprite_aa1_ps(SpriteAa1VSOut i)
 {
     uint4 col = sprite_colour(i.pos, i.col, i.uv, 1.0);
     uint a = 0x80u;
@@ -194,7 +194,7 @@ DualOut sprite_aa1_ps(SpriteAa1VSOut i)
     if (gs_alpha_discard(g_mode.z, g_mode.w, col.a)) {
         discard;
     }
-    return gs_dual_out(col, g_mode.x, g_blend.y);
+    GS_RETURN(col, i.pos);
 }
 
 // ------------------------------------------------------------ perspective STQ
@@ -241,13 +241,13 @@ SpriteStqVSOut sprite_stq_world_vs(SpriteStqVSIn i)
     return sprite_stq_vertex(i);
 }
 
-DualOut sprite_stq_ps(SpriteStqVSOut i)
+GS_PS_ATTR GS_PS_OUT sprite_stq_ps(SpriteStqVSOut i)
 {
     uint4 col = sprite_colour(i.pos, i.col, i.stq.xy / i.stq.z, i.stq.z);
     if (gs_alpha_discard(g_mode.z, g_mode.w, col.a)) {
         discard;
     }
-    return gs_dual_out(col, g_mode.x, g_blend.y);
+    GS_RETURN(col, i.pos);
 }
 
 // date_snap_ps: the bound target's alpha MSB into the R8 DATE

@@ -114,6 +114,9 @@ cbuffer DrawCB : register(b1, space1)
 // sample at the GS's level of detail (gs_lod_level) with TEX1's fields in
 // g_blend.w. Every entry that samples a game texture honours it.
 #define DF_GS_LOD 262144u
+// A destination-read pass (the *_dstrov and *_dstatt entries): the channels
+// it writes, R G B A = bits 19..22 (shader_consts.h ICO_DF_WMASK_SHIFT)
+#define DF_WMASK_SHIFT 19u
 
 // TEST.DATE. snap is the R8 DATE snapshot (1.0 where the destination alpha
 // had its MSB set when the snapshot was taken). Returns true when the
@@ -473,6 +476,104 @@ DualOut gs_dual_out(uint4 col, uint flags, uint fix)
     o.c1 = float4(f, f, f, f) * (1.0 / 128.0);
     return o;
 }
+#endif
+
+// ------------------------------------------------- destination read
+// The GS blend computed here, exactly, instead of in the GPU's blender
+// (port/render/rd_dst_read.c says why and when). The fragment reads its own
+// pixel of the bound target, works out what the GS stores there
+// (gs_dst_channel: ((A - B) * C >> 7) + D with C = As, Ad or FIX on the
+// 0x80 = 1.0 scale, COLCLAMP, PABE, FBA, the write mask) and writes it with
+// the pipeline's blending off. The fixed-function blender instead computes
+// Cs * F + Cd * (1 - F) in floats and rounds to nearest, where the GS
+// truncates: one level up on about half the pixels of every LERP.
+//
+//   ICO_DST_READ=1 (*_dstrov): the target is a rasterizer-ordered view,
+//     u0 in space 3 (D3D12 ROV; Vulkan storage image under
+//     VK_EXT_fragment_shader_interlock, which DXC emits for it:
+//     PixelInterlockOrderedEXT around the access). The pass has no colour
+//     attachment, so the shader writes the target and applies the write
+//     mask itself. globallycoherent (SPIR-V Coherent): the critical
+//     section's load sees the previous fragment's store, not a stale cache
+//     line. [earlydepthstencil]: the Z and stencil tests run before
+//     the shader, as the GS tests before it writes (a fragment that fails
+//     never reaches the store); the planner keeps a discard and a Z write
+//     from meeting in one such pass (rd_dst_read.c).
+//   ICO_DST_READ=2 (*_dstatt, Vulkan only): the colour attachment read as
+//     an input attachment (VK_KHR_dynamic_rendering_local_read) in
+//     rasterization order (VK_EXT_rasterization_order_attachment_access),
+//     the result written to SV_Target0 under the pipeline's write mask;
+//     depth, stencil and discard as on any pass. Compiled for DXIL the
+//     entries are the ICO_DST_READ=1 ones (never used there).
+#ifndef ICO_DST_READ
+#define ICO_DST_MODE 0
+#elif ICO_DST_READ == 2 && defined(__spirv__)
+#define ICO_DST_MODE 2
+#elif ICO_DST_READ != 0
+#define ICO_DST_MODE 1
+#else
+#define ICO_DST_MODE 0
+#endif
+
+// The pixel the GS stores for colour col (As in col.a) over dst.
+uint4 gs_dst_pixel(uint4 col, uint4 dst, uint flags)
+{
+    const bool fba = (flags & DF_FBA) != 0u;
+    const bool pabe = (flags & DF_PABE) != 0u;
+    const uint wmask = (flags >> DF_WMASK_SHIFT) & 15u;
+    const uint reg = g_blend.x, fix = g_blend.y, cl = g_blend.z;
+    uint4 o;
+    o.r = gs_dst_channel(0u, col.r, dst.r, col.a, dst.a, reg, fix, cl, fba, pabe, wmask);
+    o.g = gs_dst_channel(1u, col.g, dst.g, col.a, dst.a, reg, fix, cl, fba, pabe, wmask);
+    o.b = gs_dst_channel(2u, col.b, dst.b, col.a, dst.a, reg, fix, cl, fba, pabe, wmask);
+    o.a = gs_dst_channel(3u, col.a, dst.a, col.a, dst.a, reg, fix, cl, fba, pabe, wmask);
+    return o;
+}
+
+#if ICO_DST_MODE == 1
+#ifdef __spirv__
+[[vk::image_format("rgba8")]]
+#endif
+globallycoherent RasterizerOrderedTexture2D<unorm float4> g_dstRov : register(u0, space3);
+
+// UNORM8 holds k / 255 exactly: a load gives k back, a store of k / 255
+// stores k (as blend_int's and fx_sprite_ps's targets)
+void gs_dst_out(uint4 col, float4 pos)
+{
+    const uint2 p = uint2(pos.xy);
+    const uint4 dst = uint4(floor(g_dstRov[p] * 255.0 + 0.5));
+    g_dstRov[p] = float4(gs_dst_pixel(col, dst, g_mode.x)) * (1.0 / 255.0);
+}
+#define GS_PS_OUT void
+#define GS_PS_ATTR [earlydepthstencil]
+#define GS_RETURN(col, pos)                                                                        \
+    {                                                                                              \
+        gs_dst_out(col, pos);                                                                      \
+        return;                                                                                    \
+    }
+#elif ICO_DST_MODE == 2
+[[vk::input_attachment_index(0)]] [[vk::binding(16, 3)]] SubpassInput<float4> g_dstIn;
+
+struct DstOut
+{
+    VK_LOC(0) float4 c0 : SV_Target0;
+};
+
+DstOut gs_dst_out(uint4 col)
+{
+    const uint4 dst = uint4(floor(g_dstIn.SubpassLoad() * 255.0 + 0.5));
+    DstOut o;
+    o.c0 = float4(gs_dst_pixel(col, dst, g_mode.x)) * (1.0 / 255.0);
+    return o;
+}
+#define GS_PS_OUT DstOut
+#define GS_PS_ATTR
+#define GS_RETURN(col, pos) return gs_dst_out(col)
+#else
+// every other build of an entry: the fixed-function blend's outputs
+#define GS_PS_OUT DualOut
+#define GS_PS_ATTR
+#define GS_RETURN(col, pos) return gs_dual_out(col, g_mode.x, g_blend.y)
 #endif
 
 // ------------------------------------------------------- vertex helpers

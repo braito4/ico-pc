@@ -107,6 +107,13 @@ enum {
     ICO_DF_GS_LOD = 262144
 };
 
+/* DrawCB.mode[0] bits 19..22 on a destination-read pass (the *_dstrov and
+ * *_dstatt entries, port/render/rd_dst_read.c): the channels the pass
+ * writes, R G B A = bits 19..22 (FRAME.FBMSK by whole channels, the key's
+ * colorMask).  The storage path writes the target itself, so the shader
+ * applies the mask (common.hlsli gs_dst_out). */
+#define ICO_DF_WMASK_SHIFT 19u
+
 /* DrawCB.mode[1] bits 8..: TEXFMT_* in gs_math.hlsli. */
 enum { ICO_TEXFMT_RGBA32 = 0, ICO_TEXFMT_RGB24 = 1, ICO_TEXFMT_RGBA16 = 2 };
 

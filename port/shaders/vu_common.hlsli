@@ -627,8 +627,8 @@ Texture2D<float> g_dateSnap : register(t2, space2);
 // sprite_ps with STQ: the texel at S/Q, T/Q (the texture is padded to
 // 2^TW x 2^TH, so STQ is normalised already; a texture with GS levels at
 // the GS's level by Q, gs_sample), texture function, TEXA, alpha test,
-// DATE, dual-source output.
-DualOut vu_pixel(VuVSOut i)
+// DATE; the entry (vu_prelit.hlsl) writes the result (GS_RETURN).
+uint4 vu_pixel(VuVSOut i)
 {
     if ((g_mode.x & DF_DATE) != 0u) {
         if (gs_date_discard(g_mode.x, g_dateSnap.Load(int3(int2(i.pos.xy), 0)))) {
@@ -645,13 +645,13 @@ DualOut vu_pixel(VuVSOut i)
     if (gs_alpha_discard(g_mode.z, g_mode.w, col.a)) {
         discard;
     }
-    return gs_dual_out(col, g_mode.x, g_blend.y);
+    return col;
 }
 
 // vu_texa_ps: vu_pixel with TEXA per texel before the
 // bilinear weights (gs_texa_texture), for the draws rd_replay.c's VU
 // planner gives it (the texture formats and TEXA modes of sprite_texa_ps).
-DualOut vu_pixel_texa(VuVSOut i)
+uint4 vu_pixel_texa(VuVSOut i)
 {
     if ((g_mode.x & DF_DATE) != 0u) {
         if (gs_date_discard(g_mode.x, g_dateSnap.Load(int3(int2(i.pos.xy), 0)))) {
@@ -669,7 +669,7 @@ DualOut vu_pixel_texa(VuVSOut i)
     if (gs_alpha_discard(g_mode.z, g_mode.w, col.a)) {
         discard;
     }
-    return gs_dual_out(col, g_mode.x, g_blend.y);
+    return col;
 }
 
 #endif
