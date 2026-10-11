@@ -12,10 +12,7 @@
 # for its constants and CLUT order only (nothing of rd is linked)
 # door_grace.c: the doorway fix's arm and arrival grace ([gameplay] door_fix),
 # called by the exit check in ico2/fumi/src/boyact.c
-# demo_walk.c: the opening's soldiers walk off the wide picture (issue 68),
-# called by getMotionGeometry in ico2/sugipon/src/motionOrientManager.c
-add_library(ico_options STATIC options.c video_options.c photo_mode.c appearance.c door_grace.c
-            demo_walk.c)
+add_library(ico_options STATIC options.c video_options.c photo_mode.c appearance.c door_grace.c)
 target_include_directories(ico_options PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}"
                            "${CMAKE_SOURCE_DIR}/port/render")
 target_compile_options(ico_options PRIVATE ${ICO_SEMANTIC_OPTIONS} ${ICO_PORT_WARNINGS})
@@ -65,20 +62,6 @@ if(ICO_RUN_TESTS)
     add_test(NAME door_grace COMMAND door_grace_test "${CMAKE_CURRENT_BINARY_DIR}")
 endif()
 
-# The opening's soldiers' walk-off (issue 68): the plan over synthetic keys
-# (the tail, the stop, the stride, the velocity; no plan for standing,
-# rising, slow or short motions), the decision at gsFrame.w 512 (never) and
-# 2048 (only beside the 4:3 picture, inside the native frame), the walk, the
-# hold and the hook's listed motions. CPU only, no disc.
-add_executable(demo_walk_test test/demo_walk_test.c)
-target_compile_options(demo_walk_test PRIVATE ${ICO_SEMANTIC_OPTIONS} ${ICO_PORT_WARNINGS})
-target_link_libraries(demo_walk_test PRIVATE ico_options)
-if(NOT WIN32)
-    target_link_libraries(demo_walk_test PRIVATE m)
-endif()
-if(ICO_RUN_TESTS)
-    add_test(NAME demo_walk COMMAND demo_walk_test)
-endif()
 
 # Photo mode's state and camera: the orbit, the clamps, the
 # zoom, the keys, the capture's name; the basis kept from the game camera at
