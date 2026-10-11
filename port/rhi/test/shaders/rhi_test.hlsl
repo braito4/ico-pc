@@ -73,3 +73,48 @@ float ps_depth_resolve(VSOut i) : SV_Depth {
     }
     return d;
 }
+
+// The destination read (rhi.h RhiDstRead): the GS's LERP
+// ((Cs - Cd) * As >> 7) + Cd of the vertex colour (As its alpha byte, 0x80 =
+// 1.0, no clamp of the factor; the result clamped to 0..255) over the
+// target's own pixel, alpha As, computed in the shader.
+uint4 dst_lerp(uint4 s, uint4 d)
+{
+    const int3 v = (((int3(s.rgb) - int3(d.rgb)) * int(s.a)) >> 7) + int3(d.rgb);
+    return uint4(uint3(clamp(v, int3(0, 0, 0), int3(255, 255, 255))), s.a);
+}
+
+// RHI_DST_READ_STORAGE: the target a rasterizer-ordered view (u0, group 3;
+// Vulkan: a storage image under fragment shader interlock), no colour
+// target, the tests early
+#ifdef __spirv__
+[[vk::image_format("rgba8")]]
+#endif
+globallycoherent RasterizerOrderedTexture2D<unorm float4> g_rov : register(u0, space3);
+
+[earlydepthstencil] void ps_rov(VSOut i)
+{
+    const uint2 p = uint2(i.pos.xy);
+    const uint4 d = uint4(floor(g_rov[p] * 255.0 + 0.5));
+    const uint4 s = uint4(floor(i.col * 255.0 + 0.5));
+    g_rov[p] = float4(dst_lerp(s, d)) * (1.0 / 255.0);
+}
+
+// RHI_DST_READ_ATTACHMENT (Vulkan): colour attachment 0 read as an input
+// attachment (group 3, the t-register binding 16); the DXIL build, never
+// used (no attachment read on D3D12), writes the vertex colour
+#ifdef __spirv__
+[[vk::input_attachment_index(0)]] [[vk::binding(16, 3)]] SubpassInput<float4> g_dstIn;
+
+float4 ps_subpass(VSOut i) : SV_Target0
+{
+    const uint4 d = uint4(floor(g_dstIn.SubpassLoad() * 255.0 + 0.5));
+    const uint4 s = uint4(floor(i.col * 255.0 + 0.5));
+    return float4(dst_lerp(s, d)) * (1.0 / 255.0);
+}
+#else
+float4 ps_subpass(VSOut i) : SV_Target0
+{
+    return i.col;
+}
+#endif

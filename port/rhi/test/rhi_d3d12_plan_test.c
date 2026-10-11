@@ -46,8 +46,8 @@ static int failures;
         }                                                                                          \
     } while (0)
 
-static const uint32_t kWriteBits =
-    D3DP_STATE_RENDER_TARGET | D3DP_STATE_DEPTH_WRITE | D3DP_STATE_COPY_DEST;
+static const uint32_t kWriteBits = D3DP_STATE_RENDER_TARGET | D3DP_STATE_DEPTH_WRITE |
+                                   D3DP_STATE_COPY_DEST | D3DP_STATE_UNORDERED_ACCESS;
 
 /* ------------------------------------------------------------ state table */
 static void testStateTable(void)
@@ -74,6 +74,11 @@ static void testStateTable(void)
     }
     CHECK(d3dp_texture_state(RHI_STATE_SHADER_READ, false) == D3DP_STATE_SHADER_RESOURCE,
           "colour SHADER_READ");
+    /* the destination read: the ROV's UNORDERED_ACCESS; the attachment read
+     * (Vulkan only) is a plain render target here */
+    CHECK(d3dp_texture_state(RHI_STATE_STORAGE, false) == D3DP_STATE_UNORDERED_ACCESS, "STORAGE");
+    CHECK(d3dp_texture_state(RHI_STATE_RENDER_TARGET_READ, false) == D3DP_STATE_RENDER_TARGET,
+          "RENDER_TARGET_READ");
     CHECK(d3dp_texture_state(RHI_STATE_SHADER_READ, true) ==
               d3dp_texture_state(RHI_STATE_DEPTH_READ, true),
           "depth SHADER_READ == DEPTH_READ");
@@ -266,6 +271,19 @@ static void testLayouts(void)
     CHECK(d3dp_layout_build(s4, 4, &l4) && l4.resCount == 1 && l4.resStages == VS &&
               l4.dynCount == 3,
           "vu");
+    /* the destination read's group 3: u0 in the resource table, beside a t0
+     * (another register class); no input attachments on D3D12 */
+    {
+        const RhiBindSlot s3[2] = {{0, RHI_BIND_STORAGE_TEXTURE, FS},
+                                   {0, RHI_BIND_SAMPLED_TEXTURE, FS}};
+        const RhiBindSlot sIn[1] = {{0, RHI_BIND_INPUT_ATTACHMENT, FS}};
+        D3dpLayout l3, lIn;
+        CHECK(d3dp_layout_build(s3, 2, &l3) && l3.resCount == 2 &&
+                  l3.table[0] == D3DP_TABLE_RESOURCE && l3.offset[0] == 0,
+              "dst read: u0 and t0");
+        CHECK(d3dp_reg_class(RHI_BIND_STORAGE_TEXTURE) == D3DP_REG_U, "u register class");
+        CHECK(!d3dp_layout_build(sIn, 1, &lIn), "no input attachment on D3D12");
+    }
     CHECK(l4.dynSlot[0] == 2 && l4.dynSlot[1] == 3 && l4.dynSlot[2] == 1 && l4.offset[2] == 0 &&
               l4.offset[3] == 1 && l4.offset[1] == 2,
           "vu root CBVs in slot order (b1, b2, b3)");

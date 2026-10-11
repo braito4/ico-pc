@@ -159,7 +159,15 @@ typedef enum RhiTextureUsage {
     RHI_TEX_RENDER_TARGET = 1 << 1,
     RHI_TEX_DEPTH_STENCIL = 1 << 2,
     RHI_TEX_COPY_SRC = 1 << 3,
-    RHI_TEX_COPY_DST = 1 << 4
+    RHI_TEX_COPY_DST = 1 << 4,
+    /* The destination read (RhiPipelineDesc.dstRead).  STORAGE: the
+     * texture can be bound as RHI_BIND_STORAGE_TEXTURE (Vulkan storage
+     * image, D3D12 UAV; RGBA8_UNORM only, single-sampled), only with
+     * RhiLimits.fragmentInterlock or .rov.  INPUT_ATTACHMENT: a colour
+     * target a pass can read as RHI_BIND_INPUT_ATTACHMENT (Vulkan, only
+     * with RhiLimits.rasterOrderAttachment; ignored by D3D12). */
+    RHI_TEX_STORAGE = 1 << 5,
+    RHI_TEX_INPUT_ATTACHMENT = 1 << 6
 } RhiTextureUsage;
 
 typedef struct RhiTextureDesc {
@@ -206,6 +214,15 @@ typedef enum RhiState {
     RHI_STATE_COPY_SRC,
     RHI_STATE_COPY_DST,
     RHI_STATE_PRESENT,
+    /* bound as RHI_BIND_STORAGE_TEXTURE (read and written by fragment
+     * shaders: Vulkan GENERAL, D3D12 UNORDERED_ACCESS); the texture is no
+     * colour attachment while in it */
+    RHI_STATE_STORAGE,
+    /* a colour attachment the pass's fragment shaders also read as
+     * RHI_BIND_INPUT_ATTACHMENT (Vulkan RENDERING_LOCAL_READ; D3D12 the
+     * same as RENDER_TARGET).  Begin the pass with
+     * RhiColorAttachment.readable. */
+    RHI_STATE_RENDER_TARGET_READ,
     RHI_STATE_COUNT
 } RhiState;
 
@@ -250,6 +267,16 @@ typedef enum RhiBindType {
      * per slot.  Same b register
      * class as RHI_BIND_UNIFORM_BUFFER: the shader does not change. */
     RHI_BIND_UNIFORM_BUFFER_DYNAMIC,
+    /* The destination read (RhiPipelineDesc.dstRead).  STORAGE_TEXTURE: a
+     * u register (HLSL RasterizerOrderedTexture2D: a D3D12 ROV; DXC makes
+     * a Vulkan storage image with fragment shader interlock), the texture
+     * in RHI_STATE_STORAGE, made with RHI_TEX_STORAGE.  INPUT_ATTACHMENT
+     * (Vulkan only): colour attachment 0 of the pass the group is used in,
+     * read with subpassLoad (HLSL SubpassInput, input attachment index 0;
+     * the t-register binding: slot + 16), the texture in
+     * RHI_STATE_RENDER_TARGET_READ, made with RHI_TEX_INPUT_ATTACHMENT. */
+    RHI_BIND_STORAGE_TEXTURE,
+    RHI_BIND_INPUT_ATTACHMENT,
     RHI_BIND_COUNT
 } RhiBindType;
 
@@ -387,6 +414,23 @@ typedef struct RhiVertexBinding {
     bool perInstance;
 } RhiVertexBinding;
 
+/* How a pipeline's fragment shader reads its own pixel of the target
+ * (the exact GS blend, port/render/rd_dst_read.c).  STORAGE: through an
+ * RHI_BIND_STORAGE_TEXTURE in rasterization order (the shader's
+ * RasterizerOrderedTexture2D); the pipeline has no colour target
+ * (colorCount 0) and draws in a pass without one.  ATTACHMENT: colour
+ * attachment 0 read as an input attachment in rasterization order (Vulkan
+ * VK_EXT/ARM_rasterization_order_attachment_access over
+ * VK_KHR_dynamic_rendering_local_read); the pass begins it readable.
+ * Either needs the RhiLimits bit of its kind; rhi_create_pipeline fails
+ * without it. */
+typedef enum RhiDstRead {
+    RHI_DST_READ_NONE = 0,
+    RHI_DST_READ_STORAGE,
+    RHI_DST_READ_ATTACHMENT,
+    RHI_DST_READ_COUNT
+} RhiDstRead;
+
 typedef struct RhiPipelineDesc {
     RhiShader vertex, fragment;
     const RhiBindGroupLayout *layouts;
@@ -406,6 +450,7 @@ typedef struct RhiPipelineDesc {
     /* the attachments' sample count: 0 or 1 single-sampled, else the
      * RhiTextureDesc.samples of the targets it draws into */
     uint32_t samples;
+    RhiDstRead dstRead; /* RHI_DST_READ_NONE (0) for every ordinary pipeline */
 } RhiPipelineDesc;
 
 /* ------------------------------------------------------------- passes */
@@ -430,6 +475,10 @@ typedef struct RhiColorAttachment {
     RhiLoadOp load;
     float clear[4]; /* integer formats (RGBA8_UINT...): the integer value per channel, 0..255 */
     RhiStoreOp store;
+    /* the texture is in RHI_STATE_RENDER_TARGET_READ: the pass's
+     * RHI_DST_READ_ATTACHMENT pipelines read it (Vulkan: the attachment in
+     * RENDERING_LOCAL_READ; D3D12 ignores it) */
+    bool readable;
 } RhiColorAttachment;
 
 typedef struct RhiDepthAttachment {
@@ -531,6 +580,24 @@ typedef struct RhiLimits {
      * sample (Vulkan sampleRateShading; D3D12 always). */
     uint32_t msaaCounts;
     bool sampleRateShading;
+    /* The destination read (RhiDstRead), each false where the device
+     * lacks it:
+     *   fragmentInterlock      Vulkan fragmentShaderPixelInterlock
+     *                          (VK_EXT_fragment_shader_interlock) with
+     *                          RGBA8_UNORM storage images that load and
+     *                          store: RHI_DST_READ_STORAGE
+     *   rov                    D3D12 ROVsSupported with typed UAV loads of
+     *                          R8G8B8A8_UNORM: RHI_DST_READ_STORAGE
+     *   rasterOrderAttachment  Vulkan rasterizationOrderColorAttachmentAccess
+     *                          (VK_EXT_ or VK_ARM_rasterization_order_
+     *                          attachment_access) and
+     *                          dynamicRenderingLocalRead
+     *                          (VK_KHR_dynamic_rendering_local_read or
+     *                          Vulkan 1.4): RHI_DST_READ_ATTACHMENT
+     * ICO_VK_FAKE_NO_DST=1 (Vulkan) reports all of them false. */
+    bool fragmentInterlock;
+    bool rov;
+    bool rasterOrderAttachment;
 } RhiLimits;
 
 typedef struct RhiDeviceDesc {

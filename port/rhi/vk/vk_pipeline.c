@@ -211,6 +211,9 @@ static bool vkr_new_descriptor_pool(VkrFrame *f)
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2048},
         {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 8192},
         {VK_DESCRIPTOR_TYPE_SAMPLER, 8192},
+        /* the destination read's group: the target, one a pass */
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1024},
+        {VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 1024},
     };
     VkDescriptorPoolCreateInfo ci = {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
@@ -366,6 +369,24 @@ RhiBindGroup rhi_create_bind_group(const RhiBindGroupDesc *desc)
             w[n].pImageInfo = &ii[n];
             break;
         }
+        case RHI_BIND_STORAGE_TEXTURE:
+        case RHI_BIND_INPUT_ATTACHMENT: {
+            /* the destination read: the target in RHI_STATE_STORAGE
+             * (GENERAL) or RHI_STATE_RENDER_TARGET_READ (RENDERING_LOCAL_READ) */
+            VkrTexture *t = vkr_get_texture(b->texture);
+            const bool storage = b->type == RHI_BIND_STORAGE_TEXTURE;
+            if (!t || !t->view || t->samples > 1u ||
+                (storage ? !g_vkr.interlock : !g_vkr.rasterOrder)) {
+                VKR_LOG("bind group: slot %u: invalid destination-read texture", b->slot);
+                continue;
+            }
+            ii[n] = (VkDescriptorImageInfo){
+                VK_NULL_HANDLE, t->view,
+                vkr_state_layout(storage ? RHI_STATE_STORAGE : RHI_STATE_RENDER_TARGET_READ,
+                                 t->rhiFormat)};
+            w[n].pImageInfo = &ii[n];
+            break;
+        }
         default:
             continue;
         }
@@ -447,6 +468,13 @@ static bool vkr_valid_pipeline_desc(const RhiPipelineDesc *d)
             return false;
         }
     }
+    /* the destination read needs its feature; the storage form has no
+     * colour target (the shader writes the target) */
+    if (d->dstRead >= RHI_DST_READ_COUNT ||
+        (d->dstRead == RHI_DST_READ_STORAGE && (!g_vkr.interlock || d->colorCount != 0)) ||
+        (d->dstRead == RHI_DST_READ_ATTACHMENT && (!g_vkr.rasterOrder || d->colorCount != 1))) {
+        return false;
+    }
     return ds->depthCompare < RHI_CMP_COUNT;
 }
 
@@ -462,8 +490,8 @@ static bool vkr_pipeline_fits(const RhiPipelineDesc *d)
     const VkPhysicalDeviceLimits *l = &g_vkr.props.limits;
     const char *name = d->debugName ? d->debugName : "?";
     /* per stage (vertex, fragment): uniform, storage, sampled image, sampler */
-    uint32_t n[2][4] = {{0}};
-    uint32_t dyn = 0, ubo = 0, ssbo = 0, img = 0, smp = 0;
+    uint32_t n[2][6] = {{0}};
+    uint32_t dyn = 0, ubo = 0, ssbo = 0, img = 0, smp = 0, stoImg = 0, inAtt = 0;
     if (d->layoutCount > l->maxBoundDescriptorSets) {
         VKR_LOG("pipeline %s: %u descriptor sets, the device binds %u (maxBoundDescriptorSets)",
                 name, d->layoutCount, l->maxBoundDescriptorSets);
@@ -499,6 +527,14 @@ static bool vkr_pipeline_fits(const RhiPipelineDesc *d)
                 smp++;
                 k = 3;
                 break;
+            case RHI_BIND_STORAGE_TEXTURE:
+                stoImg++;
+                k = 4;
+                break;
+            case RHI_BIND_INPUT_ATTACHMENT:
+                inAtt++;
+                k = 5;
+                break;
             default:
                 continue;
             }
@@ -509,15 +545,17 @@ static bool vkr_pipeline_fits(const RhiPipelineDesc *d)
             }
         }
     }
-    const uint32_t stageMax[4] = {
+    const uint32_t stageMax[6] = {
         l->maxPerStageDescriptorUniformBuffers, l->maxPerStageDescriptorStorageBuffers,
-        l->maxPerStageDescriptorSampledImages, l->maxPerStageDescriptorSamplers};
-    static const char *const stageName[4] = {
+        l->maxPerStageDescriptorSampledImages,  l->maxPerStageDescriptorSamplers,
+        l->maxPerStageDescriptorStorageImages,  l->maxPerStageDescriptorInputAttachments};
+    static const char *const stageName[6] = {
         "maxPerStageDescriptorUniformBuffers", "maxPerStageDescriptorStorageBuffers",
-        "maxPerStageDescriptorSampledImages", "maxPerStageDescriptorSamplers"};
+        "maxPerStageDescriptorSampledImages",  "maxPerStageDescriptorSamplers",
+        "maxPerStageDescriptorStorageImages",  "maxPerStageDescriptorInputAttachments"};
     for (int s = 0; s < 2; s++) {
         uint32_t all = 0;
-        for (int k = 0; k < 4; k++) {
+        for (int k = 0; k < 6; k++) {
             all += n[s][k];
             if (n[s][k] > stageMax[k]) {
                 VKR_LOG("pipeline %s: %u in the %s stage, the device allows %u (%s)", name, n[s][k],
@@ -533,6 +571,14 @@ static bool vkr_pipeline_fits(const RhiPipelineDesc *d)
             g_vkr.lastLimit = "maxPerStageResources";
             return false;
         }
+    }
+    if (stoImg > l->maxDescriptorSetStorageImages || inAtt > l->maxDescriptorSetInputAttachments) {
+        VKR_LOG("pipeline %s: %u storage images and %u input attachments; the device allows %u "
+                "and %u (maxDescriptorSet*)",
+                name, stoImg, inAtt, l->maxDescriptorSetStorageImages,
+                l->maxDescriptorSetInputAttachments);
+        g_vkr.lastLimit = "maxDescriptorSet";
+        return false;
     }
     if (dyn > l->maxDescriptorSetUniformBuffersDynamic || ubo > l->maxDescriptorSetUniformBuffers ||
         ssbo > l->maxDescriptorSetStorageBuffers || img > l->maxDescriptorSetSampledImages ||
@@ -697,6 +743,12 @@ RhiPipeline rhi_create_pipeline(const RhiPipelineDesc *d)
     }
     VkPipelineColorBlendStateCreateInfo cb = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+        /* the attachment read as an input attachment in rasterization
+         * order: no barrier between overlapping fragments (rhi.h RhiDstRead) */
+        .flags =
+            d->dstRead == RHI_DST_READ_ATTACHMENT
+                ? VK_PIPELINE_COLOR_BLEND_STATE_CREATE_RASTERIZATION_ORDER_ATTACHMENT_ACCESS_BIT_EXT
+                : 0u,
         .attachmentCount = d->colorCount,
         .pAttachments = cba,
     };

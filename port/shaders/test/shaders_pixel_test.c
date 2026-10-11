@@ -500,8 +500,11 @@ int main(int argc, char **argv)
         /* pass 1: the sprite cells; the clear (64,64,64,64) shows through
          * where nothing is drawn */
         RhiRenderPassDesc rp = {0};
-        rp.color[0] = (RhiColorAttachment){
-            A, RHI_LOAD_CLEAR, {64 / 255.f, 64 / 255.f, 64 / 255.f, 64 / 255.f}, RHI_STORE_STORE};
+        rp.color[0] = (RhiColorAttachment){A,
+                                           RHI_LOAD_CLEAR,
+                                           {64 / 255.f, 64 / 255.f, 64 / 255.f, 64 / 255.f},
+                                           RHI_STORE_STORE,
+                                           false};
         rp.colorCount = 1;
         rp.width = W;
         rp.height = H;
@@ -548,7 +551,8 @@ int main(int argc, char **argv)
         /* pass 2: blit A to B (identity tint) and to C (tinted) */
         for (int k = 0; k < 2; k++) {
             RhiRenderPassDesc bp = {0};
-            bp.color[0] = (RhiColorAttachment){k ? C : B, RHI_LOAD_DONT_CARE, {0}, RHI_STORE_STORE};
+            bp.color[0] =
+                (RhiColorAttachment){k ? C : B, RHI_LOAD_DONT_CARE, {0}, RHI_STORE_STORE, false};
             bp.colorCount = 1;
             bp.width = W;
             bp.height = H;
@@ -564,7 +568,8 @@ int main(int argc, char **argv)
         /* pass 3: three integer blends */
         for (int k = 0; k < 3; k++) {
             RhiRenderPassDesc ip = {0};
-            ip.color[0] = (RhiColorAttachment){uout[k], RHI_LOAD_DONT_CARE, {0}, RHI_STORE_STORE};
+            ip.color[0] =
+                (RhiColorAttachment){uout[k], RHI_LOAD_DONT_CARE, {0}, RHI_STORE_STORE, false};
             ip.colorCount = 1;
             ip.width = 4;
             ip.height = 4;

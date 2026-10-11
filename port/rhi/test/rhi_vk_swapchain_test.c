@@ -71,7 +71,8 @@ static int frame(SDL_Window *win, RhiFormat fmt, int n)
         (RhiColorAttachment){bb,
                              RHI_LOAD_CLEAR,
                              {(float)r / 255.0f, (float)g / 255.0f, (float)bl / 255.0f, 1.0f},
-                             RHI_STORE_STORE};
+                             RHI_STORE_STORE,
+                             false};
     rp.colorCount = 1;
     rp.width = w;
     rp.height = h;
@@ -222,7 +223,7 @@ static int followSize(SDL_Window *win, RhiFormat fmt)
     rhi_cmd_barrier(cl, &b0, 1);
     RhiRenderPassDesc rp = {0};
     rp.color[0] =
-        (RhiColorAttachment){bb, RHI_LOAD_CLEAR, {0.0f, 0.0f, 0.0f, 1.0f}, RHI_STORE_STORE};
+        (RhiColorAttachment){bb, RHI_LOAD_CLEAR, {0.0f, 0.0f, 0.0f, 1.0f}, RHI_STORE_STORE, false};
     rp.colorCount = 1;
     rp.width = aw;
     rp.height = ah;
@@ -271,7 +272,7 @@ static int presentAtSwapSize(int n)
     rhi_cmd_barrier(cl, &b0, 1);
     RhiRenderPassDesc rp = {0};
     rp.color[0] =
-        (RhiColorAttachment){bb, RHI_LOAD_CLEAR, {0.0f, 0.0f, 0.0f, 1.0f}, RHI_STORE_STORE};
+        (RhiColorAttachment){bb, RHI_LOAD_CLEAR, {0.0f, 0.0f, 0.0f, 1.0f}, RHI_STORE_STORE, false};
     rp.colorCount = 1;
     rp.width = sw;
     rp.height = sh;

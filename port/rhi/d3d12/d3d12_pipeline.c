@@ -105,6 +105,10 @@ static DxRootSig *dx_root_signature(const RhiBindGroupLayout *layouts, uint32_t 
             case RHI_BIND_SAMPLER:
                 dr->RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER;
                 break;
+            case RHI_BIND_STORAGE_TEXTURE:
+                /* the destination read's ROV (u register) */
+                dr->RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+                break;
             default:
                 dr->RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
                 break;
@@ -206,6 +210,14 @@ static void dx_null_view(const RhiBindSlot *s, D3D12_CPU_DESCRIPTOR_HANDLE h)
         ID3D12Device_CreateConstantBufferView(g_dx.device, NULL, h);
         return;
     }
+    if (s->type == RHI_BIND_STORAGE_TEXTURE) {
+        D3D12_UNORDERED_ACCESS_VIEW_DESC u;
+        memset(&u, 0, sizeof(u));
+        u.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        u.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        ID3D12Device_CreateUnorderedAccessView(g_dx.device, NULL, NULL, &u, h);
+        return;
+    }
     D3D12_SHADER_RESOURCE_VIEW_DESC v;
     memset(&v, 0, sizeof(v));
     v.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
@@ -284,6 +296,23 @@ static bool dx_write_resource(const RhiBindSlot *s, const RhiBinding *b,
             v.Texture2D.MipLevels = t->mips;
         }
         ID3D12Device_CreateShaderResourceView(g_dx.device, t->res, &v, h);
+        return true;
+    }
+    case RHI_BIND_STORAGE_TEXTURE: {
+        /* the destination read: the target as a typed RGBA8 UNORM UAV, in
+         * UNORDERED_ACCESS (RHI_STATE_STORAGE); the shader declares it a
+         * RasterizerOrderedTexture2D */
+        DxTexture *t = dx_get_texture(b->texture);
+        if (!t || !t->uav) {
+            DX_LOG("bind group: u%u: invalid storage texture (not made with RHI_TEX_STORAGE)",
+                   s->slot);
+            return false;
+        }
+        D3D12_UNORDERED_ACCESS_VIEW_DESC u;
+        memset(&u, 0, sizeof(u));
+        u.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        u.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        ID3D12Device_CreateUnorderedAccessView(g_dx.device, t->res, NULL, &u, h);
         return true;
     }
     default:
@@ -493,6 +522,14 @@ RhiPipeline rhi_create_pipeline(const RhiPipelineDesc *d)
     const char *name = d && d->debugName ? d->debugName : "?";
     if (!d || !dx_valid_pipeline_desc(d)) {
         DX_LOG("pipeline %s: invalid description", name);
+        return out;
+    }
+    /* the destination read: ROVs only, with no render target (the pixel
+     * shader writes the target through its UAV) */
+    if (d->dstRead == RHI_DST_READ_ATTACHMENT ||
+        (d->dstRead == RHI_DST_READ_STORAGE && (!g_dx.limits.rov || d->colorCount != 0)) ||
+        d->dstRead >= RHI_DST_READ_COUNT) {
+        DX_LOG("pipeline %s: destination read %d not available", name, (int)d->dstRead);
         return out;
     }
     DxShader *vs = d3dp_pool_get(&g_dx.shaders, d->vertex.id);

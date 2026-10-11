@@ -256,6 +256,16 @@ int main(void)
              VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
     CHECK_EQ(vkr_state_layout(RHI_STATE_SHADER_READ, RHI_FMT_RGBA8_UNORM),
              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    /* the destination read: the storage image (u registers at 48, DXC's
+     * -fvk-u-shift) in GENERAL, the input attachment (binding 16 + slot, as
+     * the shaders declare it) in RENDERING_LOCAL_READ */
+    CHECK_EQ(vkr_bindTypeMap[RHI_BIND_STORAGE_TEXTURE].vk, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
+    CHECK_EQ(vkr_bindTypeMap[RHI_BIND_STORAGE_TEXTURE].shift, 48u);
+    CHECK_EQ(vkr_bindTypeMap[RHI_BIND_INPUT_ATTACHMENT].vk, VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT);
+    CHECK_EQ(vkr_bindTypeMap[RHI_BIND_INPUT_ATTACHMENT].shift, 16u);
+    CHECK_EQ(vkr_state_layout(RHI_STATE_STORAGE, RHI_FMT_RGBA8_UNORM), VK_IMAGE_LAYOUT_GENERAL);
+    CHECK_EQ(vkr_state_layout(RHI_STATE_RENDER_TARGET_READ, RHI_FMT_RGBA8_UNORM),
+             VK_IMAGE_LAYOUT_RENDERING_LOCAL_READ_KHR);
 
     /* the bindings of one group never collide across register classes */
     for (unsigned a = 0; a < RHI_BIND_COUNT; a++) {

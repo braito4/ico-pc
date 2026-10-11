@@ -297,6 +297,13 @@ RhiTexture rhi_create_texture(const RhiTextureDesc *desc)
         rd.Flags |= D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
         rd.Flags &= ~D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
     }
+    /* the destination read: a single-sampled RGBA8 target the ROV pixel
+     * shaders read and write (RhiLimits.rov); asked for elsewhere it is
+     * ignored */
+    if ((desc->usage & RHI_TEX_STORAGE) && g_dx.limits.rov && samples == 1u &&
+        desc->format == RHI_FMT_RGBA8_UNORM && !fm->depth) {
+        rd.Flags |= D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+    }
     /* Created in COMMON: an RHI texture starts UNDEFINED, and the first
      * barrier transitions from the tracked COMMON. */
     if (!DX_CHECK(ID3D12Device_CreateCommittedResource(g_dx.device, &hp, D3D12_HEAP_FLAG_NONE, &rd,
@@ -312,6 +319,7 @@ RhiTexture rhi_create_texture(const RhiTextureDesc *desc)
     t->mips = mips;
     t->samples = samples;
     t->usage = desc->usage;
+    t->uav = (rd.Flags & D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS) != 0;
     t->state = D3DP_STATE_COMMON;
     bool ok = true;
     if (rd.Flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET) {

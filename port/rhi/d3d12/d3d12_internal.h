@@ -47,6 +47,7 @@ typedef struct DxTexture {
     uint32_t state;      /* tracked D3D12 state, in recording order */
     uint64_t copySerial; /* d3dp_copy_needs_sync mark */
     bool swapchain;
+    bool uav; /* made with ALLOW_UNORDERED_ACCESS (RHI_TEX_STORAGE: the ROV) */
 } DxTexture;
 
 typedef struct DxSampler {

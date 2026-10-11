@@ -651,7 +651,7 @@ static bool vkr_create_device(void)
 {
     bool core13 = g_vkr.props.apiVersion >= VK_API_VERSION_1_3;
     g_vkr.apiVersion = g_vkr.props.apiVersion;
-    const char *exts[4];
+    const char *exts[8];
     uint32_t extCount = 0;
     if (g_vkr.surface) {
         exts[extCount++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
@@ -693,10 +693,100 @@ static bool vkr_create_device(void)
         g_vkr.bc = (fp.optimalTilingFeatures & need) == need;
     }
 
+    /* the destination read (RhiLimits.fragmentInterlock,
+     * rasterOrderAttachment; rd's exact GS blend, port/render/rd_dst_read.c):
+     *   interlock    VK_EXT_fragment_shader_interlock's
+     *                fragmentShaderPixelInterlock, fragmentStoresAndAtomics
+     *                and RGBA8_UNORM storage images (a required format);
+     *   rasterOrder  rasterizationOrderColorAttachmentAccess
+     *                (VK_EXT_ or VK_ARM_rasterization_order_attachment_access,
+     *                the same structure) and VK_KHR_dynamic_rendering_local_read
+     *                (input attachments under dynamic rendering).
+     * ICO_VK_FAKE_NO_DST=1 leaves both off, as on a device without them. */
+    VkPhysicalDeviceFragmentShaderInterlockFeaturesEXT qInterlock = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADER_INTERLOCK_FEATURES_EXT};
+    VkPhysicalDeviceRasterizationOrderAttachmentAccessFeaturesEXT qOrder = {
+        .sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RASTERIZATION_ORDER_ATTACHMENT_ACCESS_FEATURES_EXT};
+    VkPhysicalDeviceDynamicRenderingLocalReadFeaturesKHR qLocal = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_LOCAL_READ_FEATURES_KHR};
+    {
+        const char *noDst = getenv("ICO_VK_FAKE_NO_DST");
+        const bool fake = noDst && noDst[0] && noDst[0] != '0';
+        const bool extInterlock =
+            vkr_device_has_ext(g_vkr.phys, VK_EXT_FRAGMENT_SHADER_INTERLOCK_EXTENSION_NAME);
+        const bool extOrder = vkr_device_has_ext(
+            g_vkr.phys, VK_EXT_RASTERIZATION_ORDER_ATTACHMENT_ACCESS_EXTENSION_NAME);
+        const bool extOrderArm =
+            !extOrder &&
+            vkr_device_has_ext(g_vkr.phys,
+                               VK_ARM_RASTERIZATION_ORDER_ATTACHMENT_ACCESS_EXTENSION_NAME);
+        const bool extLocal =
+            vkr_device_has_ext(g_vkr.phys, VK_KHR_DYNAMIC_RENDERING_LOCAL_READ_EXTENSION_NAME);
+        void *chain = NULL;
+        if (extInterlock) {
+            qInterlock.pNext = chain;
+            chain = &qInterlock;
+        }
+        if (extOrder || extOrderArm) {
+            qOrder.pNext = chain;
+            chain = &qOrder;
+        }
+        if (extLocal) {
+            qLocal.pNext = chain;
+            chain = &qLocal;
+        }
+        if (chain) {
+            VkPhysicalDeviceFeatures2 q = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+                                           .pNext = chain};
+            vkGetPhysicalDeviceFeatures2(g_vkr.phys, &q);
+        }
+        g_vkr.interlock = !fake && extInterlock && qInterlock.fragmentShaderPixelInterlock &&
+                          avail.fragmentStoresAndAtomics == VK_TRUE &&
+                          vkr_format_ok(g_vkr.phys, VK_FORMAT_R8G8B8A8_UNORM,
+                                        VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT);
+        g_vkr.rasterOrder = !fake && (extOrder || extOrderArm) &&
+                            qOrder.rasterizationOrderColorAttachmentAccess && extLocal &&
+                            qLocal.dynamicRenderingLocalRead;
+        VKR_LOG("destination read: interlock %s, rasterization-order attachment read %s%s",
+                g_vkr.interlock ? "yes" : "no", g_vkr.rasterOrder ? "yes" : "no",
+                fake ? " (ICO_VK_FAKE_NO_DST)" : "");
+        /* only what is used is enabled; the queries' structures become the
+         * enables, everything else in them off */
+        memset(&qInterlock, 0, sizeof(qInterlock));
+        qInterlock.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADER_INTERLOCK_FEATURES_EXT;
+        qInterlock.fragmentShaderPixelInterlock = VK_TRUE;
+        memset(&qOrder, 0, sizeof(qOrder));
+        qOrder.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RASTERIZATION_ORDER_ATTACHMENT_ACCESS_FEATURES_EXT;
+        qOrder.rasterizationOrderColorAttachmentAccess = VK_TRUE;
+        memset(&qLocal, 0, sizeof(qLocal));
+        qLocal.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_LOCAL_READ_FEATURES_KHR;
+        qLocal.dynamicRenderingLocalRead = VK_TRUE;
+        if (g_vkr.interlock) {
+            exts[extCount++] = VK_EXT_FRAGMENT_SHADER_INTERLOCK_EXTENSION_NAME;
+        }
+        if (g_vkr.rasterOrder) {
+            exts[extCount++] = extOrder
+                                   ? VK_EXT_RASTERIZATION_ORDER_ATTACHMENT_ACCESS_EXTENSION_NAME
+                                   : VK_ARM_RASTERIZATION_ORDER_ATTACHMENT_ACCESS_EXTENSION_NAME;
+            exts[extCount++] = VK_KHR_DYNAMIC_RENDERING_LOCAL_READ_EXTENSION_NAME;
+        }
+    }
+
     VkPhysicalDeviceDynamicRenderingFeatures dyn = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES,
         .dynamicRendering = VK_TRUE,
     };
+    if (g_vkr.interlock) {
+        qInterlock.pNext = dyn.pNext;
+        dyn.pNext = &qInterlock;
+    }
+    if (g_vkr.rasterOrder) {
+        qOrder.pNext = dyn.pNext;
+        qLocal.pNext = &qOrder;
+        dyn.pNext = &qLocal;
+    }
     VkPhysicalDeviceVulkan12Features f12 = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
         .pNext = &dyn,
@@ -711,6 +801,9 @@ static bool vkr_create_device(void)
                 .samplerAnisotropy = g_vkr.anisotropy ? VK_TRUE : VK_FALSE,
                 .textureCompressionBC = g_vkr.bc ? VK_TRUE : VK_FALSE,
                 .sampleRateShading = g_vkr.sampleRate ? VK_TRUE : VK_FALSE,
+                /* a fragment shader storing to an image (the interlock's
+                 * destination read) */
+                .fragmentStoresAndAtomics = g_vkr.interlock ? VK_TRUE : VK_FALSE,
             },
     };
     float prio = 1.0f;
@@ -842,6 +935,10 @@ static void vkr_fill_limits(void)
     /* multisampling (vkr_msaa_counts, at device creation) */
     o->msaaCounts = g_vkr.msaaCounts | 1u;
     o->sampleRateShading = g_vkr.sampleRate;
+    /* the destination read (vkr_create_device) */
+    o->fragmentInterlock = g_vkr.interlock;
+    o->rov = false;
+    o->rasterOrderAttachment = g_vkr.rasterOrder;
     /* ICO_VK_FAKE_LIMITS=min: the limits the renderer reads at the values
      * every Vulkan device is required to meet (the specification's Required
      * Limits table), where phone GPUs sit while desktop ones and lavapipe are

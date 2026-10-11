@@ -205,6 +205,10 @@ typedef struct VkrState {
      * every multisampled format takes, and the feature enabled */
     uint32_t msaaCounts;
     bool sampleRate;
+    /* the destination read (RhiLimits.fragmentInterlock,
+     * rasterOrderAttachment): the features enabled */
+    bool interlock;
+    bool rasterOrder;
     uint32_t validationErrors;
     bool deviceLost; /* a call returned VK_ERROR_DEVICE_LOST (rhi_device_lost) */
 

@@ -456,6 +456,16 @@ RhiTexture rhi_create_texture(const RhiTextureDesc *desc)
     if (desc->usage & RHI_TEX_COPY_DST) {
         usage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     }
+    /* the destination read (RhiDstRead): asked for only where the device
+     * has the path (RhiLimits), ignored elsewhere */
+    if ((desc->usage & RHI_TEX_STORAGE) && g_vkr.interlock && desc->format == RHI_FMT_RGBA8_UNORM &&
+        desc->samples <= 1u) {
+        usage |= VK_IMAGE_USAGE_STORAGE_BIT;
+    }
+    if ((desc->usage & RHI_TEX_INPUT_ATTACHMENT) && g_vkr.rasterOrder &&
+        (desc->usage & RHI_TEX_RENDER_TARGET)) {
+        usage |= VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
+    }
     /* rhi_readback_texture works on any texture */
     usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 

@@ -797,10 +797,16 @@ void rhi_cmd_begin_render_pass(RhiCommandList cl, const RhiRenderPassDesc *pass)
         } else {
             memcpy(cv.color.float32, a->clear, sizeof(cv.color.float32));
         }
+        if (a->readable && !g_vkr.rasterOrder) {
+            VKR_LOG("render pass: a readable colour target without the attachment read");
+            return;
+        }
         color[i] = (VkRenderingAttachmentInfo){
             .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
             .imageView = t->view,
-            .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            /* read by the pass's RHI_DST_READ_ATTACHMENT pipelines */
+            .imageLayout = vkr_state_layout(
+                a->readable ? RHI_STATE_RENDER_TARGET_READ : RHI_STATE_RENDER_TARGET, t->rhiFormat),
             .loadOp = vkr_loadOpMap[a->load < RHI_LOAD_COUNT ? a->load : 0].vk,
             /* DONT_CARE when asked (a tiler skips the write-back) */
             .storeOp = a->store == RHI_STORE_DONT_CARE ? VK_ATTACHMENT_STORE_OP_DONT_CARE
@@ -872,9 +878,14 @@ void rhi_cmd_begin_render_pass(RhiCommandList cl, const RhiRenderPassDesc *pass)
         h.src = h.dst = 0;
         vkr_hz_take_pending(&h, c);
         for (uint32_t i = 0; i < pass->colorCount; i++) {
-            vkr_hz_image(&h, c, colorTex[i], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                         VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+            /* a readable attachment is also read by the fragment shaders */
+            const bool rd = pass->color[i].readable;
+            vkr_hz_image(&h, c, colorTex[i], color[i].imageLayout,
+                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                             (rd ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT : 0u),
+                         VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+                             VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                             (rd ? VK_ACCESS_INPUT_ATTACHMENT_READ_BIT : 0u),
                          ~0u);
         }
         /* a read-only depth attachment is only read when it is loaded and

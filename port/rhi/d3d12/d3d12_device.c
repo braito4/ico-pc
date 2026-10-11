@@ -399,6 +399,39 @@ static uint32_t dx_msaa_counts(void)
     return counts;
 }
 
+/* The destination read (RhiLimits.rov): rasterizer-ordered views
+ * (D3D12_OPTIONS.ROVsSupported) and typed UAV loads and stores of
+ * R8G8B8A8_UNORM (the read-modify-write of the target: a UAV typed load of
+ * it is one of the "additional formats", TypedUAVLoadAdditionalFormats,
+ * confirmed by the format's own support bits).  ICO_DX_FAKE_NO_DST=1
+ * reports none. */
+static bool dx_rov_supported(void)
+{
+    const char *noDst = getenv("ICO_DX_FAKE_NO_DST");
+    if (noDst && noDst[0] && noDst[0] != '0') {
+        DX_LOG("destination read: off (ICO_DX_FAKE_NO_DST)");
+        return false;
+    }
+    D3D12_FEATURE_DATA_D3D12_OPTIONS o;
+    memset(&o, 0, sizeof(o));
+    if (FAILED(ID3D12Device_CheckFeatureSupport(g_dx.device, D3D12_FEATURE_D3D12_OPTIONS, &o,
+                                                sizeof(o)))) {
+        return false;
+    }
+    D3D12_FEATURE_DATA_FORMAT_SUPPORT fs;
+    memset(&fs, 0, sizeof(fs));
+    fs.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    const bool fmt = SUCCEEDED(ID3D12Device_CheckFeatureSupport(
+                         g_dx.device, D3D12_FEATURE_FORMAT_SUPPORT, &fs, sizeof(fs))) &&
+                     (fs.Support1 & D3D12_FORMAT_SUPPORT1_TYPED_UNORDERED_ACCESS_VIEW) &&
+                     (fs.Support2 & D3D12_FORMAT_SUPPORT2_UAV_TYPED_LOAD) &&
+                     (fs.Support2 & D3D12_FORMAT_SUPPORT2_UAV_TYPED_STORE);
+    const bool ok = o.ROVsSupported && o.TypedUAVLoadAdditionalFormats && fmt;
+    DX_LOG("destination read: ROVs %s, typed UAV loads of RGBA8 %s", o.ROVsSupported ? "yes" : "no",
+           o.TypedUAVLoadAdditionalFormats && fmt ? "yes" : "no");
+    return ok;
+}
+
 static void dx_fill_limits(void)
 {
     RhiLimits *o = &g_dx.limits;
@@ -432,6 +465,10 @@ static void dx_fill_limits(void)
      * SV_SampleIndex runs per sample on every device */
     o->msaaCounts = dx_msaa_counts();
     o->sampleRateShading = true;
+    /* the destination read: ROVs (no interlock or attachment read here) */
+    o->rov = dx_rov_supported();
+    o->fragmentInterlock = false;
+    o->rasterOrderAttachment = false;
 }
 
 /* ------------------------------------------------------------- lifecycle */

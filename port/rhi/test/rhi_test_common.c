@@ -99,7 +99,8 @@ static void cellQuad(Vtx *v, int cell, float z, uint8_t r, uint8_t g, uint8_t b,
 typedef struct Ctx {
     RhiBindGroupLayout l0, l1, l2;
     RhiShader vs, psDual, psColor, psTex, psUint;
-    RhiShader psDepthResolve; /* multisampling: the depth's largest sample */
+    RhiShader psDepthResolve;   /* multisampling: the depth's largest sample */
+    RhiShader psRov, psSubpass; /* the destination read (dstReadCell) */
 } Ctx;
 
 /* color RHI_FMT_UNKNOWN: no colour target (a depth-only pass); samples the
@@ -305,7 +306,7 @@ static void bcCell(const Ctx *c)
     rhi_cmd_barrier(cl, rd, 2);
     RhiRenderPassDesc rp = {0};
     rp.color[0] =
-        (RhiColorAttachment){tgt, RHI_LOAD_CLEAR, {0.0f, 0.0f, 0.0f, 0.0f}, RHI_STORE_STORE};
+        (RhiColorAttachment){tgt, RHI_LOAD_CLEAR, {0.0f, 0.0f, 0.0f, 0.0f}, RHI_STORE_STORE, false};
     rp.colorCount = 1;
     rp.width = BW;
     rp.height = BH;
@@ -545,6 +546,176 @@ static void msaaCell(const Ctx *c)
     }
 }
 
+/* The destination read (rhi.h RhiDstRead), each kind the device reports
+ * (RhiLimits.fragmentInterlock or .rov: STORAGE; .rasterOrderAttachment:
+ * ATTACHMENT), else skipped and logged: a 16 x 16 RGBA8 target cleared to
+ * (10, 200, 30, 0x55), then ps_rov / ps_subpass compute the GS LERP
+ * ((Cs - Cd) * As >> 7) + Cd of the vertex colour over the target's own
+ * pixel: one draw of two full quads in (200, 100, 50, 0x40), so every pixel
+ * takes the second over the first inside one draw (the rasterization
+ * order), then a draw of the left half in (0, 255, 255, 0x90) (As past
+ * 0x80 overshoots, clamped).  Every texel is the integer formula's,
+ * exactly; the fixed-function blender's rounding would put channels one
+ * level up. */
+static int gsLerpRef(int s, int d, int a)
+{
+    const int v = (((s - d) * a) >> 7) + d;
+    return v < 0 ? 0 : (v > 255 ? 255 : v);
+}
+
+static void dstReadCell(const Ctx *c, RhiDstRead kind)
+{
+    enum { DS = 16 };
+
+    const RhiLimits *lim = rhi_limits();
+    const bool storage = kind == RHI_DST_READ_STORAGE;
+    const char *name = storage ? "storage (interlock / ROV)" : "attachment read";
+    if (storage ? !(lim->fragmentInterlock || lim->rov) : !lim->rasterOrderAttachment) {
+        rhi_test_log("SKIP %s: destination read, %s: not reported (fragmentInterlock %d, rov %d, "
+                     "rasterOrderAttachment %d)\n",
+                     s_label, name, lim->fragmentInterlock, lim->rov, lim->rasterOrderAttachment);
+        return;
+    }
+    rhi_wait_frame();
+    const RhiFormat CF = RHI_FMT_RGBA8_UNORM;
+    const uint32_t usage =
+        RHI_TEX_RENDER_TARGET | RHI_TEX_SAMPLED | RHI_TEX_COPY_SRC |
+        (storage ? (uint32_t)RHI_TEX_STORAGE : (uint32_t)RHI_TEX_INPUT_ATTACHMENT);
+    RhiTexture tgt = rhi_create_texture(&(RhiTextureDesc){DS, DS, 1, CF, usage, "dst read", 0});
+    const RhiBindSlot s3 = {0, storage ? RHI_BIND_STORAGE_TEXTURE : RHI_BIND_INPUT_ATTACHMENT,
+                            1u << RHI_STAGE_FRAGMENT};
+    const RhiBindGroupLayout l3 =
+        rhi_create_bind_group_layout(&(RhiBindGroupLayoutDesc){&s3, 1, "dst read group"});
+    RhiBuffer ring =
+        rhi_create_buffer(&(RhiBufferDesc){4096, RHI_BUF_VERTEX, RHI_MEM_UPLOAD, "dst verts"});
+    uint8_t *map = ring.id ? rhi_map_buffer(ring) : NULL;
+
+    static const RhiVertexBinding vb = {0, sizeof(Vtx), false};
+    static const RhiVertexAttr va[3] = {
+        {0, 0, RHI_VTX_F32x3, offsetof(Vtx, x)},
+        {1, 0, RHI_VTX_U8x4_UNORM, offsetof(Vtx, rgba)},
+        {2, 0, RHI_VTX_F32x2, offsetof(Vtx, u)},
+    };
+    RhiBindGroupLayout layouts[4] = {c->l0, c->l1, c->l2, l3};
+    RhiPipelineDesc d;
+    memset(&d, 0, sizeof(d));
+    d.vertex = c->vs;
+    d.fragment = storage ? c->psRov : c->psSubpass;
+    d.layouts = layouts;
+    d.layoutCount = 4;
+    d.vertexBindings = &vb;
+    d.vertexBindingCount = 1;
+    d.vertexAttrs = va;
+    d.vertexAttrCount = 3;
+    d.topology = RHI_TOPO_TRIANGLE_LIST;
+    d.cullNone = true;
+    d.blend[0].writeMask = 0xF; /* blending off: the shader blends */
+    d.colorFormats[0] = CF;
+    d.colorCount = storage ? 0u : 1u; /* the storage form writes the target itself */
+    d.depthFormat = RHI_FMT_UNKNOWN;
+    d.debugName = storage ? "dst read storage" : "dst read attachment";
+    d.dstRead = kind;
+    RhiPipeline pipe = rhi_create_pipeline(&d);
+    if (!tgt.id || !l3.id || !map || !pipe.id) {
+        rhi_test_log("FAIL %s: destination read, %s: resources (target %u, layout %u, pipeline "
+                     "%u)\n",
+                     s_label, name, tgt.id, l3.id, pipe.id);
+        failures++;
+        return;
+    }
+    Vtx v[18];
+    quad(&v[0], 0, 0, DS, DS, DS, DS, 0.0f, 200, 100, 50, 0x40);
+    quad(&v[6], 0, 0, DS, DS, DS, DS, 0.0f, 200, 100, 50, 0x40);
+    quad(&v[12], 0, 0, DS / 2, DS, DS, DS, 0.0f, 0, 255, 255, 0x90);
+    memcpy(map, v, sizeof(v));
+
+    static const float clearCol[4] = {10.0f / 255.0f, 200.0f / 255.0f, 30.0f / 255.0f,
+                                      85.0f / 255.0f};
+    RhiCommandList cl = rhi_begin_commands();
+    RhiRenderPassDesc rp;
+    memset(&rp, 0, sizeof(rp));
+    rp.color[0].texture = tgt;
+    rp.color[0].load = RHI_LOAD_CLEAR;
+    memcpy(rp.color[0].clear, clearCol, sizeof(clearCol));
+    rp.colorCount = 1;
+    rp.width = DS;
+    rp.height = DS;
+    /* the clear as a pass of its own (as rd records a clear before a pass
+     * that reads the target), then the target as the ROV, or as an
+     * attachment the next pass loads and reads */
+    RhiTextureBarrier b0 = {tgt, RHI_STATE_UNDEFINED, RHI_STATE_RENDER_TARGET};
+    rhi_cmd_barrier(cl, &b0, 1);
+    rhi_cmd_begin_render_pass(cl, &rp);
+    rhi_cmd_end_render_pass(cl);
+    RhiTextureBarrier b1 = {tgt, RHI_STATE_RENDER_TARGET,
+                            storage ? RHI_STATE_STORAGE : RHI_STATE_RENDER_TARGET_READ};
+    rhi_cmd_barrier(cl, &b1, 1);
+    if (storage) {
+        RhiRenderPassDesc sp;
+        memset(&sp, 0, sizeof(sp));
+        sp.width = DS;
+        sp.height = DS;
+        rhi_cmd_begin_render_pass(cl, &sp);
+    } else {
+        rp.color[0].load = RHI_LOAD_LOAD;
+        rp.color[0].readable = true;
+        rhi_cmd_begin_render_pass(cl, &rp);
+    }
+    RhiBinding tb;
+    memset(&tb, 0, sizeof(tb));
+    tb.slot = 0;
+    tb.type = s3.type;
+    tb.texture = tgt;
+    RhiBindGroupDesc tbd = {l3, &tb, 1};
+    rhi_cmd_set_pipeline(cl, pipe);
+    rhi_cmd_set_bind_group(cl, 3, rhi_create_bind_group(&tbd));
+    rhi_cmd_set_vertex_buffer(cl, 0, ring, 0);
+    rhi_cmd_draw(cl, 12, 0, 1); /* the two quads: one over the other in one draw */
+    rhi_cmd_draw(cl, 6, 12, 1); /* the left half: the next draw */
+    rhi_cmd_end_render_pass(cl);
+    RhiTextureBarrier b2 = {tgt, storage ? RHI_STATE_STORAGE : RHI_STATE_RENDER_TARGET_READ,
+                            RHI_STATE_COPY_SRC};
+    rhi_cmd_barrier(cl, &b2, 1);
+    rhi_end_commands(cl);
+    rhi_submit(cl);
+
+    static uint8_t img[DS * DS * 4];
+    uint32_t pitch = 0;
+    if (!rhi_readback_texture(tgt, RHI_ASPECT_COLOR, img, sizeof(img), &pitch)) {
+        rhi_test_log("FAIL %s: destination read, %s: readback\n", s_label, name);
+        failures++;
+    } else {
+        static const int bg[4] = {10, 200, 30, 0x55}, s1[4] = {200, 100, 50, 0x40},
+                         s2[4] = {0, 255, 255, 0x90};
+        uint8_t wantR[4], wantL[4];
+        for (int k = 0; k < 3; k++) {
+            const int once = gsLerpRef(s1[k], bg[k], s1[3]);
+            const int twice = gsLerpRef(s1[k], once, s1[3]);
+            wantR[k] = (uint8_t)twice;
+            wantL[k] = (uint8_t)gsLerpRef(s2[k], twice, s2[3]);
+        }
+        wantR[3] = (uint8_t)s1[3];
+        wantL[3] = (uint8_t)s2[3];
+        const int before = failures;
+        for (int y = 0; y < DS && failures == before; y++) {
+            for (int x = 0; x < DS && failures == before; x++) {
+                const uint8_t *w = x < DS / 2 ? wantL : wantR;
+                expectRGBA(img, pitch, x, y, w[0], w[1], w[2], w[3], 200 + (int)kind);
+            }
+        }
+        if (failures == before) {
+            rhi_test_log("%s: destination read, %s: every texel the GS's (%u %u %u %u / %u %u %u "
+                         "%u)\n",
+                         s_label, name, wantL[0], wantL[1], wantL[2], wantL[3], wantR[0], wantR[1],
+                         wantR[2], wantR[3]);
+        }
+    }
+    rhi_destroy_pipeline(pipe);
+    rhi_destroy_bind_group_layout(l3);
+    rhi_destroy_texture(tgt);
+    rhi_destroy_buffer(ring);
+}
+
 int rhi_test_run_cells(const RhiTestConfig *cfg)
 {
     failures = 0;
@@ -585,6 +756,16 @@ int rhi_test_run_cells(const RhiTestConfig *cfg)
     if (!dual) {
         rhi_test_log("%s: no dual-source blending: cells 0 and 1 skipped\n", s_label);
     }
+    /* the destination read (dstReadCell): reported, and off when faked off */
+    rhi_test_log("%s: destination read: fragmentInterlock %d, rov %d, rasterOrderAttachment %d\n",
+                 s_label, lim->fragmentInterlock, lim->rov, lim->rasterOrderAttachment);
+    const char *fakeDst =
+        getenv(rhi_backend() == RHI_BACKEND_D3D12 ? "ICO_DX_FAKE_NO_DST" : "ICO_VK_FAKE_NO_DST");
+    if (fakeDst && fakeDst[0] && fakeDst[0] != '0' &&
+        (lim->fragmentInterlock || lim->rov || lim->rasterOrderAttachment)) {
+        rhi_test_log("FAIL the destination read faked off but reported\n");
+        failures++;
+    }
     const uint32_t ua = lim->uniformAlign;
 
     Ctx c;
@@ -614,6 +795,8 @@ int rhi_test_run_cells(const RhiTestConfig *cfg)
     c.psTex = makeShader(RHI_STAGE_FRAGMENT, BLOB(ps_tex), "ps_tex");
     c.psUint = makeShader(RHI_STAGE_FRAGMENT, BLOB(ps_uint), "ps_uint");
     c.psDepthResolve = makeShader(RHI_STAGE_FRAGMENT, BLOB(ps_depth_resolve), "ps_depth_resolve");
+    c.psRov = makeShader(RHI_STAGE_FRAGMENT, BLOB(ps_rov), "ps_rov");
+    c.psSubpass = makeShader(RHI_STAGE_FRAGMENT, BLOB(ps_subpass), "ps_subpass");
 #undef BLOB
 
     const RhiFormat CF = RHI_FMT_RGBA8_UNORM, DF = RHI_FMT_D32F_S8;
@@ -850,7 +1033,8 @@ int rhi_test_run_cells(const RhiTestConfig *cfg)
             (RhiColorAttachment){scene,
                                  RHI_LOAD_CLEAR,
                                  {64.0f / 255.0f, 64.0f / 255.0f, 64.0f / 255.0f, 64.0f / 255.0f},
-                                 RHI_STORE_STORE};
+                                 RHI_STORE_STORE,
+                                 false};
         rp.colorCount = 1;
         rp.depth = (RhiDepthAttachment){depth, RHI_LOAD_CLEAR, RHI_LOAD_CLEAR,  0.0f,
                                         0,     false,          RHI_STORE_STORE, RHI_STORE_STORE};
@@ -903,8 +1087,8 @@ int rhi_test_run_cells(const RhiTestConfig *cfg)
         rhi_cmd_end_label(cl);
 
         RhiRenderPassDesc up2 = {0};
-        up2.color[0] =
-            (RhiColorAttachment){utex, RHI_LOAD_CLEAR, {1.0f, 2.0f, 3.0f, 4.0f}, RHI_STORE_STORE};
+        up2.color[0] = (RhiColorAttachment){
+            utex, RHI_LOAD_CLEAR, {1.0f, 2.0f, 3.0f, 4.0f}, RHI_STORE_STORE, false};
         up2.colorCount = 1;
         up2.width = 4;
         up2.height = 4;
@@ -1033,6 +1217,10 @@ int rhi_test_run_cells(const RhiTestConfig *cfg)
     if (!failures) {
         msaaCell(&c);
     }
+    if (!failures) {
+        dstReadCell(&c, RHI_DST_READ_STORAGE);
+        dstReadCell(&c, RHI_DST_READ_ATTACHMENT);
+    }
 
     /* destroys are deferred; the frames in flight retire them */
     rhi_destroy_pipeline(pUint);
@@ -1041,6 +1229,8 @@ int rhi_test_run_cells(const RhiTestConfig *cfg)
     rhi_destroy_sampler(smp);
     rhi_destroy_shader(c.psUint);
     rhi_destroy_shader(c.psDepthResolve);
+    rhi_destroy_shader(c.psRov);
+    rhi_destroy_shader(c.psSubpass);
     rhi_wait_frame();
     rhi_wait_frame();
     rhi_wait_idle();
