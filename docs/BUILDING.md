@@ -428,6 +428,19 @@ allocations; `rhi_vk_mali` also checks that what goes past them is refused
 by the limit's name, and `rd_perf_mali` creates the whole reachable pipeline
 set). On a device, the log is mirrored to logcat: `adb logcat -s ico-pc`.
 
+The renderer blends as the PS2 does (integer arithmetic, rounding down)
+where the GPU can read the pixel it draws over; the start-up log says
+which way: `rd: blend: exact (attachment read)` (Vulkan rasterization-order
+attachment access, phones and lavapipe), `exact (interlock)` (Vulkan
+fragment shader interlock: the Steam Deck and the desktop drivers),
+`exact (rov)` (D3D12) or `fixed-function (rounds up)` (none of them).
+lavapipe has every one and takes the attachment read, so the
+`*_storage` tests run the render tests again with `ICO_RD_BLEND=storage`
+and the `*_fixed` ones with `ICO_RD_BLEND=fixed` (the latter also compare
+`rd_present`'s and `rd_crt`'s recorded hashes, which are the fixed-function
+blend's); `ICO_VK_FAKE_NO_DST=1` / `ICO_DX_FAKE_NO_DST=1` report a device
+without them.
+
 ## Native frame gates
 
 Two checks guard the renderer rework (they need saved frame dumps and a
