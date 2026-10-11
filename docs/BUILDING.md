@@ -209,6 +209,12 @@ licenses inside the bundle and a separate `dist/ico-pc-ios.map` for crash
 offsets. No provisioning profile or signing identity is required.
 The app includes an original AI-generated illustration as its iPhone and
 iPad icon (`port/platform/ios/icons/`), not artwork extracted from the disc.
+iOS defaults to the previous fixed-function blend path: the new storage
+interlock path caused visual and performance regressions on an iPhone 12
+through MoltenVK, resolved in a device comparison using fixed-function
+blending. This default is set only in the iOS entry point; other platforms
+keep upstream's blend selection. An explicit `ICO_RD_BLEND` environment
+override is still respected. All game effects remain available.
 The dependency fetch also installs the pinned libchdr and libmpeg2 source
 trees, using `tools/fetch_deps.sh --game-only`.
 

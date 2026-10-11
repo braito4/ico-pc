@@ -3,6 +3,7 @@
 #include <SDL3/SDL_main.h>
 #include "../fiber.h"
 #include "../host_config.h"
+#include <stdlib.h>
 #include <unistd.h>
 
 int ico_host_main(int argc, char **argv);
@@ -21,6 +22,12 @@ static void run_host(void *user)
 
 int main(int argc, char **argv)
 {
+    /* Storage interlock regresses rendering and performance on A14/MoltenVK. */
+    if (setenv("ICO_RD_BLEND", "fixed", 0) != 0) {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "ICO", "Cannot set the iOS blend path.",
+                                 NULL);
+        return 1;
+    }
     MainArgs args = {argc, argv, 1};
     SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
     SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
