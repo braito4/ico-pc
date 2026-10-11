@@ -5183,6 +5183,17 @@ static bool ensureRing(uint64_t need)
         RHI_MEM_UPLOAD, "rd ring"});
     g_rd.ringMap[s_slot] = g_rd.ring[s_slot].id ? rhi_map_buffer(g_rd.ring[s_slot]) : NULL;
     g_rd.ringCap[s_slot] = g_rd.ringMap[s_slot] ? cap : 0;
+    /* issue 58: a frame that uploads many pack replacements at once (a
+       stage change) can need a ring of hundreds of MB; the ring never
+       shrinks, so its large sizes are named in the log */
+    if (!g_rd.ringMap[s_slot]) {
+        rd__log("the upload ring of frame slot %d could not grow to %llu MB (this frame needs "
+                "%llu MB)",
+                (int)s_slot, (unsigned long long)(cap >> 20), (unsigned long long)(need >> 20));
+    } else if (cap >= (64ull << 20)) {
+        rd__log("the upload ring of frame slot %d grows to %llu MB (this frame needs %llu MB)",
+                (int)s_slot, (unsigned long long)(cap >> 20), (unsigned long long)(need >> 20));
+    }
     return g_rd.ringMap[s_slot] != NULL;
 }
 
@@ -5293,6 +5304,14 @@ static int uploadReplacement(RdTexRec *t)
         if (!map) {
             if (own.id) {
                 rhi_destroy_buffer(own);
+            }
+            /* issue 58: the replacement waits for a later replay; named once */
+            static int s_ownFailLogged;
+            if (!s_ownFailLogged) {
+                s_ownFailLogged = 1;
+                rd__log("textures: no room for the %llu MB upload of \"%s\" (%ux%u); it waits "
+                        "for a later frame (reported once)",
+                        (unsigned long long)(bytes >> 20), t->name, t->w, t->h);
             }
             return 0;
         }

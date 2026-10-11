@@ -592,6 +592,31 @@ static bool vkr_pick_device(void)
     vkGetPhysicalDeviceProperties(g_vkr.phys, &g_vkr.props);
     vkr_fake_limits();
     vkGetPhysicalDeviceMemoryProperties(g_vkr.phys, &g_vkr.memProps);
+    /* issue 58: the heaps, and the one uploads (the renderer's ring, texture
+       pack uploads) come from: a device-local, host-visible type first
+       (vkr_allocate), which without resizable BAR is a window of about
+       256 MB that every upload buffer shares */
+    for (uint32_t i = 0; i < g_vkr.memProps.memoryHeapCount; i++) {
+        const VkMemoryHeap *mh = &g_vkr.memProps.memoryHeaps[i];
+        VKR_LOG("memory heap %u: %llu MB%s", i, (unsigned long long)(mh->size >> 20),
+                (mh->flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) ? ", device-local" : "");
+    }
+    {
+        const VkMemoryPropertyFlags up = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                         VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
+                                         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+        uint32_t i = 0;
+        while (i < g_vkr.memProps.memoryTypeCount &&
+               (g_vkr.memProps.memoryTypes[i].propertyFlags & up) != up) {
+            i++;
+        }
+        if (i < g_vkr.memProps.memoryTypeCount) {
+            VKR_LOG("uploads prefer memory heap %u (device-local and host-visible)",
+                    g_vkr.memProps.memoryTypes[i].heapIndex);
+        } else {
+            VKR_LOG("uploads use host memory (no device-local, host-visible type)");
+        }
+    }
     snprintf(g_vkr.adapterName, sizeof(g_vkr.adapterName), "%s", g_vkr.props.deviceName);
     bool fake = false;
     g_vkr.dsFormat = vkr_choose_depth_stencil(g_vkr.phys, &fake);
