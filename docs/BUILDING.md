@@ -698,6 +698,16 @@ ctest skip convention.
 
 ## Continuous integration
 
+`.github/workflows/ios.yml` builds an unsigned ARM64 IPA on `macos-15` for
+pull requests, pushes to `main`, manual runs, and published releases. The
+IPA and SHA-256 checksum are available as Actions artifacts for 30 days.
+For a published `vX.Y.Z` release, the bundle version comes from the tag,
+and a separate job attaches both files to that release. Only that job has
+write permissions; pull-request builds need no secrets or game data.
+The pinned host DXC is built from source on a cache miss. No signing
+certificate, provisioning profile, or Apple developer account is required.
+Publishing to another repository is not configured by this workflow.
+
 `.github/workflows/ci.yml` runs on every push to main, every pull request and
 every pushed `v*` tag (which also packages for arm64, see
 [Packages](#packages)): two Linux

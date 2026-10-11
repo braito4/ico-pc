@@ -198,6 +198,8 @@ if(ICO_LINK_EXE)
         target_compile_definitions(ico_pc PRIVATE ICO_HOST_FORCE_PORTABLE=1)
         target_include_directories(ico_pc PRIVATE port/platform/android)
     elseif(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+        set(ICO_IOS_VERSION "0.6.0" CACHE STRING "iOS bundle release version")
+        set(ICO_IOS_BUILD "3" CACHE STRING "iOS bundle build revision")
         add_executable(ico_pc MACOSX_BUNDLE ${_ico_pc_sources} port/platform/ios/main_ios.c)
         target_compile_definitions(ico_pc PRIVATE ICO_IOS=1 ICO_HOST_FORCE_PORTABLE=1)
         set_target_properties(ico_pc PROPERTIES
