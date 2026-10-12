@@ -48,6 +48,8 @@ typedef struct VuGsVertex {
     /* not sent to the GS, for tests and debugging: */
     int32_t inside;     /* the loop's region test (1 when the program has none) */
     uint32_t clipFlags; /* scissor loops: clipw flags of mem[20..23] * pos (bits 0..5) */
+    float clipW;        /* the w the region test reads (p.w, the clip w; > 0 in front of the
+                           eye) */
 } VuGsVertex;
 
 static inline int vu_gs_adc(const VuGsVertex *v)
@@ -138,7 +140,7 @@ void vu1ref_particle_set_matrix(Vu1Ref *r, const float qw[8][4]);
 
 /* ------------------------------------------------------- the port's rule
  * What the renderer draws of what the programs above output
- * (port/shaders/vu_common.hlsli vu_triangle_out_marked, vu_region_drops,
+ * (port/shaders/vu_common.hlsli vu_region_rule, vu_triangle_out,
  * vu_content_hidden; vu_particle.hlsl vu_particle_vs).  The region test
  * itself is the program's own on the position as computed, at every
  * aspect (VuGsVertex.inside). */
@@ -153,23 +155,45 @@ enum {
     VU1REF_DRAW_CLIPPED = 2 /* drawn, clipped by the GPU at the native frustum */
 };
 
+/* The state the region rule reads (ICO_VU_EXTENDED, rd_replay.c
+ * vuExtended): 0 out of the box, the Original preset on a frame frameW GS
+ * pixels wide that is 4:3 (512) at scene scale 1; 1 in any other state
+ * (the Enhanced preset, a wider frame, a scale above 1). */
+static inline int vu1ref_extended(int preset, int frameW, float scale)
+{
+    return preset != VU1REF_ORIGINAL || frameW > 512 || scale > 1.0f;
+}
+
 /* A strip triangle whose vertices' region tests are insideA..C: all inside,
  * drawn exactly; one outside: clipped under photo mode's free camera
- * (freeCamera, ICO_VU_BEHIND_EYE); else not drawn when reaches (what the
- * GPU draws of it, cut to 0 <= z <= w and to the picture's rows, meets the
- * camera's picture's columns: vu_cut_reaches_picture,
- * vu1ref_polygon_reaches_picture), as the PS2 does not draw it, and
- * clipped when it lies wholly beside it.  The same in both presets (preset
- * changes nothing here).  hide: the triangle carries ICO_VU_INDEX_HIDE
- * (never drawn). */
-int vu1ref_region_draw(int preset, int freeCamera, int insideA, int insideB, int insideC, int hide,
-                       int reaches);
+ * (freeCamera, ICO_VU_BEHIND_EYE); else clipped when it lies wholly beside
+ * the camera's picture (reaches 0: what the GPU draws of it, cut to
+ * 0 <= z <= w and to the picture's rows, does not meet the picture's
+ * columns: vu_cut_reaches_picture, vu1ref_polygon_reaches_picture); one
+ * that reaches the picture is not drawn out of the box (extended 0), and
+ * in any other state (extended 1, vu1ref_extended) is clipped when every
+ * vertex is in front of the eye (front: each VuGsVertex.clipW > 0) and it
+ * is not a card: its strip is joined to another (joined: the triangle
+ * carries ICO_VU_INDEX_JOINED, rd_mesh.c markJoinedStrips) or a triangle
+ * of its strip passes the region test (stripPasses, vu1ref_strip_passes);
+ * else not drawn.  hide: the triangle carries ICO_VU_INDEX_HIDE (never
+ * drawn). */
+int vu1ref_region_draw(int extended, int freeCamera, int insideA, int insideB, int insideC,
+                       int hide, int reaches, int front, int joined, int stripPasses);
+/* Whether a triangle of the strip of static kick k passes the region test
+ * (vu_common.hlsli vu_strip_of and the programs' vu_*_strip_passes): the
+ * strip is the run of static kicks (vu1ref_static_kicks; stw and
+ * batchFirst as there, stw NULL for the mesh program, whose batch is one
+ * strip) that k belongs to, over v[0..count). */
+int vu1ref_strip_passes(const VuGsVertex *v, const float *stw, const int *batchFirst, int count,
+                        int k);
 /* A particle: shown (alpha non-zero, w inside the window) and drawn (the
  * VU's test, both corners inside its x/y window too).  Not drawn by the VU:
  * the whole sprite (the GPU clips it) under the free camera; else dropped
  * when its quad reaches the camera's picture (reaches,
  * vu1ref_rect_reaches_picture), drawn whole when
- * wholly beside it; the same in both presets. */
+ * wholly beside it; the same in every state (the strip rule is the
+ * triangles'). */
 int vu1ref_particle_draw(int preset, int freeCamera, int drawn, int shown, int reaches);
 
 /* The reach those two take (vu_common.hlsli vu_cut_reaches_picture,

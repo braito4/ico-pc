@@ -41,6 +41,18 @@
  *      kExpect (Gate A in miniature: the Original picture at 4:3 does not
  *      change).  Runs always; kExpect is zero until the first run's printed
  *      hashes are filled in (then the check is off).
+ *   s  the region rule's strip test (VIS-WINDOW, v0.6.1; vu_common.hlsli
+ *      vu_region_rule), runs always, one strip a frame (checkStripRule):
+ *      a wall (a 2-triangle strip whose second triangle has a vertex above
+ *      the region window and reaches the picture, issue 72) is drawn as
+ *      the PS2 draws it out of the box (Original, W 512, 1x: the failing
+ *      triangle is not drawn) and with the failing triangle clipped in
+ *      every other state (Enhanced at W 512, 688 (16:9) and 2048 (48:9),
+ *      Enhanced 2x, Original at W 688); a card (a free-standing 2-triangle
+ *      strip both of whose triangles fail, the opening's tree card) and a
+ *      strip whose failing triangle has a vertex behind the eye add nothing
+ *      in any state; the same card's strip joined to a passing strip (a
+ *      plank's face, rd_mesh.c markJoinedStrips) is drawn as the wall is.
  *   The W = 512 renders also have to show the frame (not the clear colour).
  * The wide cases (c, e) run only with ICO_NATIVE_GATE=1 in the environment;
  * without it the test checks W = 512 and exits 77 (skipped), so the ctest is
@@ -574,6 +586,244 @@ static void checkFilmGrain(void)
     freeRender(&refNo);
 }
 
+/* ------------------------------------------------- the strip rule (s) */
+
+/* One or two strips of n VU vertices (code 32, the identity matrix of
+ * triDraw: x, y GS pixels, z GS Z, w 1 or -1 behind the eye with x and y
+ * negated), one colour; split: the vertex the second strip starts at (0:
+ * one strip) */
+typedef struct StripMesh {
+    const char *what;
+    int n, split;
+    float v[8][4];
+    uint8_t c[3];
+} StripMesh;
+
+/* a wall: triangle 2 passes, triangle 3 has a vertex above the region
+ * window (GS y -379, the water tower's lift wall) and reaches the
+ * picture */
+static const StripMesh kWall = {"wall",
+                                4,
+                                0,
+                                {{1900, 2250, 1000000, 1},
+                                 {2200, 2250, 1000000, 1},
+                                 {2050, 2000, 1000000, 1},
+                                 {2300, -379, 1000000, 1}},
+                                {200, 60, 60}};
+/* a card: both triangles have a vertex above the window and reach the
+ * picture; a free-standing strip (the opening's tree card) */
+static const StripMesh kCard = {"card",
+                                4,
+                                0,
+                                {{1820, -100, 1000000, 1},
+                                 {1900, -100, 1000000, 1},
+                                 {1820, 2000, 1000000, 1},
+                                 {1900, 2000, 1000000, 1}},
+                                {60, 200, 60}};
+/* the same card's strip joined to a passing triangle's strip below it
+ * (they share the corners (1820, 2000) and (1900, 2000): a plank's face,
+ * rd_mesh.c markJoinedStrips) */
+static const StripMesh kJoined = {"joined card",
+                                  7,
+                                  3,
+                                  {{1820, 2000, 1000000, 1},
+                                   {1900, 2000, 1000000, 1},
+                                   {1860, 2100, 1000000, 1},
+                                   {1820, -100, 1000000, 1},
+                                   {1900, -100, 1000000, 1},
+                                   {1820, 2000, 1000000, 1},
+                                   {1900, 2000, 1000000, 1}},
+                                  {60, 200, 200}};
+/* triangle 2 passes, triangle 3 has a vertex behind the eye and reaches
+ * the picture (as kTris' "behind the eye") */
+static const StripMesh kEye = {"behind the eye",
+                               4,
+                               0,
+                               {{1960, 1850, 1006000, 1},
+                                {2030, 1850, 1006000, 1},
+                                {1960, 1980, 1006000, 1},
+                                {-2300, 2000, 1006000, -1}},
+                               {60, 60, 200}};
+
+static RdMesh stripMesh(const StripMesh *m, int n)
+{
+    float qw[1 + 8 * 3][4];
+    memset(qw, 0, sizeof(qw));
+    const uint32_t tag = 0x8000u | (uint32_t)n; /* NLOOP n, EOP */
+    memcpy(&qw[0][0], &tag, 4);
+    for (int k = 0; k < n; k++) {
+        memcpy(qw[1 + k * 3], m->v[k], sizeof(m->v[k]));
+        qw[1 + k * 3 + 1][2] = 1.0f; /* Q */
+        /* the strip flag: 0 where a strip starts */
+        qw[1 + k * 3 + 1][3] = k == 0 || (m->split && k == m->split) ? 0.0f : 1.0f;
+        for (int i = 0; i < 3; i++) {
+            qw[1 + k * 3 + 2][i] = (float)m->c[i];
+        }
+        qw[1 + k * 3 + 2][3] = 127.0f;
+    }
+    const RdVuBatchDesc bd = {0, 0, 0};
+    RdVuMeshDesc md;
+    memset(&md, 0, sizeof(md));
+    md.qw = (const float (*)[4])qw;
+    md.qwCount = (uint32_t)(1 + n * 3);
+    md.qwPerVertex = RD_VU_QW_PRELIT;
+    md.batchCount = 1;
+    md.batches = &bd;
+    const RdMesh r = rd_create_vu_mesh(&md);
+    CHECK(r.id != 0, "rd_create_vu_mesh (%s, %d vertices)", m->what, n);
+    return r;
+}
+
+/* SCENE of a frame at native width W under cfg holding the first n
+ * vertices of m as one code-32 strip (n 0: the clear only) */
+static int renderStrip(const Cfg *cfg, int W, const StripMesh *m, int n, Img *scene)
+{
+    memset(scene, 0, sizeof(*scene));
+    RdSettings st;
+    memset(&st, 0, sizeof(st));
+    st.preset = cfg->preset;
+    st.outputWidth = 640;
+    st.outputHeight = 480;
+    st.aspect = W == BAND ? 4.0f / 3.0f : (float)W / 384.0f;
+    st.sceneScale = cfg->scale;
+    if (!rd_init(BAND, GS_H, &st, NULL)) {
+        return R_NO_DEVICE;
+    }
+    if (W != BAND) {
+        rd_reset_scene((uint32_t)W, GS_H);
+    }
+    const RdMesh mesh = n ? stripMesh(m, n) : (RdMesh){0};
+    rd_begin_frame();
+    RdFrameHead h;
+    memset(&h, 0, sizeof(h));
+    memcpy(h.rgba, kBg, 4);
+    h.gsW = (uint32_t)W;
+    h.gsH = GS_H;
+    h.clear = 1;
+    rd_frame_head(&h);
+    rd_select_list(0);
+    rd_set_target(rd_target(RD_TARGET_SCENE), rd_target(RD_TARGET_SCENE), (uint32_t)W, GS_H, 1);
+    rd_test_gs(RD_TEST_Z_GEQUAL);
+    rd_z_write(1);
+    rd_blend(RD_BLEND_LERP_AS, 0x80, 0);
+    rd_abe(0);
+    rd_pabe(0);
+    rd_fba(0);
+    rd_gouraud(1);
+    rd_texture_off();
+    if (mesh.id) {
+        Tri t;
+        memset(&t, 0, sizeof(t));
+        t.code = 32;
+        triDraw(mesh, &t, 0);
+    }
+    rd_end_frame(0);
+    const bool ok = readImg(RD_TARGET_SCENE, scene);
+    if (mesh.id) {
+        rd_destroy_vu_mesh(mesh);
+    }
+    const uint32_t verr = rhi_vk_validation_error_count();
+    CHECK(verr == 0, "strip rule, %s, W %d: %u validation errors", cfg->name, W, verr);
+    rd_shutdown();
+    return ok ? R_OK : R_FAIL;
+}
+
+static bool sameImg(const Img *a, const Img *b)
+{
+    return a->px && b->px && a->w == b->w && a->h == b->h &&
+           memcmp(a->px, b->px, (size_t)a->w * a->h * 4) == 0;
+}
+
+/* whether SCENE shows something other than the clear at GS pixel (x, y) */
+static bool drawnAt(const Img *im, int W, int x, int y)
+{
+    const uint32_t fx = texelsPerPixel(im, W), fy = im->h / GS_H;
+    if (fx == 0 || fy == 0) {
+        CHECK(0, "SCENE %ux%u is not a whole number of texels a GS pixel at W %d", im->w, im->h, W);
+        return false;
+    }
+    const size_t tx = (size_t)(x - (2048 - W / 2)) * fx + fx / 2;
+    const size_t ty = (size_t)(y - (2048 - GS_H / 2)) * fy + fy / 2;
+    return memcmp(&im->px[(ty * im->w + tx) * 4], kBg, 3) != 0;
+}
+
+/* The region rule's strip test (case s): out of the box the PS2's picture;
+ * in every other state a wall's failing triangle drawn clipped, a card and
+ * a triangle with a vertex behind the eye nowhere. */
+static void checkStripRule(void)
+{
+    static const struct {
+        Cfg cfg;
+        int W, extended;
+    } kStates[] = {
+        {{"Original 1x", RD_PRESET_ORIGINAL, 1.0f}, BAND, 0},
+        {{"Enhanced 1x", RD_PRESET_ENHANCED, 1.0f}, BAND, 1},
+        {{"Enhanced 1x", RD_PRESET_ENHANCED, 1.0f}, 688, 1},  /* 16:9 */
+        {{"Enhanced 1x", RD_PRESET_ENHANCED, 1.0f}, 2048, 1}, /* 48:9 */
+        {{"Enhanced 2x", RD_PRESET_ENHANCED, 2.0f}, BAND, 1},
+        {{"Original 1x", RD_PRESET_ORIGINAL, 1.0f}, 688, 1}, /* a wide frame */
+    };
+
+    for (size_t i = 0; i < sizeof(kStates) / sizeof(kStates[0]); i++) {
+        const Cfg *cfg = &kStates[i].cfg;
+        const int W = kStates[i].W;
+        Img none = {0}, wall3 = {0}, wall4 = {0}, card = {0}, eye3 = {0}, eye4 = {0};
+        Img joined3 = {0}, joined7 = {0};
+        if (renderStrip(cfg, W, &kWall, 0, &none) != R_OK ||
+            renderStrip(cfg, W, &kWall, 3, &wall3) != R_OK ||
+            renderStrip(cfg, W, &kWall, 4, &wall4) != R_OK ||
+            renderStrip(cfg, W, &kCard, 4, &card) != R_OK ||
+            renderStrip(cfg, W, &kEye, 3, &eye3) != R_OK ||
+            renderStrip(cfg, W, &kEye, 4, &eye4) != R_OK ||
+            renderStrip(cfg, W, &kJoined, 3, &joined3) != R_OK ||
+            renderStrip(cfg, W, &kJoined, 7, &joined7) != R_OK) {
+            CHECK(0, "strip rule, %s, W %d: a frame could not be rendered", cfg->name, W);
+        } else {
+            /* the passing triangle is drawn in every state */
+            CHECK(drawnAt(&wall3, W, 2050, 2150),
+                  "strip rule, %s, W %d: the wall's passing "
+                  "triangle is drawn",
+                  cfg->name, W);
+            if (kStates[i].extended) {
+                /* the failing triangle, clipped: inside the picture and up
+                 * to its top row */
+                CHECK(drawnAt(&wall4, W, 2160, 2100) && drawnAt(&wall4, W, 2140, 1830) &&
+                          !drawnAt(&wall3, W, 2160, 2100),
+                      "strip rule, %s, W %d: the wall's triangle with a vertex above the window "
+                      "is drawn, clipped",
+                      cfg->name, W);
+            } else {
+                CHECK(sameImg(&wall4, &wall3),
+                      "strip rule, %s, W %d: out of the box the wall's triangle with a vertex "
+                      "above the window is not drawn (the PS2's)",
+                      cfg->name, W);
+            }
+            CHECK(sameImg(&card, &none) && !drawnAt(&card, W, 1860, 1950),
+                  "strip rule, %s, W %d: the card is not drawn", cfg->name, W);
+            /* the card's strip joined to a passing strip: a plank's face */
+            if (kStates[i].extended) {
+                CHECK(drawnAt(&joined7, W, 1860, 1950) && !drawnAt(&joined3, W, 1860, 1950),
+                      "strip rule, %s, W %d: the joined card is drawn, clipped", cfg->name, W);
+            } else {
+                CHECK(sameImg(&joined7, &joined3),
+                      "strip rule, %s, W %d: out of the box the joined card is not drawn",
+                      cfg->name, W);
+            }
+            CHECK(sameImg(&eye4, &eye3),
+                  "strip rule, %s, W %d: the triangle with a vertex behind the eye is not drawn",
+                  cfg->name, W);
+        }
+        free(none.px);
+        free(wall3.px);
+        free(wall4.px);
+        free(card.px);
+        free(eye3.px);
+        free(eye4.px);
+        free(joined3.px);
+        free(joined7.px);
+    }
+}
+
 int main(void)
 {
     const char *gateEnv = getenv("ICO_NATIVE_GATE");
@@ -611,6 +861,7 @@ int main(void)
     }
 
     checkFilmGrain();
+    checkStripRule();
     if (gate) {
         /* the wide frames, Enhanced only (Original is the 4:3 picture) */
         for (int c = 1; c < NCFGS; c++) {

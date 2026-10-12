@@ -444,6 +444,23 @@ and the `*_fixed` ones with `ICO_RD_BLEND=fixed` (the latter also compare
 blend's); `ICO_VK_FAKE_NO_DST=1` / `ICO_DX_FAKE_NO_DST=1` report a device
 without them.
 
+A triangle of a VU program that fails the program's region test (a vertex
+outside the GS window 0..4094, or behind the eye) goes through one rule
+(`vu_region_rule` in `port/shaders/vu_common.hlsli`, mirrored on the CPU by
+`vu1ref_region_draw` in `port/render/vu1_ref`, tested by `vu1_test` and
+`rd_native`): one wholly beside the 4:3 picture is drawn, clipped by the
+GPU; one that reaches into the picture is not drawn out of the box (the
+Original preset at 4:3 and 1x: the PS2's picture), and in any other state
+(Enhanced, a wider aspect, a Resolution above 1x) it is drawn, clipped, when
+its three vertices are in front of the eye and it is not part of a card (a
+wall with one vertex past the window, a plank's face). A card is a
+free-standing strip, one that shares no corner with another strip of its
+mesh but its own double-sided copy (`markJoinedStrips` in
+`port/render/rd_mesh.c` marks the others), none of whose triangles passes
+the test, such as the opening's tree card; it stays undrawn, as does a
+triangle with a vertex behind the eye. Photo mode's free camera draws every
+one of them, clipped.
+
 ## Native frame gates
 
 Two checks guard the renderer rework (they need saved frame dumps and a

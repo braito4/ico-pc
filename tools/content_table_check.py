@@ -2,11 +2,17 @@
 """tools/content_table_check.py: the content table (port/render/rd_content_hide.c)
 against saved frames.
 
-The renderer draws one camera on the native frame: a triangle that fails a
-VU program's region test is not drawn when what the GPU would draw of it
-reaches into the camera's picture (GS X 2048 -+ 256), as the PS2 does not
-draw it, and is drawn, clipped by the GPU, when it lies wholly beside the
-picture (seen only on a frame wider than 4:3).  The stage geometry made
+The renderer draws one camera on the native frame (vu_common.hlsli
+vu_region_rule): a triangle that fails a VU program's region test is drawn,
+clipped by the GPU, when it lies wholly beside the camera's picture (GS X
+2048 -+ 256; seen only on a frame wider than 4:3); one that reaches into
+the picture is not drawn out of the box (Original, 4:3, 1x), as the PS2
+does not draw it, and in any other state (Enhanced among them) is drawn,
+clipped, when its vertices are in front of the eye and it is not part of a
+card, so the report below can show such pixels inside the picture in
+Enhanced (a card, a free-standing strip none of whose triangles pass,
+shows none).
+The stage geometry made
 for the PS2's 4:3 picture that passes the region test beside it (closing
 planes) is listed in the content table with the verb HIDE (drawn
 nowhere).  This tool drives port/render/rd_replay_tool over dumps; the

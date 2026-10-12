@@ -258,7 +258,7 @@ _Static_assert(sizeof(IcoSpriteStqVertex) == 24, "STQ vertex size");
  * stream (float4 quadwords as the VIF unpacked them), b2 = IcoVuCB,
  * b3 = IcoVuBoneCB (cluster only). */
 
-/* VuCB: group 1, slot 2 (register b2, space1). 608 bytes.
+/* VuCB: group 1, slot 2 (register b2, space1). 624 bytes.
  *   mem    VU1 data memory 0..35 as the program reads it: 0..15 the common
  *          block (RdVuCommon), 16..27 the per-object matrices, 28..35 the
  *          light matrices (vu_common.hlsli lists what each program keeps
@@ -269,11 +269,15 @@ _Static_assert(sizeof(IcoSpriteStqVertex) == 24, "STQ vertex size");
  *          colour 2, 3 with the VIF qword of a Mesh3D buffer), qwords after
  *          them (a Mesh3D buffer's MSCNT: 1), the clip plane's code and its
  *          offset's float bits (0, 0: none; rd_chain.h, static prelit and lit
- *          meshes) */
+ *          meshes)
+ *   strip  the draw's first vertex and one past its last (the region
+ *          rule's strip test, vu_common.hlsli vu_strip_of; both 0: no strip
+ *          test), 0, 0 */
 typedef struct IcoVuCB {
     float mem[36][4];
     uint32_t draw[4];
     uint32_t batch[4];
+    uint32_t strip[4];
 } IcoVuCB;
 
 /* VuBoneCB: group 1, slot 3 (register b3, space1): VU memory 16..255, the
@@ -286,15 +290,19 @@ typedef struct IcoVuBoneCB {
 enum {
     ICO_VU_CLIP_REGION = 0,  /* region test: a failing triangle whose clipped extent
                               * reaches the camera's picture (FrameCB frame[1], [2]) is dropped,
-                              * one wholly beside it GPU-clipped at the native frustum, in
-                              * either preset; every one GPU-clipped under
-                              * ICO_VU_BEHIND_EYE */
+                              * one wholly beside it GPU-clipped at the native frustum; every
+                              * one GPU-clipped under ICO_VU_BEHIND_EYE; under
+                              * ICO_VU_EXTENDED one in front of the eye is GPU-clipped unless
+                              * it belongs to a card (vu_common.hlsli vu_region_rule) */
     ICO_VU_CLIP_NONE = 1,    /* normal_c code 34: no test, X/Y wrap to 16 bits */
     ICO_VU_CLIP_SCISSOR = 2, /* code 36: clip-space flags, trivial reject, GPU clipping */
     ICO_VU_CLIP_MASK = 3,
     ICO_VU_PROBE = 16,      /* tests: one value per pixel of a 16-wide RGBA8_UINT target */
     ICO_VU_CUT_ONLY = 32,   /* scissor: only the triangles SCISSOR_COMMON draws (first draw) */
     ICO_VU_KICK_ONLY = 64,  /* scissor: only the triangles the strip kicks (second draw) */
+    ICO_VU_EXTENDED = 128,  /* region test: the picture is not the PS2's out of the box (the
+                             * Enhanced preset, wider than 4:3 or scaled up; rd_replay.c
+                             * vuExtended) */
     ICO_VU_BEHIND_EYE = 256 /* region test and particle window: a failing triangle or
                                * sprite is GPU-clipped, not dropped, in either preset
                                * (photo mode's free camera, RdCamera.freeCamera) */
@@ -321,9 +329,15 @@ enum {
 #define ICO_VU_INDEX_LATER 0x40000000u
 /* The content table (port/render/rd_content_hide.c, rd_mesh.c
  * markContentHidden), set on the three indices of a triangle of a listed
- * artist trick: HIDE, drawn nowhere.  vu_common.hlsli's VU_INDEX_HIDE.
- * Bit 28 is unused */
+ * artist trick: HIDE, drawn nowhere.  vu_common.hlsli's VU_INDEX_HIDE */
 #define ICO_VU_INDEX_HIDE 0x20000000u
+/* VIS-WINDOW: set on the three indices of a triangle of a joined strip (one
+ * that shares a vertex position with another strip of its mesh, not its
+ * double-sided copy; rd_mesh.c markJoinedStrips; prelit, lit and skinned
+ * meshes): not a card, so the region rule draws its failing triangles
+ * clipped outside the out-of-the-box state.  vu_common.hlsli's
+ * VU_INDEX_JOINED */
+#define ICO_VU_INDEX_JOINED 0x10000000u
 #define ICO_VU_INDEX_MASK 0x0FFFFFFFu
 /* kick * 4 + corner below 2^28: the meshes rd_mesh.c marks have fewer
  * vertices */
@@ -335,8 +349,9 @@ _Static_assert(offsetof(IcoVuCB, mem) == 0, "vu mem");
 _Static_assert(offsetof(IcoVuCB, draw) == 576, "vu draw");
 
 _Static_assert(offsetof(IcoVuCB, batch) == 592, "vu batch");
+_Static_assert(offsetof(IcoVuCB, strip) == 608, "vu strip");
 
-_Static_assert(sizeof(IcoVuCB) == 608, "VuCB size");
+_Static_assert(sizeof(IcoVuCB) == 624, "VuCB size");
 
 _Static_assert(sizeof(IcoVuBoneCB) == 3840, "VuBoneCB size");
 

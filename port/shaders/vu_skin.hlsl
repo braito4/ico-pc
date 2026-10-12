@@ -82,19 +82,51 @@ VuVtx vu_skin_vertex(uint v, uint variant, bool full)
     return o;
 }
 
+// VU_RULE_STRIP: whether a triangle of kick's strip passes the region
+// test (vu_prelit_strip_passes; the cluster strip flag, cluster.vsm:238-242)
+bool vu_skin_strip_passes(uint kick, uint variant)
+{
+    uint3 r = vu_strip_of(kick, true);
+    if (r.z != 0u) {
+        return true;
+    }
+    bool i0 = vu_skin_vertex(r.x, variant, false).inside;
+    bool i1 = vu_skin_vertex(r.x + 1u, variant, false).inside;
+    [loop] for (uint v = r.x + 2u; v < r.y; v++) {
+        bool i2 = vu_skin_vertex(v, variant, false).inside;
+        if (i0 && i1 && i2) {
+            return true;
+        }
+        i0 = i1;
+        i1 = i2;
+    }
+    return false;
+}
+
 VuVSOut vu_skin_main(uint vid, uint variant)
 {
     if ((vu_draw.z & VU_F_PROBE) != 0u) {
         VuVtx v = vu_skin_vertex(vu_probe_vertex(vid), variant, true);
         return vu_probe_out(vid, vu_probe_field(v, (vid / 3u) % VU_PROBE_FIELDS));
     }
-    uint kick = vid >> 2;
+    // the index marks: VU_INDEX_JOINED (rd_mesh.c markJoinedStrips)
+    uint kick = (vid & VU_INDEX_MASK) >> 2;
     uint corner = vid & 3u;
     VuVtx a = vu_skin_vertex(kick - 2u, variant, false);
     VuVtx b = vu_skin_vertex(kick - 1u, variant, false);
     VuVtx c = vu_skin_vertex(kick, variant, false);
     VuVtx me = vu_skin_vertex(kick - 2u + corner, variant, true);
-    return vu_triangle_out(a, b, c, me, VU_CLIP_REGION);
+    uint rule = vu_region_rule(a, b, c);
+    if (rule == VU_RULE_STRIP) {
+        // a joined strip is not a card; a free-standing one is unless a
+        // triangle of it passes
+        if ((vid & VU_INDEX_JOINED) != 0u) {
+            rule = VU_RULE_CLIP;
+        } else {
+            rule = vu_skin_strip_passes(kick, variant) ? VU_RULE_CLIP : VU_RULE_DROP;
+        }
+    }
+    return vu_triangle_out(a, b, c, me, VU_CLIP_REGION, rule);
 }
 
 VuVSOut vu_skin_vs(uint vid : SV_VertexID)

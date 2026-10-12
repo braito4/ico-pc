@@ -2,12 +2,16 @@
  * PS2's 4:3 picture that the native frame must not show.
  *
  * The renderer draws one camera on the native frame (vu_common.hlsli
- * vu_triangle_out): a triangle that fails a VU program's region test is
- * not drawn when what the GPU would draw of it reaches into the camera's
- * picture (GS X 2048 -+ 256), as the PS2 does not draw it, and is drawn,
- * clipped by the GPU, when it lies wholly beside the picture (seen only on
- * a frame wider than 4:3).  A camera passing through scenery (the
- * opening's cliff st26a_p1 and tree card st26a_near) needs no entry.  A
+ * vu_region_rule): a triangle that fails a VU program's region test is
+ * drawn, clipped by the GPU, when it lies wholly beside the camera's
+ * picture (GS X 2048 -+ 256; seen only on a frame wider than 4:3); one
+ * that reaches into the picture is not drawn out of the box (the Original
+ * preset at 4:3 and 1x), as the PS2 does not draw it, and in any other
+ * state is drawn, clipped, when its vertices are in front of the eye and
+ * it is not part of a card (a free-standing strip none of whose triangles
+ * pass; rd_mesh.c markJoinedStrips).  A camera passing through scenery
+ * (the opening's cliff st26a_p1, a vertex behind the eye, and tree card
+ * st26a_near, a card) needs no entry.  A
  * few stage faces relied on the PS2's 4:3 picture in another way: closing
  * planes that seal a model where the 4:3 camera never looks, which pass
  * the region test beside the picture.  They are listed here as data, by

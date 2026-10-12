@@ -4040,6 +4040,18 @@ static int ovDiff(const uint8_t *x, const uint8_t *y, uint32_t w, uint32_t h)
     return n;
 }
 
+/* the indices of m's draw list that carry ICO_VU_INDEX_LATER (the list
+ * also carries ICO_VU_INDEX_JOINED where strips share corners: rd_mesh.c
+ * markJoinedStrips) */
+static int laterMarks(const RdMeshRec *m)
+{
+    int n = 0;
+    for (uint32_t i = 0; i < m->indexCount; i++) {
+        n += (rd__mesh_draw_index(m)[i] & ICO_VU_INDEX_LATER) != 0;
+    }
+    return n;
+}
+
 static void testVuOverlap(const char *mode)
 {
     /* the game's order: the front strip, then the back strips */
@@ -4062,10 +4074,10 @@ static void testVuOverlap(const char *mode)
             marks += later;
             right += later == (kick == 7 || kick == 8 || kick == 11);
         }
-        CHECK(marks == 9 && right == (int)ma->indexCount && !mf->drawIndex && !mb->drawIndex,
-              "vu overlap: %d marked indices (%d as expected of %u), front %s, back %s", marks,
-              right, ma->indexCount, mf->drawIndex ? "marked" : "clear",
-              mb->drawIndex ? "marked" : "clear");
+        CHECK(marks == 9 && right == (int)ma->indexCount && laterMarks(mf) == 0 &&
+                  laterMarks(mb) == 0,
+              "vu overlap: %d marked indices (%d as expected of %u), front %d, back %d", marks,
+              right, ma->indexCount, laterMarks(mf), laterMarks(mb));
     } else {
         CHECK(0, "vu overlap: mesh records");
     }

@@ -94,6 +94,27 @@ VuVtx vu_lit_vertex(uint v, uint mode, uint variant, bool full)
     return o;
 }
 
+// VU_RULE_STRIP: whether a triangle of kick's strip passes the region
+// test (vu_prelit_strip_passes)
+bool vu_lit_strip_passes(uint kick, uint variant)
+{
+    uint3 r = vu_strip_of(kick, true);
+    if (r.z != 0u) {
+        return true;
+    }
+    bool i0 = vu_lit_vertex(r.x, VU_CLIP_REGION, variant, false).inside;
+    bool i1 = vu_lit_vertex(r.x + 1u, VU_CLIP_REGION, variant, false).inside;
+    [loop] for (uint v = r.x + 2u; v < r.y; v++) {
+        bool i2 = vu_lit_vertex(v, VU_CLIP_REGION, variant, false).inside;
+        if (i0 && i1 && i2) {
+            return true;
+        }
+        i0 = i1;
+        i1 = i2;
+    }
+    return false;
+}
+
 VuVSOut vu_lit_main(uint vid, uint variant)
 {
     // codes 34 and 38 have no scissor variant: always the region test
@@ -113,7 +134,17 @@ VuVSOut vu_lit_main(uint vid, uint variant)
     VuVtx b = vu_lit_vertex(kick - 1u, mode, variant, false);
     VuVtx c = vu_lit_vertex(kick, mode, variant, false);
     VuVtx me = vu_lit_vertex(kick - 2u + corner, mode, variant, true);
-    VuVSOut o = vu_plane_out(vu_triangle_out(a, b, c, me, mode), kick, corner);
+    uint rule = mode == VU_CLIP_REGION ? vu_region_rule(a, b, c) : VU_RULE_EXACT;
+    if (rule == VU_RULE_STRIP) {
+        // a joined strip is not a card; a free-standing one is unless a
+        // triangle of it passes
+        if ((vid & VU_INDEX_JOINED) != 0u) {
+            rule = VU_RULE_CLIP;
+        } else {
+            rule = vu_lit_strip_passes(kick, variant) ? VU_RULE_CLIP : VU_RULE_DROP;
+        }
+    }
+    VuVSOut o = vu_plane_out(vu_triangle_out(a, b, c, me, mode, rule), kick, corner);
     if ((vid & VU_INDEX_LATER) != 0u) {
         o = vu_later_out(o, a, b, c);
     }

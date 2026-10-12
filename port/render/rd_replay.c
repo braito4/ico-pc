@@ -3927,6 +3927,18 @@ static void vuDraw(Replay *r, const RdStateBlock *s, const DrawSetup *ds, RhiBin
 
 static void doVuDraw(Replay *r, const RdFrame *f, const RdCmd *c);
 
+/* VIS-WINDOW (v0.6.1): whether the picture is not the PS2's out of the box,
+ * the Original preset on a 4:3 frame at 1x (ICO_VU_EXTENDED; the region
+ * rule, vu_common.hlsli vu_region_rule): the Enhanced preset, a frame
+ * wider than 4:3 or a scene scale above 1.  The user's ruling
+ * (2026-10-12): out of the box the PS2's behaviour stays; any other state
+ * draws what a game made for that picture would draw. */
+static bool vuExtended(void)
+{
+    return g_rd.settings.preset != RD_PRESET_ORIGINAL || g_rd.gsW > ICO_SH_FRAME_BASE_W ||
+           g_rd.sceneSx > 1.0f || g_rd.sceneSy > 1.0f;
+}
+
 /* A VU draw under its camera's picture (Replay.picture: the frame group's
  * g_frame.yz) */
 static void doVu(Replay *r, const RdFrame *f, const RdCmd *c)
@@ -4023,6 +4035,11 @@ static void doVuDraw(Replay *r, const RdFrame *f, const RdCmd *c)
         /* photo mode: behind-eye triangles clipped, not dropped */
         vcb.draw[2] |= ICO_VU_BEHIND_EYE;
     }
+    if (vuExtended()) {
+        /* a triangle the region test drops is clipped unless it belongs
+         * to a card (vu_region_rule) */
+        vcb.draw[2] |= ICO_VU_EXTENDED;
+    }
 
     if (c->type == RDC_GRID) {
         /* the Mesh3D buffer as it is: per strip the VIF qword, tag and colour
@@ -4032,6 +4049,10 @@ static void doVuDraw(Replay *r, const RdFrame *f, const RdCmd *c)
         vcb.draw[3] = vpb;
         vcb.batch[0] = 3;
         vcb.batch[1] = 1;
+        /* the strip test's bounds: every vertex of the buffer (a batch is
+         * one strip) */
+        vcb.strip[0] = 0;
+        vcb.strip[1] = p.batchCount * vpb;
         const uint32_t ni = p.batchCount * (vpb - 2) * 3;
         const uint64_t iOff = rd__ring_alloc((uint64_t)ni * 4, 16);
         if (iOff == ~0ull) {
@@ -4073,6 +4094,9 @@ static void doVuDraw(Replay *r, const RdFrame *f, const RdCmd *c)
     if (last > m->batchCount || p.batchCount == 0) {
         last = m->batchCount;
     }
+    /* the strip test's bounds: the draw's vertices (its batches') */
+    vcb.strip[0] = m->batches[p.firstBatch].firstVertex;
+    vcb.strip[1] = m->batches[last - 1].firstVertex + m->batches[last - 1].vertexCount;
     if (p.clip != RD_VU_CLIP_SCISSOR) {
         const RdVuBatchRec *b0 = &m->batches[p.firstBatch], *b1 = &m->batches[last - 1];
         vuDraw(r, &r->st, &ds, g2, p.prog, vs, streamBuf, streamBufSize, streamOff, streamSize,

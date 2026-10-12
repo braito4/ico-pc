@@ -47,11 +47,15 @@
 //          of an unstripped Mesh3D buffer), y = qwords after each batch's
 //          vertices (an unstripped Mesh3D buffer's MSCNT: 1), z = a clip
 //          plane's code (0 none; vu_plane_distance), w = its offset's bits
+// vu_strip x, y = the draw's vertices, the first and one past the last
+//          (the region rule's strip test, vu_strip_of; y 0: no strip test,
+//          the PS2's rule), zw reserved
 cbuffer VuCB : register(b2, space1)
 {
     float4 vu_mem[36];
     uint4 vu_draw;
     uint4 vu_batch;
+    uint4 vu_strip;
 };
 
 StructuredBuffer<float4> vu_stream : register(t0, space1);
@@ -74,6 +78,11 @@ StructuredBuffer<float4> vu_stream : register(t0, space1);
 // GPU-clipped over the whole picture, a vertex behind the eye or not, in
 // either preset (vu_triangle_out, vu_particle_vs)
 #define VU_F_BEHIND_EYE 256u
+// The picture is not the PS2's out of the box (rd_replay.c doVuDraw: the
+// Enhanced preset, a frame wider than 4:3 or a scene scale above 1): a
+// triangle the region test drops is drawn, GPU-clipped, unless it belongs
+// to a card (vu_region_rule)
+#define VU_F_EXTENDED 128u
 // Issue 25: the index bit of a triangle that overlaps an earlier triangle of
 // its mesh in the same plane (shader_consts.h ICO_VU_INDEX_LATER; static
 // prelit and lit meshes, rd_mesh.c markLaterOverlaps); vu_later_out
@@ -83,6 +92,10 @@ StructuredBuffer<float4> vu_stream : register(t0, space1);
 // for the 4:3 picture, drawn nowhere (HIDE). Static prelit and lit meshes
 // only; shader_consts.h ICO_VU_INDEX_HIDE
 #define VU_INDEX_HIDE 0x20000000u
+// VIS-WINDOW: the index bit of a triangle of a joined strip (rd_mesh.c
+// markJoinedStrips; shader_consts.h ICO_VU_INDEX_JOINED): not a card
+// (vu_region_rule)
+#define VU_INDEX_JOINED 0x10000000u
 #define VU_INDEX_MASK 0x0FFFFFFFu
 
 // Whether the triangle of index value vid is left out of every draw (HIDE).
@@ -463,10 +476,152 @@ VuVSOut vu_plane_out(VuVSOut o, uint kick, uint me)
     return o;
 }
 
+// What the port draws of a triangle of a program with the region test
+// (vu_region_rule; vu1_ref.h vu1ref_region_draw is the CPU mirror).
+#define VU_RULE_EXACT 0u // all three vertices inside: at their GS positions
+#define VU_RULE_CLIP 1u  // GPU-clipped at the native frustum (vu_cut_position)
+#define VU_RULE_DROP 2u  // not drawn
+// The card test decides (the caller's): VU_RULE_DROP for a triangle of a
+// card, a free-standing strip (no VU_INDEX_JOINED) none of whose
+// triangles passes the region test (vu_*_strip_passes), else VU_RULE_CLIP
+#define VU_RULE_STRIP 3u
+
+// The region rule (VIS-RULES items 11 and 12, VIS-WINDOW, v0.6.1).
+// On the PS2 any vertex outside the region sets ADC on itself and the next
+// two, and the triangle is not drawn. That test is the camera's own: the
+// program's, on the position as computed (VuVtx.inside, the tests' probe
+// field), and the projection is the same at every aspect. The rule, in
+// this order:
+// - all three vertices inside: drawn exactly (vu_vtx_position, on the
+//   ftoi4 grid);
+// - photo mode's free camera (VU_F_BEHIND_EYE): drawn, clipped by the GPU
+//   at the native frustum (a walkway low under the camera left a hole);
+// - a triangle whose GPU-clipped extent (0 <= z <= w, a vertex behind the
+//   eye or not) lies wholly beside the camera's picture (GS 2048 -+ 256
+//   across by the native height, the drawing camera's,
+//   vu_cut_reaches_picture; seen only on a frame wider than 4:3): drawn,
+//   clipped (there the PS2 showed nothing, and dropped triangles left
+//   holes: a wall with one vertex past the window, issue 29; at 48:9 a
+//   patch of the sea at the far left of the old bridge whose only
+//   triangles there have a vertex behind the eye);
+// - one that reaches into the picture, out of the box (the Original preset
+//   at 4:3 and 1x, VU_F_EXTENDED clear): not drawn, as the PS2 does not
+//   draw it. At 4:3 the frame is the picture, so every failing triangle
+//   that could show reaches it, and the picture is the PS2's;
+// - one that reaches into the picture in any other state (VU_F_EXTENDED:
+//   Enhanced, wider than 4:3, or scaled up), every vertex in front of the
+//   eye: the user's ruling (2026-10-12), "these expanded aspect ratios and
+//   resolutions need to be rendering everything in the camera that it
+//   would expect ... like what the game would still look like if they had
+//   larger resolutions and aspect ratios in mind". A game made for that
+//   picture clips such a triangle, so it is drawn, clipped, unless it
+//   belongs to an artist's card parked at the picture's edge: a
+//   free-standing strip (the run of triangles the strip flag ties together,
+//   vu_strip_of: one strip of the model, pac_makeNormalStrip; sharing no
+//   vertex position with another strip of its mesh but a double-sided
+//   copy, no VU_INDEX_JOINED, rd_mesh.c markJoinedStrips) none of whose
+//   triangles pass the test. The opening's tree card (st26a_near, a
+//   free-standing 2-triangle strip of a 12-card draw, every vertex 160 to
+//   540 units in front of the eye) and the waterfall's mist cards (issue
+//   57) stay out of the picture, as out of the box. A wall is drawn: its
+//   strip passes (issue 72: the water tower's lift wall, st20a_p2 part 28,
+//   packet 4, strip 14, two of its six triangles pass) or is joined to the
+//   rest of the surface (the old bridge's plank faces at 48:9, st08a_p4,
+//   issue 29). The unit is not the draw: the tree card's draw has 7
+//   passing triangles in its other cards;
+// - one with a vertex behind the eye that reaches into the picture: not
+//   drawn in any state (the opening's cliff st26a_p1, filmed from inside):
+//   a game made for a wide picture would not draw geometry behind the eye
+//   either. None is cut at the picture's edge (the waterfall's mist,
+//   issue 57).
+// A drawn triangle with a vertex outside takes code 36's corner rule
+// (vu_cut_position: the GS position where the vertex has one, the
+// homogeneous form of h where it is behind the eye, saturated or below GS
+// Z 0; every program computes h before the test). A HIDE triangle never
+// reaches here (vu_content_hidden); the strip test counts every triangle
+// of the strip, marked or not. The grids (vu_grid.hlsl) carry no marks: a
+// batch is their strip, and a batch none of whose triangles pass is a
+// card.
+// Two differences from a code-36 draw of the same triangle remain: code
+// 36's clipped triangles go through their own earlier pass with ABE forced
+// on (rd_replay.c draws them as the VU's fans, PRIM 0x5D), which a code-32
+// draw does not, so a mesh whose clip code flips between 32 and 36 still
+// changes the blending along its cut rim; and vu_later_out's bias needs
+// all three GS positions, so a later-marked triangle with a corner
+// saturated or below GS Z 0 is drawn without it.
+uint vu_region_rule(VuVtx a, VuVtx b, VuVtx c)
+{
+    if (a.inside && b.inside && c.inside) {
+        return VU_RULE_EXACT;
+    }
+    if ((vu_draw.z & VU_F_BEHIND_EYE) != 0u ||
+        !vu_cut_reaches_picture(vu_cut_position(a), vu_cut_position(b), vu_cut_position(c))) {
+        return VU_RULE_CLIP;
+    }
+    if ((vu_draw.z & VU_F_EXTENDED) != 0u && vu_strip.y != 0u &&
+        min(a.h.w, min(b.h.w, c.h.w)) > 0.0) {
+        return VU_RULE_STRIP;
+    }
+    return VU_RULE_DROP;
+}
+
+// The strip test's longest scan, in vertices each way: a strip of the
+// game's models has at most 64 (Packet.c pac_checkDivide: 192 qwords a
+// batch, a batch holds whole strips); a longer one (a replacement model's,
+// modelpack.c stripify) counts as having a passing triangle (not a card).
+#define VU_STRIP_SCAN 256u
+
+// Whether vertex v starts a strip (ST.w < 1, the strip flag; ST is the
+// second-last quadword of a normal_c, normal_l and cluster vertex,
+// rd_mesh.c batchIndices). flagged: the program reads the flag (mesh does
+// not: a batch is one strip).
+bool vu_strip_start(uint v, bool flagged)
+{
+    return flagged && vu_stream[vu_vertex_qw(v) + vu_draw.y - 2u].w < 1.0;
+}
+
+// The strip of kick k, as the static kicks see it (vu1_ref.h
+// vu1ref_static_kicks): x its first vertex, y one past its last, z 1 when
+// it is longer than VU_STRIP_SCAN. Its triangles are the kicks x + 2 ..
+// y - 1, every one drawn (no vertex after x starts a strip). Bounded by
+// the draw's vertices (vu_strip.xy) and, in a stream with batches
+// (vu_draw.w), by k's batch; a tagless mesh's batch starts a strip
+// (pac_makeNormalStrip and pac_makeClusterStrip write ST.w 0 on every
+// strip's first vertex, modelpack.c on every one it starts).
+uint3 vu_strip_of(uint k, bool flagged)
+{
+    uint lo = vu_strip.x;
+    uint hi = vu_strip.y;
+    uint vpb = vu_draw.w;
+    if (vpb != 0u) {
+        uint b0 = (k / vpb) * vpb;
+        lo = max(lo, b0);
+        hi = min(hi, b0 + vpb);
+    }
+    if (!flagged) {
+        return uint3(lo, hi, 0u);
+    }
+    // k and k - 1 start nothing (k is a kick): the start is at k - 2 or before
+    uint s = k - 2u;
+    uint n = 0u;
+    [loop] while (s > lo && !vu_strip_start(s, true) && n < VU_STRIP_SCAN) {
+        s--;
+        n++;
+    }
+    uint e = k + 1u;
+    uint m = 0u;
+    [loop] while (e < hi && !vu_strip_start(e, true) && m < VU_STRIP_SCAN) {
+        e++;
+        m++;
+    }
+    return uint3(s, e, n >= VU_STRIP_SCAN || m >= VU_STRIP_SCAN ? 1u : 0u);
+}
+
 // The triangle k-2, k-1, k: what the GS draws of it. me is the corner this invocation outputs.
 // mode: VU_CLIP_*; the programs without a scissor or no-test variant pass
-// VU_CLIP_REGION whatever vu_draw.z says.
-VuVSOut vu_triangle_out(VuVtx a, VuVtx b, VuVtx c, VuVtx me, uint mode)
+// VU_CLIP_REGION whatever vu_draw.z says. rule: VU_CLIP_REGION's decision,
+// vu_region_rule with VU_RULE_STRIP resolved (the others ignore it).
+VuVSOut vu_triangle_out(VuVtx a, VuVtx b, VuVtx c, VuVtx me, uint mode, uint rule)
 {
     VuVSOut o = vu_out_init();
     o.col = float4(me.rgba);
@@ -485,60 +640,10 @@ VuVSOut vu_triangle_out(VuVtx a, VuVtx b, VuVtx c, VuVtx me, uint mode)
         return o;
     }
     if (mode == VU_CLIP_REGION) {
-        // VIS-RULES items 11 and 12 (v0.6.1), kept: the window rule and the
-        // behind-the-eye drop are the PS2's at every aspect (parity).
-        // On the PS2 any vertex outside the region sets ADC on itself and
-        // the next two, and the triangle is not drawn. That test is the
-        // camera's own: the program's, on the position as computed
-        // (VuVtx.inside, the tests' probe field), and the projection is
-        // the same at every aspect. The port's rule, one camera on the
-        // native frame (user decision 2026-10-11 after v0.6.0-rc1's forest
-        // shot: "don't draw things that would've been hidden, but 4:3 is
-        // not a separate viewport, it's a camera; don't render something
-        // that will get clipped off inside of the 4:3"), the same in both
-        // presets:
-        // - all three vertices inside: drawn exactly (vu_vtx_position, on
-        //   the ftoi4 grid);
-        // - a failing triangle under photo mode's free camera
-        //   (VU_F_BEHIND_EYE) is drawn, clipped by the GPU at the native
-        //   frustum (a walkway low under the camera left a hole);
-        // - a failing triangle whose GPU-clipped extent (0 <= z <= w, a
-        //   vertex behind the eye or not) reaches into the camera's
-        //   picture (GS 2048 -+ 256 across by the native height, the
-        //   drawing camera's, vu_cut_reaches_picture) is not
-        //   drawn, as the PS2 does not draw it: the opening's cliff
-        //   (st26a_p1, filmed from inside, vertices behind the eye) and the
-        //   forest's tree card (st26a_near, a vertex past the window, every
-        //   vertex 160 to 540 units in front of the eye) stay out of the
-        //   picture, and none is cut at the picture's edge (the waterfall's
-        //   mist, issue 57);
-        // - a failing triangle wholly beside the camera's picture (seen
-        //   only on a frame wider than 4:3) is drawn, clipped by the GPU at
-        //   the native frustum: there the PS2 showed nothing, and dropped
-        //   triangles left holes (a wall with one vertex past the window,
-        //   issue 29; at 48:9 a patch of the sea at the far left of the old
-        //   bridge whose only triangles there have a vertex behind the
-        //   eye). It never touches the picture, so nothing is discarded.
-        // At 4:3 the frame is the picture, so every failing triangle that
-        // could show reaches it: the picture is the PS2's in both presets.
-        // A drawn triangle with a vertex outside takes code 36's corner
-        // rule (vu_cut_position: the GS position where the vertex has one,
-        // the homogeneous form of h where it is behind the eye, saturated
-        // or below GS Z 0; every program computes h before the test). A
-        // HIDE triangle never reaches here (vu_content_hidden).
-        // Two differences from a code-36 draw of the same triangle remain:
-        // code 36's clipped triangles go through their own earlier pass
-        // with ABE forced on (rd_replay.c draws them as the VU's fans,
-        // PRIM 0x5D), which a code-32 draw does not, so a mesh whose clip
-        // code flips between 32 and 36 still changes the blending along its
-        // cut rim; and vu_later_out's bias needs all three GS positions, so
-        // a later-marked triangle with a corner saturated or below GS Z 0
-        // is drawn without it.
-        if (a.inside && b.inside && c.inside) {
+        // the region rule (vu_region_rule)
+        if (rule == VU_RULE_EXACT) {
             o.pos = vu_vtx_position(me);
-        } else if ((vu_draw.z & VU_F_BEHIND_EYE) != 0u ||
-                   !vu_cut_reaches_picture(vu_cut_position(a), vu_cut_position(b),
-                                           vu_cut_position(c))) {
+        } else if (rule == VU_RULE_CLIP) {
             o.pos = vu_cut_position(me);
         }
         return o;

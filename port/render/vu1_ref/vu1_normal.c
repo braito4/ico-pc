@@ -93,6 +93,7 @@ static void normalCLoop(Vu1Ref *r, int clip, const float (*in)[4], VuBatchOut *o
         int adc = vu_adc_counter(&r->vi[5], restartFlag(st), inside);
         o->inside = inside;
         o->clipFlags = 0;
+        o->clipW = p[3];
         vu_xyz(o, p, adc ? 0x8000 : 0);
     }
     out->count = n;
@@ -136,6 +137,7 @@ static void normalCScissor(Vu1Ref *r, const float (*in)[4], VuBatchOut *out)
         v4_copy(win[2].clip, c);
         o->inside = 1;
         o->clipFlags = vu_clipw(c);
+        o->clipW = 1.0f; /* no region test */
         /* SCISSOR_COMMON reads the ST back from the input with vf17.xy added
          * (scissorcommcut.h:50-52) and the colour back from the output */
         v4_copy(win[2].stq, st);
@@ -252,6 +254,7 @@ static void normalLLoop(Vu1Ref *r, int spec, const float (*in)[4], VuBatchOut *o
         int adc = vu_adc_counter(&r->vi[5], restartFlag(st), inside);
         o->inside = inside;
         o->clipFlags = 0;
+        o->clipW = p[3];
         vu_xyz(o, p, adc ? 0x8000 : 0);
     }
     out->count = n;
@@ -325,6 +328,7 @@ static void normalRef(Vu1Ref *r, const float (*in)[4], VuBatchOut *out)
         int adc = vu_adc_counter(&r->vi[5], restartFlag(st), inside);
         o->inside = inside;
         o->clipFlags = 0;
+        o->clipW = p[3];
         vu_xyz(o, p, adc ? 0x8000 : 0);
     }
     out->count = n;
@@ -367,6 +371,7 @@ static void normalLScissor(Vu1Ref *r, const float (*in)[4], VuBatchOut *out)
         v4_copy(win[2].clip, c);
         o->inside = 1;
         o->clipFlags = vu_clipw(c);
+        o->clipW = 1.0f; /* no region test */
         v4_copy(win[2].stq, st);
         win[2].stq[0] = st[0] + r->vf[17][0];
         win[2].stq[1] = st[1] + r->vf[17][1];

@@ -2471,6 +2471,105 @@ static void buildModels(void)
     makeParticles();
 }
 
+/* ------------------------------------------------- joined strips */
+/* rd_mesh.c markJoinedStrips (VIS-WINDOW): a strip that shares a corner
+ * position with another strip of its mesh, not its double-sided copy,
+ * carries ICO_VU_INDEX_JOINED on every triangle of the draw's list (the
+ * region rule draws it as a wall outside the out-of-the-box state, never as
+ * a card); a free-standing strip, or one whose only neighbour is its
+ * double-sided copy, does not. */
+
+/* a prelit mesh of one batch: n corners (x, y) at z 0, a strip starting at
+   each corner with start[k] set */
+static RdMesh joinMesh(const float (*xy)[2], const uint8_t *start, int n)
+{
+    float qw[1 + 16 * 3][4];
+    memset(qw, 0, sizeof(qw));
+    const uint32_t tag = 0x8000u | (uint32_t)n;
+    memcpy(&qw[0][0], &tag, 4);
+    for (int k = 0; k < n; k++) {
+        qw[1 + k * 3][0] = xy[k][0];
+        qw[1 + k * 3][1] = xy[k][1];
+        qw[1 + k * 3][3] = 1.0f;
+        qw[2 + k * 3][2] = 1.0f;
+        qw[2 + k * 3][3] = start[k] ? 0.0f : 1.0f;
+        qw[3 + k * 3][0] = qw[3 + k * 3][1] = qw[3 + k * 3][2] = 100.0f;
+        qw[3 + k * 3][3] = 127.0f;
+    }
+    const RdVuBatchDesc bd = {0, 0, 0};
+    RdVuMeshDesc md;
+    memset(&md, 0, sizeof(md));
+    md.qw = (const float (*)[4])qw;
+    md.qwCount = (uint32_t)(1 + n * 3);
+    md.qwPerVertex = RD_VU_QW_PRELIT;
+    md.batchCount = 1;
+    md.batches = &bd;
+    md.materialCount = 1;
+    md.debugName = "joined";
+    const RdMesh m = rd_create_vu_mesh(&md);
+    CHECK(m.id != 0, "joined strips: rd_create_vu_mesh");
+    return m;
+}
+
+/* the joined mark of the triangle that kick ends in m's draw list: 1
+   marked, 0 not, -1 no such triangle */
+static int joinedAt(const RdMeshRec *m, uint32_t kick)
+{
+    for (uint32_t i = 0; i + 2 < m->indexCount; i += 3) {
+        if ((m->index[i] & ICO_VU_INDEX_MASK) / 4u == kick) {
+            const uint32_t *d = rd__mesh_draw_index(m);
+            const int j = (d[i] & ICO_VU_INDEX_JOINED) != 0;
+            return j == ((d[i + 1] & ICO_VU_INDEX_JOINED) != 0) &&
+                           j == ((d[i + 2] & ICO_VU_INDEX_JOINED) != 0)
+                       ? j
+                       : -1;
+        }
+    }
+    return -1;
+}
+
+static void joinedStripChecks(void)
+{
+    /* a quad (kicks 2, 3) and a triangle (kick 6) sharing the corner
+     * (1, 1); then a free-standing quad (kicks 9, 10) */
+    static const float kWall[11][2] = {{0, 0}, {1, 0}, {0, 1}, {1, 1}, {1, 1}, {2, 1},
+                                       {1, 2}, {5, 5}, {6, 5}, {5, 6}, {6, 6}};
+    static const uint8_t kWallStart[11] = {1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0};
+    const RdMesh wall = joinMesh(kWall, kWallStart, 11);
+    const RdMeshRec *w = rd__mesh_rec(wall.id);
+    CHECK(w && joinedAt(w, 2) == 1 && joinedAt(w, 3) == 1 && joinedAt(w, 6) == 1 &&
+              joinedAt(w, 9) == 0 && joinedAt(w, 10) == 0,
+          "joined strips: the quad and the triangle sharing a corner are joined, the "
+          "free-standing quad is not (%d %d %d %d %d)",
+          w ? joinedAt(w, 2) : -2, w ? joinedAt(w, 3) : -2, w ? joinedAt(w, 6) : -2,
+          w ? joinedAt(w, 9) : -2, w ? joinedAt(w, 10) : -2);
+    rd_destroy_vu_mesh(wall);
+
+    /* a double-sided card: the same four corners twice, the second strip
+     * turned (its back face): not joined (its back triangles carry
+     * ICO_VU_INDEX_LATER, issue 25) */
+    static const float kCard[8][2] = {{0, 0}, {1, 0}, {0, 1}, {1, 1},
+                                      {1, 0}, {0, 0}, {1, 1}, {0, 1}};
+    static const uint8_t kCardStart[8] = {1, 0, 0, 0, 1, 0, 0, 0};
+    const RdMesh card = joinMesh(kCard, kCardStart, 8);
+    const RdMeshRec *c = rd__mesh_rec(card.id);
+    CHECK(c && joinedAt(c, 2) == 0 && joinedAt(c, 3) == 0 && joinedAt(c, 6) == 0 &&
+              joinedAt(c, 7) == 0,
+          "joined strips: a double-sided card is not joined");
+    rd_destroy_vu_mesh(card);
+
+    /* the same card with a third strip on one of its corners: all three
+     * joined */
+    static const float kCard3[11][2] = {{0, 0}, {1, 0}, {0, 1}, {1, 1}, {1, 0}, {0, 0},
+                                        {1, 1}, {0, 1}, {1, 1}, {2, 1}, {1, 2}};
+    static const uint8_t kCard3Start[11] = {1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0};
+    const RdMesh card3 = joinMesh(kCard3, kCard3Start, 11);
+    const RdMeshRec *c3 = rd__mesh_rec(card3.id);
+    CHECK(c3 && joinedAt(c3, 2) == 1 && joinedAt(c3, 7) == 1 && joinedAt(c3, 10) == 1,
+          "joined strips: a double-sided card touching a third strip is joined");
+    rd_destroy_vu_mesh(card3);
+}
+
 static void recordingChecks(void)
 {
     CHECK(packetA() && packetA()->next == NULL, "one packet for the prelit model");
@@ -2499,6 +2598,7 @@ static void recordingChecks(void)
     stripPacketChecks();
     modelPackChecks();
     visRuleChecks();
+    joinedStripChecks();
 }
 
 int main(int argc, char **argv)

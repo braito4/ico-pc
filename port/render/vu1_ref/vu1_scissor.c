@@ -108,6 +108,7 @@ void vu1ref_scissor_common(Vu1Ref *r, const float pos[3][4], const float col[3][
         vu_xyz(o, v, ps2_ftoi4(v[3]));
         o->inside = 1;
         o->clipFlags = 0;
+        o->clipW = 1.0f; /* no region test */
     }
     for (int i = 0; i < 4; i++) {
         v4_copy(r->vf[1 + i], r->mem[16 + i]);

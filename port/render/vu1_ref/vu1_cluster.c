@@ -108,6 +108,7 @@ void vu1ref_cluster(Vu1Ref *r, int code, const float (*in)[4], VuBatchOut *out)
         int adc = vu_adc_counter(&r->vi[7], st[3] - 1.0f < 0.0f, inside);
         o->inside = inside;
         o->clipFlags = 0;
+        o->clipW = S[3];
         vu_xyz(o, S, adc ? 0x8000 : 0);
     }
     out->count = n;

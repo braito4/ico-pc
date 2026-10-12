@@ -86,7 +86,9 @@
  *                         (stream quadwords; '*' where the static index list
  *                         draws the triangle ending at the vertex, '^' where
  *                         that triangle overlaps an earlier one in its plane
- *                         and is drawn in front of it: issue 25)
+ *                         and is drawn in front of it: issue 25; then 'j'
+ *                         where its strip is joined to another strip of
+ *                         the mesh, ICO_VU_INDEX_JOINED: not a card)
  *   --dump-textures DIR   writes every image texture of the dump to
  *                         DIR/tex-<id>-<w>x<h>.png as decoded (RGBA8, the
  *                         alpha byte as stored: GS 0x80 = 1.0; an R8
@@ -148,7 +150,8 @@
 #include "dump_zip.h" /* port/platform: the F12 zip */
 #include "rd_internal.h"
 #include "rd_mesh.h"
-#include "font.h" /* port/ui: the overlay test's text */
+#include "../../shaders/shader_consts.h" /* ICO_VU_INDEX_*: the marks --mesh shows */
+#include "font.h"                        /* port/ui: the overlay test's text */
 
 static const char *const kNames[] = {
     "SCENE", "DISPLAY",   "SHADOW0",  "SHADOW1",   "SHADOW2",   "WORK0",
@@ -477,13 +480,15 @@ static void listMesh(const char *name)
                    br->material, br->firstVertex, br->firstVertex + br->vertexCount - 1,
                    br->indexCount);
             for (uint32_t v = br->firstVertex; v < br->firstVertex + br->vertexCount; v++) {
-                bool drawn = false, later = false;
+                bool drawn = false, later = false, joined = false;
                 for (uint32_t k = 0; k < br->indexCount; k++) {
                     const uint32_t ix = m->index[br->firstIndex + k];
+                    const uint32_t dx = rd__mesh_draw_index(m)[br->firstIndex + k];
                     drawn |= ix / 4 == v;
-                    later |= ix / 4 == v && rd__mesh_draw_index(m)[br->firstIndex + k] != ix;
+                    later |= ix / 4 == v && (dx & ICO_VU_INDEX_LATER) != 0;
+                    joined |= ix / 4 == v && (dx & ICO_VU_INDEX_JOINED) != 0;
                 }
-                printf("  %4u %c", v, later ? '^' : drawn ? '*' : ' ');
+                printf("  %4u %c%c", v, later ? '^' : drawn ? '*' : ' ', joined ? 'j' : ' ');
                 for (uint32_t q = 0; q < m->qwPerVertex; q++) {
                     const float *f = m->stream[(size_t)v * m->qwPerVertex + q];
                     printf(" (%g %g %g %g)", f[0], f[1], f[2], f[3]);

@@ -50,6 +50,24 @@ VuVtx vu_grid_vertex(uint v, uint variant, bool full)
     return o;
 }
 
+// VU_RULE_STRIP: whether a triangle of kick's strip, its batch (mesh.vsm
+// has no strip flag), passes the region test (vu_prelit_strip_passes)
+bool vu_grid_strip_passes(uint kick, uint variant)
+{
+    uint3 r = vu_strip_of(kick, false);
+    bool i0 = vu_grid_vertex(r.x, variant, false).inside;
+    bool i1 = vu_grid_vertex(r.x + 1u, variant, false).inside;
+    [loop] for (uint v = r.x + 2u; v < r.y; v++) {
+        bool i2 = vu_grid_vertex(v, variant, false).inside;
+        if (i0 && i1 && i2) {
+            return true;
+        }
+        i0 = i1;
+        i1 = i2;
+    }
+    return false;
+}
+
 VuVSOut vu_grid_main(uint vid, uint variant)
 {
     if ((vu_draw.z & VU_F_PROBE) != 0u) {
@@ -62,7 +80,11 @@ VuVSOut vu_grid_main(uint vid, uint variant)
     VuVtx b = vu_grid_vertex(kick - 1u, variant, false);
     VuVtx c = vu_grid_vertex(kick, variant, false);
     VuVtx me = vu_grid_vertex(kick - 2u + corner, variant, true);
-    return vu_triangle_out(a, b, c, me, VU_CLIP_REGION);
+    uint rule = vu_region_rule(a, b, c);
+    if (rule == VU_RULE_STRIP) {
+        rule = vu_grid_strip_passes(kick, variant) ? VU_RULE_CLIP : VU_RULE_DROP;
+    }
+    return vu_triangle_out(a, b, c, me, VU_CLIP_REGION, rule);
 }
 
 VuVSOut vu_grid_vs(uint vid : SV_VertexID)

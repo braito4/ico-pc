@@ -67,6 +67,7 @@ void vu1ref_mesh(Vu1Ref *r, int code, const float (*in)[4], VuBatchOut *out)
         int adc = vu_adc_counter(&r->vi[5], 0, inside);
         o->inside = inside;
         o->clipFlags = 0;
+        o->clipW = p[3];
         vu_xyz(o, p, adc ? 0x8000 : 0);
     }
     out->count = n;
