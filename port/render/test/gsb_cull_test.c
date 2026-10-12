@@ -37,7 +37,7 @@
  *            inside all three cull frustums.
  *   corner   the case three cameras alone miss: the eye moving 149 units
  *            along the view's +x and +y together, a box in the picture's
- *            -x, +y corner (left, and down on the screen) at t = 0.25, 300
+ *            -x, +y corner (left, and down on the screen) at t = 0.25, 120
  *            units out, outside the three cameras' frustums: kept by the
  *            eye's sweep.
  *   cut      a cut the presenter does not blend over: the eye moved 2000
@@ -48,7 +48,7 @@
  *            29 degrees none (every box kept), 301 units or 31 degrees
  *            one.
  *   margin   (VIS-RULES items 2 and 3) a box every corner of which is past
- *            a plane by less than |w| / 1024 + 1 is kept (the PS2 dropped
+ *            a plane by less than |w| / 65536 + 1 is kept (the PS2 dropped
  *            it), one past it by more is dropped; "every result the PS2's"
  *            above is the PS2's test with this margin.
  *   still    the camera the same matrix bitwise as the tick before: one
@@ -646,6 +646,17 @@ static int ballOutside(const Cam *c, const double *p, double r)
     const double tx = 1.0 / s_cull[0], ty = 1.0 / s_cull[5];
     const double nearZ = -s_cull[14] / (s_cull[10] + 1.0);
     const double nx = sqrt(1.0 + tx * tx), ny = sqrt(1.0 + ty * ty);
+    /* gsb_ClipBox drops only past the margin |w| GSB_DROP_REL +
+       GSB_DROP_ABS in clip units (GsBase.c gsbHostDropFlags; |w| at most
+       the ball's farthest depth): at most that many view units past a side
+       plane (tx / nx < 1) and half of it past the near plane (1 + s10 > 2),
+       and the near plane's gap behind the eye (-s14) must exceed it */
+    const double clipM = (fabs(q[2]) + r) * GSB_DROP_REL + GSB_DROP_ABS;
+    const double m = clipM * fmax(1.0, fmax(tx / nx, ty / ny));
+    if (clipM >= -s_cull[14]) {
+        return 0;
+    }
+    r += m;
     if (nearZ - q[2] > r) {
         return 1;
     }
@@ -688,7 +699,8 @@ static int clipBox(Box *b)
 
 /* the PS2's test (gsb_ClipBox's own code) on the current matrix, with the
    port's drop margin (v0.6.1, VIS-RULES items 2 and 3: a box is dropped
-   only when every corner is past a plane by |w| / 1024 + 1): the reference
+   only when every corner is past a plane by |w| GSB_DROP_REL +
+   GSB_DROP_ABS, GsBase.h): the reference
    for the cases with one camera */
 static int refClip(const Box *b)
 {
@@ -697,7 +709,7 @@ static int refClip(const Box *b)
         float r[4];
         ico_apply_matrix_w1(r, (const float (*)[4])ico_current_matrix, b->v[i]);
         const float w = fabsf(r[3]);
-        const float wd = w * (1.0f + 1.0f / 1024.0f) + 1.0f;
+        const float wd = w * (1.0f + GSB_DROP_REL) + GSB_DROP_ABS;
         int f = 0, d = 0;
         f |= (r[0] > w) << 0;
         f |= (r[0] < -w) << 1;
@@ -941,7 +953,9 @@ static void checkMoving(const char *what, int winW, int winH, int wantW)
 
 /* the eye moving 149 units (just inside half the limits, where three
    cameras cull) along the view's +x and +y together, a box in the
-   picture's -x, +y corner at t = 0.25, 300 units out: outside the three
+   picture's -x, +y corner at t = 0.25, 120 units out (the step's quarter,
+   26 units across and up, against the cull's 12 % margin there): outside
+   the three
    cameras' frustums (the tick before's misses it above or below, the
    half-way and this tick's at the side), inside the swept ones */
 static void checkCorner(void)
@@ -958,7 +972,7 @@ static void checkCorner(void)
     setCamera(&b);
     readProjections();
     const double tdx = halfW() / s_screen[0], tdy = halfH() / s_screen[5];
-    const double centre[3] = {c.e[0] - 0.98 * tdx * 300.0, c.e[1] + 0.98 * tdy * 300.0, 300.0};
+    const double centre[3] = {c.e[0] - 0.98 * tdx * 120.0, c.e[1] + 0.98 * tdy * 120.0, 120.0};
     Box bx = boxOf(centre, 1.0);
     int seen = 0;
     for (int i = 0; i < 8; i++) {
@@ -1298,7 +1312,7 @@ static void checkMargin(void)
         int dropped;
     } cases[] = {
         {1.0005f, 1.5f, 0}, /* past x = w by less than the margin: kept */
-        {1.5f, 2.0f, 0},    /* every corner within w (1 + 1/1024) + 1 */
+        {1.5f, 2.0f, 0},    /* every corner within w (1 + 2^-16) + 1 */
         {2.01f, 3.0f, 1},   /* past it: dropped */
         {-1.5f, -1.0005f, 0}, {-3.0f, -2.01f, 1},
     };

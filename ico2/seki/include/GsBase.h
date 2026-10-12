@@ -77,4 +77,8 @@ float gsb_HostShadowClipX(void);
 /* the largest edge clip gsb_HostShadowClipX gives (GsBase.c: a clipped end
    at GS x 2 or 4094 passes Shadow.c's range test) */
 #define GSB_SHADOW_CLIP_MAX 2046.0f
+/* gsb_ClipBox drops a box only when every corner is past a plane by
+   |w| GSB_DROP_REL + GSB_DROP_ABS (GsBase.c gsbHostDropFlags) */
+#define GSB_DROP_REL (1.0f / 65536.0f)
+#define GSB_DROP_ABS 1.0f
 #endif /* GSBASE_H */

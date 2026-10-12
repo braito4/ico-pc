@@ -2031,14 +2031,20 @@ static int gsbHostClipFlags(const float *r, float cw)
    conservative (a plane all eight corners are outside of holds the whole
    convex box outside), but a corner on a plane is a coin toss of the
    float rounding of the transform, and a box the toss drops is a hole in
-   the picture.  So a drop needs every corner outside by a relative margin:
-   |c| > |w| (1 + 1/1024) + 1, the rounding of a product of the matrices'
-   magnitudes many times over; the "inside" flags (gsbHostClipFlags, which
-   pick the VU program) stay exact, so a box this keeps is drawn by the
-   program that clips (32 or 36).  At 4:3 it only keeps boxes within the
-   margin of a plane, which the PS2 dropped or kept by the same toss. */
-#define GSB_DROP_REL (1.0f / 1024.0f)
-#define GSB_DROP_ABS 1.0f
+   the picture.  So a drop needs every corner outside by a margin:
+   |c| > |w| (1 + GSB_DROP_REL) + GSB_DROP_ABS (GsBase.h: 2^-16 and 1).
+   The rounding of a corner through the float matrix is a few ulps (2^-23)
+   of its largest term, about |w|; 2^-16 is 128 of them, and the 1 covers
+   a corner near the eye.  The relative part must stay that small: the
+   near plane's gap between z and -w is a constant (2 f n / (f - n), about
+   twice the near distance, 4 units) at every depth, so a relative margin
+   of r keeps every box more than (4 - 1) / r units behind the eye from
+   being dropped by it (1/1024, the first value, kept every box more than
+   3072 units behind: gsb_cull_test "moving"); with 2^-16 that is past
+   196608 units.  The "inside" flags (gsbHostClipFlags, which pick the VU
+   program) stay exact, so a box this keeps is drawn by the program that
+   clips (32 or 36).  At 4:3 it only keeps boxes within the margin of a
+   plane, which the PS2 dropped or kept by the same toss. */
 
 static int gsbHostDropFlags(const float *r, float cw)
 {
