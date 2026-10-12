@@ -61,7 +61,9 @@ How the picture looks.
   textures) but needs more from your graphics card. **MSAA 2x**, **4x** and
   **8x** smooth the edges of shapes and are lighter to run; they only appear
   when your graphics card supports them. This row only works with the
-  Enhanced preset.
+  Enhanced preset. It always shows what is in use: **Off** under the
+  Original preset, and **Off** when your graphics card cannot do the choice
+  you saved.
 - **Window mode** is **Windowed** (a normal window), **Borderless** (a
   window without a frame that fills the whole screen, so switching to
   another program is quick) or **Fullscreen**. In Steam Deck Game Mode the
@@ -79,7 +81,10 @@ How the picture looks.
   Uncapped. With Vertical sync on, Uncapped follows your
   screen: one new picture each time the screen shows one (and never
   fewer than sixty a second where the screen can take them). With it off,
-  Uncapped draws as fast as your computer can. On Android it starts at 60.
+  Uncapped draws as fast as your computer can. A limit equal to your
+  screen's refresh rate (60 on a 60 Hz screen, 120 on a 120 Hz screen)
+  follows the screen, so motion stays smooth, and the 144 and 240 limits
+  reach their rate. On Android it starts at 60.
 - **Video mode** is PAL 50 Hz or 60 Hz. The normal choice is 60 Hz. This
   row is only on the title screen's Options.
 

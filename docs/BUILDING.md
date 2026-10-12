@@ -404,6 +404,10 @@ the test executables without running them. A test that needs the disc
 (`vfs_disc`, `archive_disc`, `texpack_disc`) or a Vulkan device (the
 `rhi_vk*`, `rd_*`, `shaders_pixel` and `vu1` tests) exits 77 without one,
 and `SKIP_RETURN_CODE 77` makes ctest report it as skipped, which passes.
+New in v0.6.1: `steam_shortcut` (the Add to Steam list writer,
+`port/platform/steam_shortcut.c`), `movie_pad` (START is the only input that
+skips a movie), `adpcm_slots` (the sound stream slots), `coverage_corpus` and
+`coverage_check_selftest` ([below](#coverage-corpus)).
 The disc tests read `ICO_DISC_IMAGE` (default `baserom/Ico_PAL.iso`).
 `texpack_disc` also matches a PCSX2 texture pack's file names against the
 disc's textures when `ICO_TEXPACK_DIR` (default
