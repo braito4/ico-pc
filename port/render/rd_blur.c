@@ -39,6 +39,7 @@
  * RGBA8_UINT ping-pong, without the UINT copies: UNORM8 holds k / 255
  * exactly and a Load of it gives k back.
  */
+#include <math.h>
 #include <string.h>
 #include "rd_internal.h"
 
@@ -103,9 +104,17 @@ void rd__post_blur_verts(RdPostKind kind, const RdPostParams *p, const RdScreenV
  * scissor (2 .. W - 3) and the black sprite (pixels 0 .. W - 1) are
  * symmetric already, and V (v = 2y + 1) does not change.  On a scaled
  * target the hardware sprite (rd__blur_screen_fallback) has its U moved the
- * same half texel (rd_post.c records that pair too), so it samples at
- * x + s / 4 and, mirrored, x - s / 4 in the target's texels, again the
- * mirror image. */
+ * same half texel (rd_post.c records that pair too), so it would sample at
+ * x + s / 4 and, mirrored, x - s / 4 in the target's texels (s the scene's
+ * horizontal scale), again the mirror image.  A fraction of s / 4 blends two
+ * neighbouring columns over the whole frame (s = 2.8125 at 1920x1080 16:9
+ * gives 30 / 70), a softness the PS2's 1x model never had at that size, so
+ * the replay snaps the offset to a whole texel (rd__blur_snap_verts): it
+ * samples at x + round(s / 4) and, mirrored, x - round(s / 4).  The whole
+ * texel part of the bias stays (position parity), no column is blended.  A
+ * whole s is left as it is: every block of s texels then holds one GS
+ * pixel's PS2 blend, and the block averages equal the 1x picture
+ * (rd_present_test scale2). */
 void rd__blur_uv_rect(uint32_t kind, const RdPostRec *p, float uv[4])
 {
     memcpy(uv, p->uv, sizeof(p->uv));
@@ -138,4 +147,30 @@ uint32_t rd__blur_screen_fallback(uint32_t kind, const RdPostRec *p, const RdSta
         return ~0u;
     }
     return p->lutOffset + (rd__mirror_on() ? 2u * (uint32_t)sizeof(RdScreenVtx) : 0u);
+}
+
+/* The two vertices of the hardware sprite (rd__blur_screen_fallback's pair,
+ * already copied by the caller) with S moved so the sample lands on a
+ * texel centre of the scene: by (round(s / 4) - s / 4) / s GS texels, in
+ * 1/16 units, the sign reversed with the mirror on (the sprite's bias is
+ * -s / 4 there).  s is the scene target's horizontal scale; a whole s
+ * keeps the PS2 blend. */
+void rd__blur_snap_verts(const RdStateBlock *st, RdScreenVtx v[2])
+{
+    const RdTexRec *t = st->ds.texEnabled ? rd__tex_rec(st->tex) : NULL;
+    const RdTargetRec *src = t && t->kind == RD_TEXKIND_TARGET ? rd__target_rec(t->target) : NULL;
+    if (!src || !(src->sx > 0.0f)) {
+        return;
+    }
+    const float sx = src->sx;
+    if (sx == floorf(sx)) {
+        return; /* a whole scale is the PS2's quarter pixel, replicated (2x averages to 1x) */
+    }
+    const float quarter = sx * 0.25f;
+    float d = (floorf(quarter + 0.5f) - quarter) / sx * 16.0f;
+    if (rd__mirror_on()) {
+        d = -d;
+    }
+    v[0].s += d;
+    v[1].s += d;
 }

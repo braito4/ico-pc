@@ -1160,6 +1160,7 @@ void rd__post_blur_verts(RdPostKind kind, const RdPostParams *p, const RdScreenV
  * drawn with instead of the model (the reduction on a scaled target), or
  * ~0u. */
 uint32_t rd__blur_screen_fallback(uint32_t kind, const RdPostRec *p, const RdStateBlock *st);
+void rd__blur_snap_verts(const RdStateBlock *st, RdScreenVtx v[2]);
 /* rd_blur.c: the UV rectangle the replay draws a recorded sprite with: the
  * recorded one, except the reduction's with the mirror on, which samples
  * the mirror image of the unmirrored sample points. */

@@ -5153,9 +5153,16 @@ static void doBlurSpriteDraw(Replay *r, const RdFrame *f, const RdCmd *c)
         sc.b[0] = RD_PRIM_SPRITES;
         sc.b[1] = RD_SPACE_FULLFRAME;
         sc.b[2] = 1;
-        sc.u[0] = screenVtx;
+        sc.u[0] = 0;
         sc.u[1] = 2;
-        doScreen(r, f, &sc);
+        /* S moved to a whole scene texel (rd_blur.c rd__blur_snap_verts), in
+         * a frame of its own: the recorded pair stays as it is */
+        RdScreenVtx snap[2];
+        memcpy(snap, f->payload + screenVtx, sizeof(snap));
+        rd__blur_snap_verts(&r->st, snap);
+        RdFrame sf = *f;
+        sf.payload = (uint8_t *)snap;
+        doScreen(r, &sf, &sc);
         flushScreenRun(r); /* the fallback sprite is a run of its own */
         return;
     }

@@ -2607,6 +2607,108 @@ static uint8_t *clampRun(int full, float scale, int fullHeight, int mirror, int 
     return p && *w >= 512 && *h >= 64 ? p : NULL;
 }
 
+/* Reduction snap (issue 73).  SCENE is alternating 0 / 255 GS columns
+ * (symmetric about the frame's centre), the reduction runs at a scale, and
+ * every DISPLAY texel inside the crop is exactly 0 or 255: the hardware
+ * sprite's sample lands on a texel centre and no neighbouring columns are
+ * blended (the old x + s / 4 gave a 30 / 70 mix at 2.8125, 41 / 59 at
+ * 5.625).  The mirrored run is the mirror image of the plain one. */
+static uint8_t *snapRun(float scale, int mirror, uint32_t *w, uint32_t *h)
+{
+    static uint8_t keep[2][2880 * 1440 * 4];
+    static int which;
+    static const uint8_t black[4] = {0, 0, 0, 0x80}, white[4] = {255, 255, 255, 0x80};
+    RdSettings s = originalSettings();
+    s.mirror = (uint8_t)mirror;
+    s.preset = RD_PRESET_ENHANCED;
+    s.sceneScale = scale;
+    if (!rd_init(512, 512, &s, NULL)) {
+        return NULL;
+    }
+    rd_begin_frame();
+    rd_select_list(0);
+    rd_clear_target(rd_target(RD_TARGET_SCENE), black, 1, 0);
+    rd_set_target(rd_target(RD_TARGET_SCENE), rd_target(RD_TARGET_SCENE), 512, 512, 1);
+    opaque2D();
+    rd_texture_off();
+    for (int i = 0; i < 512; i++) {
+        const int m = i < 256 ? i : 511 - i;
+        if (m & 1) {
+            sprite(RD_SPACE_FULLFRAME, i * 16, 0, (i + 1) * 16, 512 * 16, white, 0, 0, 0, 0);
+        }
+    }
+    rd_select_list(12);
+    RdPostParams pp;
+    memset(&pp, 0, sizeof(pp));
+    pp.rgba[0] = pp.rgba[1] = pp.rgba[2] = 128;
+    rd_post(RD_POST_REDUCTION, &pp);
+    rd_end_frame(0);
+    uint8_t *p = readTarget(RD_TARGET_DISPLAY, w, h);
+    CHECK(rhi_vk_validation_error_count() == 0, "reduction snap: %u validation errors",
+          rhi_vk_validation_error_count());
+    if (p && (size_t)*w * *h * 4 <= sizeof(keep[0])) {
+        which ^= 1;
+        memcpy(keep[which], p, (size_t)*w * *h * 4);
+        p = keep[which];
+    } else {
+        p = NULL;
+    }
+    rd_shutdown();
+    return p;
+}
+
+static void checkReductionSnapAt(float scale)
+{
+    const int whole = scale == floorf(scale);
+    uint32_t w = 0, h = 0, w2 = 0, h2 = 0;
+    const uint8_t *a = snapRun(scale, 0, &w, &h);
+    if (!a) {
+        CHECK(0, "reduction snap %g: readback", (double)scale);
+        return;
+    }
+    static uint8_t plain[2880 * 1440 * 4];
+    memcpy(plain, a, (size_t)w * h * 4);
+    const uint8_t *m = snapRun(scale, 1, &w2, &h2);
+    if (!m || w2 != w || h2 != h) {
+        CHECK(0, "reduction snap %g: mirrored readback", (double)scale);
+        return;
+    }
+    const uint32_t pad = (uint32_t)(6.0f * scale) + 1;
+    /* the plain sample is x + b, the mirrored one x - b, so the mirrored
+     * texel x is the plain texel x - 2b (b = s / 4, a whole texel unless s
+     * is whole: 2x keeps the PS2 blend, b = 0.5) */
+    const uint32_t shift =
+        whole ? (uint32_t)(scale / 2.0f + 0.5f) : 2u * (uint32_t)(scale / 4.0f + 0.5f);
+    uint32_t mixed = 0, mixedM = 0, lit = 0, differ = 0;
+    for (uint32_t y = h / 4; y < h / 4 + 8; y++) {
+        for (uint32_t x = pad; x + pad < w; x++) {
+            const uint8_t v = plain[((size_t)y * w + x) * 4];
+            const uint8_t vm = m[((size_t)y * w + x) * 4];
+            mixed += v != 0 && v != 255;
+            mixedM += vm != 0 && vm != 255;
+            lit += v == 255;
+            differ += vm != plain[((size_t)y * w + (x - shift)) * 4];
+        }
+    }
+    CHECK(lit > 0, "reduction snap %g: the columns are drawn", (double)scale);
+    if (!whole || scale >= 4.0f) {
+        CHECK(mixed == 0, "reduction snap %g: %u blended texels (plain)", (double)scale, mixed);
+        CHECK(mixedM == 0, "reduction snap %g: %u blended texels (mirrored)", (double)scale,
+              mixedM);
+    }
+    CHECK(differ == 0,
+          "reduction snap %g: the mirrored run is not the plain one shifted (%u texels)",
+          (double)scale, differ);
+}
+
+static void checkReductionSnap(void)
+{
+    static const float scales[] = {2.8125f, 3.75f, 2.0f, 4.0f, 5.625f};
+    for (size_t i = 0; i < sizeof(scales) / sizeof(scales[0]); i++) {
+        checkReductionSnapAt(scales[i]);
+    }
+}
+
 /* A draw that samples a render target clamps at its edges with the option
  * on: SCENE blue with red from column 8 on, drawn into WORK0 (256 x 128)
  * through a sprite whose u starts at -8, so WORK0's columns 0..7 read
@@ -4031,6 +4133,7 @@ int main(int argc, char **argv)
     checkFullPixelSharp(1440, 1080);
     checkFullPixelClamp();
     checkFullPixelTargetWrap();
+    checkReductionSnap();
     checkFullPixelBands();
     checkFullPixelCrtOverlay();
     checkMips();
