@@ -463,28 +463,54 @@ static void postFilmNoise(const RdPostParams *p)
         rd_texture(rd_target_texture(p->src, RD_VIEW_RGBA), RD_TEXFN_MODULATE, RD_TCC_RGBA);
     }
     prim(1, 0); /* PRIM 0x56: sprite, TME, ABE, ST */
-    RdScreenVtx v[2];
-    memset(v, 0, sizeof(v));
-    /* ST 0,0 at XYZ2 0xFFFFFFFF70007000; ST scale,scale at 0xFFFFFFFF90009000
-       for the 512 columns of the 4:3 picture.  At a wider native frame the
-       sprite spans the whole frame: x grows by frameX, s by the same ratio
-       k = gsW / 512 about the middle (the REPEAT wrap carries the grain
-       past the 4:3 edges), so the density and the 4:3 columns' texels
-       stay the game's; k is 1 at 4:3 and the values are the game's */
+    /* ST 0,0 at XYZ2 0xFFFFFFFF70007000; ST scale,scale at 0xFFFFFFFF90009000:
+       the 512 columns of the 4:3 picture, exactly the game's sprite at every
+       width.  A wider native frame (gsW > 512) adds a sprite on each side to
+       the frame's edge, the same texel density (s runs on at scale / 8192
+       per x unit, continuous at the seams, the REPEAT wrap carries it), so
+       the 4:3 columns' sub-texel phase is the game's and byte-identical */
     const float k = (float)(g_rd.gsW ? g_rd.gsW : ICO_FRAME_BASE_W) / (float)ICO_FRAME_BASE_W;
-    v[0].x = 0x8000 - frameX(4096);
-    v[1].x = 0x8000 + frameX(4096);
-    v[0].y = 0x7000;
-    v[1].y = 0x9000;
-    v[0].z = v[1].z = 0xFFFFFFFFu;
-    v[0].s = scale * (1.0f - k) * 0.5f;
-    v[1].s = scale * (1.0f + k) * 0.5f;
-    v[0].t = 0.0f;
-    v[1].t = scale;
-    v[0].q = v[1].q = 1.0f;
-    memcpy(v[0].rgba, col, 4);
-    memcpy(v[1].rgba, col, 4);
-    rd_screen_prims(RD_PRIM_SPRITES, v, 2, RD_SPACE_FULLFRAME, 0, 0);
+    const int32_t edge = frameX(4096);
+
+    struct {
+        int32_t x0, x1;
+        float s0, s1;
+    } part[3];
+
+    int n = 0;
+    if (edge > 4096) {
+        part[n].x0 = 0x8000 - edge;
+        part[n].x1 = 0x7000;
+        part[n].s0 = scale * (1.0f - k) * 0.5f;
+        part[n++].s1 = 0.0f;
+    }
+    part[n].x0 = 0x7000;
+    part[n].x1 = 0x9000;
+    part[n].s0 = 0.0f;
+    part[n++].s1 = scale;
+    if (edge > 4096) {
+        part[n].x0 = 0x9000;
+        part[n].x1 = 0x8000 + edge;
+        part[n].s0 = scale;
+        part[n++].s1 = scale * (1.0f + k) * 0.5f;
+    }
+    for (int i = 0; i < n; i++) {
+        RdScreenVtx v[2];
+        memset(v, 0, sizeof(v));
+        v[0].x = part[i].x0;
+        v[1].x = part[i].x1;
+        v[0].y = 0x7000;
+        v[1].y = 0x9000;
+        v[0].z = v[1].z = 0xFFFFFFFFu;
+        v[0].s = part[i].s0;
+        v[1].s = part[i].s1;
+        v[0].t = 0.0f;
+        v[1].t = scale;
+        v[0].q = v[1].q = 1.0f;
+        memcpy(v[0].rgba, col, 4);
+        memcpy(v[1].rgba, col, 4);
+        rd_screen_prims(RD_PRIM_SPRITES, v, 2, RD_SPACE_FULLFRAME, 0, 0);
+    }
 }
 
 static void postComposite(const RdPostParams *p)
