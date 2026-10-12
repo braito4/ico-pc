@@ -5,8 +5,8 @@
 #   tools/dev_build.sh <worktree-or-.> <target>... [-- <ctest args>]
 #
 #   tools/dev_build.sh . ico_pc rd_present_test -- -R rd_present
-#   tools/dev_build.sh /path/to/worktree rd_blur_test -- -R '^rd_blur$'
-#   tools/dev_build.sh . ico_pc tests -- -L render      (every test program, one area)
+#   tools/dev_build.sh /path/to/worktree rd_blur_test -- -R '^rd_blur\.'
+#   tools/dev_build.sh . ico_pc tests -- -L render -j4  (every test program, one area; -j4 is the gate's)
 #   tools/dev_build.sh . ico_pc                        (build only)
 #
 # What it does, and nothing else:

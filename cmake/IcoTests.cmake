@@ -134,3 +134,36 @@ function(ico_finalize_tests)
         endif()
     endforeach()
 endfunction()
+
+# ico_add_sharded_test(<name> <shards> PROGRAM <target> [ARGS <args>...]
+#                      [WORKING_DIRECTORY <dir>] [PROPERTIES <prop> <value>...])
+#
+# A slow test program that takes `--shard k/N` and `--list-cases`
+# (port/test/ico_shard.h) registered as <name>.1of<N> ... <name>.<N>of<N>, which
+# together run every case once, so ctest -j runs them side by side. Each shard
+# gets the PROPERTIES and the area LABELS of an ordinary test. <name>.cases (cheap,
+# no device) checks that the program's cases are split over the shards without a
+# case missing or in two: cmake/IcoShardCheck.cmake. The shards' names are left in
+# <name>_SHARDS of the caller. "@SHARD@" in ARGS is the shard's number (a folder of its
+# own to write in).
+function(ico_add_sharded_test name shards)
+    cmake_parse_arguments(PARSE_ARGV 2 _s "" "PROGRAM;WORKING_DIRECTORY" "ARGS;PROPERTIES")
+    set(_wd "")
+    if(_s_WORKING_DIRECTORY)
+        set(_wd WORKING_DIRECTORY "${_s_WORKING_DIRECTORY}")
+    endif()
+    set(_names "")
+    foreach(_k RANGE 1 ${shards})
+        set(_n ${name}.${_k}of${shards})
+        list(APPEND _names ${_n})
+        string(REPLACE "@SHARD@" "${_k}" _args "${_s_ARGS}")
+        add_test(NAME ${_n} COMMAND ${_s_PROGRAM} ${_args} --shard ${_k}/${shards} ${_wd})
+        if(_s_PROPERTIES)
+            set_tests_properties(${_n} PROPERTIES ${_s_PROPERTIES})
+        endif()
+    endforeach()
+    set(${name}_SHARDS ${_names} PARENT_SCOPE) # for set_tests_properties on all shards
+    add_test(NAME ${name}.cases
+             COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=$<TARGET_FILE:${_s_PROGRAM}>" -DSHARDS=${shards}
+                     "-DARGS=${_s_ARGS}" -P "${CMAKE_SOURCE_DIR}/cmake/IcoShardCheck.cmake")
+endfunction()

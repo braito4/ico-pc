@@ -17,7 +17,7 @@ tools/fetch_toolchain.sh          # about 1.6 GB under tools/toolchain/, no root
 CMAKE=tools/toolchain/cmake/bin
 $CMAKE/cmake --preset linux-x64 -DICO_HEADLESS=OFF -DICO_LINK_EXE=ON
 $CMAKE/cmake --build build-host/linux-x64 --target all tests
-$CMAKE/ctest --test-dir build-host/linux-x64
+$CMAKE/ctest --test-dir build-host/linux-x64 -j4
 ```
 
 The test programs are not part of the default target: `--target all tests`
@@ -194,7 +194,7 @@ Agents and developers working on one change build only what it touches.
 
 ```sh
 tools/dev_build.sh . ico_pc rd_present_test -- -R '^rd_present$'
-tools/dev_build.sh /path/to/worktree ico_pc tests -- -L render -j2
+tools/dev_build.sh /path/to/worktree ico_pc tests -- -L render -j4
 ```
 
 `tools/dev_build.sh <worktree-or-.> <target>... [-- <ctest args>]` configures
@@ -214,6 +214,24 @@ start the game), builds exactly the named targets at `-j4` under `flock` on
   test program; `--target rd_present_test` one. `ctest` on a tree whose test
   programs were not built reports each of those tests as "Not Run" and fails:
   it never passes with nothing run. CI builds `--target all tests`.
+- **Parallel tests and shards.** The gate runs `ctest -j4` (CI passes
+  `--parallel 4`; the tests use well under 1 GB each, `rd_pixel` the most at
+  about 0.8 GB, so four at once fit in 12 GB). `tools/dev_build.sh` passes its
+  ctest arguments through, so a whole-area run is
+  `tools/dev_build.sh . ico_pc tests -- -L render -j4`. A test program that
+  takes minutes in one process is split into shards that ctest runs side by
+  side: `rd_blur`, `rd_mesh` (and its `_mali` and `_minlimits` runs) register as
+  `<name>.1of4` ... `<name>.4of4` through `ico_add_sharded_test` in
+  `cmake/IcoTests.cmake`. The program lists its cases once with a weight
+  (`port/test/ico_shard.h`), `--shard k/N` runs the cases shard k owns (the
+  heaviest case goes to the shard with the least weight so far, so the split is
+  a function of the table and N), and `--list-cases` prints who owns what.
+  `<name>.cases` fails when a case is in no shard or in two, and a program stops
+  when `main()` reaches a case in another order than its table or ends before
+  the last one, so a case added without its table entry cannot be skipped. A
+  case that needs another case's result belongs in the same table entry.
+  Run by hand, a program without `--shard` runs every case. `-R '^rd_blur\.'`
+  selects all of one test's shards.
 - **Labels.** Each test carries the label of the directory that registers it,
   so `ctest -L render` runs one area: `render` (`port/render`), `ui`,
   `platform` (`port/platform`, `port/input`, `port/config`), `audio`, `game`

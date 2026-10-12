@@ -98,6 +98,7 @@
 #include "staticBlur.h"
 #include "debug.h"
 #include "main.h"
+#include "../../test/ico_shard.h"
 
 static int failures;
 
@@ -2961,8 +2962,29 @@ static void checkPipelines(void)
     printf("  pipelines: %u created (%d fx), %u reachable\n", rd__pipeline_count(), fx, n);
 }
 
-int main(void)
+/* the weights are each case's seconds in a whole run (255 s at -j2 on 4 cores); the
+   aura case (600 frames, each fed by the one before) is the shortest a shard can be */
+static const IcoShardCase k_cases[] = {
+    {"bilerp_pcsx2", 1},
+    {"effects", 2},
+    {"dump", 1},
+    {"motion_blur", 46},
+    {"aura", 81},
+    {"cut_presents", 1},
+    {"motion_blur_presents", 40},
+    {"queen_mirage", 10},
+    {"queen_presents", 1},
+    {"motion_blur_presents_scaled", 41},
+    {"feedback_wide", 25},
+    {"shrinks_wide_device", 3},
+    {"motion_blur_wide", 4},
+};
+
+int main(int argc, char **argv)
 {
+    if (ico_shard_start(argc, argv, k_cases, ICO_SHARD_COUNT(k_cases))) {
+        return ico_shard_exit();
+    }
     rd__set_not_implemented_fatal(true); /* a stub command replayed stops the test */
     printf("rd_blur_test\n");
     setMatrices();
@@ -3039,24 +3061,57 @@ int main(void)
     makeImage(1, 0);
     s_imgTex = rd_create_texture(W, H, s_img, RD_TEXA_80_80, "rd_blur_test image");
 
-    checkBilerpPcsx2();
-    checkEffects();
-    checkDump();
-    checkMotionBlur();
-    checkAura();
-    checkCutPresents();
-    checkMotionBlurPresents(); /* issue 28 */
+    /* the cases, in the order they run (ico_shard.h): the first seven share
+       one device, the rest each start their own */
+    if (ico_shard_take("bilerp_pcsx2")) {
+        checkBilerpPcsx2();
+    }
+    if (ico_shard_take("effects")) {
+        checkEffects();
+    }
+    if (ico_shard_take("dump")) {
+        checkDump();
+    }
+    if (ico_shard_take("motion_blur")) {
+        checkMotionBlur();
+    }
+    if (ico_shard_take("aura")) {
+        checkAura();
+    }
+    if (ico_shard_take("cut_presents")) {
+        checkCutPresents();
+    }
+    if (ico_shard_take("motion_blur_presents")) {
+        checkMotionBlurPresents(); /* issue 28 */
+    }
 
+    /* the pipelines the cases above created (this shard's) are all in the
+       reachable set; every shard runs these two */
     checkPipelines();
     CHECK(rhi_vk_validation_error_count() == 0, "%u validation errors",
           rhi_vk_validation_error_count());
     CHECK(rd__not_implemented_count() == 0, "no stubbed command replayed");
-    checkQueenMirage(); /* re-initialises rd (NTSC, 1x, 4x) */
-    checkQueenPresents();
-    checkMotionBlurPresentsScaled(); /* issue 28: re-initialises rd (2x) */
-    checkFeedbackWide();             /* W4, issue 61: re-initialises rd (W 512, 2048) */
-    checkShrinksWideDevice();        /* the shrink anchor: re-initialises rd (W 512, 1536) */
-    checkMotionBlurWide();           /* the motion blur's 4:3 columns: re-initialises rd */
+    if (ico_shard_take("queen_mirage")) {
+        checkQueenMirage(); /* re-initialises rd (NTSC, 1x, 4x) */
+    }
+    if (ico_shard_take("queen_presents")) {
+        checkQueenPresents();
+    }
+    if (ico_shard_take("motion_blur_presents_scaled")) {
+        checkMotionBlurPresentsScaled(); /* issue 28: re-initialises rd (2x) */
+    }
+    if (ico_shard_take("feedback_wide")) {
+        checkFeedbackWide(); /* W4, issue 61: re-initialises rd (W 512, 2048) */
+    }
+    if (ico_shard_take("shrinks_wide_device")) {
+        checkShrinksWideDevice(); /* the shrink anchor: re-initialises rd (W 512, 1536) */
+    }
+    if (ico_shard_take("motion_blur_wide")) {
+        checkMotionBlurWide(); /* the motion blur's 4:3 columns: re-initialises rd */
+    }
+    if (ico_shard_finish() != 0) {
+        return 1;
+    }
     if (failures) {
         printf("rd_blur_test: %d failures\n", failures);
         return 1;

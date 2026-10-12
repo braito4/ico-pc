@@ -644,8 +644,9 @@ if(ICO_RUN_TESTS)
     # (issue 76): 77 without the disc image
     add_test(NAME gsb_cull_stage COMMAND gsb_cull_test --stage "${ICO_DISC_IMAGE}")
     set_tests_properties(gsb_cull_stage PROPERTIES SKIP_RETURN_CODE 77)
-    add_test(NAME rd_mesh COMMAND rd_mesh_test "${ICO_DISC_IMAGE}")
-    set_tests_properties(rd_mesh PROPERTIES SKIP_RETURN_CODE 77)
+    # 50 s of it is the disc's models, in four slices: four shards (port/test/ico_shard.h)
+    ico_add_sharded_test(rd_mesh 4 PROGRAM rd_mesh_test ARGS "${ICO_DISC_IMAGE}"
+                         PROPERTIES SKIP_RETURN_CODE 77)
     add_test(NAME modelpack COMMAND modelpack_test "${CMAKE_CURRENT_BINARY_DIR}")
     set_tests_properties(modelpack PROPERTIES SKIP_RETURN_CODE 77)
     add_test(NAME rd_shadow COMMAND rd_shadow_test)
@@ -663,8 +664,10 @@ if(ICO_RUN_TESTS)
             set_tests_properties(fog_lut_arm64 PROPERTIES ENVIRONMENT "QEMU=${ICO_QEMU_AARCH64}")
         endif()
     endif()
-    add_test(NAME rd_blur COMMAND rd_blur_test WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
-    set_tests_properties(rd_blur PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 1500)
+    # 255 s in one process: four shards of its cases (port/test/ico_shard.h)
+    ico_add_sharded_test(rd_blur 4 PROGRAM rd_blur_test
+                         WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+                         PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 1500)
     set_tests_properties(rd_pixel PROPERTIES SKIP_RETURN_CODE 77 FIXTURES_SETUP rd_dump)
     # the dump rd_pixel leaves behind, through the tool
     add_test(NAME rd_replay_tool
@@ -755,9 +758,10 @@ if(ICO_RUN_TESTS)
     endif()
     if(_env)
         set_tests_properties(rd_water PROPERTIES ENVIRONMENT "${_env}")
-        set_tests_properties(rd_pixel rd_replay_tool rd_layout rd_tex rd_gsbase rd_mesh modelpack
-                             rd_shadow rd_fog rd_blur rd_raw rd_debug rd_present rd_crt rd_interp rd_mirror rd_msaa rd_perf rd_native PROPERTIES ENVIRONMENT
+        set_tests_properties(rd_pixel rd_replay_tool rd_layout rd_tex rd_gsbase ${rd_mesh_SHARDS} modelpack
+                             rd_shadow rd_fog rd_raw rd_debug rd_present rd_crt rd_interp rd_mirror rd_msaa rd_perf rd_native PROPERTIES ENVIRONMENT
                                                                            "${_env}")
+        set_tests_properties(${rd_blur_SHARDS} PROPERTIES ENVIRONMENT "${_env}")
     endif()
     # the same tests and expectations in the two-pass blend
     # fallback (ICO_RD_NO_DUAL=1: lavapipe has dualSrcBlend, so it is forced)
@@ -974,8 +978,8 @@ if(ICO_RUN_TESTS)
         add_test(NAME ${t}_mali COMMAND ${t}_test "${_ml}")
         list(APPEND _ico_mali_tests ${t}_mali)
     endforeach()
-    add_test(NAME rd_mesh_mali COMMAND rd_mesh_test "${ICO_DISC_IMAGE}")
-    list(APPEND _ico_mali_tests rd_mesh_mali)
+    ico_add_sharded_test(rd_mesh_mali 4 PROGRAM rd_mesh_test ARGS "${ICO_DISC_IMAGE}")
+    list(APPEND _ico_mali_tests ${rd_mesh_mali_SHARDS})
     set_tests_properties(${_ico_mali_tests} PROPERTIES SKIP_RETURN_CODE 77 WORKING_DIRECTORY "${_ml}"
                                                        ENVIRONMENT "${_env_mali}")
     # the same tests and expectations at the limits every Vulkan device is
@@ -987,9 +991,9 @@ if(ICO_RUN_TESTS)
     file(MAKE_DIRECTORY "${_mn}")
     add_test(NAME rd_pixel_minlimits COMMAND rd_pixel_test "${_mn}")
     add_test(NAME rd_present_minlimits COMMAND rd_present_test "${_mn}")
-    add_test(NAME rd_mesh_minlimits COMMAND rd_mesh_test "${ICO_DISC_IMAGE}")
+    ico_add_sharded_test(rd_mesh_minlimits 4 PROGRAM rd_mesh_test ARGS "${ICO_DISC_IMAGE}")
     add_test(NAME rd_interp_minlimits COMMAND rd_interp_test)
-    set_tests_properties(rd_pixel_minlimits rd_present_minlimits rd_mesh_minlimits
+    set_tests_properties(rd_pixel_minlimits rd_present_minlimits ${rd_mesh_minlimits_SHARDS}
                          rd_interp_minlimits
                          PROPERTIES SKIP_RETURN_CODE 77 WORKING_DIRECTORY "${_mn}"
                                     ENVIRONMENT "${_env_minlimits}")

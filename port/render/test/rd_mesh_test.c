@@ -136,6 +136,7 @@ static int failures;
         }                                                                                          \
     } while (0)
 #include "mesh_env.h"
+#include "../../test/ico_shard.h"
 
 static Sub15C s_objA, s_objB;
 
@@ -2383,7 +2384,11 @@ static long boxCheckModel(const PObjModel *m, const unsigned char *lo, const uns
     return n;
 }
 
-static void boxDiscChecks(const char *disc)
+#define BOX_SLICES 4
+
+/* the disc's models whose number among the .p2o members is slice (mod BOX_SLICES): the
+   slices together are every model, and each is a case of its own (ico_shard.h) */
+static void boxDiscChecks(const char *disc, int slice)
 {
     IcoVfs *vfs = disc ? ico_vfs_mount(&ico_vfs_iso9660, disc) : NULL;
     if (!vfs) {
@@ -2397,11 +2402,15 @@ static void boxDiscChecks(const char *disc)
     const size_t room = sizeof(s_arena) - BOX_IMAGE_AT;
     long models = 0, verts = 0, bad = 0, tooBig = 0;
     int offsetDone = 0;
+    int ordinal = 0;
     for (int i = 0; i < members; i++) {
         const char *name = ico_df_member_name(i);
         const size_t len = name ? strlen(name) : 0;
         if (len < 4 || name[len - 4] != '.' || (name[len - 3] | 0x20) != 'p' ||
             name[len - 2] != '2' || (name[len - 1] | 0x20) != 'o' || ico_df_member(i, &m) != 0) {
+            continue;
+        }
+        if (ordinal++ % BOX_SLICES != slice) {
             continue;
         }
         if (m.size > room) {
@@ -2447,7 +2456,7 @@ static void boxDiscChecks(const char *disc)
     printf("  boxes: %ld models, %ld strip vertices, %ld outside their boxes, %ld too big for "
            "the arena\n",
            models, verts, bad, tooBig);
-    CHECK(models > 100 && verts > 0 && bad == 0 && tooBig == 0,
+    CHECK(models > 100 / BOX_SLICES && verts > 0 && bad == 0 && tooBig == 0,
           "boxes: every strip vertex of the disc's %ld models inside its part's and its object's "
           "box (%ld outside, %ld models not loaded)",
           models, bad, tooBig);
@@ -2601,8 +2610,19 @@ static void recordingChecks(void)
     joinedStripChecks();
 }
 
+/* the cases in the order main() runs them (ico_shard.h); the weights are seconds of a whole
+   run */
+static const IcoShardCase k_cases[] = {
+    {"recording", 1},        {"strip_disc", 1},  {"box_disc_0", 14},      {"box_disc_1", 14},
+    {"box_disc_2", 15},      {"box_disc_3", 15}, {"gpu_prims", 1},        {"stretch_same", 1},
+    {"closing_original", 1}, {"chain", 1},       {"stretch_enhanced", 1},
+};
+
 int main(int argc, char **argv)
 {
+    if (ico_shard_start(argc, argv, k_cases, ICO_SHARD_COUNT(k_cases))) {
+        return ico_shard_exit();
+    }
     rd__set_not_implemented_fatal(true); /* a stub command replayed stops the test */
     if (!rd__init_record_only(512, 512)) {
         printf("FAIL rd__init_record_only\n");
@@ -2611,9 +2631,19 @@ int main(int argc, char **argv)
     dl_Init();
     setup();
     buildModels();
-    recordingChecks();
-    stripDiscChecks(argc > 1 ? argv[1] : NULL);
-    boxDiscChecks(argc > 1 ? argv[1] : NULL);
+    if (ico_shard_take("recording")) {
+        recordingChecks();
+    }
+    if (ico_shard_take("strip_disc")) {
+        stripDiscChecks(argc > 1 ? argv[1] : NULL);
+    }
+    static const char *const boxCases[BOX_SLICES] = {"box_disc_0", "box_disc_1", "box_disc_2",
+                                                     "box_disc_3"};
+    for (int q = 0; q < BOX_SLICES; q++) {
+        if (ico_shard_take(boxCases[q])) {
+            boxDiscChecks(argc > 1 ? argv[1] : NULL, q);
+        }
+    }
     rd_shutdown();
     if (failures) {
         printf("rd_mesh_test: %d failures\n", failures);
@@ -2632,12 +2662,16 @@ int main(int argc, char **argv)
     gif_HostFrameReset();
     setup();
     buildScene();
-    gpuCase("prelit 32", recPrelit, refPrelit32, RD_PRIM_TRIANGLES, 2000);
-    gpuCase("prelit 36 (scissor)", recScissor, refPrelit36, RD_PRIM_TRIANGLES, 2000);
-    gpuCase("cluster 20", recordCluster, refClusterA, RD_PRIM_TRIANGLES, 2000);
-    gpuCase("grid 20", recordGrid, refGrid, RD_PRIM_TRIANGLES, 2000);
-    gpuCase("particle 18", recordParticles, refParticles, RD_PRIM_SPRITES, 200);
-    stretchSamePixels();
+    if (ico_shard_take("gpu_prims")) {
+        gpuCase("prelit 32", recPrelit, refPrelit32, RD_PRIM_TRIANGLES, 2000);
+        gpuCase("prelit 36 (scissor)", recScissor, refPrelit36, RD_PRIM_TRIANGLES, 2000);
+        gpuCase("cluster 20", recordCluster, refClusterA, RD_PRIM_TRIANGLES, 2000);
+        gpuCase("grid 20", recordGrid, refGrid, RD_PRIM_TRIANGLES, 2000);
+        gpuCase("particle 18", recordParticles, refParticles, RD_PRIM_SPRITES, 200);
+    }
+    if (ico_shard_take("stretch_same")) {
+        stretchSamePixels();
+    }
 
     /* every pipeline created is in the enumerated reachable set */
     static RdPipeKeyInt keys[RD_PIPELINE_REACHABLE_MAX];
@@ -2656,8 +2690,12 @@ int main(int argc, char **argv)
         CHECK(found, "created pipeline %u (prog %u vs %u blend %u z %u/%u) is not enumerated", i,
               k->gs.program, k->vs, k->gs.blend, k->gs.ztst, k->gs.zwrite);
     }
-    closingPixels(0);
-    chainPixels();
+    if (ico_shard_take("closing_original")) {
+        closingPixels(0);
+    }
+    if (ico_shard_take("chain")) {
+        chainPixels();
+    }
     CHECK(rhi_vk_validation_error_count() == 0, "%u validation errors",
           rhi_vk_validation_error_count());
     CHECK(rd__not_implemented_count() == 0, "no stubbed command replayed");
@@ -2668,7 +2706,11 @@ int main(int argc, char **argv)
     st.aspect = 4.0f / 3.0f;
     st.sceneScale = 1.0f;
     s_sceneW = 512;
-    if (!rd_init(512, 512, &st, NULL)) {
+    /* the 16:9 run compares with the 4:3 run's picture: one case */
+    const int stretchCase = ico_shard_take("stretch_enhanced");
+    if (!stretchCase) {
+        /* another shard's */
+    } else if (!rd_init(512, 512, &st, NULL)) {
         CHECK(0, "rd_init at 4:3 Enhanced");
     } else {
         gif_HostForgetTextures();
@@ -2684,7 +2726,9 @@ int main(int argc, char **argv)
     st.aspect = 16.0f / 9.0f;
     st.sceneScale = 1.0f;
     s_sceneW = WT;
-    if (!rd_init(WT, 512, &st, NULL)) {
+    if (!stretchCase) {
+        /* another shard's */
+    } else if (!rd_init(WT, 512, &st, NULL)) {
         CHECK(0, "rd_init at 16:9");
     } else {
         gif_HostForgetTextures();
@@ -2696,6 +2740,9 @@ int main(int argc, char **argv)
         CHECK(rhi_vk_validation_error_count() == 0, "16:9: %u validation errors",
               rhi_vk_validation_error_count());
         rd_shutdown();
+    }
+    if (ico_shard_finish() != 0) {
+        return 1;
     }
     if (failures) {
         printf("rd_mesh_test: %d failures\n", failures);
