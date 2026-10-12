@@ -212,10 +212,45 @@ static void testCapEqualsRefresh(void)
     CHECK(pace_cap_equals_refresh(60, 1000000000ull * 2 / 119));
     CHECK(pace_cap_equals_refresh(60, 1000000000ull * 2 / 121 + 1));
     CHECK(!pace_cap_equals_refresh(60, 1000000000ull / 61));
-    /* a whole-number report is a rate cut down (Windows): up to 1 Hz above
-       it equal, so 60 equals a reported 59 (a 59.x screen) */
-    CHECK(pace_cap_equals_refresh(60, 1000000000ull / 59));
-    CHECK(!pace_cap_equals_refresh(60, 1000000000ull / 58));
+    /* What SDL 3.4 reports on Windows (src/video/windows/SDL_windowsmodes.c
+       WIN_GetRefreshRate): the mode's whole dmDisplayFrequency, except 29,
+       59 and 119, which become (x + 1) * 1000 / 1001 (unless DXGI's closest
+       mode gives the exact rate).  A whole report of 100 Hz or more may be
+       a rate cut down (143.9 reads 143): up to 1 Hz above it equals.  Below
+       100 Hz a whole report is the true rate (59 is a 59.00 Hz mode, as on
+       Linux), and a cap of 60 locked to it would run the game 1.7 % slow.
+         Windows mode   SDL reports        cap  locks
+         59             60000/1001 59.94   60   yes
+         60             60                 60   yes
+         59 (true)      59                 60   no
+         119            120000/1001        120  yes
+         143            143                144  yes
+         239            239                240  yes
+         99             99                 100  no
+         74             74                 75   no */
+    {
+        static const struct {
+            uint64_t num, den;
+            int cap;
+            bool locks;
+        } k_table[] = {
+            {60000, 1001, 60, true},   {60, 1, 60, true},       {59, 1, 60, false},
+            {120000, 1001, 120, true}, {143, 1, 144, true},     {239, 1, 240, true},
+            {99, 1, 100, false},       {74, 1, 75, false},      {58, 1, 60, false},
+            {142, 1, 144, false},      {30000, 1001, 30, true}, {59951, 1000, 60, true},
+        };
+
+        for (unsigned i = 0; i < sizeof k_table / sizeof k_table[0]; i++) {
+            const uint64_t ns = 1000000000ull * k_table[i].den / k_table[i].num;
+
+            if (pace_cap_equals_refresh(k_table[i].cap, ns) != k_table[i].locks) {
+                printf("FAIL cap %d on %llu/%llu Hz: want %s\n", k_table[i].cap,
+                       (unsigned long long)k_table[i].num, (unsigned long long)k_table[i].den,
+                       k_table[i].locks ? "locked" : "not locked");
+                fails++;
+            }
+        }
+    }
     /* issue 74: Windows reports 143.9 Hz as 143.0 and 239.8 as 239.0;
        within 1.0 Hz above a whole number, 0.5 Hz otherwise */
     CHECK(pace_cap_equals_refresh(144, (uint64_t)(1e9 / 143.0)));

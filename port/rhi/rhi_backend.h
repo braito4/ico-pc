@@ -31,6 +31,7 @@
     X(surface_poll_restart)                                                                        \
     X(acquire_backbuffer)                                                                          \
     X(present)                                                                                     \
+    X(present_shown)                                                                               \
     X(release_surface)                                                                             \
     X(recreate_surface)                                                                            \
     X(create_buffer)                                                                               \

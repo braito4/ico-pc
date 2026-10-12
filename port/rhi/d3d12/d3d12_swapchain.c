@@ -135,9 +135,18 @@ void rhi_surface_poll_restart(void)
     /* D3D12 learns a size change from DXGI; nothing to poll */
 }
 
+/* the last present reached the display (rhi_present_shown) */
+static bool s_presentShown;
+
+bool rhi_present_shown(void)
+{
+    return s_presentShown;
+}
+
 RhiTexture rhi_acquire_backbuffer(void)
 {
     RhiTexture out = {0};
+    s_presentShown = false; /* until this frame's present shows it */
     if (!g_dx.swapchain || g_dx.swapCount == 0) {
         return out;
     }
@@ -174,6 +183,7 @@ const char *rhi_present_mode_name(void)
 
 void rhi_present(void)
 {
+    s_presentShown = false;
     if (!g_dx.swapchain || !g_dx.swapAcquired) {
         return;
     }
@@ -190,6 +200,10 @@ void rhi_present(void)
         DX_CHECK(hr);
         return;
     }
+    /* DXGI_STATUS_OCCLUDED (a success code): the window is minimised or
+       covered; the flip-model present returned without waiting for a
+       vblank and nothing was shown */
+    s_presentShown = hr != DXGI_STATUS_OCCLUDED;
     /* DXGI has no out-of-date result: follow the window's size here, as
      * the Vulkan backend does on VK_ERROR_OUT_OF_DATE_KHR */
     int w = (int)g_dx.swapWidth, h = (int)g_dx.swapHeight;

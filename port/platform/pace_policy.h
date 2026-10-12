@@ -54,10 +54,13 @@ uint64_t pace_present_gap(int cap, bool uncappedVsync, bool mailbox, uint64_t re
 
 /* True when a numeric frame rate limit (cap > 0) equals the display's rate:
  * within 0.5 Hz (60 on a 59.94 or 60.00 Hz screen, 120 on 119.88 or 120.00),
- * and up to 1.0 Hz above a reported rate that is a whole number: Windows
- * reports whole numbers cut down (except 29, 59 and 119, which SDL turns
- * into x / 1.001), so a 143.9 Hz screen reads 143 and a 239.8 Hz one 239,
- * and 144 or 240 equals them.
+ * and up to 1.0 Hz above a reported rate of 100 Hz or more that is a whole
+ * number: Windows reports whole numbers cut down, so a 143.9 Hz screen reads
+ * 143 and a 239.8 Hz one 239, and 144 or 240 equals them.  Below 100 Hz the
+ * 0.5 Hz holds: SDL 3.4 turns Windows' 29, 59 and 119 into x / 1.001
+ * (src/video/windows/SDL_windowsmodes.c WIN_GetRefreshRate), so a reported
+ * whole 59 is a true 59.00 Hz mode, and a cap of 60 locked to it would run
+ * the game 1.7 % slow.
  * With vsync on such a limit takes the FIFO present mode and no timer gap
  * (the blocking present holds each present to a vblank): the simulation's
  * 59.94 Hz clock is not the display's, and presents timed from it left some
@@ -87,7 +90,19 @@ bool pace_cap_equals_refresh(int cap, uint64_t refreshNs);
  * wait for a vblank (a compositor or driver that does not block): a miss.
  * The median of the last PACE_LOCK_HIST intervals outside 2 % of the
  * nominal refresh (a display running at another rate than it reports): a
- * miss.  A miss times that vsync's step on the simulation's own grid (the
+ * miss.  But a FIFO present only blocks once the swapchain's queue is full
+ * (three images, two frames in flight; NVIDIA's acquire does not wait), so
+ * from an empty queue (the lock's start, after a stall, a sleep or a
+ * swapchain rebuild) the first presents return at once: while the queue
+ * fills (L->filling, until the first hit) an at-once return presents again
+ * at once, the same picture, up to PACE_LOCK_FILL_PRESENTS presents in the
+ * vsync, before it counts as a miss.  Only an interval that starts at a
+ * return on a vblank (one that ended an interval of half a refresh or more)
+ * measures the refresh: one from the first return, a return after a sleep,
+ * an at-once return or a stall counts one vblank and is not judged.  A present that never blocks still misses every vsync.
+ * A present the window reports as not shown (PaceLockIo.shown: minimised,
+ * hidden, occluded, a 0x0 surface) is not judged: the vsync runs on the
+ * grid, no miss.  A miss times that vsync's step on the simulation's own grid (the
  * last step's due time + the period, as without the lock); PACE_LOCK_MISSES
  * misses in a row drop the lock (the window goes back to the timer and
  * mailbox until the next settings apply).  An interval of 1.5 refreshes or
@@ -99,6 +114,7 @@ bool pace_cap_equals_refresh(int cap, uint64_t refreshNs);
 #define PACE_LOCK_HIST 8
 #define PACE_LOCK_MISSES 3
 #define PACE_LOCK_DEBT_VSYNCS 6
+#define PACE_LOCK_FILL_PRESENTS 4
 /* a measured rate block for the audio needs this many steps */
 #define PACE_LOCK_RATE_MIN_STEPS 100
 
@@ -125,13 +141,19 @@ typedef struct PaceLock {
     unsigned sinceClose; /* vblanks since the last game frame closed */
     unsigned perFrame;   /* simulated vsyncs per game frame (the last two closes'; 1..4) */
     unsigned vsyncsSinceClose;
+    bool closeSeen; /* a frame closed since the reset (perFrame is measured from the next) */
+    bool filling;   /* the swapchain's queue may be filling: at-once returns present again */
+    bool onVblank;  /* the last return ended an interval of about a refresh (it waited for
+                         a vblank): only an interval from such a return is a measure */
     uint64_t hist[PACE_LOCK_HIST]; /* the judged intervals */
     unsigned histCount, histNext;
     unsigned misses; /* in a row */
     int dropped;     /* PACE_LOCK_HELD or why it was dropped */
     /* counts since pace_lock_reset */
     unsigned presents, steps, debtSteps, gridSteps, resyncs;
-    uint64_t droppedNs; /* display time dropped (more debt than PACE_LOCK_DEBT_VSYNCS) */
+    unsigned fillPresents; /* at-once presents made again while the queue filled */
+    unsigned unshown;      /* vsyncs whose present the window reported not shown */
+    uint64_t droppedNs;    /* display time dropped (more debt than PACE_LOCK_DEBT_VSYNCS) */
     /* the rate block (pace_lock_rate_ratio) */
     uint64_t rateFirst, rateLast;
     unsigned rateSteps;
@@ -169,6 +191,11 @@ typedef struct PaceLockIo {
        false: nothing presented (a movie on the output, nothing closed yet) */
     bool (*present)(void *user, float alpha);
     void (*sleepUntil)(void *user, uint64_t ns);
+    /* after a present that returned true: false when it did not reach the
+       display (the window minimised, hidden or occluded, a D3D12 present
+       that reported DXGI_STATUS_OCCLUDED, a Vulkan surface at 0x0): it is
+       not judged.  NULL: always shown */
+    bool (*shown)(void *user);
 } PaceLockIo;
 
 /* One simulated vsync under the lock (L->n > 0, L->dropped == 0): presents
@@ -180,6 +207,14 @@ typedef struct PaceLockIo {
  * this vsync's miss was the PACE_LOCK_MISSES-th in a row. */
 uint64_t pace_lock_vsync(PaceLock *L, const PaceLockIo *io, bool newFrame);
 
+/* The simulated vsync rate under the lock as the display's nominal
+ * refresh gives it, over the simulation's: periodNs / (n * refreshNs), 1.001
+ * for one present a vsync on a 60.00 Hz screen under 59.94 (1.0 when more
+ * than 2 % from 1, or n or the refresh is 0).  The audio's ratio from the
+ * lock's start, until the first measured block (pace_lock_rate_ratio), so
+ * its queue does not grow by 0.1 % over the first 10 s. */
+double pace_lock_nominal_ratio(const PaceLock *L);
+
 /* The simulated vsync rate measured over the steps since the last call,
  * over the nominal (1e9 / periodNs): 1.001 on a 60.00 Hz display under a
  * 59.94 Hz simulation.  1.0 when the block was not steady (a miss, a
@@ -187,6 +222,20 @@ uint64_t pace_lock_vsync(PaceLock *L, const PaceLockIo *io, bool newFrame);
  * 1; either way a new block starts.  0 while a steady block has fewer than
  * PACE_LOCK_RATE_MIN_STEPS steps: it goes on (the caller keeps its ratio). */
 double pace_lock_rate_ratio(PaceLock *L);
+
+/* Without the lock, under FIFO with a refresh shorter than the
+ * simulation's period (a cap of 144 on 59.94, 60 on PAL's 50): whether the
+ * window holds this vsync's next present back and sleeps to the deadline
+ * because it would return on a vblank past it (a FIFO present returns on
+ * the first vblank after it is made, on the last return's grid of
+ * refreshes; one started just before the deadline ran the step a refresh
+ * late, issue 74).  Never a frame that is not shown yet once the deadline
+ * has passed (the game behind: one present per new frame), and a new frame
+ * is held back at most once (frameHeld: this frame was held at the last
+ * vsync), so a game whose step is about a period long still shows its
+ * frames.  lastReturn 0: no present yet, nothing held. */
+bool pace_fifo_hold(uint64_t nowNs, uint64_t lastReturnNs, uint64_t refreshNs, uint64_t deadlineNs,
+                    bool frameShown, bool frameHeld);
 
 /* The limiter's grid: when the present after one that started at startNs is
  * due.  nextPresent is when that one was due (0: none yet).  The result is

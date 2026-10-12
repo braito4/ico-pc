@@ -127,6 +127,12 @@ static int lifecycle(SDL_Window *win, RhiFormat fmt)
     vkr_test_force_present_result(RHI_VK_TEST_SUBOPTIMAL);
     failures += frame(win, fmt, 10);
     failures += frame(win, fmt, 11);
+    /* a suboptimal present was shown (rhi_present_shown: the window's
+       vsync lock judges it) */
+    if (!rhi_present_shown()) {
+        printf("FAIL a suboptimal present not reported shown\n");
+        failures++;
+    }
     if (vkr_test_swapchain_creations() - n0 != wantNew) {
         printf("FAIL suboptimal without a size change made %u swapchain(s), want %u\n",
                vkr_test_swapchain_creations() - n0, wantNew);
@@ -142,6 +148,12 @@ static int lifecycle(SDL_Window *win, RhiFormat fmt)
         failures++;
     }
     rhi_present();
+    /* nothing reached the display (a minimised window has no swapchain
+       either): the window's vsync lock does not judge it */
+    if (rhi_present_shown()) {
+        printf("FAIL a present without a surface reported shown\n");
+        failures++;
+    }
     if (rhi_swapchain_format() != fmt) {
         printf("FAIL the format after the release is %d, was %d\n", (int)rhi_swapchain_format(),
                (int)fmt);

@@ -649,6 +649,13 @@ RhiTexture rhi_acquire_backbuffer(void);
 /* The backbuffer's state after acquire is UNDEFINED; before rhi_present the
  * caller moves it to RHI_STATE_PRESENT. */
 void rhi_present(void);
+/* Whether the last rhi_present reached the display: false after an acquire
+ * or a present that did nothing (no swapchain, as at a 0x0 window, a
+ * failed acquire, a lost surface) and after a D3D12 present that reported
+ * DXGI_STATUS_OCCLUDED (the window minimised or covered: the present did
+ * not wait for a vblank).  The window's vsync lock does not judge such a
+ * present (port/platform/pace_policy.h). */
+bool rhi_present_shown(void);
 /* The window's surface (the Android lifecycle).
  * rhi_release_surface waits for the GPU, destroys the swapchain and the
  * surface and keeps the device and everything made on it: the app goes to

@@ -156,6 +156,9 @@ static struct {
     Uint64 lockRefresh;   /* the refresh it was started with */
     int lockDropped;      /* PACE_LOCK_DROP_*: dropped until the next settings change */
     int lockDropApply;    /* a drop for ico_window_pace to apply (the present mode) */
+    int offScreen;        /* the window minimised, hidden, occluded or 0x0 (window_off_screen) */
+    int lockRearm;        /* back on the screen: ico_window_pace tries the lock again */
+    uint32_t heldFrame;   /* a new frame pace_fifo_hold held back (+1; 0: none) */
     unsigned lockResyncs; /* lock.resyncs already counted in statResyncs */
     Uint64 lockDroppedNs; /* lock.droppedNs already counted in statDropped */
     double audioRatio;    /* the audio's rate ratio last set (ico_audio_set_rate_ratio) */
@@ -2192,7 +2195,9 @@ static void pace_log(Uint64 now)
         snprintf(lock, sizeof(lock), "lock held (%u present%s a vsync, audio rate x%.4f)",
                  s_pres.lockN, s_pres.lockN == 1 ? "" : "s", ratio);
     } else if (s_pres.fifoLock) {
-        snprintf(lock, sizeof(lock), "lock held (steps on the game's own timer)");
+        /* fifo with a cap that is not a whole multiple of the game's rate
+           (144 on 59.94): nothing is locked */
+        snprintf(lock, sizeof(lock), "no lock (fifo, steps on the game's own timer)");
     } else if (s_pres.lockDropped) {
         snprintf(lock, sizeof(lock), "lock dropped (%s)", lock_drop_reason(s_pres.lockDropped));
     } else {
@@ -2357,6 +2362,16 @@ void ico_window_pace(int hz)
         s_pres.lockDropApply = 0;
         video_apply(1);
     }
+    if (s_pres.lockRearm) {
+        /* back on the screen: a lock dropped meanwhile (presents that
+           did not wait while the window was away) is tried again, and the
+           present mode follows */
+        s_pres.lockRearm = 0;
+        if (s_pres.lockDropped) {
+            s_pres.lockDropped = 0;
+            video_apply(1);
+        }
+    }
     perf_drain(); /* every vsync, so the record queue never overflows */
     if (s_autoRes.tickBudget) {
         /* two fields a tick: 40 ms PAL, 33.4 ms NTSC (pace's periods) */
@@ -2448,6 +2463,15 @@ static bool lock_io_present(void *u, float a)
     return present_once(a, c->refresh, c->period) != 0;
 }
 
+/* the present reached the display: the window on the screen and the
+   backend's present shown (not DXGI_STATUS_OCCLUDED, a swapchain there);
+   without a swapchain (no window surface) nothing waits for a display */
+static bool lock_io_shown(void *u)
+{
+    (void)u;
+    return !s_pres.offScreen && (rhi_present_shown() || rhi_swapchain_format() == RHI_FMT_UNKNOWN);
+}
+
 static void lock_io_sleep(void *u, uint64_t ns)
 {
     const Uint64 now = SDL_GetTicksNS();
@@ -2464,7 +2488,7 @@ static void lock_io_sleep(void *u, uint64_t ns)
 static void pace_locked(unsigned n, Uint64 period)
 {
     LockIoCtx ctx;
-    const PaceLockIo io = {&ctx, lock_io_now, lock_io_present, lock_io_sleep};
+    const PaceLockIo io = {&ctx, lock_io_now, lock_io_present, lock_io_sleep, lock_io_shown};
 
     ctx.refresh = display_refresh_ns(period);
     ctx.period = period;
@@ -2477,6 +2501,10 @@ static void pace_locked(unsigned n, Uint64 period)
         s_pres.lockResyncs = 0;
         s_pres.lockDroppedNs = 0;
         s_pres.nextPresent = 0;
+        /* the audio at the display's nominal rate until the first
+           measured block (the 10 s line) */
+        s_pres.audioRatio = pace_lock_nominal_ratio(&s_pres.lock);
+        ico_audio_set_rate_ratio(s_pres.audioRatio);
     }
     /* the frame closed in the step that was due at the last return */
     const int newFrame = frame_seen(s_deadline);
@@ -2499,12 +2527,49 @@ static void pace_locked(unsigned n, Uint64 period)
     pace_log(SDL_GetTicksNS());
 }
 
+/* The window is off the screen: minimised, hidden, occluded, or 0x0
+   pixels (a Vulkan swapchain cannot be made); its presents do not wait for
+   the display */
+static int window_off_screen(void)
+{
+    int w = 0, h = 0;
+
+    if (s_window == NULL) {
+        return 0;
+    }
+    if (SDL_GetWindowFlags(s_window) &
+        (SDL_WINDOW_MINIMIZED | SDL_WINDOW_HIDDEN | SDL_WINDOW_OCCLUDED)) {
+        return 1;
+    }
+    SDL_GetWindowSizeInPixels(s_window, &w, &h);
+    return w <= 0 || h <= 0;
+}
+
 static void pace(int hz)
 {
     /* PAL 50 Hz: 20 ms; NTSC 59.94 Hz: 16.683 ms (host_loop.c's simulated
        periods) */
     const Uint64 period = hz == 50 ? 20000000ull : 16683333ull;
     Uint64 now;
+
+    /* off the screen: the lock does not judge the presents (they return at
+       once); back on it, the lock starts again from an empty queue */
+    {
+        const int off = window_off_screen();
+
+        if (off != s_pres.offScreen) {
+            static unsigned s_lines; /* a window that flickers: the first few */
+
+            if (s_lines++ < 20) {
+                fprintf(stderr, "window: %s the screen\n", off ? "off" : "back on");
+            }
+            if (!off) {
+                s_pres.lockN = 0; /* pace_locked resets the lock */
+                s_pres.lockRearm = 1;
+            }
+            s_pres.offScreen = off;
+        }
+    }
 
     /* the vsync lock: the cap equals the refresh under FIFO and is a whole
        multiple of the simulation's rate (60 or 120 on 59.94) */
@@ -2585,27 +2650,31 @@ static void pace(int hz)
         /* under FIFO with a cap that is not a whole multiple of the
            simulation's rate (144 on 59.94, 60 on PAL's 50) and a refresh
            shorter than the period: no present that would return on a
-           vblank past the deadline, whether the frame was shown or not
-           (it is shown at the next vsync).  A FIFO present returns on the
+           vblank past the deadline.  A FIFO present returns on the
            first vblank after it is made, so on the last return's grid of
-           refreshes; starting one just before the deadline
-           blocked a whole refresh and ran the step late (issue 74) */
-        if (s_pres.fifoLock && refresh < period && s_pres.lastReturn != 0 &&
-            now >= s_pres.lastReturn) {
-            const Uint64 k = (now - s_pres.lastReturn) / refresh + 1;
-
-            if (s_pres.lastReturn + k * refresh > s_deadline) {
-                if (now < s_deadline) {
-                    SDL_DelayPrecise(s_deadline - now);
-                }
-                break;
+           refreshes; starting one just before the deadline blocked a whole
+           refresh and ran the step late (issue 74).  A new frame is held
+           back (to the next vsync) at most once and never once the deadline
+           has passed, so a game behind still shows each frame
+           (pace_policy.h pace_fifo_hold) */
+        if (s_pres.fifoLock && refresh < period &&
+            pace_fifo_hold(now, s_pres.lastReturn, refresh, s_deadline,
+                           s_pres.presentedFrame == s_pres.frame,
+                           s_pres.heldFrame == s_pres.frame + 1u)) {
+            if (s_pres.presentedFrame != s_pres.frame) {
+                s_pres.heldFrame = s_pres.frame + 1u;
             }
+            if (now < s_deadline) {
+                SDL_DelayPrecise(s_deadline - now);
+            }
+            break;
         }
         /* nor a further present of a frame already shown that would
            end past the deadline (its cost the last present's): the next
            simulation step is never late for one */
+        /* off the screen: no present again */
         if (s_pres.presentedFrame == s_pres.frame &&
-            (now >= s_deadline || s_pres.paceSlow ||
+            (now >= s_deadline || s_pres.paceSlow || s_pres.offScreen ||
              (!s_pres.fifoLock && now + s_pres.cost > s_deadline))) {
             if (now < s_deadline) {
                 SDL_DelayPrecise(s_deadline - now);

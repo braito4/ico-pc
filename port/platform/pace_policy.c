@@ -5,6 +5,8 @@
  */
 #include "pace_policy.h"
 
+#include <stddef.h>
+
 uint64_t pace_slow_threshold(uint64_t refreshNs, uint64_t periodNs, bool injector)
 {
     if (injector) {
@@ -45,10 +47,28 @@ bool pace_cap_equals_refresh(int cap, uint64_t refreshNs)
     const uint64_t mhz = (1000000000000ull + refreshNs / 2) / refreshNs;
     const uint64_t frac = mhz % 1000;
     const uint64_t c = (uint64_t)cap * 1000ull;
-    /* a whole number (to 0.01 Hz) may be a rate cut down: up to 1 Hz above it */
-    const uint64_t above = frac <= 10 || frac >= 990 ? 1000 : 500;
+    /* a whole number (to 0.01 Hz) of 100 Hz or more may be a rate cut down:
+       up to 1 Hz above it (below, SDL reports 59 as 59.94: a whole 59 is a
+       true 59.00 Hz mode) */
+    const uint64_t above = mhz >= 99990 && (frac <= 10 || frac >= 990) ? 1000 : 500;
 
     return c + 500 >= mhz && c <= mhz + above;
+}
+
+bool pace_fifo_hold(uint64_t nowNs, uint64_t lastReturnNs, uint64_t refreshNs, uint64_t deadlineNs,
+                    bool frameShown, bool frameHeld)
+{
+    if (lastReturnNs == 0 || refreshNs == 0 || nowNs < lastReturnNs) {
+        return false;
+    }
+    /* a new frame: shown once the deadline has passed, held at most once */
+    if (!frameShown && (nowNs >= deadlineNs || frameHeld)) {
+        return false;
+    }
+    /* the vblank a present made now returns on */
+    const uint64_t k = (nowNs - lastReturnNs) / refreshNs + 1;
+
+    return lastReturnNs + k * refreshNs > deadlineNs;
 }
 
 uint64_t pace_next_present(uint64_t nextPresent, uint64_t startNs, uint64_t gap)
@@ -215,6 +235,7 @@ void pace_lock_reset(PaceLock *L, unsigned n, uint64_t refreshNs, uint64_t perio
     L->due = nowNs;
     L->perFrame = 2; /* a game frame every two vsyncs until two closes are seen */
     L->rateClean = true;
+    L->filling = true; /* the queue may be empty (the start, a rebuild, the background) */
 }
 
 PaceLockVerdict pace_lock_judge(PaceLock *L, uint64_t returnNs, unsigned *vblanks)
@@ -222,9 +243,11 @@ PaceLockVerdict pace_lock_judge(PaceLock *L, uint64_t returnNs, unsigned *vblank
     const uint64_t r = L->refreshNs;
     const uint64_t last = L->lastReturn;
     const bool unjudged = L->unjudged || last == 0 || returnNs < last;
+    const bool fromVblank = L->onVblank;
 
     L->lastReturn = returnNs;
     L->unjudged = false;
+    L->onVblank = false;
     *vblanks = 1;
     if (unjudged) {
         return PACE_LOCK_UNJUDGED;
@@ -236,8 +259,18 @@ PaceLockVerdict pace_lock_judge(PaceLock *L, uint64_t returnNs, unsigned *vblank
         return PACE_LOCK_MISS_AT_ONCE;
     }
     if (iv * 2 >= 3 * r) {
+        /* a stall: the queue drained meanwhile (this return may not have
+           waited for a vblank) */
         *vblanks = (unsigned)((iv + r / 2) / r);
+        L->filling = true;
         return PACE_LOCK_STALL;
+    }
+    L->onVblank = true;
+    if (!fromVblank) {
+        /* the interval started at a return that may not have been on a
+           vblank (the first, after a sleep, at once): one vblank, not a
+           measure of the refresh */
+        return PACE_LOCK_UNJUDGED;
     }
     L->hist[L->histNext] = iv;
     L->histNext = (L->histNext + 1) % PACE_LOCK_HIST;
@@ -281,6 +314,7 @@ static uint64_t lock_grid(PaceLock *L, const PaceLockIo *io, uint64_t now)
     }
     L->vblanks = 0;
     L->unjudged = true;
+    L->filling = true; /* the display drained the queue while it slept */
     L->gridSteps++;
     L->rateClean = false;
     return lock_step(L, due);
@@ -294,7 +328,12 @@ uint64_t pace_lock_vsync(PaceLock *L, const PaceLockIo *io, bool newFrame)
     if (newFrame) {
         const unsigned v = L->vsyncsSinceClose;
 
-        L->perFrame = v < 1 ? 1 : (v > 4 ? 4 : v);
+        /* the first close since the reset ends no whole frame: perFrame
+           stays (two) until the next */
+        if (L->closeSeen) {
+            L->perFrame = v < 1 ? 1 : (v > 4 ? 4 : v);
+        }
+        L->closeSeen = true;
         L->vsyncsSinceClose = 0;
         L->sinceClose = 0;
     }
@@ -305,6 +344,8 @@ uint64_t pace_lock_vsync(PaceLock *L, const PaceLockIo *io, bool newFrame)
         L->debtSteps++;
         return lock_step(L, L->due);
     }
+    unsigned atOnce = 0; /* at-once returns this vsync */
+
     for (;;) {
         unsigned vb = 0;
         const float a = pace_lock_alpha(L->sinceClose + 1, L->n, L->perFrame);
@@ -315,8 +356,20 @@ uint64_t pace_lock_vsync(PaceLock *L, const PaceLockIo *io, bool newFrame)
         }
         now = io->now(io->user);
         L->presents++;
+        if (io->shown != NULL && !io->shown(io->user)) {
+            /* not on the screen (minimised, occluded): not judged, the
+               grid; the next interval spans it */
+            L->unshown++;
+            L->lastReturn = now;
+            return lock_grid(L, io, now);
+        }
         const PaceLockVerdict v = pace_lock_judge(L, now, &vb);
 
+        if (v == PACE_LOCK_MISS_AT_ONCE && L->filling && ++atOnce < PACE_LOCK_FILL_PRESENTS) {
+            /* the queue is filling: present again, now */
+            L->fillPresents++;
+            continue;
+        }
         if (v == PACE_LOCK_MISS_AT_ONCE || v == PACE_LOCK_MISS_RATE) {
             if (++L->misses >= PACE_LOCK_MISSES) {
                 L->dropped =
@@ -326,6 +379,7 @@ uint64_t pace_lock_vsync(PaceLock *L, const PaceLockIo *io, bool newFrame)
         }
         if (v == PACE_LOCK_HIT) {
             L->misses = 0;
+            L->filling = false; /* the queue is full: an at-once return is a miss */
         }
         L->sinceClose += vb;
         L->vblanks += vb;
@@ -344,6 +398,16 @@ uint64_t pace_lock_vsync(PaceLock *L, const PaceLockIo *io, bool newFrame)
             return lock_step(L, now);
         }
     }
+}
+
+double pace_lock_nominal_ratio(const PaceLock *L)
+{
+    if (L->n == 0 || L->refreshNs == 0 || L->periodNs == 0) {
+        return 1.0;
+    }
+    const double r = (double)L->periodNs / ((double)L->n * (double)L->refreshNs);
+
+    return r > 1.02 || r < 0.98 ? 1.0 : r;
 }
 
 double pace_lock_rate_ratio(PaceLock *L)

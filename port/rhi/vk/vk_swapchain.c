@@ -22,6 +22,8 @@ _Static_assert(RHI_VK_TEST_OUT_OF_DATE == VK_ERROR_OUT_OF_DATE_KHR,
  * driver's (VK_SUCCESS: none), and the swapchains created since the
  * program started */
 static VkResult s_forcePresent = VK_SUCCESS;
+/* the last present reached the display (rhi_present_shown) */
+static bool s_presentShown;
 static uint32_t s_creations;
 
 void vkr_test_force_present_result(int32_t result)
@@ -537,6 +539,7 @@ bool rhi_swapchain_size(uint32_t *w, uint32_t *h)
 RhiTexture rhi_acquire_backbuffer(void)
 {
     RhiTexture out = {0};
+    s_presentShown = false; /* until this frame's present shows it */
     if (!g_vkr.swapchain) {
         return out;
     }
@@ -635,8 +638,14 @@ static void vkr_poll_surface(void)
     }
 }
 
+bool rhi_present_shown(void)
+{
+    return s_presentShown;
+}
+
 void rhi_present(void)
 {
+    s_presentShown = false;
     if (!g_vkr.swapchain || !g_vkr.swapAcquired) {
         return;
     }
@@ -691,6 +700,8 @@ void rhi_present(void)
     } else if (r != VK_SUCCESS) {
         VKR_CHECK(r);
     }
+    /* an image queued for the display (a suboptimal one too: it is shown) */
+    s_presentShown = r == VK_SUCCESS || r == VK_SUBOPTIMAL_KHR;
     if (!rebuild && (r == VK_SUCCESS || r == VK_SUBOPTIMAL_KHR)) {
         vkr_poll_surface(); /* a size change the present did not report */
     }

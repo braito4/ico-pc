@@ -431,6 +431,11 @@ void rhi_prefer_mailbox(bool on)
     be()->prefer_mailbox(on);
 }
 
+bool rhi_present_shown(void)
+{
+    return be()->present_shown();
+}
+
 bool rhi_present_mailbox(void)
 {
     return be()->present_mailbox();
