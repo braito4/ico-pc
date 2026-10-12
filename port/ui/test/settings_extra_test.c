@@ -1833,8 +1833,10 @@ static void testNaturalChains(void)
               "title %d: the Natural chains row", title);
         CHECK(row >= 0 && strcmp(lt_ext_row_text(row), "Natural chains") == 0,
               "title %d: its label \"%s\"", title, row >= 0 ? lt_ext_row_text(row) : "");
-        CHECK(row == ui_settings_row_of(UI_PAGE_GAMEPLAY, UI_OPT_DOOR_FIX) + 1,
-              "title %d: right after the East Reflector door fix", title);
+        /* between the door fix (and its note row) and the Film effect */
+        CHECK(row > ui_settings_row_of(UI_PAGE_GAMEPLAY, UI_OPT_DOOR_FIX) &&
+                  row < ui_settings_row_of(UI_PAGE_GAMEPLAY, UI_OPT_FILM_EFFECT),
+              "title %d: after the East Reflector door fix, before the Film effect", title);
         CHECK(ico_opt_natural_chains() == 0 &&
                   strcmp(ui_settings_value_text(UI_OPT_NATURAL_CHAINS), "Off") == 0,
               "title %d: Off by default", title);
