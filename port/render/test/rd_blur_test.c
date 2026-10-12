@@ -1638,29 +1638,37 @@ static void checkBilerpPcsx2(void)
 
 /* =================================================== (e) one frame each */
 
+/* one frame of post mode `post` (the sun on, InitStaticBlur called), run
+ * against the CPU model; returns the max difference */
+static int effectsFrame(int post, int clear)
+{
+    char what[48];
+    snprintf(what, sizeof(what), "(e) post mode %d", post);
+    setStage(post, 0, 64);
+    makeImage((uint32_t)post, 0);
+    rd_update_texture(s_imgTex, s_img);
+    if (clear) {
+        clearAll();
+    }
+    putScene();
+    s_fanDraws = 0;
+    FullScreenEffectBefore();
+    /* a shine object of list 7 into the flare mask (WORK2, left bound) */
+    dl_SetDLPriority(7);
+    putImage(rd_target(RD_TARGET_WORK2), rd_target(RD_TARGET_SCENE), W, H, 200, 260, 0, 0);
+    FullScreenEffectAfter();
+    const int d = runFrame(what, 1);
+    printf("  %s: max difference %d over %d sprites\n", what, d,
+           (collectFrame(rd__last_frame()), s_nspr));
+    CHECK(post == 2 || s_fanDraws == 2, "%s: the sun is on screen (fans %d)", what, s_fanDraws);
+    return d;
+}
+
 static void checkEffects(void)
 {
     InitStaticBlur(0, (float[4]){0.3f, -0.2f, -1.0f, 0.0f});
     for (int post = 1; post <= 7; post++) {
-        char what[48];
-        snprintf(what, sizeof(what), "(e) post mode %d", post);
-        setStage(post, 0, 64);
-        makeImage((uint32_t)post, 0);
-        rd_update_texture(s_imgTex, s_img);
-        if (post == 1) {
-            clearAll();
-        }
-        putScene();
-        s_fanDraws = 0;
-        FullScreenEffectBefore();
-        /* a shine object of list 7 into the flare mask (WORK2, left bound) */
-        dl_SetDLPriority(7);
-        putImage(rd_target(RD_TARGET_WORK2), rd_target(RD_TARGET_SCENE), W, H, 200, 260, 0, 0);
-        FullScreenEffectAfter();
-        const int d = runFrame(what, 1);
-        printf("  %s: max difference %d over %d sprites\n", what, d,
-               (collectFrame(rd__last_frame()), s_nspr));
-        CHECK(post == 2 || s_fanDraws == 2, "%s: the sun is on screen (fans %d)", what, s_fanDraws);
+        (void)effectsFrame(post, post == 1);
     }
     InitializeStaticBlur(); /* sun off */
 }
@@ -1670,6 +1678,11 @@ static void checkDump(void)
     static uint8_t first[W * H * 4], again[W * H * 4];
     uint32_t w, h;
     const char *path = "rd_blur_test.rddump";
+    /* its own frame (post mode 7), so the case does not rely on the case
+     * before it in the shard */
+    InitStaticBlur(0, (float[4]){0.3f, -0.2f, -1.0f, 0.0f});
+    (void)effectsFrame(7, 1);
+    InitializeStaticBlur(); /* sun off */
     if (!rd__read_target(rd_target(RD_TARGET_SCENE), first, sizeof(first), &w, &h)) {
         CHECK(0, "(d) read SCENE");
         return;

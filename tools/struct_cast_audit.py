@@ -31,6 +31,7 @@ with the fixture's EXPECT markers.
 
 import os
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -78,7 +79,8 @@ def compile_probe(path, name):
     """Compile the probe file with $ICO_CC, else $CC, else gcc.  A failure to start the compiler
     or to compile is shown (the first lines of stderr, once per cause) so the cause is visible."""
     cc = os.environ.get("ICO_CC") or os.environ.get("CC") or "gcc"
-    cmd = [cc] + include_flags() + ["-I" + os.path.dirname(path)] + FLAGS + [name]
+    LAST_ERR[0] = ""  # a success after a failed probe leaves no stale cause
+    cmd = shlex.split(cc) + include_flags() + ["-I" + os.path.dirname(path)] + FLAGS + [name]
     try:
         r = subprocess.run(cmd, capture_output=True, text=True)
     except OSError as e:

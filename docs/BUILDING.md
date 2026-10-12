@@ -252,11 +252,12 @@ start the game), builds exactly the named targets at `-j4` under `flock` on
   shares the main checkout's toolchain by a link:
   `ln -s <main>/tools/toolchain <worktree>/tools/toolchain`.
 - **Shaders.** Each of the HLSL shader steps lists the headers it includes
-  from the compiler itself (`dxc -MD`/`-MF` depfile), so editing one header
+  from the compiler itself (`dxc -MF` depfile), so editing one header
   rebuilds only the shaders that include it.
 - **Packages.** `tools/package_win.sh` and `tools/package_linux.sh` build
   `ico_pc mc_import`; the
-  Android package goes through Gradle, which builds `ico_pc` and nothing else.
+  Android package goes through Gradle, which builds `ico_pc` and the three
+  libadrenotools hook libraries (`main_hook`, `hook_impl`, `file_redirect_hook`).
 
 ## Compilers
 
@@ -723,7 +724,7 @@ more preset; `linux-arm64` and `android` are described after the table.
 | --- | --- |
 | host packages, venv | gcc 14 (the runner's default gcc 13 also configures, since `cmake/IcoFlags.cmake` drops warning flags a compiler does not know), the X11, ALSA and PulseAudio headers SDL3 builds against, lavapipe (`mesa-vulkan-drivers`, `libvulkan1`) so the render tests run on a CPU Vulkan device, `tools/requirements.txt` |
 | cache and `tools/fetch_toolchain.sh` | `tools/toolchain/` is cached on the hash of `fetch_toolchain.sh`, `fetch_deps.sh`, `fetch_common.sh` and `fetch_android.sh`, restored and saved as separate steps so a cold fetch is saved even when a later step fails |
-| ccache | `~/.cache/ccache` is restored before the builds and saved after them (also when a build fails), keyed by the job or preset and the same four scripts' hash, with the commit as the last part so every run saves its entries; the `linux-arm64` job has no ccache |
+| ccache | `~/.cache/ccache` is restored before the builds and saved after them (also when a build fails), keyed by the job or preset and the same four scripts' hash, with the commit as the last part so every run saves its entries, each capped at 5 GiB (`CCACHE_MAXSIZE` in the workflow's `env`; `tools/fetch_toolchain.sh` sets the same cap for a local ccache); the `linux-arm64` job has no ccache |
 | `tools/check_no_rom.sh` | the IP scan over every tracked file |
 | `tools/format.sh --check` | clang-format over the tracked C |
 | `tools/strip_host_gates.py --check` | no `ICO_HOST` conditional in `ico2/` or `sce/` |
@@ -731,10 +732,10 @@ more preset; `linux-arm64` and `android` are described after the table.
 | `tools/struct_cast_audit.py` (`--selftest`, then the tree) | no fixed array, buffer or smaller record in `ico2/` cast to a struct whose host size is larger (records holding pointers are wider on the host than the EE's 4-byte pointers: `ClipWork` is 0xF0 bytes, not 0xC0), sized by compiling the file with the host compiler; checked exceptions are in `tools/struct_cast_allow.txt` |
 | `tools/check_call_types.py` | no call through a function-pointer cast that passes fewer arguments than the function it reaches reads, and no `extern` in an `ico2/` `.c` file that differs from its definition in parameter count, integer width or return width; checked exceptions are in `tools/check_call_types_allow.txt` |
 | `gen_data_desc.py`, `gen_layout_asserts.py`, `gen_sources.py` with `--check` | the generated files are fresh |
-| `linux-x64` headless | configure with `-DICO_LINK_EXE=ON`, build `all tests`, `ctest` |
+| `linux-x64` headless | configure with `-DICO_LINK_EXE=ON`, build `all tests` (the targets `all` and `tests`), `ctest` |
 | `linux-x64` window | `-DICO_HEADLESS=OFF -DICO_LINK_EXE=ON` into `build-host/linux-x64-window`, build, `ctest` |
 | `linux-x64-clang` | build, `ctest` |
-| `win-x64` | cross-compile the window build and `ico_pc.exe`; the tests are built, not run |
+| `win-x64` | cross-compile the window build; `ico_pc.exe` and `SDL3.dll` must exist; the tests are built, not run |
 | `extra`: `asan` | AddressSanitizer + UBSan (Debug, `-O1`), headless with `-DICO_LINK_EXE=ON`, build, `ctest` |
 | `extra`: `fptrap` | float divide-by-zero and invalid trap, headless with `-DICO_LINK_EXE=ON`, build, `ctest` |
 | `extra`: `win-x64-clang` | cross-compile the window build (`-DICO_HEADLESS=OFF`) with llvm-mingw clang; `ico_pc.exe` and `SDL3.dll` must exist |
@@ -799,7 +800,8 @@ absence). The link map stays in `dist/stage` (`ico_pc_x64.map`,
 `ico_pc.map`) to symbolize a crash address from a player's log, and
 `tools/package_win.sh` builds only `ico_pc` and `mc_import`. The Windows
 program carries version information (company, product, file version
-`x.y.z.0`), from `-DICO_VERSION_LABEL=<label>` which `package_win.sh` passes
+`x.y.z.N`: N is the release candidate's number for a label such as
+`v0.6.2-rc3`, 0 for the final), from `-DICO_VERSION_LABEL=<label>` which `package_win.sh` passes
 (`port/platform/win/ico_pc.rc`; a build without the label says 0.0.0.0).
 It has no icon and no signature. `ico_pc.manifest` has no `dpiAwareness`:
 SDL3 sets the process's DPI awareness itself when the window system starts.

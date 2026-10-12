@@ -785,10 +785,14 @@ static bool runSelftest(void)
     s_st.th = t->th;
     /* the scene as the settings ask for it: the replays below draw it
        multisampled when MSAA is asked for, and the paths are tried on that */
+    const bool wasBlocked = g_rd.msaaBlocked;
     g_rd.msaaBlocked = false;
     s_st.samples = rd_aa_samples(rd__aa_requested());
     static RdFrame f;
     if (!stBuildFrame(&f, rd_target(RD_TARGET_SCENE).id, t->w, t->h)) {
+        /* the paths were not run: what was known before stays known, not
+           MSAA on with the depth path unchecked */
+        g_rd.msaaBlocked = wasBlocked;
         rd__frame_free(&f);
         rd__log("fog: self-test: could not build its frame");
         return false;

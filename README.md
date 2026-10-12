@@ -155,6 +155,9 @@ You do not need the disc image to build it.
 - Sad Origami, for the ICO PAL HD texture pack, and for the support and
   blessing to test the port with it
   ([GBAtemp thread](https://gbatemp.net/threads/ps2-ico-pal-sces-50760-in-progress.671638/)).
+- katsifolis, for the iOS (through LiveContainer) and Apple-silicon macOS
+  support.
+- braito4, for the native macOS app.
 
 ## Legal and licence
 

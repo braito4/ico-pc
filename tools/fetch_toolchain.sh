@@ -188,5 +188,9 @@ else
     echo "$CCACHE_NAME" > "$CCACHE_DIR_TOOL/.ico-release"
     "$CCACHE_DIR_TOOL/bin/ccache" --version | head -n 1
 fi
+# a size cap that a CCACHE_MAXSIZE in the environment overrides
+if [[ -x "$CCACHE_DIR_TOOL/bin/ccache" ]]; then
+    "$CCACHE_DIR_TOOL/bin/ccache" --set-config "max_size=${CCACHE_MAXSIZE:-5G}"
+fi
 "$ROOT/tools/fetch_deps.sh" # library dependencies: Vulkan headers, volk, SDL3
 echo "==> done: $DEST"

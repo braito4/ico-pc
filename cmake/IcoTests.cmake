@@ -26,9 +26,9 @@
 #    executable target that is a test program (a name ending in _test, or one a
 #    test command names) EXCLUDE_FROM_ALL and makes the aggregate target `tests`
 #    depend on all of them. ICO_KEEP_IN_ALL lists the programs that are not tests
-#    and stay in `all` (the replay tool and the save importer are shipped by the
-#    packages, ico_pc is the game); `tests` still depends on them because tests
-#    run them.
+#    and stay in `all` (the save importer is shipped by the Windows packages, ico_pc
+#    is the game, the replay tool is a developer tool the packages do not ship);
+#    `tests` still depends on them because tests run them.
 
 set(ICO_KEEP_IN_ALL rd_replay_tool mc_import ico_pc)
 set_property(GLOBAL PROPERTY ICO_TEST_PROGRAMS "")

@@ -388,12 +388,15 @@ bool rd__apply_display(void)
         /* the scene's texels (SCENE's texture: the frame's exact width
          * alone with Full pixel, rd__target_scale_of) */
         const float sceneW = (cropWe > 0.0f ? cropWe : gw) * sx;
+        /* MSAA is asked for here; the fog's self-test settles it later
+         * (rd__fog_aa_reconcile) and logs "msaa: off" when the device cannot */
         rd__log("display: scene %gx%g (%.0fx%.0f)%s, work %g, aspect %.3f, filter %u, %s height, "
-                "full pixel %s, vsync %s%s%s",
+                "full pixel %s, vsync %s%s%s%s",
                 (double)sx, (double)sy, floor((double)sceneW + 0.5), floor((double)(gh * sy) + 0.5),
                 crtLock ? " (CRT: 1x)" : "", (double)work, (double)aspect, (unsigned)filter,
                 full ? "full" : "half", st->fullPixel ? "on" : "off", st->vsync ? "on" : "off",
-                aaMode == RD_AA_OFF ? "" : rd__aa_label(aaMode), ssaaNote);
+                aaMode == RD_AA_OFF ? "" : rd__aa_label(aaMode),
+                rd_aa_samples(aaMode) > 1u ? " (asked)" : "", ssaaNote);
     }
     if (changed) {
         g_rd.frameCropWe = cropWe;

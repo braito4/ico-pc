@@ -237,16 +237,13 @@ if(ICO_LINK_EXE)
         enable_language(RC)
         # The version information (port/platform/win/ico_pc.rc): the package
         # label (tools/package_win.sh passes -DICO_VERSION_LABEL=<label>), as
-        # text and as the numbers x.y.z.0 of a label that starts with
-        # [v]x.y.z; 0.0.0.0 and "dev" otherwise (a development build).
+        # text and as the numbers x.y.z.N of a label that starts with
+        # [v]x.y.z: N is the release candidate's number for a label such as
+        # v0.6.2-rc3 (0.6.2.3), 0 for the final (0.6.2.0); 0.0.0.0 and "dev"
+        # otherwise (a development build).
         set(ICO_VERSION_LABEL "" CACHE STRING "Package label for the Windows version information")
-        if(ICO_VERSION_LABEL MATCHES "^v?([0-9]+)\\.([0-9]+)\\.([0-9]+)")
-            set(ICO_VER_NUMERIC "${CMAKE_MATCH_1},${CMAKE_MATCH_2},${CMAKE_MATCH_3},0")
-            set(ICO_VER_TEXT "${CMAKE_MATCH_1}.${CMAKE_MATCH_2}.${CMAKE_MATCH_3}.0")
-        else()
-            set(ICO_VER_NUMERIC "0,0,0,0")
-            set(ICO_VER_TEXT "0.0.0.0")
-        endif()
+        include(cmake/IcoVersion.cmake)
+        ico_version_from_label("${ICO_VERSION_LABEL}" ICO_VER_NUMERIC ICO_VER_TEXT)
         configure_file(port/platform/win/ico_version.h.in
                        "${CMAKE_BINARY_DIR}/generated/ico_version.h" @ONLY)
         target_sources(ico_pc PRIVATE port/platform/win/ico_pc.rc)

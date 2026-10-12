@@ -35,7 +35,7 @@ How the picture looks.
   the PS2 picture. **Enhanced** makes the picture as sharp as your
   window, fits it to the window's shape, smooths the textures and shows
   the full-height picture. Once you change one of those four rows yourself,
-  it says **Custom**. Two of those four rows, Full-height picture and Texture filtering, are on the Effects page.
+  it says **Custom**. Two of those four rows, Full-height picture and Texture filtering, are on the Effects page. The shortcut also sets Full pixel (Effects page): Enhanced turns it on, Original turns it off.
 - **Resolution** is how sharp the picture is: 1x is the PS2's, up to 16x,
   or the size of your window. Very high values need a lot of graphics
   memory; when your graphics card cannot hold the picture, the game lowers
@@ -133,11 +133,14 @@ The last row is not one of the game's effects:
   screen's own pixels: each pixel of the game's picture is one pixel on your
   screen, so nothing is rounded, cropped or stretched, and the strip the PS2
   hid under its thin black border is shown too. The picture is exactly as
-  wide as the window shows it, at every size and shape of window. It is on
-  by default with the Enhanced Preset. Off keeps the original game's frame
-  shape, with its thin black border. With Video mode at 50 Hz the strip at
-  the top and bottom is a little taller. It works with every Preset and with
-  the CRT filter (which shows the PS2's own pixels whatever this row says).
+  wide as the window shows it, at every size and shape of window. It needs
+  the Enhanced Preset with Resolution set to the size of your window. With
+  Original, a fixed Resolution (1x to 16x), the CRT filter or supersampling,
+  this row only opens up the thin black border. It is on by default with the
+  Enhanced Preset. If you played an earlier version, your settings keep it
+  Off: turn it on here, or pick the Enhanced Preset again. Off keeps the
+  original game's frame shape, with its thin black border. With Video mode
+  at 50 Hz the strip at the top and bottom is a little taller.
 
 The Preset on the Display page sets Texture filtering, Full-height picture and Full pixel on this page too (Enhanced turns Full pixel on, Original turns it off), but it does not change the rest. Changes you make
 here show in photo mode at once.

@@ -103,5 +103,16 @@ grep -q 'pkg_assert_tar_lacks "$out" "ico-pc-$label/ico_pc.map"' "$here/tools/pa
 # the version information: the label's numbers reach the resource
 grep -q 'ICO_VERSION_LABEL' "$here/tools/package_win.sh" || bad "package_win.sh does not pass the label to the build"
 grep -q 'VERSIONINFO' "$here/port/platform/win/ico_pc.rc" || bad "ico_pc.rc has no version information"
+# an rc build has its own number in the fourth field, the final has 0
+cm="$(command -v cmake || true)"
+[[ -n "$cm" ]] || cm="$here/tools/toolchain/cmake/bin/cmake"
+if [[ -x "$cm" ]]; then
+    vout="$("$cm" "-DLABELS=v0.6.2-rc3;v0.6.2;0.6.2;v0.6.2-rc12;dev;" -P "$here/cmake/IcoVersion.cmake" 2>&1)"
+    for want in "v0.6.2-rc3 0,6,2,3 0.6.2.3" "v0.6.2 0,6,2,0 0.6.2.0" "0.6.2 0,6,2,0 0.6.2.0" \
+        "v0.6.2-rc12 0,6,2,12 0.6.2.12" "dev 0,0,0,0 0.0.0.0"; do
+        grep -qxF -- "-- $want" <<<"$vout" || bad "version label: no line '$want' in: $vout"
+    done
+    ok "an rc label gives its own file version, the final 0"
+fi
 ok "player archives carry no developer files; the program has version information"
 echo "package_textures_test: OK"

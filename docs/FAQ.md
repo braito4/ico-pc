@@ -114,14 +114,16 @@ download. The warning is about the file having no history yet, not about
 anything found inside it.
 
 In Chrome or Edge, open the downloads list, choose the three dots next to
-the file and pick **Keep**, then **Keep anyway** (Edge: **Keep**, then
-**Show more**, **Keep anyway**). If Windows shows "Windows protected your
+the file and pick **Keep** (some Chrome versions word it **Keep dangerous
+file**), then **Keep anyway** if it asks again. In Edge, open the three
+dots next to the download, then pick **Keep**, **Show more**, **Keep
+anyway**. If Windows shows "Windows protected your
 PC" when you start the game, choose **More info**, then **Run anyway**.
 
 You can check the files yourself: upload the zip to
 [VirusTotal](https://www.virustotal.com/) and read what its scanners say.
 The whole program is open source, so you can also read what it does or
-build it yourself ([how to build it](BUILDING.md)).
+build it yourself ([how to build it](https://github.com/nathanialf/ico-pc/blob/main/docs/BUILDING.md)).
 
 ## Where are my saves?
 

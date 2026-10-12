@@ -2221,7 +2221,7 @@ static void buildOptionPage(int id, int header, const int *opts, const int *strs
     pg->parent = parent;
     int first = lt_ext_prop_count() + LT_GAME_PROPERTY_COUNT;
     addHeader(pg, header);
-    for (int i = 0; i < n; i++) {
+    for (int i = 0; i < n && pg->count < MAX_ROWS; i++) { /* the tables are asserted to fit */
         addOption(pg, id, opts[i], strs[i], links ? links[i] : -1);
     }
     switch (id) {
@@ -2796,6 +2796,14 @@ static void build(void)
                    "a string and a link for each Extras row");
     _Static_assert(sizeof(charOpts) == sizeof(charStrs), "a string for each Characters row");
     _Static_assert(N_OF(charOpts) <= MAX_ROWS, "the Characters rows fit");
+    _Static_assert(N_OF(mainOpts) <= MAX_ROWS, "the mainOpts rows fit the page's row budget");
+    _Static_assert(N_OF(dispOpts) <= MAX_ROWS, "the dispOpts rows fit the page's row budget");
+    _Static_assert(N_OF(audioOpts) <= MAX_ROWS, "the audioOpts rows fit the page's row budget");
+    _Static_assert(N_OF(fxOpts) <= MAX_ROWS, "the fxOpts rows fit the page's row budget");
+    _Static_assert(N_OF(gpuOpts) <= MAX_ROWS, "the gpuOpts rows fit the page's row budget");
+    _Static_assert(N_OF(ctlOpts) <= MAX_ROWS, "the ctlOpts rows fit the page's row budget");
+    _Static_assert(N_OF(gameOpts) <= MAX_ROWS, "the gameOpts rows fit the page's row budget");
+    _Static_assert(N_OF(extrasOpts) <= MAX_ROWS, "the extrasOpts rows fit the page's row budget");
 
     ui_font_init(); /* the notes are wrapped by measuring */
     memset(s_pages, 0, sizeof(s_pages));
