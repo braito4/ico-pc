@@ -912,7 +912,8 @@ if(ICO_RUN_TESTS)
       set_tests_properties(${_odd_msaa} rd_fog_selftest_7740 PROPERTIES ENVIRONMENT "${_env}")
     endif()
     # Full pixel at 1920 x 1080 16:9 (the window's exact pixels: SCENE 1920
-    # texels, the frame's 688 GS pixels cropped to its exact 682.67), with
+    # texels and a guard texel a side, the frame's 688 GS pixels cropped to
+    # its exact 682.67), with
     # and without MSAA: the depth read in place passes and is taken
     set(_fullpixel)
     foreach(_aa 0 3 4 5)

@@ -216,15 +216,21 @@ void rd__ui_box(uint32_t outW, uint32_t outH, RhiRect *box)
 /* The texels of a source sw wide that step 2 leaves out at each side: the
  * frame's columns past its exact width, (gsW - wExact) / 2 GS pixels at
  * sw / gsW texels each (the CRT filter crops the same columns rounded to
- * whole GS pixels: rd_crt.c rd__crt_grid).  0 at 512 (4:3). */
-static float sourceCrop(uint32_t sw)
+ * whole GS pixels: rd_crt.c rd__crt_grid).  0 at 512 (4:3).  disp:
+ * DISPLAY, of which the source is a copy as wide (sw texels); a Full pixel
+ * DISPLAY (ox) holds the exact width and its guard texels, which are left
+ * out (RD_FULL_PIXEL_GUARD each side, rd__target_scale_of). */
+static float sourceCrop(const RdTargetRec *disp, uint32_t sw)
 {
+    if (disp && disp->ox > 0.0f && disp->tw > 2u * RD_FULL_PIXEL_GUARD) {
+        return (float)RD_FULL_PIXEL_GUARD * (float)sw / (float)disp->tw;
+    }
     const uint32_t gw = g_rd.gsW ? g_rd.gsW : ICO_FRAME_BASE_W;
     const float we = rd__frame_wexact();
-    /* Full pixel: DISPLAY holds the exact width alone (frameCropWe,
-     * rd__target_scale_of), so nothing is left out but what a narrower
-     * frame than the targets were made for leaves (none in the game: the
-     * frame's exact width is the option's aspect's) */
+    /* Full pixel (frameCropWe) where DISPLAY is not cropped (no ox:
+     * rd__target_scale_of crops a scaled target only): nothing is left out
+     * but what a narrower frame than the targets were made for leaves (none
+     * in the game: the frame's exact width is the option's aspect's) */
     const float held = g_rd.frameCropWe > 0.0f ? g_rd.frameCropWe : (float)gw;
     if (gw == ICO_FRAME_BASE_W || !(we < held)) {
         return 0.0f;
@@ -1728,7 +1734,7 @@ void rd__present_record(RhiCommandList cl)
          * effects program is loaded (never under the CRT filter, even when
          * it could not draw) */
         /* the frame's columns past its exact width left out (none at 4:3) */
-        float crop = sourceCrop(sw);
+        float crop = sourceCrop(disp, sw);
         RdFilter scaleFilter = pr->scaleFilter;
         /* anti-aliasing: the source box-averaged to the box first when it
          * has more than a texel a pixel (the reduce takes the crop; the box

@@ -11,8 +11,9 @@
  * in-place and copy reads sabotaged (buffer taken) MSAA is off, and
  * rd_aa_supported_mask still lists it.  <out w> <out h> (texels 0 0): the
  * Enhanced window resolution in that output at 16:9, Full pixel on: SCENE
- * the window's exact pixels, the frame's exact width alone (RdTargetRec.ox;
- * rd_fog_selftest_fullpixel*: 688 x 448 in 1920 x 1080).
+ * the window's exact pixels, the frame's exact width and a guard texel a
+ * side (RdTargetRec.ox, RD_FULL_PIXEL_GUARD; rd_fog_selftest_fullpixel*:
+ * 688 x 448 in 1920 x 1080).
  *
  * On a Vulkan device (77 without one), at a wide scene (16:9, scale 2,
  * Full pixel) so the self-test runs on a SCENE whose texels are not its GS
@@ -224,9 +225,9 @@ int main(int argc, char **argv)
     CHECK(t && (scale <= 1.0f || t->tw != t->w), "a scaled, wide SCENE (%ux%u texels for %ux%u)",
           t ? t->tw : 0, t ? t->th : 0, w, h);
     if (outW) {
-        CHECK(t && t->tw == outW && t->ox > 0.0f,
-              "Full pixel: SCENE is the window's %u columns (%u, %g left out)", outW, t ? t->tw : 0,
-              t ? (double)t->ox : 0.0);
+        CHECK(t && t->tw == outW + 2u * RD_FULL_PIXEL_GUARD && t->ox > 0.0f,
+              "Full pixel: SCENE is the window's %u columns and the guard (%u, %g left out)", outW,
+              t ? t->tw : 0, t ? (double)t->ox : 0.0);
     }
     if (aa > RD_AA_OFF && (rd_aa_supported_mask() & (1u << aa)) == 0u) {
         printf("rd_fog_selftest_test: SKIP: anti-aliasing %d is not offered here\n", aa);

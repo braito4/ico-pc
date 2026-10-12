@@ -527,15 +527,21 @@ void rd__target_scale_of(RdTargetRec *t, int named)
     t->th = sy == 1.0f ? t->h : scaled(t->h, sy);
     t->ox = 0.0f;
     /* Full pixel (rd__apply_display: g_rd.frameCropWe): a frame-wide
-     * scene-class target holds the frame's exact visible width alone, its
-     * texels the window's pixels (1920 at 1080p 16:9, not 688 x 2.8125 =
-     * 1935), the same scale, centred: the GS frame's w sx / 2 - floor(tw /
-     * 2) texels at the left are not drawn (ox), so GS pixel x is texel
-     * x sx - ox and the frame's centre (GS 2048) texel floor(tw / 2)
-     * (rd_replay.c rd__frame_group_ex) */
+     * scene-class target holds the frame's exact visible width, its texels
+     * the window's pixels (1920 at 1080p 16:9, not 688 x 2.8125 = 1935),
+     * the same scale, centred, and RD_FULL_PIXEL_GUARD texels more at each
+     * side: the reduction's sprite samples a whole texel to the right of
+     * its pixel (rd_blur.c rd__blur_snap_verts; the left, mirrored), so
+     * the window's last column needs the frame's column past it, which the
+     * guard holds (without it the sample clamped and the column repeated
+     * its neighbour).  The presenter leaves the guard out (rd_present.c
+     * sourceCrop), so what is shown is the exact width.  The GS frame's
+     * w sx / 2 - floor(tw / 2) texels at the left are not drawn (ox), so
+     * GS pixel x is texel x sx - ox and the frame's centre (GS 2048) texel
+     * floor(tw / 2) (rd_replay.c rd__frame_group_ex) */
     if (scene && g_rd.frameCropWe > 0.0f && t->w == g_rd.gsW && g_rd.frameCropWe < (float)t->w &&
         sx > 1.0f) {
-        const uint32_t cw = scaled(1u, g_rd.frameCropWe * sx);
+        const uint32_t cw = scaled(1u, g_rd.frameCropWe * sx) + 2u * RD_FULL_PIXEL_GUARD;
         if (cw < t->tw) {
             /* the frame's centre on the texture's middle texel edge,
              * floor(tw / 2): a whole texel at every width, so the 4:3
@@ -2314,7 +2320,20 @@ bool rd_read_display(void *dst, uint32_t *w, uint32_t *h)
     if (!t || !dst) {
         return false;
     }
-    return rd__read_target(rd_target(RD_TARGET_DISPLAY), dst, (size_t)t->tw * t->th * 4, w, h);
+    if (!rd__read_target(rd_target(RD_TARGET_DISPLAY), dst, (size_t)t->tw * t->th * 4, w, h)) {
+        return false;
+    }
+    /* Full pixel: the picture without the guard columns (rd__target_scale_of) */
+    const uint32_t g = t->ox > 0.0f && *w > 2u * RD_FULL_PIXEL_GUARD ? RD_FULL_PIXEL_GUARD : 0u;
+    if (g) {
+        uint8_t *px = (uint8_t *)dst;
+        const uint32_t nw = *w - 2u * g;
+        for (uint32_t y = 0; y < *h; y++) {
+            memmove(px + (size_t)y * nw * 4, px + ((size_t)y * *w + g) * 4, (size_t)nw * 4);
+        }
+        *w = nw;
+    }
+    return true;
 }
 
 const RdStats *rd_get_stats(void)

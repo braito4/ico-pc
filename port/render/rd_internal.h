@@ -343,6 +343,11 @@ void rd__walk(const RdFrame *f, int keep, RdStateBlock *state, RdWalkFn fn, void
  * (generation << 16) | (slot + 1) with slot >= RD_TARGET_COUNT. */
 #define RD_MAX_TARGETS 96
 
+/* Full pixel: the texels a cropped frame-wide target holds past the
+ * frame's exact width at each side (rd_core.c rd__target_scale_of): the
+ * reduction's whole-texel sample reads one there */
+#define RD_FULL_PIXEL_GUARD 1u
+
 typedef struct RdTargetRec {
     uint32_t gen;
     uint8_t live, named, withDepth, keepAcross;
@@ -357,7 +362,9 @@ typedef struct RdTargetRec {
      * frame-wide scene-class target holds only the frame's exact visible
      * width, the window's own pixels, and ox texels of the GS frame's left
      * (and right) are not in it: GS pixel x of the target is texels
-     * x * sx - ox (rd__gs_texel_x).  0 for every other target */
+     * x * sx - ox (rd__gs_texel_x); it holds RD_FULL_PIXEL_GUARD texels
+     * more at each side, which the present leaves out.  0 for every other
+     * target */
     float ox;
     RhiFormat format;
     RhiTexture color, depth;

@@ -2258,8 +2258,61 @@ static uint32_t colsDiffer(const uint8_t *a, uint32_t aw, uint32_t x0, const uin
     return bad;
 }
 
-/* With Full pixel on: SCENE and DISPLAY are the box's exact size, the
- * present is DISPLAY one texel a pixel (the whole box, nothing cropped),
+/* The present's edge columns with Full pixel on (review S2): DISPLAY is
+ * SCENE through the reduction, which samples a whole texel off its pixel
+ * (round(s / 4), rd__blur_snap_verts); the shift d is found on the band's
+ * inner columns (rows of one colour a column), and every presented column
+ * of the band's middle row, the edge ones too, must be SCENE's column
+ * x + G + d (G the guard texels the present leaves out).  Without the
+ * guard the last column's sample lay past SCENE and clamped: it repeated
+ * its neighbour's texel. */
+static void checkExactEdges(const char *name, const ExactRun *a, uint32_t outW, uint32_t G)
+{
+    const uint32_t W = a->box.w;
+    const uint32_t y = 168u * a->sh / 512u; /* the band's middle row (GS 96 .. 240) */
+    const uint8_t *srow = &a->scene[(size_t)y * a->sw * 4];
+    const uint8_t *orow = &a->out[(((size_t)a->box.y + y) * outW + (uint32_t)a->box.x) * 4];
+    int d = -99;
+    for (int k = -2; k <= 2 && d == -99; k++) {
+        uint32_t bad = 0;
+        for (uint32_t x = W / 4; x < 3u * W / 4u; x++) {
+            const int64_t sx = (int64_t)x + G + k;
+            for (int c = 0; c < 3; c++) {
+                bad += abs((int)orow[x * 4 + c] - (int)srow[sx * 4 + c]) > 1;
+            }
+        }
+        d = bad == 0 ? k : d;
+    }
+    CHECK(d != -99, "%s: the present's middle row is SCENE's, shifted (no shift fits)", name);
+    if (d == -99) {
+        return;
+    }
+    uint32_t past = 0, bad = 0, first = ~0u;
+    for (uint32_t x = 0; x < W; x++) {
+        const int64_t sx = (int64_t)x + G + d;
+        if (sx < 0 || sx >= (int64_t)a->sw) {
+            past++;
+            first = first == ~0u ? x : first;
+            continue;
+        }
+        int e = 0;
+        for (int c = 0; c < 3; c++) {
+            e |= abs((int)orow[x * 4 + c] - (int)srow[sx * 4 + c]) > 1;
+        }
+        bad += (uint32_t)e;
+        first = e && first == ~0u ? x : first;
+    }
+    CHECK(past == 0 && bad == 0,
+          "%s: every presented column is SCENE's column + %d, the edges too (%u read past "
+          "SCENE's %u texels, %u differ, the first %u)",
+          name, (int)G + d, past, a->sw, bad, first);
+    printf("%s: the present is SCENE shifted %d texel(s), edge columns included (%u differ)\n",
+           name, (int)G + d, past + bad);
+}
+
+/* With Full pixel on: SCENE and DISPLAY are the box's exact size and
+ * RD_FULL_PIXEL_GUARD texels more at each side, the present is DISPLAY one
+ * texel a pixel without the guard (the whole box, nothing else cropped),
  * and the frame's 4:3 columns are byte for byte the 4:3 picture at the
  * same height (the Enhanced window at 4:3 in a box as high: "4:3 is a
  * camera"): SCENE whole, DISPLAY but the reduction's few columns at the
@@ -2274,16 +2327,27 @@ static void checkExactWindow(const char *name, float aspect, uint32_t outW, uint
         CHECK(0, "%s: full pixel readback", name);
         return;
     }
-    CHECK(a.sw == a.box.w && a.sh == a.box.h, "%s: SCENE is the box, %ux%u (%ux%u)", name, a.box.w,
-          a.box.h, a.sw, a.sh);
+    /* the guard where the frame is cropped (its exact width below the
+       native width: not 48:9, whose 2048 is exact) */
+    IcoFrame fr;
+    ico_frame_make(&fr, aspect, 448);
+    const uint32_t G = fr.wExact < (float)fr.w - 0.01f ? RD_FULL_PIXEL_GUARD : 0u;
+    CHECK(a.sw == a.box.w + 2u * G && a.sh == a.box.h,
+          "%s: SCENE is the box and %u guard texels a side, %ux%u (%ux%u)", name, G,
+          a.box.w + 2u * G, a.box.h, a.sw, a.sh);
     CHECK(a.dw == a.sw && a.dh == a.sh, "%s: DISPLAY is SCENE's size (%ux%u)", name, a.dw, a.dh);
-    if (a.dw == a.box.w && a.dh == a.box.h) {
+    if (a.dw == a.box.w + 2u * G && a.dh == a.box.h) {
         uint32_t bad = 0;
         for (uint32_t y = 0; y < a.dh; y++) {
             bad += memcmp(&a.out[(((size_t)a.box.y + y) * outW + (uint32_t)a.box.x) * 4],
-                          &a.disp[(size_t)y * a.dw * 4], (size_t)a.dw * 4) != 0;
+                          &a.disp[((size_t)y * a.dw + G) * 4], (size_t)a.box.w * 4) != 0;
         }
-        CHECK(bad == 0, "%s: the present is DISPLAY byte for byte (%u rows differ)", name, bad);
+        CHECK(bad == 0,
+              "%s: the present is DISPLAY byte for byte, its guard left out (%u rows differ)", name,
+              bad);
+    }
+    if (a.sh == a.box.h && a.sw >= a.box.w) {
+        checkExactEdges(name, &a, outW, G);
     }
     /* the 4:3 picture as high as the box */
     const uint32_t w43 = (uint32_t)(((uint64_t)a.box.h * 4u + 1u) / 3u);
