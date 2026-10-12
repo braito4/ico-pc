@@ -138,9 +138,14 @@ float4 aa_reduce_ps(BlitVSOut i) : SV_Target0
 
 // MSAA (rd_replay.c, the MSAA epoch). depth_resolve_ps: the multisampled
 // scene depth (t1, Texture2DMS read with Load at each sample) into the
-// single-sampled one as SV_Depth, the largest sample (the depth grows with
-// GS Z and the game tests GEQUAL: the nearest surface any sample saw), in a
-// depth-only pass over the whole target, test ALWAYS with writes.
+// single-sampled one as SV_Depth, the smallest sample (the depth grows with
+// GS Z and the game tests GEQUAL: the farthest depth any sample saw), in a
+// depth-only pass over the whole target, test ALWAYS with writes.  The
+// sample patterns are centred on the pixel centre, so on a plane the
+// smallest sample is at or below the centre's depth: a surface drawn again
+// after the epoch single-sampled (the glow's GEQUAL re-draws, issue 43)
+// passes where it passed at 1x; the largest sample lies above the centre
+// on any slope and failed them.
 // depth_upsample_ps: the other way, the single-sampled depth (t1) into
 // every sample of the multisampled one, when an epoch starts on a scene
 // that already holds a picture.
@@ -151,9 +156,9 @@ float depth_resolve_ps(BlitVSOut i) : SV_Depth
     uint w, h, n;
     g_msDepth.GetDimensions(w, h, n);
     int2 p = int2(i.pos.xy);
-    float d = 0.0;
+    float d = 1.0;
     for (uint s = 0u; s < n; s++) {
-        d = max(d, g_msDepth.Load(p, int(s)));
+        d = min(d, g_msDepth.Load(p, int(s)));
     }
     return d;
 }

@@ -22,6 +22,14 @@
  *            anti-aliasing (drawn with the fixed-function blend, which the
  *            fog of an MSAA frame keeps) on every pixel inside a cell (its
  *            3x3 one colour);
+ *   redraw   issue 43: a triangle slanted in depth (and a nearer one over
+ *            part of it) drawn in the epoch, then the epoch closed by a
+ *            pass on SCENE's depth with WORK2 as its colour (the flare
+ *            mask's pass) where the slanted triangle is drawn again with
+ *            GEQUAL and no Z write: WORK2 is the same as without
+ *            anti-aliasing on every pixel away from an edge, and the
+ *            triangle covers its interior (the depth resolve takes the
+ *            smallest sample; the largest failed the re-draw on a slope);
  *   original the Original preset with MSAA4 asked for: the frame without
  *            anti-aliasing, byte for byte. */
 #include <stdio.h>
@@ -378,6 +386,91 @@ static void testFog(void)
     CHECK(bad == 0, "fog: per sample and resolved differ at %d interior pixels", bad);
 }
 
+/* testRedraw's frame: the epoch's triangles, then the re-draw into WORK2 */
+static void redrawTri(const uint8_t c[4])
+{
+    RdScreenVtx v[3] = {vtx(40 * 16 + 5, 30 * 16 + 9, 0x20000000u, c, 0, 0),
+                        vtx(470 * 16 + 11, 80 * 16 + 3, 0x68000000u, c, 0, 0),
+                        vtx(120 * 16 + 7, 410 * 16 + 13, 0x44000000u, c, 0, 0)};
+    rd_screen_prims(RD_PRIM_TRIANGLES, v, 3, RD_SPACE_WORLD, 1, 0);
+}
+
+static void redrawFrame(void)
+{
+    static const uint8_t black[4] = {0, 0, 0, 0};
+    const RdTarget scene = rd_target(RD_TARGET_SCENE);
+    const RdTarget work2 = rd_target(RD_TARGET_WORK2);
+    rd_begin_frame();
+    rd_select_list(0);
+    rd_set_target(scene, scene, GW, GH, 0);
+    rd_clear_target(scene, kClear, 1, 0);
+    rd_abe(0);
+    rd_fba(0);
+    rd_gouraud(0);
+    rd_texture_off();
+    rd_z_write(1);
+    rd_test_gs(RD_TEST_Z_GEQUAL);
+    redrawTri(kRed);
+    /* nearer than the slanted one wherever they overlap */
+    tri(200 * 16 + 3, 150 * 16 + 9, 360 * 16 + 1, 170 * 16 + 5, 260 * 16 + 13, 330 * 16 + 7,
+        0x78000000u, kBlue);
+    /* the pass that closes the epoch: SCENE's depth, another colour */
+    rd_select_list(7);
+    rd_set_target(work2, scene, GW, GH, 0);
+    rd_clear_target(work2, black, 0, 0);
+    rd_z_write(0);
+    rd_test_gs(RD_TEST_Z_GEQUAL);
+    redrawTri(kGreen);
+    rd_end_frame(0);
+}
+
+static int readWork2(uint8_t *dst)
+{
+    uint32_t w = 0, h = 0;
+    rhi_wait_idle();
+    if (!rd__read_target(rd_target(RD_TARGET_WORK2), dst, (size_t)GW * GH * 4, &w, &h) || w != GW ||
+        h != GH) {
+        CHECK(0, "WORK2 readback (%u x %u)", w, h);
+        return 0;
+    }
+    return 1;
+}
+
+/* WORK2's pixels the re-draw covers in s_off (not the clear's black) whose
+ * 3x3 is one colour there, and that hold s_off's colour in a */
+static int redrawInterior(const uint8_t *a)
+{
+    static const uint8_t black[3] = {0, 0, 0};
+    int n = 0;
+    for (int y = 0; y < GH; y++) {
+        for (int x = 0; x < GW; x++) {
+            const size_t i = ((size_t)y * GW + (size_t)x) * 4;
+            n += uniform3x3(s_off, x, y) && memcmp(&s_off[i], black, 3) != 0 &&
+                 memcmp(&a[i], &s_off[i], 4) == 0;
+        }
+    }
+    return n;
+}
+
+static void testRedraw(void)
+{
+    settings(RD_PRESET_ENHANCED, RD_AA_OFF);
+    redrawFrame();
+    if (!readWork2(s_off)) {
+        return;
+    }
+    settings(RD_PRESET_ENHANCED, RD_AA_MSAA4);
+    redrawFrame();
+    if (!readWork2(s_on)) {
+        return;
+    }
+    const int off = redrawInterior(s_off), on = redrawInterior(s_on);
+    printf("  redraw: %d interior pixels re-drawn without anti-aliasing, %d with MSAA4\n", off, on);
+    CHECK(off > 20000, "redraw: the frame without anti-aliasing re-draws %d interior pixels", off);
+    CHECK(on == off, "redraw: MSAA4 re-draws %d of the %d interior pixels", on, off);
+    compareEdges("redraw", 0);
+}
+
 static void testOriginal(void)
 {
     settings(RD_PRESET_ORIGINAL, RD_AA_OFF);
@@ -440,6 +533,7 @@ int main(void)
     testScene();
     testDate();
     testFog();
+    testRedraw();
     testOriginal();
     CHECK(rhi_vk_validation_error_count() == 0, "%u validation errors",
           rhi_vk_validation_error_count());

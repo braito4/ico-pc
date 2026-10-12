@@ -760,6 +760,18 @@ static int aaLocked(void)
     return ico_video_preset(&o) == ICO_VIDEO_ORIGINAL;
 }
 
+/* the value in force, which the row shows and steps from: the stored one
+   (Off under Original, ico_video_anti_alias), Off when the device does not
+   offer it (the renderer draws without: rd__aa_mode) */
+static int aaInForce(void)
+{
+    const int aa = ico_video_anti_alias();
+    if (aa <= ICO_AA_OFF || aa >= ICO_AA_COUNT || !(aaMask() & (1u << aa))) {
+        return ICO_AA_OFF;
+    }
+    return aa;
+}
+
 void ui_settings_set_models_handler(int (*fn)(void))
 {
     s_modelsEnter = fn;
@@ -1043,8 +1055,7 @@ static const char *rawValue(int opt, char *buf, unsigned size)
     case UI_OPT_ANTI_ALIAS: {
         static const int aaStr[ICO_AA_COUNT] = {UI_STR_AA_OFF,   UI_STR_AA_SSAA2, UI_STR_AA_SSAA4,
                                                 UI_STR_AA_MSAA2, UI_STR_AA_MSAA4, UI_STR_AA_MSAA8};
-        const int aa = ico_video_anti_alias(); /* Off under Original */
-        return ui_str(aaStr[aa >= 0 && aa < ICO_AA_COUNT ? aa : ICO_AA_OFF]);
+        return ui_str(aaStr[aaInForce()]);
     }
     case UI_OPT_WINDOW_MODE: {
         /* the window's own answer when the host installed one */
@@ -1401,10 +1412,10 @@ void ui_settings_step(UiSettingsOpt opt, int dir)
         if (aaLocked()) {
             return; /* Off under Original */
         }
-        /* Off, then the values the device can draw, around */
+        /* Off, then the values the device can draw, around, from the
+           value the row shows */
         const unsigned m = aaMask();
-        int a = o.antiAlias;
-        a = a >= 0 && a < ICO_AA_COUNT ? a : ICO_AA_OFF;
+        int a = aaInForce();
         for (int k = 0; k < ICO_AA_COUNT; k++) {
             a = stepIndex(a, ICO_AA_COUNT, dir);
             if (m & (1u << a)) {

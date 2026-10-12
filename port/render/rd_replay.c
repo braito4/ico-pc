@@ -1124,9 +1124,20 @@ static void beginPass(Replay *r, RdTargetRec *c, RdTargetRec *d, uint32_t cid, u
  *    the replay (dumps and readbacks then read the resolved SCENE);
  *  - closing resolves: the colour by rhi_cmd_resolve_color (the mean of the
  *    samples) into SCENE's colour, the depth by depth_resolve_ps (the
- *    largest sample: the nearest under GEQUAL) into SCENE's depth, each
+ *    smallest sample: the farthest under GEQUAL) into SCENE's depth, each
  *    only when the epoch drew it.  Everything after draws single-sampled;
- *    the epoch does not open again in the replay;
+ *    the epoch does not open again in the replay.  The smallest because the
+ *    sample patterns are centred on the pixel centre: on a plane it is at
+ *    or below the centre's depth, so a surface the game draws again after
+ *    the close with GEQUAL against SCENE's depth (the flare mask's and the
+ *    aura's re-draws of the glowing meshes, issue 43) passes on every
+ *    pixel it passed at 1x; the largest sample lies above the centre on
+ *    any slope and failed nearly all of them.  The cost is on silhouettes:
+ *    a pixel shared by a near and a far surface resolves to the far one,
+ *    so a pass after the close treats it as the far surface (the largest
+ *    made it the near one: the same one-pixel error on the other side);
+ *    inside a surface every pass after the close sees the 1x depth or
+ *    below it by under a pixel's slope;
  *  - the fog inside the epoch, with sample-rate shading and the depth drawn
  *    in it, runs per sample (fog_lut_ms_ps reading SCENE_MS's depth at
  *    SV_SampleIndex) and keeps the epoch open; otherwise its depth read

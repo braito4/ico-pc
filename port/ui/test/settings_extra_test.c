@@ -1607,21 +1607,35 @@ static void testAntiAlias(void)
         CHECK(o.antiAlias == aa, "full mask: Right gives %d (%d)", aa, o.antiAlias);
     }
     CHECK(strcmp(ui_settings_value_text(UI_OPT_ANTI_ALIAS), "MSAA 8x") == 0, "MSAA 8x reads so");
-    /* a mask with only the always-there values: MSAA from the file is stepped away */
+    /* a mask with only the always-there values: the stored 8x is drawn
+       without (rd__aa_mode), so the row reads Off and steps from Off */
     s_aaMask = (1u << ICO_AA_OFF) | (1u << ICO_AA_SSAA2) | (1u << ICO_AA_SSAA4);
+    CHECK(strcmp(ui_settings_value_text(UI_OPT_ANTI_ALIAS), "Off") == 0,
+          "no MSAA listed: the stored 8x reads Off (%s)",
+          ui_settings_value_text(UI_OPT_ANTI_ALIAS));
     ui_settings_step(UI_OPT_ANTI_ALIAS, 1);
     ico_video_get(&o);
-    CHECK(o.antiAlias == ICO_AA_OFF, "no MSAA listed: Right from 8x wraps to Off (%d)",
-          o.antiAlias);
+    CHECK(o.antiAlias == ICO_AA_SSAA2,
+          "no MSAA listed: Right from the shown Off is 2x supersampling (%d)", o.antiAlias);
+    ui_settings_step(UI_OPT_ANTI_ALIAS, -1);
     ui_settings_step(UI_OPT_ANTI_ALIAS, -1);
     ico_video_get(&o);
     CHECK(o.antiAlias == ICO_AA_SSAA4, "no MSAA listed: Left from Off is 4x supersampling (%d)",
           o.antiAlias);
 
-    /* the value from the file */
+    /* the value from the file: shown when the device offers it; the value
+       actually used (Off) when it does not, the file kept (issue 43) */
     useConfig("version = 1\n[video]\npreset = \"enhanced\"\nanti_aliasing = \"msaa2\"\n");
     enterMainKeep(1);
-    CHECK(strcmp(ui_settings_value_text(UI_OPT_ANTI_ALIAS), "MSAA 2x") == 0, "msaa2 from the file");
+    CHECK(strcmp(ui_settings_value_text(UI_OPT_ANTI_ALIAS), "Off") == 0,
+          "msaa2 from the file, not offered: reads Off (%s)",
+          ui_settings_value_text(UI_OPT_ANTI_ALIAS));
+    ico_video_get(&o);
+    CHECK(o.antiAlias == ICO_AA_MSAA2, "msaa2 from the file, not offered: kept (%d)", o.antiAlias);
+    s_aaMask |= 1u << ICO_AA_MSAA2;
+    CHECK(strcmp(ui_settings_value_text(UI_OPT_ANTI_ALIAS), "MSAA 2x") == 0,
+          "msaa2 from the file, offered: reads MSAA 2x (%s)",
+          ui_settings_value_text(UI_OPT_ANTI_ALIAS));
 
     /* Original: Off, greyed, no step.  Loading preset "original" applies the
        Original shortcut, which puts the stored option off too (options_test
