@@ -73,7 +73,8 @@ the PS2 gives. [What each one does](OPTIONS.md#effects).
 
 The PS2 itself drew a thin black border around the picture, a few dots wide
 at the sides and a little more at the top and bottom, and the game keeps
-it. To hide it, turn on **Full pixel (exact screen pixels)** in **Options > Effects** (on by default with the Enhanced Preset).
+it. To hide it, turn on **Full pixel (exact screen pixels)** in
+**Options > Effects** (it is on by default with the Enhanced Preset).
 It shows the strip of picture the PS2 hid under the border, so the picture
 fills the box. Nothing is cut off or enlarged, and the picture stays as
 sharp as it is without the option. With Video mode at 50 Hz the strip at

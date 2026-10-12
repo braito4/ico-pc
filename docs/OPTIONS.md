@@ -89,6 +89,8 @@ How the picture looks.
   screen's refresh rate (60 on a 60 Hz screen, 120 on a 120 Hz screen)
   follows the screen, so motion stays smooth, and the 144 and 240 limits
   reach their rate. On Android it starts at 60.
+  If motion ever looks uneven, check that this limit matches your
+  screen's refresh rate (see your system's display settings).
 - **Video mode** is PAL 50 Hz or 60 Hz. The normal choice is 60 Hz. This
   row is only on the title screen's Options.
 
