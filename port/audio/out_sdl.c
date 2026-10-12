@@ -46,7 +46,8 @@ static SDL_AudioDeviceID chosen; /* the named device the stream is on, 0: the de
 static int logged_unknown;
 static unsigned long underruns;
 static unsigned long drops;
-static float rate_ratio = 1.0f; /* ico_audio_set_rate_ratio */
+static float rate_ratio = 1.0f;    /* ico_audio_set_rate_ratio */
+static float applied_ratio = 1.0f; /* the stream's (ico_audio_play_ratio of rate_ratio) */
 static int16_t silence[1024 * CHANNELS];
 static int16_t scaled[1024 * CHANNELS];
 
@@ -114,6 +115,7 @@ static int open_stream(const char *name)
         fprintf(stderr, "audio: no audio device (%s); no sound\n", SDL_GetError());
         return -1;
     }
+    applied_ratio = rate_ratio;
     if (rate_ratio != 1.0f) {
         SDL_SetAudioStreamFrequencyRatio(stream, rate_ratio);
     }
@@ -211,6 +213,7 @@ void ico_audio_set_rate_ratio(double ratio)
         return;
     }
     rate_ratio = r;
+    applied_ratio = r; /* the trim, if any, again at the next push */
     if (stream != NULL && !SDL_SetAudioStreamFrequencyRatio(stream, r)) {
         fprintf(stderr, "audio: rate ratio: %s\n", SDL_GetError());
     }
@@ -226,6 +229,14 @@ void ico_audio_sdl_push(const int16_t *frames, int count)
         return;
     }
     queued = SDL_GetAudioStreamQueued(stream);
+    {
+        /* more than two vsyncs waiting: played out a little faster */
+        const float want = (float)ico_audio_play_ratio(rate_ratio, queued, vsync_bytes);
+
+        if (want != applied_ratio && SDL_SetAudioStreamFrequencyRatio(stream, want)) {
+            applied_ratio = want;
+        }
+    }
     if (queued > 4 * vsync_bytes) {
         drops++;
         return;

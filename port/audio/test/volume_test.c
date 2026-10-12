@@ -66,6 +66,30 @@ int main(void)
     check_eq(in[1], 250, "in place: quarter");
     check_eq(in[3], 8192, "in place: quarter of full scale");
 
+    /* the play ratio: the rate ratio, a quarter of a percent faster above
+       two vsyncs queued (800 frames of 4 bytes a vsync) */
+    check_eq((long)(ico_audio_play_ratio(1.001, 3200, 3200) * 1e6 + 0.5), 1001000,
+             "one vsync: as is");
+    check_eq((long)(ico_audio_play_ratio(1.001, 6400, 3200) * 1e6 + 0.5), 1001000, "two: as is");
+    check_eq((long)(ico_audio_play_ratio(1.0, 6404, 3200) * 1e6 + 0.5), 1002500,
+             "above two: trimmed");
+    check_eq((long)(ico_audio_play_ratio(1.0, 9999, 0) * 1e6 + 0.5), 1000000, "no block size");
+    /* a queue grown to 2.2 vsyncs (a rate measured a little short over
+       the blocks), pushed and played a vsync at a time: trimmed back to
+       two vsyncs, then left alone; rc1 kept it queued */
+    {
+        const double vs = 3200.0;
+        double q = 2.2 * vs, ratio = 1.0;
+        int n;
+
+        for (n = 0; n < 3600; n++) {
+            ratio = ico_audio_play_ratio(1.0, (int)q, (int)vs);
+            q += vs - vs * ratio; /* a vsync in, a vsync times the ratio out */
+        }
+        check_eq(q <= 2.0 * vs + 10.0 && q > 1.99 * vs, 1, "a surplus trimmed to two vsyncs");
+        check_eq(ratio == 1.0, 1, "then the rate as is");
+    }
+
     if (failures == 0) {
         printf("volume_test: ok\n");
     }

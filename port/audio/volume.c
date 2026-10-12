@@ -28,6 +28,14 @@ int ico_audio_volume_q8(void)
     return volume_q8;
 }
 
+double ico_audio_play_ratio(double rateRatio, int queuedBytes, int vsyncBytes)
+{
+    if (vsyncBytes > 0 && queuedBytes > 2 * vsyncBytes) {
+        return rateRatio * ICO_AUDIO_TRIM;
+    }
+    return rateRatio;
+}
+
 void ico_audio_scale(int16_t *dst, const int16_t *src, int count, int q8)
 {
     int i;

@@ -53,6 +53,16 @@ int ico_audio_volume_q8(void);
 /* dst[i] = clamp16(src[i] * q8 / 256), `count` samples (dst may equal src);
    integer math, q8 clamped to 0..256, 256 is a copy. */
 void ico_audio_scale(int16_t *dst, const int16_t *src, int count, int q8);
+/* The ratio the output plays at (volume.c, pure): the window's rate ratio
+   (ico_audio_set_rate_ratio), and ICO_AUDIO_TRIM faster while more than
+   two vsyncs of audio wait before a vsync's block is queued.  The rate
+   ratio is measured over 10 s, so what the simulation produced ahead of it
+   (a 60.00 Hz screen: 0.1 % for the first 10 s, a vsync's worth over a
+   long session of measuring errors) would stay queued as latency until
+   the four-vsync drop cut a block; the trim plays it out (a quarter of a
+   percent: a vsync in about 7 s, a pitch change no one hears). */
+#define ICO_AUDIO_TRIM 1.0025
+double ico_audio_play_ratio(double rateRatio, int queuedBytes, int vsyncBytes);
 
 /* Close the WAV and the device (also an atexit handler). */
 void ico_audio_host_shutdown(void);
