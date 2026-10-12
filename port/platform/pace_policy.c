@@ -36,10 +36,12 @@ uint64_t pace_present_gap(int cap, bool uncappedVsync, bool mailbox, uint64_t re
     return cap > 0 ? 1000000000ull / (uint64_t)cap : 0;
 }
 
-bool pace_cap_follows_refresh(int cap, uint64_t refreshNs)
+bool pace_cap_equals_refresh(int cap, uint64_t refreshNs)
 {
-    /* cap >= 1e9 / refreshNs - 0.5, in integers: (2 cap + 1) refreshNs >= 2e9 */
-    return cap > 0 && refreshNs > 0 && (2ull * (uint64_t)cap + 1ull) * refreshNs >= 2000000000ull;
+    /* |cap - 1e9 / refreshNs| <= 0.5, in integers:
+       (2 cap - 1) refreshNs <= 2e9 <= (2 cap + 1) refreshNs */
+    return cap > 0 && refreshNs > 0 && (2ull * (uint64_t)cap - 1ull) * refreshNs <= 2000000000ull &&
+           (2ull * (uint64_t)cap + 1ull) * refreshNs >= 2000000000ull;
 }
 
 uint64_t pace_next_present(uint64_t nextPresent, uint64_t startNs, uint64_t gap)

@@ -180,35 +180,42 @@ static void testPresentGap(void)
     }
 }
 
-/* A limit at or above the display's rate follows the refresh (issue 74) */
-static void testCapFollowsRefresh(void)
+/* The mode a numeric cap takes with vsync on (issue 74): a cap equal to the
+   refresh within 0.5 Hz takes FIFO with no timer gap; above or below it,
+   mailbox (above) with the cap's own gap */
+static void testCapEqualsRefresh(void)
 {
     const uint64_t r6000 = 16666667ull, r5994 = 16683350ull, r120 = 8333333ull, r11988 = 8341675ull,
                    r144 = 6944444ull;
-    const uint64_t refreshGap = r6000 - r6000 / 16;
 
-    /* cap 60 on 60.00 and on 59.94: the refresh's gap (vsync on) */
-    CHECK(pace_cap_follows_refresh(60, r6000));
-    CHECK(pace_cap_follows_refresh(60, r5994));
-    CHECK(pace_present_gap(60, pace_cap_follows_refresh(60, r6000), true, r6000) == refreshGap);
-    CHECK(pace_present_gap(60, pace_cap_follows_refresh(60, r5994), true, r5994) == refreshGap);
-    /* the same under FIFO (D3D12): the refresh minus a sixteenth */
-    CHECK(pace_present_gap(60, pace_cap_follows_refresh(60, r6000), false, r6000) == refreshGap);
-    /* cap 60 on 120 Hz: the cap's own gap, as before */
-    CHECK(!pace_cap_follows_refresh(60, r120));
-    CHECK(pace_present_gap(60, pace_cap_follows_refresh(60, r120), true, r120) == 16666666ull);
-    /* 120 on 119.88 and 120; 144 on 144; 240 on 144 */
-    CHECK(pace_cap_follows_refresh(120, r11988));
-    CHECK(pace_cap_follows_refresh(120, r120));
-    CHECK(pace_cap_follows_refresh(144, r144));
-    CHECK(pace_cap_follows_refresh(240, r144));
-    CHECK(pace_present_gap(144, pace_cap_follows_refresh(144, r144), true, r144) ==
-          r144 - r144 / 16);
-    /* below the refresh: 59 on 60 Hz is 1 Hz under, 30 on 60 */
-    CHECK(!pace_cap_follows_refresh(59, r6000));
-    CHECK(!pace_cap_follows_refresh(30, r6000));
-    CHECK(!pace_cap_follows_refresh(0, r6000));
-    CHECK(!pace_cap_follows_refresh(-1, r6000));
+    /* equal: 60 on 60.00 and 59.94, 120 on 120.00 and 119.88, 144 on 144 */
+    CHECK(pace_cap_equals_refresh(60, r6000));
+    CHECK(pace_cap_equals_refresh(60, r5994));
+    CHECK(pace_cap_equals_refresh(120, r120));
+    CHECK(pace_cap_equals_refresh(120, r11988));
+    CHECK(pace_cap_equals_refresh(144, r144));
+    /* the window's rule: equal -> gap 0 (FIFO); otherwise the cap's gap */
+    CHECK(pace_present_gap(-1, true, true, r6000) != 0); /* uncapped: unchanged */
+    /* above the refresh: not equal, the cap's own gap (mailbox) */
+    CHECK(!pace_cap_equals_refresh(144, r6000));
+    CHECK(!pace_cap_equals_refresh(144, r120));
+    CHECK(!pace_cap_equals_refresh(240, r144));
+    CHECK(pace_present_gap(144, false, true, r6000) == 1000000000ull / 144);
+    CHECK(pace_present_gap(240, false, true, r144) == 1000000000ull / 240);
+    /* below the refresh: 60 on 120, 59 on 60, 30 on 60 */
+    CHECK(!pace_cap_equals_refresh(60, r120));
+    CHECK(!pace_cap_equals_refresh(59, r6000));
+    CHECK(!pace_cap_equals_refresh(30, r6000));
+    CHECK(pace_present_gap(60, false, true, r120) == 16666666ull);
+    /* the edges: 0.5 Hz either side of 60 still equal, a whole Hz not */
+    CHECK(pace_cap_equals_refresh(60, 1000000000ull * 2 / 119));
+    CHECK(pace_cap_equals_refresh(60, 1000000000ull * 2 / 121 + 1));
+    CHECK(!pace_cap_equals_refresh(60, 1000000000ull / 61));
+    CHECK(!pace_cap_equals_refresh(60, 1000000000ull / 59));
+    /* no cap */
+    CHECK(!pace_cap_equals_refresh(0, r6000));
+    CHECK(!pace_cap_equals_refresh(-1, r6000));
+    CHECK(!pace_cap_equals_refresh(60, 0));
 }
 
 /* The limiter's grid under a fake clock.  pace() in window_host.c loops per
@@ -393,7 +400,7 @@ int main(void)
 
     testAutoResolution();
     testPresentGap();
-    testCapFollowsRefresh();
+    testCapEqualsRefresh();
     testLimiterGrid();
 
     if (fails) {

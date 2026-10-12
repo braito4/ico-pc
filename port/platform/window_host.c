@@ -143,7 +143,9 @@ static struct {
     Uint64 paceEnd;
     double stepSumMs, stepMaxMs;
     unsigned stepCount;
-    int mailbox; /* rhi_prefer_mailbox as last applied: vsync on and presenting between ticks */
+    int mailbox;  /* rhi_prefer_mailbox as last applied: vsync on and presenting between ticks */
+    int vsync;    /* vsync on and presenting between ticks */
+    int fifoLock; /* vsync on and the cap equals the display's refresh: FIFO, a present a vblank */
     /* the slow-step lines ([dev] slow_step_ms, 0 off): the threshold,
        the block's count and lines, ico_window_pump's time, the renderer's
        texture decodes and pipeline creations at the last pace's end */
@@ -197,6 +199,17 @@ static struct {
 
 /* The renderer's settings from the display options and the window's pixel
    size. */
+/* The display's refresh period in ns (0 unknown); fallback is returned when
+   the display reports none */
+static Uint64 display_refresh_ns(Uint64 fallback)
+{
+    const SDL_DisplayMode *dm =
+        s_window != NULL ? SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(s_window)) : NULL;
+
+    return dm != NULL && dm->refresh_rate > 1.0f ? (Uint64)(1e9 / (double)dm->refresh_rate)
+                                                 : fallback;
+}
+
 static void video_settings(RdSettings *rs, int w, int h)
 {
     IcoVideoOptions o;
@@ -266,7 +279,22 @@ static void video_settings(RdSettings *rs, int w, int h)
     /* presenting between ticks with vsync on, the swapchain prefers the
        mailbox mode: no tearing, and a present never waits for the display,
        so it cannot hold the simulation back */
-    s_pres.mailbox = rs->vsync && rs->interpolate;
+    s_pres.vsync = rs->vsync && rs->interpolate;
+    /* A cap equal to the display's rate (60 on 59.94 or 60.00 Hz, 120 on
+       119.88 or 120.00) takes FIFO instead: the blocking present locks each
+       present to a vblank, one picture a refresh, which a timer between
+       mailbox presents cannot do against the simulation's 59.94 Hz clock
+       (issue 74).  D3D12 is FIFO already. */
+    {
+        const int lock =
+            s_pres.vsync && pace_cap_equals_refresh(s_pres.framerate, display_refresh_ns(0));
+        if (lock != s_pres.fifoLock) {
+            fprintf(stderr, "window: the cap %s the refresh: present mode %s\n",
+                    lock ? "equals" : "no longer equals", lock ? "fifo" : "as the options say");
+        }
+        s_pres.fifoLock = lock;
+    }
+    s_pres.mailbox = s_pres.vsync && !s_pres.fifoLock;
     rhi_prefer_mailbox(s_pres.mailbox != 0);
 }
 
@@ -882,7 +910,9 @@ int ico_window_open(unsigned int gsW, unsigned int gsH)
                 o.modelPack ? "on" : "off", o.dumpModels && ico_opt_developer_mode() ? "on" : "off",
                 rhi_limits()->depthStencilFormatName);
         fprintf(stderr, "window: present mode %s%s\n", rhi_present_mode_name(),
-                rhi_present_mailbox() ? " (vsync without waiting on the display)" : "");
+                s_pres.fifoLock         ? " (the cap equals the refresh)"
+                : rhi_present_mailbox() ? " (vsync without waiting on the display)"
+                                        : "");
         /* a program hooking the graphics API, once */
         ico_diag_set_effects_program(rhi_injector_name() != NULL);
         if (rhi_injector_name() != NULL) {
@@ -1471,6 +1501,12 @@ int ico_window_pump(void)
             if (window_mode_now() == ICO_WINDOW_BORDERLESS) {
                 ico_window_video_refit(s_window);
             }
+            /* the refresh may differ: whether the cap equals it, and with
+               it the present mode, is decided again */
+            video_apply(1);
+            break;
+        case SDL_EVENT_DISPLAY_CURRENT_MODE_CHANGED:
+            video_apply(1);
             break;
         case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED: {
             /* a drag sends one per size: print when the fullscreen
@@ -2309,13 +2345,9 @@ static void pace(int hz)
        simulated period (pace_policy.h: the cost is smoothed, with
        hysteresis, and the limit is higher with an effects program
        loaded). */
-    Uint64 refresh = period;
     Uint64 gap;
+    const Uint64 refresh = display_refresh_ns(period);
     {
-        const SDL_DisplayMode *dm = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(s_window));
-        refresh = dm != NULL && dm->refresh_rate > 1.0f ? (Uint64)(1e9 / (double)dm->refresh_rate)
-                                                        : period;
-
         /* "uncapped" with vsync on (s_pres.mailbox: rhi_prefer_mailbox):
            a little less than one display refresh between presents, in
            mailbox mode as under FIFO, so the presents average about one a
@@ -2323,17 +2355,15 @@ static void pace(int hz)
            Two a refresh in mailbox mode drew a picture the display never
            showed for every one it did, which kept a handheld's GPU near its
            limit; a phone also lost the time for the game.  Without vsync
-           "uncapped" is back to back (pace_policy.h pace_present_gap) */
-        /* A limit at or above the display's rate (60 on a 59.94 or 60.00
-           screen, 120 on a 119.88) is paced the same way: presents timed
-           from the simulation's own 59.94 Hz clock showed one picture too
-           few or too many each few seconds (issue 74). Under FIFO (D3D12
-           always) too: s_pres.mailbox is the vsync option. */
-        gap = pace_present_gap(s_pres.framerate,
-                               s_pres.mailbox &&
-                                   (s_pres.framerate == ICO_FRAMERATE_UNCAPPED ||
-                                    pace_cap_follows_refresh(s_pres.framerate, refresh)),
-                               rhi_present_mailbox(), refresh);
+           "uncapped" is back to back.  A cap equal to the refresh has no
+           gap: FIFO's blocking present is the timer (s_pres.fifoLock).
+           Any other cap is its own gap, on the drift-free grid
+           (pace_policy.h pace_present_gap, pace_next_present) */
+        gap = s_pres.fifoLock
+                  ? 0
+                  : pace_present_gap(s_pres.framerate,
+                                     s_pres.framerate == ICO_FRAMERATE_UNCAPPED && s_pres.mailbox,
+                                     rhi_present_mailbox(), refresh);
         if (!gap) {
             s_pres.nextPresent = 0;
         }
@@ -2350,7 +2380,8 @@ static void pace(int hz)
            end past the deadline (its cost the last present's): the next
            simulation step is never late for one */
         if (s_pres.presentedFrame == s_pres.frame &&
-            (now >= s_deadline || s_pres.paceSlow || now + s_pres.cost > s_deadline)) {
+            (now >= s_deadline || s_pres.paceSlow ||
+             (!s_pres.fifoLock && now + s_pres.cost > s_deadline))) {
             if (now < s_deadline) {
                 SDL_DelayPrecise(s_deadline - now);
             }
@@ -2372,9 +2403,9 @@ static void pace(int hz)
            to the presents' steady cadence) against the simulated time the
            frame closed; the raw measured time jittered with the step and
            the sleeps before the present */
-        float a =
-            rd_present_clock_alpha(&s_pres.clock, (double)now / 1e6, (double)s_pres.tickAt / 1e6,
-                                   (double)tick / 1e6, (double)gap / 1e6);
+        float a = rd_present_clock_alpha(&s_pres.clock, (double)now / 1e6,
+                                         (double)s_pres.tickAt / 1e6, (double)tick / 1e6,
+                                         (double)(s_pres.fifoLock ? refresh : gap) / 1e6);
 
         if (s_pres.legacyAlpha) {
             /* ICO_RD_S2_LEGACY=1: the raw measured time, without the clock */

@@ -52,14 +52,14 @@ bool pace_slow_present(PaceHist *h, uint64_t costNs, uint64_t refreshNs, uint64_
  * 0 (no gap: back to back) otherwise, i.e. "uncapped" without vsync. */
 uint64_t pace_present_gap(int cap, bool uncappedVsync, bool mailbox, uint64_t refreshNs);
 
-/* True when a numeric frame rate limit (cap > 0) is at or above the
- * display's rate minus 0.5 Hz, so 60 counts as the refresh of a 59.94 or
- * 60.00 Hz screen and 120 of a 119.88 Hz one.  With vsync on such a limit is
- * paced like "uncapped" (the refresh-based gap of pace_present_gap): the
- * simulation's 59.94 Hz clock is not the display's, and presents timed from
- * it left some refresh without a new picture (issue 74).  A limit under the
- * refresh keeps its own gap. */
-bool pace_cap_follows_refresh(int cap, uint64_t refreshNs);
+/* True when a numeric frame rate limit (cap > 0) equals the display's rate
+ * within 0.5 Hz (60 on a 59.94 or 60.00 Hz screen, 120 on 119.88 or 120.00).
+ * With vsync on such a limit takes the FIFO present mode and no timer gap
+ * (the blocking present holds each present to a vblank): the simulation's
+ * 59.94 Hz clock is not the display's, and presents timed from it left some
+ * refresh without a new picture (issue 74).  A limit above the refresh keeps
+ * mailbox and its own gap, one below keeps its own gap. */
+bool pace_cap_equals_refresh(int cap, uint64_t refreshNs);
 
 /* The limiter's grid: when the present after one that started at startNs is
  * due.  nextPresent is when that one was due (0: none yet).  The result is
