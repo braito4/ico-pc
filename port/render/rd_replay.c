@@ -5148,6 +5148,14 @@ static bool blurSpriteClears(const Replay *r, const RdTargetRec *tc, const RdPos
  * it draws into, the target is first copied into its snapshot, which the
  * shader reads as the destination (t2) and, sampling itself, as the
  * texture: the GS reads both before it writes. */
+/* rd__set_blur_fix128_skip (rd_internal.h) */
+static bool s_blurFix128Skip = true;
+
+void rd__set_blur_fix128_skip(bool on)
+{
+    s_blurFix128Skip = on;
+}
+
 static void doBlurSpriteDraw(Replay *r, const RdFrame *f, const RdCmd *c)
 {
     RdPostRec p;
@@ -5180,7 +5188,8 @@ static void doBlurSpriteDraw(Replay *r, const RdFrame *f, const RdCmd *c)
     RdDrawState draw = r->st.ds;
     /* GS FIX 128: ((Cs - Cd) * 128 >> 7) + Cd is Cs, even with PABE.
      * Normalize this draw only; later packets still inherit the GS state. */
-    draw.abe = draw.abe && !(draw.blend == RD_BLEND_LERP_FIX && draw.blendFix == 128);
+    draw.abe =
+        draw.abe && !(s_blurFix128Skip && draw.blend == RD_BLEND_LERP_FIX && draw.blendFix == 128);
     const RdDrawState *d = &draw;
     RdTargetRec *td = rd__target_rec(r->st.depth);
     if (td && (!td->withDepth || !td->depth.id || td->tw != tc->tw || td->th != tc->th)) {

@@ -1589,6 +1589,13 @@ void rd__gpu_shutdown(void);
  * present, runs the presenter.  The replay state block ends as f->endState. */
 bool rd__replay_frame(const RdFrame *f, int keep, bool present);
 
+/* A staticBlur sprite with ABE and ALPHA LERP FIX at FIX 128 writes
+ * ((Cs - Cd) * 128 >> 7) + Cd, which is Cs: rd_replay.c draws it without
+ * ABE and so without the destination snapshot (DATE and AFAIL RGB_ONLY
+ * still take theirs). On by default; off draws it with the blend (tests:
+ * the same frame replayed both ways). */
+void rd__set_blur_fix128_skip(bool on);
+
 /* rd_perf.c (rd.h RdPerfRecord): the record of the replay
  * being made.  rd__perf_begin starts it (the CPU phases are added to it by
  * the replay), rd__perf_end closes it with the RhiStats deltas and queues it
