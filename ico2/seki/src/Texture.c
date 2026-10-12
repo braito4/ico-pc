@@ -1603,12 +1603,30 @@ static void tex_scrollClut(void *dstClut, void *curClut, void *srcClut, int size
     }
 }
 
+#ifdef ICO_RD
+
+/* port/game/photo_mode.c: 1 while photo mode shows the paused game */
+extern int ico_photo_active(void);
+
+/* PC port: the one entry tex_textureAnimation advances (-1: all of them).
+   Photo mode pauses the game (systemStatus[5]) and with it every texture
+   scroll; the film grain's texture alone keeps moving there, so the
+   capture holds a fresh pattern */
+static int texAnimOnly = -1;
+
+#endif
+
 static void tex_textureAnimation(void)
 {
     int i;
 
     for (i = 0; i < texCount; i++) {
         TexData *t = &texTable[i].rec;
+#ifdef ICO_RD
+        if (texAnimOnly >= 0 && i != texAnimOnly) {
+            continue;
+        }
+#endif
         TexExt *e = &t->ext;
         TexUV *uv = &t->uv;
 
@@ -1798,6 +1816,16 @@ void tex_ResetVram(void)
     if (systemStatus[5] == 0) {
         tex_textureAnimation();
     }
+#ifdef ICO_RD
+    else if (ico_photo_active()) {
+        /* PC port: photo mode keeps the film grain moving (issue 75) */
+        texAnimOnly = tex_GetTextureNo("sandstorm_spr");
+        if (texAnimOnly >= 0) {
+            tex_textureAnimation();
+        }
+        texAnimOnly = -1;
+    }
+#endif
 #ifdef ICO_RD
     /* R2b: once per frame; destroys the rd textures retired two frames
        ago */

@@ -245,6 +245,9 @@ static RdTex makeTexture(void)
 
 /* ----------------------------------------------------------- the frame */
 
+/* 1: drawFrame adds the film grain (RD_POST_FILM_NOISE) after the fog stand-in */
+static int s_grain;
+
 static const uint8_t kBg[4] = {0x30, 0x50, 0x70, 0x80};
 
 /* The game frame at native width W: list 0 holds the head (the clear), the
@@ -293,6 +296,19 @@ static void drawFrame(int W, RdTex tex, const RdMesh *meshes)
     rd_texture_off();
     spriteAbs(l, top, r, bot, tint, RD_SPACE_FULLFRAME, 0, 0, 0, 0);
     spriteAbs(l, top, r, bot, fog, RD_SPACE_FULLFRAME, 0, 0, 0, 0);
+
+    if (s_grain) {
+        /* gsb_filmNoise: the noise texture bound, then the post (no source
+           target: it uses the bound texture), alpha 0x40, repeat 4 */
+        RdPostParams gp;
+        memset(&gp, 0, sizeof(gp));
+        gp.rgba[0] = gp.rgba[1] = gp.rgba[2] = 0x80;
+        gp.rgba[3] = 0x40;
+        gp.scalar[0] = 4.0f;
+        rd_sampler(RD_FILTER_NEAREST, RD_FILTER_NEAREST, RD_WRAP_CLAMP, RD_WRAP_CLAMP);
+        rd_texture(tex, RD_TEXFN_MODULATE, RD_TCC_RGBA);
+        rd_post(RD_POST_FILM_NOISE, &gp);
+    }
 
     rd_select_list(12);
     RdPostParams pp;
@@ -482,6 +498,54 @@ static void checkContinuity(const Cfg *cfg, int W, const Img *im)
     }
 }
 
+/* The film grain spans the native frame (D12, issue 75): the 512 columns of
+ * the 4:3 picture carry the same grain at every width (centre rule), and the
+ * columns beside them carry grain too (they differ from the same frame
+ * without it) */
+static void checkFilmGrain(void)
+{
+    static const int widths[] = {688, 1376, 2560};
+    Render ref, refNo;
+    s_grain = 1;
+    int st = renderAt(&kCfgs[0], BAND, &ref);
+    s_grain = 0;
+    if (st != R_OK || renderAt(&kCfgs[0], BAND, &refNo) != R_OK) {
+        CHECK(0, "film grain: the W 512 frame could not be rendered");
+        return;
+    }
+    CHECK(memcmp(ref.scene.px, refNo.scene.px, (size_t)ref.scene.w * ref.scene.h * 4) != 0,
+          "film grain: the W 512 frame shows the grain");
+    for (size_t i = 0; i < sizeof(widths) / sizeof(widths[0]); i++) {
+        const int W = widths[i];
+        Render g, n;
+        s_grain = 1;
+        st = renderAt(&kCfgs[0], W, &g);
+        s_grain = 0;
+        if (st != R_OK || renderAt(&kCfgs[0], W, &n) != R_OK) {
+            CHECK(0, "film grain: the W %d frame could not be rendered", W);
+            continue;
+        }
+        compareCentre("film grain SCENE", &kCfgs[0], W, &g.scene, &ref.scene, 0);
+        const uint32_t f = texelsPerPixel(&g.scene, W);
+        size_t differ = 0, total = 0;
+        for (uint32_t y = 0; f && y < g.scene.h; y++) {
+            for (uint32_t x = 0; x < (uint32_t)(W / 2 - BAND / 2) * f; x++) {
+                const size_t o = ((size_t)y * g.scene.w + x) * 4;
+                total++;
+                differ += memcmp(&g.scene.px[o], &n.scene.px[o], 3) != 0;
+            }
+        }
+        CHECK(total > 0 && differ * 2 > total,
+              "film grain, W %d: the left side columns carry the grain (%zu of %zu pixels differ "
+              "from the frame without it)",
+              W, differ, total);
+        freeRender(&g);
+        freeRender(&n);
+    }
+    freeRender(&ref);
+    freeRender(&refNo);
+}
+
 int main(void)
 {
     const char *gateEnv = getenv("ICO_NATIVE_GATE");
@@ -518,6 +582,7 @@ int main(void)
         }
     }
 
+    checkFilmGrain();
     if (gate) {
         /* the wide frames, Enhanced only (Original is the 4:3 picture) */
         for (int c = 1; c < NCFGS; c++) {

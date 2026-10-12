@@ -465,12 +465,22 @@ static void postFilmNoise(const RdPostParams *p)
     prim(1, 0); /* PRIM 0x56: sprite, TME, ABE, ST */
     RdScreenVtx v[2];
     memset(v, 0, sizeof(v));
-    /* ST 0,0 at XYZ2 0xFFFFFFFF70007000; ST scale,scale at 0xFFFFFFFF90009000 */
-    v[0].x = v[0].y = 0x7000;
-    v[1].x = v[1].y = 0x9000;
+    /* ST 0,0 at XYZ2 0xFFFFFFFF70007000; ST scale,scale at 0xFFFFFFFF90009000
+       for the 512 columns of the 4:3 picture.  At a wider native frame the
+       sprite spans the whole frame: x grows by frameX, s by the same ratio
+       k = gsW / 512 about the middle (the REPEAT wrap carries the grain
+       past the 4:3 edges), so the density and the 4:3 columns' texels
+       stay the game's; k is 1 at 4:3 and the values are the game's */
+    const float k = (float)(g_rd.gsW ? g_rd.gsW : ICO_FRAME_BASE_W) / (float)ICO_FRAME_BASE_W;
+    v[0].x = 0x8000 - frameX(4096);
+    v[1].x = 0x8000 + frameX(4096);
+    v[0].y = 0x7000;
+    v[1].y = 0x9000;
     v[0].z = v[1].z = 0xFFFFFFFFu;
-    v[0].s = v[0].t = 0.0f;
-    v[1].s = v[1].t = scale;
+    v[0].s = scale * (1.0f - k) * 0.5f;
+    v[1].s = scale * (1.0f + k) * 0.5f;
+    v[0].t = 0.0f;
+    v[1].t = scale;
     v[0].q = v[1].q = 1.0f;
     memcpy(v[0].rgba, col, 4);
     memcpy(v[1].rgba, col, 4);

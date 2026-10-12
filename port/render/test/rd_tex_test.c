@@ -73,6 +73,7 @@
 #include "GifPacket.h"
 #include "Texture.h"
 #include "Tim2.h"
+#include "photo_mode.h"
 
 static int failures;
 
@@ -1309,6 +1310,36 @@ static void r8Pixels(void)
     rd_destroy_texture(t);
 }
 
+/* Photo mode (issue 75): the game is paused (systemStatus[5]) and every
+ * texture scroll with it, but the film grain's texture (sandstorm_spr)
+ * keeps scrolling so a capture holds a fresh pattern */
+static void photoGrainChecks(void)
+{
+    Tim2Ext scroll = icoBlock(0, 0);
+    scroll.scrlU = 0.25f;
+    const Made grain = makeIndexed("sandstorm_spr", 8, 0, 0, 16, 16, &scroll);
+    const Made other = makeIndexed("grain_other", 8, 0, 0, 16, 16, &scroll);
+    CHECK(grain.id >= 0 && other.id >= 0, "grain: textures made");
+    TexExt *g = tex_GetTexExtData(grain.id);
+    TexExt *o = tex_GetTexExtData(other.id);
+
+    systemStatus[5] = 1;
+    tex_ResetVram();
+    CHECK(g->frame == 0 && o->frame == 0, "grain: paused, photo mode off: nothing scrolls (%u %u)",
+          g->frame, o->frame);
+    ico_photo_enter();
+    tex_ResetVram();
+    CHECK(g->frame == 1, "grain: paused in photo mode: the grain texture scrolls (%u)", g->frame);
+    CHECK(o->frame == 0, "grain: paused in photo mode: another texture stays (%u)", o->frame);
+    tex_ResetVram();
+    CHECK(g->frame == 2, "grain: a second photo frame scrolls again (%u)", g->frame);
+    ico_photo_exit();
+    systemStatus[5] = 0;
+    tex_ResetVram();
+    CHECK(g->frame == 3 && o->frame == 1, "grain: unpaused: both scroll once (%u %u)", g->frame,
+          o->frame);
+}
+
 int main(void)
 {
     rd__set_not_implemented_fatal(true); /* a stub command replayed stops the test */
@@ -1327,6 +1358,7 @@ int main(void)
     cacheChecks();
     r8Checks();
     replacementChecks();
+    photoGrainChecks();
     dl_Clear();
     recordFrame();
     {
