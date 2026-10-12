@@ -47,6 +47,10 @@ typedef struct IcoFrameCB {
     float z[4];
     float misc[4]; /* x frame counter, y preset, zw the target's share of the exact
                     * viewport (common.hlsli fullscreen_triangle; 0: all of it) */
+    /* xy: the exact viewport's centre lies this far (0 or 0.5 texel) before
+     * the target's: its origin is kept on a whole texel for an odd-sized
+     * target (common.hlsli g_vpo); zw reserved (0) */
+    float vpo[4];
 } IcoFrameCB;
 
 /* DrawCB: group 1, slot 1 (register b1, space1). */
@@ -250,7 +254,9 @@ _Static_assert(offsetof(IcoFrameCB, z) == 288, "z");
 
 _Static_assert(offsetof(IcoFrameCB, misc) == 304, "misc");
 
-_Static_assert(sizeof(IcoFrameCB) == 320, "FrameCB size");
+_Static_assert(offsetof(IcoFrameCB, vpo) == 320, "vpo");
+
+_Static_assert(sizeof(IcoFrameCB) == 336, "FrameCB size");
 
 _Static_assert(offsetof(IcoDrawCB, mode) == 16, "mode");
 

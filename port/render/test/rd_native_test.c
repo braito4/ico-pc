@@ -102,9 +102,17 @@ static int failures;
     } while (0)
 
 /* The recorded expectation of the Original preset at W = 512, 1x: FNV-1a 64
- * of SCENE's and of DISPLAY's readback bytes.  TODO(orchestrator): fill both
- * from the "hash" line of the first run; while zero the check is off. */
-static const uint64_t kExpect[2] = {0, 0};
+ * of SCENE's and of DISPLAY's readback bytes (lavapipe).  It moved from
+ * v0.6.0's for two causes:
+ *   - the nearest filter's rounding to the GS's texel at texel boundaries
+ *     (GRAIN-PHASE, common.hlsli gs_nearest_uv); after it the hash was
+ *     ed09df2a0e3e1074 / cd51a5ce8f28f653;
+ *   - EXACT-RASTER: the exact viewport (no GPU clip at the 512 target's
+ *     edge: 58 pixel-centre ties on the edges of the triangles reaching
+ *     past it go to the unclipped triangle's side) and the attribute
+ *     planes (23 pixels one colour step apart from the GPU's
+ *     interpolation). */
+static const uint64_t kExpect[2] = {0xd7c36bf58c6091f6ull, 0x410c22223b5aa4baull};
 
 static const int kWidths[] = {512, 688, 1376, 2048, 2560};
 #define NWIDTHS ((int)(sizeof(kWidths) / sizeof(kWidths[0])))

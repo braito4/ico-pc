@@ -886,8 +886,9 @@ static void testEnumeration(void)
     CHECK(ns > 0 && ns < 400, "reachable screen and post pipelines %u must stay under 400", ns);
     CHECK(n < RD_PIPELINE_REACHABLE_MAX, "reachable pipeline count %u must stay under %d", n,
           RD_PIPELINE_REACHABLE_MAX);
-    for (uint32_t i = 0; i < n && i < 512; i++) {
-        for (uint32_t j = i + 1; j < n && j < 512; j++) {
+    /* the whole set (683 keys since EXACT-RASTER's plane keys, v0.6.1) */
+    for (uint32_t i = 0; i < n && i < RD_PIPELINE_REACHABLE_MAX; i++) {
+        for (uint32_t j = i + 1; j < n && j < RD_PIPELINE_REACHABLE_MAX; j++) {
             CHECK(!rd__pipe_key_equal(&keys[i], &keys[j]), "duplicate key %u/%u", i, j);
         }
         CHECK(keys[i].gs.atst == RD_ATST_ALWAYS && keys[i].gs.pabe == 0 && keys[i].gs.fba == 0 &&

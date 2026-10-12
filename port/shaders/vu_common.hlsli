@@ -295,8 +295,8 @@ float4 vu_homogeneous_position(float4 h)
         // about the target's centre, so the same at every frame width up to
         // the viewport's power-of-two factor
         precise float2 c = g_origin.xy + g_target.xy * 0.5;
-        precise float x = ((h.x - c.x * h.w) * g_vp.z + g_frame.w * h.w) * g_vp.x;
-        precise float y = -(((h.y - c.y * h.w) * g_vp.w + g_frame.w * h.w) * g_vp.y);
+        precise float x = ((h.x - c.x * h.w) * g_vp.z + (g_frame.w + g_vpo.x) * h.w) * g_vp.x;
+        precise float y = -(((h.y - c.y * h.w) * g_vp.w + (g_frame.w + g_vpo.y) * h.w) * g_vp.y);
         return float4(x, y, z, h.w);
     }
     float2 o = g_origin.xy - g_origin.zw;
@@ -899,7 +899,8 @@ VuVSOut vu_probe_out(uint vid, uint value)
     // texel px of the target (under the exact viewport the target is the
     // share g_misc.zw of it about its centre: common.hlsli fullscreen_triangle)
     o.pos = g_vp.x != 0.0
-                ? float4(px.x * g_vp.x - g_misc.z, g_misc.w - px.y * g_vp.y, 0.5, 1.0)
+                ? float4((px.x + g_vpo.x) * g_vp.x - g_misc.z,
+                         g_misc.w - (px.y + g_vpo.y) * g_vp.y, 0.5, 1.0)
                 : float4(px.x * g_target.z * 2.0 - 1.0, 1.0 - px.y * g_target.w * 2.0, 0.5, 1.0);
     o.col = float4(float(value & 0xFFFFu), float(value >> 16), 0.0, 0.0);
     return o;

@@ -64,6 +64,10 @@ cbuffer FrameCB : register(b0, space0)
                         // ICO_RD_VU_OFFGRID, Enhanced on a scaled target)
     float4 g_misc;      // x frame counter, y preset (0 Original, 1 Enhanced), zw the
                         // target's share of the exact viewport (fullscreen_triangle)
+    float4 g_vpo;       // xy the exact viewport's centre this far (0 or 0.5 texel)
+                        // before the target's (its origin on a whole texel for an
+                        // odd-sized target: no device's viewport sub-pixel
+                        // precision is relied on), zw reserved
 };
 
 // ---------------------------------------------------------------- DrawCB
@@ -682,7 +686,7 @@ float2 gs_px_to_ndc(float2 px)
 {
     if (g_vp.x != 0.0) {
         precise float2 c = g_origin.xy + g_target.xy * 0.5;
-        precise float2 q = (px - c) * g_vp.zw + g_frame.w;
+        precise float2 q = (px - c) * g_vp.zw + g_frame.w + g_vpo.xy;
         precise float2 ndc = float2(q.x * g_vp.x, -(q.y * g_vp.y));
         return ndc;
     }
@@ -731,7 +735,9 @@ void fullscreen_triangle(uint id, out float4 pos, out float2 t)
 {
     float2 c = float2((id << 1) & 2u, id & 2u);
     float2 k = g_misc.z != 0.0 ? g_misc.zw : float2(1.0, 1.0);
-    pos = float4((c.x * 2.0 - 1.0) * k.x, (1.0 - c.y * 2.0) * k.y, 0.0, 1.0);
+    // the viewport's centre g_vpo before the target's (0 in the plain mapping)
+    pos = float4((c.x * 2.0 - 1.0) * k.x + g_vpo.x * g_vp.x,
+                 (1.0 - c.y * 2.0) * k.y - g_vpo.y * g_vp.y, 0.0, 1.0);
     t = c;
 }
 

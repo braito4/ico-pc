@@ -667,8 +667,10 @@ static void setViewport(uint32_t w, uint32_t h)
     RhiViewport vp = {0.0f, 0.0f, (float)w, (float)h, 0.0f, 1.0f};
     if (s_vpExact) {
         const uint32_t pw = vpExtent(w), ph = vpExtent(h);
-        vp.x = ((float)w - (float)pw) * 0.5f;
-        vp.y = ((float)h - (float)ph) * 0.5f;
+        /* on a whole texel (an odd-sized target's centre is half a texel
+         * past the viewport's: FrameCB vpo carries it) */
+        vp.x = floorf(((float)w - (float)pw) * 0.5f);
+        vp.y = floorf(((float)h - (float)ph) * 0.5f);
         vp.w = (float)pw;
         vp.h = (float)ph;
     }
@@ -749,6 +751,10 @@ RdUniform rd__frame_group_ex(uint32_t targetW, uint32_t targetH, float originX, 
         cb.frame[3] = s_frameNoHalf ? 0.0f : 0.5f;
         cb.misc[2] = (float)tw / (float)pw;
         cb.misc[3] = (float)th / (float)ph;
+        /* the target's centre less the viewport's (setViewport: its origin
+         * floor((w - P) / 2)): 0, or 0.5 for an odd size */
+        cb.vpo[0] = (float)tw * 0.5f - (floorf(((float)tw - (float)pw) * 0.5f) + (float)pw * 0.5f);
+        cb.vpo[1] = (float)th * 0.5f - (floorf(((float)th - (float)ph) * 0.5f) + (float)ph * 0.5f);
     }
     return uniformGroup(g_rd.layoutFrame, 0, &cb, sizeof(cb));
 }
