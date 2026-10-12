@@ -528,8 +528,33 @@ static void checkFilmGrain(void)
             CHECK(0, "film grain: the W %d frame could not be rendered", W);
             continue;
         }
-        compareCentre("film grain SCENE", &kCfgs[0], W, &g.scene, &ref.scene, 0);
         const uint32_t f = texelsPerPixel(&g.scene, W);
+        /* The centre columns carry the same grain at every width wherever
+           the frame under it is the same: the triangles' own edges and
+           clipping differ with the width (the Enhanced centre rule fails
+           on the frame without grain too), so the pixels whose frame
+           without grain differs from the W 512 one are left out, and most
+           of the centre must remain compared */
+        {
+            size_t bad = 0, cmp = 0, all = 0;
+            const size_t x0 = (size_t)(W / 2 - BAND / 2) * f;
+            for (uint32_t y = 0; f == 1 && y < g.scene.h; y++) {
+                for (size_t x = 0; x < (size_t)BAND; x++) {
+                    const size_t o = ((size_t)y * g.scene.w + x0 + x) * 4;
+                    const size_t r = ((size_t)y * ref.scene.w + x) * 4;
+                    all++;
+                    if (memcmp(&n.scene.px[o], &refNo.scene.px[r], 4) != 0) {
+                        continue;
+                    }
+                    cmp++;
+                    bad += memcmp(&g.scene.px[o], &ref.scene.px[r], 4) != 0;
+                }
+            }
+            CHECK(f == 1 && cmp * 10 > all * 8 && bad == 0,
+                  "film grain, W %d: %zu of %zu centre pixels (frame without grain equal) "
+                  "differ from the W 512 render; %zu pixels compared",
+                  W, bad, all, cmp);
+        }
         size_t differ = 0, total = 0;
         for (uint32_t y = 0; f && y < g.scene.h; y++) {
             for (uint32_t x = 0; x < (uint32_t)(W / 2 - BAND / 2) * f; x++) {
