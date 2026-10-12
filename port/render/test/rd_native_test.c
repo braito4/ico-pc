@@ -913,6 +913,9 @@ static void checkStripRule(void)
         free(eye4.px);
         free(joined3.px);
         free(joined7.px);
+    }
+}
+
 /* the texel the texel texture (s_grain 2) put at pixel (x, y) of im */
 static void texelAt(const Img *im, uint32_t x, uint32_t y, int *u, int *v)
 {
