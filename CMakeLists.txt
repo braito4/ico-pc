@@ -14,6 +14,9 @@ if(CMAKE_C_COMPILER_LAUNCHER AND NOT EXISTS "${CMAKE_C_COMPILER_LAUNCHER}"
 endif()
 
 project(ico_pc LANGUAGES C)
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    add_compile_definitions(ICO_IOS=1)
+endif()
 
 include(cmake/IcoFlags.cmake)
 include(cmake/IcoSources.cmake)
@@ -205,6 +208,26 @@ if(ICO_LINK_EXE)
         set_target_properties(ico_pc PROPERTIES OUTPUT_NAME main)
         target_compile_definitions(ico_pc PRIVATE ICO_HOST_FORCE_PORTABLE=1)
         target_include_directories(ico_pc PRIVATE port/platform/android)
+    elseif(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+        set(ICO_IOS_VERSION "0.6.1" CACHE STRING "iOS bundle release version")
+        set(ICO_IOS_BUILD "6" CACHE STRING "iOS bundle build revision")
+        add_executable(ico_pc MACOSX_BUNDLE ${_ico_pc_sources} port/platform/ios/main_ios.c)
+        foreach(size 120 180 152 167)
+            set(icon "${CMAKE_SOURCE_DIR}/port/platform/ios/icons/Icon${size}.png")
+            target_sources(ico_pc PRIVATE "${icon}")
+            set_source_files_properties("${icon}" PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+        endforeach()
+        target_compile_definitions(ico_pc PRIVATE ICO_IOS=1 ICO_HOST_FORCE_PORTABLE=1)
+        set_target_properties(ico_pc PROPERTIES
+            OUTPUT_NAME ICO
+            MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/port/platform/ios/Info.plist.in"
+            XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED NO
+            XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED NO)
+    elseif(APPLE)
+        add_executable(ico_pc MACOSX_BUNDLE ${_ico_pc_sources})
+        set_target_properties(ico_pc PROPERTIES
+            OUTPUT_NAME ICO
+            MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/port/platform/macos/Info.plist.in")
     else()
         add_executable(ico_pc ${_ico_pc_sources})
     endif()
@@ -347,15 +370,15 @@ add_subdirectory(port/ui) # runtime text, layout extension, popups, the menus
 
 # --- The window build: ico_pc on port/render --------------------------------
 if(TARGET ico_pc AND NOT ICO_HEADLESS)
-    if(NOT TARGET ico_render OR NOT TARGET SDL3::SDL3-shared)
+    if(NOT TARGET ico_render OR NOT TARGET SDL3::SDL3)
         message(FATAL_ERROR "The window build of ico_pc needs port/render (DXC, Vulkan-Headers, "
                             "volk) and SDL3 for this target: run tools/fetch_deps.sh, or "
                             "configure with -DICO_HEADLESS=ON")
     endif()
     target_sources(ico_pc PRIVATE port/platform/window_host.c port/platform/window_video.c
                                   port/platform/dump_zip.c)
-    target_link_libraries(ico_pc PRIVATE ico_render ico_miniz SDL3::SDL3-shared)
-    if(NOT ANDROID)
+    target_link_libraries(ico_pc PRIVATE ico_render ico_miniz SDL3::SDL3)
+    if(NOT ANDROID AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
         # Extras > Add to Steam: desktop only (Windows, Linux, Steam Deck)
         target_sources(ico_pc PRIVATE port/platform/steam_shortcut.c)
         if(WIN32)

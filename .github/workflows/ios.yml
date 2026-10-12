@@ -1,0 +1,85 @@
+name: iOS IPA
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 120
+    env:
+      ICO_BUILD_JOBS: '2'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Host tools
+        run: |
+          brew install cmake ninja
+          python3 -m venv .venv
+          .venv/bin/pip install PyYAML
+
+      - name: Apple dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            tools/toolchain/deps/moltenvk
+            tools/toolchain/deps/sdl3/ios-arm64
+            tools/toolchain/deps/dxc-build/bin
+            tools/toolchain/deps/dxc-build/lib
+          key: ios-macos15-arm64-${{ hashFiles('tools/fetch_moltenvk.sh', 'tools/fetch_common.sh', '.github/workflows/ios.yml') }}
+
+      - name: Build host DXC if needed
+        run: |
+          if [[ ! -x tools/toolchain/deps/dxc-build/bin/dxc ]]; then
+            git clone --depth 1 --branch v1.9.2602 --recurse-submodules \
+              https://github.com/microsoft/DirectXShaderCompiler tools/toolchain/deps/dxc-src
+            [[ "$(git -C tools/toolchain/deps/dxc-src rev-parse HEAD)" == 21d28f727ad395b59394815ef76012e432f7e4e5 ]]
+            cmake -S tools/toolchain/deps/dxc-src -B tools/toolchain/deps/dxc-build -G Ninja \
+              -C tools/toolchain/deps/dxc-src/cmake/caches/PredefinedParams.cmake \
+              -DCMAKE_BUILD_TYPE=Release -DENABLE_SPIRV_CODEGEN=ON \
+              -DHLSL_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_TESTS=OFF \
+              -DSPIRV_BUILD_TESTS=OFF -DCMAKE_CXX_FLAGS=-Wno-invalid-specialization
+            cmake --build tools/toolchain/deps/dxc-build --target dxc --parallel 2
+          fi
+
+      - name: Build unsigned IPA for the release tag
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          tools/package_ios.sh -DICO_IOS_VERSION="$version" -DICO_IOS_BUILD="$((GITHUB_RUN_NUMBER + 3))"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ico-pc-ios-${{ github.run_number }}
+          path: dist/ico-pc-ios-unsigned.ipa
+          retention-days: 30
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ico-pc-ios-${{ github.run_number }}
+          path: dist
+      - name: Attach IPA to the published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          gh release upload "$RELEASE_TAG" \
+            dist/ico-pc-ios-unsigned.ipa \
+            --repo "$GITHUB_REPOSITORY"

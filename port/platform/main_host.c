@@ -236,7 +236,7 @@ static int shutdown_n;
 
 static void at_shutdown(void (*fn)(void))
 {
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(ICO_IOS)
     if (shutdown_n < SHUTDOWN_MAX) {
         shutdown_fn[shutdown_n++] = fn;
     } else {
@@ -536,7 +536,7 @@ static void record_check(const char *path)
     }
 }
 
-#if !defined(ICO_HEADLESS) && !defined(_WIN32)
+#if !defined(ICO_HEADLESS) && !defined(_WIN32) && !defined(ICO_IOS)
 
 /* Linux window build: SDL3's file dialog (xdg-desktop-portal, else zenity or
    kdialog), since host_config.c's native dialog is Windows only. Returns 0
@@ -720,6 +720,12 @@ static int find_iso(const Args *a, const IcoIni *ini, const char *exe_dir, char 
             return 0;
         }
     }
+#ifdef ICO_IOS
+    ico_host_fatal(log_file(), "Game data is missing. Copy ico.o2r into ICO's Documents folder "
+                               "using LiveContainer's data-folder access, then reopen ICO. "
+                               "A PAL Ico_PAL.iso or Ico_PAL.chd can also be placed there.");
+    return 1;
+#else
 #if !defined(ICO_HEADLESS) && !defined(_WIN32)
     if (pick_iso_sdl(iso, ICO_PATH_MAX) == 0) {
 #else
@@ -733,6 +739,7 @@ static int find_iso(const Args *a, const IcoIni *ini, const char *exe_dir, char 
                    "No ICO disc image was found or chosen. Put Ico_PAL.iso or "
                    "Ico_PAL.chd (or .bin or .cue) next to the program, or set iso=<path> in "
                    "ico-pc.ini.");
+#endif
     return 0;
 #endif
 }
@@ -1549,9 +1556,22 @@ static int host_main(int argc, char **argv)
 
     /* the log first, so everything after it is recorded */
     ico_host_exe_dir(exe_dir, sizeof(exe_dir));
-    if (ico_path_join(logs_dir, sizeof(logs_dir), exe_dir, "logs") != 0 ||
-        ico_path_join(log_path, sizeof(log_path), logs_dir, "ico-pc.log") != 0) {
+#if defined(__APPLE__) && !defined(ICO_IOS)
+    {
+        char user_dir[ICO_PATH_MAX];
+
+        if (ico_host_pref_dir(user_dir, sizeof(user_dir)) != 0 ||
+            ico_path_join(logs_dir, sizeof(logs_dir), user_dir, "logs") != 0) {
+            logs_dir[0] = '\0';
+        }
+    }
+#else
+    if (ico_path_join(logs_dir, sizeof(logs_dir), exe_dir, "logs") != 0) {
         logs_dir[0] = '\0';
+    }
+#endif
+    if (logs_dir[0] == '\0' ||
+        ico_path_join(log_path, sizeof(log_path), logs_dir, "ico-pc.log") != 0) {
         log_path[0] = '\0';
     }
     /* Traces and pad recordings still use the logs folder with --console. */
@@ -1586,7 +1606,7 @@ static int host_main(int argc, char **argv)
         fprintf(stderr, "ico_pc: argument %s\n", argv[r]);
     }
 
-    if (ico_path_join(ini_path, sizeof(ini_path), exe_dir, "ico-pc.ini") != 0) {
+    if (ico_host_ini_path(ini_path, sizeof(ini_path)) != 0) {
         ico_host_fatal(log_file(),
                        "The path of the folder %s is too long. Move the game to a folder with "
                        "a shorter path.",
@@ -1766,10 +1786,9 @@ static int host_main(int argc, char **argv)
     }
 }
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(ICO_IOS)
 
-/* Android: SDL_main (port/platform/android/main_android.c) calls this on
-   its own thread; the end-of-run steps run before it returns. */
+/* Mobile entry points run the end-of-run steps before returning to SDL. */
 int ico_host_main(int argc, char **argv)
 {
     int r = host_main(argc, argv);
@@ -1779,7 +1798,9 @@ int ico_host_main(int argc, char **argv)
        must neither count the time nor signal a thread that is gone */
     ico_diag_watchdog_pause(1);
     ico_diag_main_thread_end();
+#ifdef __ANDROID__
     ico_android_log_mirror_flush();
+#endif
     return r;
 }
 

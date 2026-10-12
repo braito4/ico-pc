@@ -15,6 +15,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
+
 /* ICO_HOST_FORCE_PORTABLE (the Android build of ico_pc, and
    host_config_portable_test): the user folder is always the executable's
    folder itself, whatever portable= says. On Android that folder is the
@@ -24,10 +28,13 @@
 #define ICO_HOST_ANDROID 1
 #include "android/host_android.h"
 #endif
-#ifdef ICO_HOST_SDL_PREFPATH
+#if defined(ICO_HOST_SDL_PREFPATH) || defined(ICO_IOS)
 
 #include <SDL3/SDL_filesystem.h>
 #include <SDL3/SDL_stdinc.h>
+#ifdef ICO_IOS
+#include <SDL3/SDL_messagebox.h>
+#endif
 
 #endif
 #ifdef _WIN32
@@ -63,7 +70,15 @@ static void copy(char *out, size_t size, const char *s)
 
 int ico_host_exe_dir(char *out, size_t size)
 {
-#ifdef ICO_HOST_ANDROID
+#ifdef ICO_IOS
+    const char *documents = SDL_GetUserFolder(SDL_FOLDER_DOCUMENTS);
+    if (!documents || strlen(documents) >= size || ico_make_dir(documents) != 0) {
+        copy(out, size, ".");
+        return -1;
+    }
+    copy(out, size, documents);
+    return 0;
+#elif defined(ICO_HOST_ANDROID)
     /* no folder of its own: the app's files folder */
     if (ico_android_files_dir(out, size) != 0) {
         copy(out, size, ".");
@@ -89,6 +104,18 @@ int ico_host_exe_dir(char *out, size_t size)
     if (strrchr(buf, '/') > slash) {
         slash = strrchr(buf, '/');
     }
+#elif defined(__APPLE__)
+    {
+        uint32_t n = (uint32_t)sizeof(buf);
+        char resolved[ICO_PATH_MAX];
+
+        if (_NSGetExecutablePath(buf, &n) != 0 || realpath(buf, resolved) == NULL) {
+            copy(out, size, ".");
+            return -1;
+        }
+        copy(buf, sizeof(buf), resolved);
+    }
+    slash = strrchr(buf, '/');
 #else
     long n = (long)readlink("/proc/self/exe", buf, sizeof(buf) - 1);
 
@@ -958,6 +985,9 @@ void ico_host_message_box(const char *text, int error)
 #if defined(ICO_HOST_ANDROID)
     flush_all();
     ico_android_message_box(text, error);
+#elif defined(ICO_IOS)
+    SDL_ShowSimpleMessageBox(error ? SDL_MESSAGEBOX_ERROR : SDL_MESSAGEBOX_INFORMATION, "ICO", text,
+                             NULL);
 #elif defined(_WIN32)
     wchar_t *w = ico_widen(text);
 
@@ -996,7 +1026,7 @@ void ico_host_fatal(const char *log_path, const char *fmt, ...)
     }
     flush_all();
     _exit(1);
-#elif defined(_WIN32)
+#elif defined(_WIN32) || defined(ICO_IOS)
     {
         char box[3072];
 
@@ -1846,7 +1876,11 @@ int ico_host_pref_dir(char *out, size_t size)
 int ico_host_ini_path(char *out, size_t size)
 {
     char dir[ICO_PATH_MAX];
+#if defined(__APPLE__) && !defined(ICO_IOS) && defined(ICO_HOST_SDL_PREFPATH)
+    int r = ico_host_pref_dir(dir, sizeof(dir));
+#else
     int r = ico_host_exe_dir(dir, sizeof(dir));
+#endif
 
     if (ico_path_join(out, size, dir, "ico-pc.ini") != 0) {
         return -1;

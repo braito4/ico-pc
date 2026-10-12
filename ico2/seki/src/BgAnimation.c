@@ -2064,7 +2064,7 @@ void bga_CalcSdfCamera(char *data, int loop)
         dir.w = 0.0f;
         _NormalizeVector(&dir, &dir);
         _InitCurrentMatrix();
-        _RotCurrentMatrixZ((short)(roll * 182.04445f));
+        _RotCurrentMatrixZ((short)(int)(roll * 182.04445f));
         _ApplyCurrentMatrix(&up, &up);
         _SetCameraMatrix(bgaCameraMatrix, &pos, &dir, &up);
         if (GlobalTimer != 0) {
@@ -2073,7 +2073,7 @@ void bga_CalcSdfCamera(char *data, int loop)
                 currentScreenWidth = 0;
             }
         }
-        a = (short)(fov * 3.1415927f / 360.0f * 10430.378f);
+        a = (short)(int)(fov * 3.1415927f / 360.0f * 10430.378f);
         bgaZoom = 224.0f / (GetTableSin(a) / GetTableCos(a));
         _PopCurrentMatrix();
     }
