@@ -71,7 +71,10 @@
  *      512 run's byte for byte (mode 2 all of them; modes 1 and 3, whose
  *      taps spread one feedback texel a frame, away from the 4:3 edges by 4
  *      pixels a frame), and FEED's alpha as the paste reads it at most
- *      0x80 (the mask's, never extrapolating the paste).
+ *      0x80 (the mask's, never extrapolating the paste); the motion blur's
+ *      loop at W = 512, 688, 1376 and 2560 on the device, SCENE's and
+ *      DISPLAY's 4:3 columns the 512 run's byte for byte (frames + 2
+ *      pixels in from their edges).
  * Tolerance 0 everywhere (but q's scaled runs).  Every pipeline created is enumerated; no
  * validation errors; no stubbed command replayed. */
 #include <math.h>
@@ -2845,6 +2848,99 @@ static void checkShrinksWideDevice(void)
     systemStatus[0] = status0;
 }
 
+/* (w) the motion blur on the device at W 512, 688, 1376 and 2560: the
+ * loop of checkMotionBlur (DISPLAY blended over SCENE at FIX 0x40 with the
+ * flare's linear filter leaked in, SCENE reduced into DISPLAY) over the
+ * picture putImageAt lays across the frame (the 4:3 columns the image's,
+ * whatever is beside them), every target against the CPU model exactly.
+ * The game's sprite (staticBlur.c MotionBlur) spans the frame W * 16 wide
+ * with a UV W * 16 wide, both from the frame's left edge: one texel a pixel
+ * at the texel centre at every width, so the 4:3 columns of the wide
+ * SCENE and DISPLAY are the 4:3 run's byte for byte, but for the pixels
+ * that what lies beside them can reach: the reduction's bilinear reads one
+ * pixel to the right a frame, so frames + 2 pixels in from the edges. */
+static uint8_t s_mbCentre[2][2][W * QH * 4]; /* [run][SCENE, DISPLAY] */
+
+static void checkMotionBlurWide(void)
+{
+    static const int kW[4] = {W, 688, 1376, 2560};
+
+    enum { FRAMES = 6 };
+
+    const int screenHeight = ScreenHeight, status0 = systemStatus[0];
+    const int margin = FRAMES + 2;
+    ScreenHeight = QH;
+    systemStatus[0] = 0;
+    GlobalTimer = 0;
+    currentScreenWidth = 0;
+    rd_shutdown();
+    cpuFree();
+    makeImage(5, 0);
+    for (int r = 0; r < 4; r++) {
+        const int fw = kW[r];
+        char what[64];
+        setFrameWidth(fw);
+        setStage(0, 0, 0);
+        snprintf(what, sizeof(what), "(w) motion blur W %d", fw);
+        qInit(what, RD_PRESET_ORIGINAL, 0.0f, 0);
+        cpuInit();
+        clearAll();
+        rd_update_texture(s_imgTex, s_img);
+        for (int n = 0; n < FRAMES; n++) {
+            dl_SetDLPriority(0);
+            putImageAt(rd_target(RD_TARGET_SCENE), rd_target(RD_TARGET_SCENE), fw, QH, 0, QH, 0, 1);
+            dl_SetDLPriority(7);
+            rd_sampler_filter(RD_FILTER_LINEAR, RD_FILTER_LINEAR);
+            rd_sampler_wrap(RD_WRAP_CLAMP, RD_WRAP_CLAMP);
+            SetMotionBlur(0x40);
+            MotionBlur();
+            putReduction();
+            snprintf(what, sizeof(what), "(w) motion blur W %d frame %d", fw, n);
+            runFrame(what, failures < 10);
+        }
+        const int c0 = (fw - W) / 2;
+        static const RdTargetId kT[2] = {RD_TARGET_SCENE, RD_TARGET_DISPLAY};
+        for (int t = 0; t < 2; t++) {
+            const CpuT *ct = &s_cpu[kT[t]];
+            CHECK(ct->c && ct->w == fw, "(w) motion blur W %d: %s %dx%d", fw, tname(kT[t] + 1u),
+                  ct->w, ct->h);
+            for (int y = 0; ct->c && ct->w == fw && y < ct->h && y < QH; y++) {
+                memcpy(&s_mbCentre[r ? 1 : 0][t][(size_t)y * W * 4],
+                       &ct->c[((size_t)y * fw + c0) * 4], (size_t)W * 4);
+            }
+            if (r == 0 || !ct->c || ct->w != fw) {
+                continue;
+            }
+            int bad = 0, n = 0, blurred = 0;
+            for (int y = 0; y < ct->h && y < QH; y++) {
+                for (int x = margin; x < W - margin; x++) {
+                    const size_t i = ((size_t)y * W + x) * 4;
+                    bad += memcmp(&s_mbCentre[0][t][i], &s_mbCentre[1][t][i], 4) != 0;
+                    blurred += t == 0 && memcmp(&s_mbCentre[1][t][i], &s_img[i], 3) != 0;
+                    n++;
+                }
+            }
+            printf("  (w) motion blur W %d: %s's 4:3 columns (%d in from their edges): %d of %d "
+                   "pixels differ from the 4:3 run's\n",
+                   fw, tname(kT[t] + 1u), margin, bad, n);
+            CHECK(bad == 0,
+                  "(w) motion blur W %d: %s's 4:3 columns differ from the 4:3 run's in %d pixels",
+                  fw, tname(kT[t] + 1u), bad);
+            if (t == 0) {
+                CHECK(blurred > 1000, "(w) motion blur W %d: the effect changed SCENE (%d pixels)",
+                      fw, blurred);
+            }
+        }
+        CHECK(rhi_vk_validation_error_count() == 0, "(w) motion blur W %d: %u validation errors",
+              fw, rhi_vk_validation_error_count());
+        rd_shutdown();
+        cpuFree();
+    }
+    setFrameWidth(W);
+    ScreenHeight = screenHeight;
+    systemStatus[0] = status0;
+}
+
 static void checkPipelines(void)
 {
     static RdPipeKeyInt keys[RD_PIPELINE_REACHABLE_MAX];
@@ -2960,6 +3056,7 @@ int main(void)
     checkMotionBlurPresentsScaled(); /* issue 28: re-initialises rd (2x) */
     checkFeedbackWide();             /* W4, issue 61: re-initialises rd (W 512, 2048) */
     checkShrinksWideDevice();        /* the shrink anchor: re-initialises rd (W 512, 1536) */
+    checkMotionBlurWide();           /* the motion blur's 4:3 columns: re-initialises rd */
     if (failures) {
         printf("rd_blur_test: %d failures\n", failures);
         return 1;
