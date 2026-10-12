@@ -10,14 +10,13 @@
 // (u + du, v + dv) with Q = 1, flat colour.
 #include "vu_common.hlsli"
 
-struct VuSprite
-{
-    int3 c0;     // ftoi4 of corner 0 (x - e, y - e) and Z
-    int3 c1;     // corner 1 (x + e, y + e)
+struct VuSprite {
+    int3 c0; // ftoi4 of corner 0 (x - e, y - e) and Z
+    int3 c1; // corner 1 (x + e, y + e)
     uint4 rgba;
-    float4 st;   // u0, v0, u1, v1
-    bool drawn;  // the VU's test: alpha non-zero and both corners inside the clip window
-    bool shown;  // what the port can draw: alpha non-zero and w inside the window
+    float4 st;  // u0, v0, u1, v1
+    bool drawn; // the VU's test: alpha non-zero and both corners inside the clip window
+    bool shown; // what the port can draw: alpha non-zero and w inside the window
 };
 
 VuSprite vu_particle(uint i)
@@ -96,6 +95,46 @@ uint vu_particle_probe(VuSprite s, uint field)
     return r;
 }
 
+// Issue 76's rule for the x/y window (vu_common.hlsli vu_region_rule):
+// whether a tick showed sprite i, seen through a camera blended between
+// two ticks' (VU_F_TICKS): at tick k's camera (h_k = R_k h, vu_ticks; the
+// half extent e is the screen matrix's, the same at every camera) the VU
+// draws it (alpha, both corners inside the x/y window, w inside its
+// window) and its quad reaches the frame (vu_frame_ndc).
+bool vu_particle_tick_shown(uint i)
+{
+    uint base = vu_draw.x;
+    float4 clipMin = vu_stream[base + 3u];
+    float4 clipMax = vu_stream[base + 4u];
+    float4 k = vu_stream[base + 5u];
+    float4 a = vu_stream[base + 6u + 2u * i];
+    float4 h = vu_matm(16u, float4(a.xyz, 1.0), 1.0);
+    precise float sz = (0.0 + a.w) * k.x;
+    float4 e = vu_matm(20u, float4(sz, sz, 0.0, 1.0), 1.0);
+    float4 frame = vu_frame_ndc();
+    [loop] for (uint t = 0u; t < 2u; t++)
+    {
+        uint b = 4u * t;
+        precise float4 hk = vu_ticks[b] * h.x + vu_ticks[b + 1u] * h.y + vu_ticks[b + 2u] * h.z +
+                            vu_ticks[b + 3u] * h.w;
+        float q = vu_rcp(hk.w);
+        precise float3 p0 = float3(hk.xy - e.xy, hk.z) * q;
+        precise float3 p1 = float3(hk.xy + e.xy, hk.z) * q;
+        if (!vu_inside(float4(p0, hk.w), clipMin, clipMax) ||
+            !vu_inside(float4(p1, hk.w), clipMin, clipMax)) {
+            continue;
+        }
+        float2 n0 = vu_ndc(float2(vu_ftoi4(p0.x), vu_ftoi4(p0.y)) * (1.0 / 16.0));
+        float2 n1 = vu_ndc(float2(vu_ftoi4(p1.x), vu_ftoi4(p1.y)) * (1.0 / 16.0));
+        float2 lo = min(n0, n1);
+        float2 hi = max(n0, n1);
+        if (lo.x < frame.y && hi.x > frame.x && lo.y < frame.z && hi.y > frame.w) {
+            return true;
+        }
+    }
+    return false;
+}
+
 VuVSOut vu_particle_vs(uint vid : SV_VertexID)
 {
     if ((vu_draw.z & VU_F_PROBE) != 0u) {
@@ -114,11 +153,14 @@ VuVSOut vu_particle_vs(uint vid : SV_VertexID)
     // wholly beside it, under photo mode's free camera, and in any other
     // state (VU_F_EXTENDED, VIS-WINDOW: a sprite is an effect, never a card
     // parked at the picture's edge; the shown test keeps it in front of the
-    // eye)
+    // eye). Out of the box between two ticks (VU_F_TICKS): drawn whole
+    // when a tick showed it (vu_particle_tick_shown), as a triangle the
+    // region rule drops at the blended camera is (vu_region_rule).
     if (!s.drawn && (vu_draw.z & (VU_F_BEHIND_EYE | VU_F_EXTENDED)) == 0u) {
         float2 p0 = vu_ndc(float2(s.c0.xy) * (1.0 / 16.0));
         float2 p1 = vu_ndc(float2(s.c1.xy) * (1.0 / 16.0));
-        if (vu_rect_reaches_picture(min(p0, p1), max(p0, p1))) {
+        if (vu_rect_reaches_picture(min(p0, p1), max(p0, p1)) &&
+            ((vu_draw.z & VU_F_TICKS) == 0u || !vu_particle_tick_shown(vid / 6u))) {
             return o;
         }
     }

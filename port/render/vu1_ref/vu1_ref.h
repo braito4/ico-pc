@@ -182,12 +182,19 @@ int vu1ref_region_draw(int extended, int freeCamera, int insideA, int insideB, i
                        int hide, int reaches, int front, int joined, int stripPasses);
 /* The rule at a camera blended between two ticks' (ICO_VU_TICKS, issue 76;
  * vu_common.hlsli vu_region_rule): drawT what vu1ref_region_draw gives at
- * the blended camera, drawPrev and drawCur what it gives with each tick's
- * camera's positions (the region tests, the reach, front) and the blended
- * camera's card test (joined, stripPasses) and HIDE.  A triangle the rule
- * does not draw at the blended camera is drawn clipped when it draws it at
- * either tick, else not drawn; the rest as drawT. */
-int vu1ref_region_between(int drawT, int drawPrev, int drawCur);
+ * the blended camera; cardT 1 when its verdict there was the card test's
+ * (a triangle reaching the picture, every vertex in front of the eye, in
+ * any state but out of the box: drawT stands, so a card never enters the
+ * picture between the ticks); shownPrev and shownCur whether each tick
+ * showed it: vu1ref_region_draw with that tick's camera's positions (the
+ * region tests, the reach, front) and the blended camera's card test
+ * (joined, stripPasses) and HIDE draws it, and what the GPU draws of it
+ * there reaches the frame (vu1ref_polygon_reaches_picture with the bound
+ * target's rectangle: at 4:3 the picture, so a triangle wholly beside the
+ * picture at a tick was never seen).  A triangle the rule does not draw at
+ * the blended camera is drawn clipped when a tick showed it, else not
+ * drawn; the rest as drawT. */
+int vu1ref_region_between(int drawT, int cardT, int shownPrev, int shownCur);
 /* Whether a triangle of the strip of static kick k passes the region test
  * (vu_common.hlsli vu_strip_of and the programs' vu_*_strip_passes): the
  * strip is the run of static kicks (vu1ref_static_kicks; stw and
@@ -201,7 +208,10 @@ int vu1ref_strip_passes(const VuGsVertex *v, const float *stw, const int *batchF
  * state but out of the box (extended, vu1ref_extended: a sprite is an
  * effect, never a card); out of the box dropped when its quad reaches the
  * camera's picture (reaches, vu1ref_rect_reaches_picture), drawn whole
- * when wholly beside it. */
+ * when wholly beside it.  Between two ticks (ICO_VU_TICKS) a sprite this
+ * drops out of the box is drawn whole when a tick's VU drew it on the
+ * frame (vu1ref_region_between with cardT 0; vu_particle.hlsl
+ * vu_particle_tick_shown). */
 int vu1ref_particle_draw(int extended, int freeCamera, int drawn, int shown, int reaches);
 
 /* The reach those two take (vu_common.hlsli vu_cut_reaches_picture,

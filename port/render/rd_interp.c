@@ -827,7 +827,13 @@ static void camSetup(const RdFrame *prev, const RdFrame *cur, float t)
         s_cam.itf[i] = (float)s_cam.it[i];
     }
     /* issue 76: the ticks' cameras from the blended one's positions
-     * (vu_common.hlsli vu_region_rule) */
+     * (vu_common.hlsli vu_region_rule): R_k = S_k St^-1 moves only the
+     * camera back to tick k.  A vertex's position through the blended
+     * camera already carries its object's blended pose (a matched draw's
+     * model matrix blends with the camera), so the region rule at tick k
+     * tests the tick's camera against the object where it is drawn, not
+     * against the object's own pose at that tick; for a still object (the
+     * stage, every wall of issue 76) the two are the same. */
     double st[16], ist[16], sk[16], r[16];
     mul4d(s_cam.zoom ? pt : s_cam.pc, s_cam.vt, st);
     if (invert4d(st, ist)) {

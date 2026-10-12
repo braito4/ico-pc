@@ -1009,7 +1009,11 @@ enum {
     DEPART_CARD_STRIP,
     DEPART_GRID_ROW,
     DEPART_EYE_TICKS,
-    DEPART_EYE_TICKS_BOTH
+    DEPART_EYE_TICKS_BOTH,
+    DEPART_EYE_TICKS_BESIDE,
+    DEPART_EYE_TICKS_BAND,
+    DEPART_CARD_TICKS,
+    DEPART_SPRITE_TICKS
 };
 
 /* The content table's mark (rd_content_hide.c; vu_content_hidden):
@@ -1019,19 +1023,77 @@ enum {
 enum { MARK_NONE, MARK_HIDE, MARK_JOINED };
 
 /* issue 76: DEPART_EYE's input seen through a camera blended between two
- * ticks' (ICO_VU_TICKS), the tick before's the blended one, this tick's
- * moved back along its axis by tickShift: by 2 (DEPART_EYE_TICKS), vertex 7
- * (model z -1) lies in front of that tick's eye, every triangle of it
- * inside the window there; by 0.5 (DEPART_EYE_TICKS_BOTH), it stays behind
- * the eye at both ticks */
+ * ticks' (ICO_VU_TICKS), each tick's camera the blended one with the model
+ * moved by tickMove (makeVuCB's T): DEPART_EYE_TICKS, the tick before's
+ * the blended one, this tick's moved back 2 along z: vertex 7 (model z -1)
+ * lies in front of that tick's eye, every triangle of it inside the window
+ * and on the target there (shown); DEPART_EYE_TICKS_BOTH, this tick's
+ * moved back 0.5: behind the eye at both ticks.  DEPART_EYE_TICKS_BESIDE
+ * and DEPART_EYE_TICKS_BAND (S1): this tick's model moved 0.5 along z,
+ * vertex 7 behind the eye there and its triangles reaching the picture
+ * (dropped); the tick before's model moved so that they lie wholly beside
+ * the picture, vertex 7 at z 0.5, behind the near plane (clipped).
+ * BESIDE: the other vertices at GS X 2056..2064 (makeVertex out 12), the
+ * move (66, 0, 1.5) puts them at X 2354..2359; the target around 2048
+ * inside the picture, as at 4:3: the tick before drew them off the frame,
+ * never seen, so between the ticks they stay dropped.  BAND: the other
+ * vertices at GS X 2228..2348 (out 13), the move (40, 0, 1.5) puts them at
+ * X 2334..2402 and the near cut at about 2750; the target right of the
+ * picture (GS X 2320..2384), as the band beside the picture on a wider
+ * frame: the tick before showed them there, so they are drawn clipped.
+ * DEPART_CARD_TICKS: DEPART_CARD_STRIP's card with the tick before's
+ * model moved (500, 0, 6), every vertex inside the window and the card
+ * across the target there: at the blended camera the card test drops it,
+ * and the ticks do not overrule the card test (the shader and
+ * vu1ref_region_between alike).  DEPART_SPRITE_TICKS: DEPART_SPRITE's
+ * sprite, which the VU skips (X 2040..3080, past the window's 3071) and
+ * which reaches the picture, with the tick before's model moved 2 to the
+ * left (X 2024..3064, inside the window, across the target): out of the
+ * box the tick before drew it, so it is drawn whole between the ticks
+ * (vu_particle.hlsl vu_particle_tick_shown) */
 static int tickCase(const Case *c)
 {
-    return c->depart == DEPART_EYE_TICKS || c->depart == DEPART_EYE_TICKS_BOTH;
+    return c->depart == DEPART_EYE_TICKS || c->depart == DEPART_EYE_TICKS_BOTH ||
+           c->depart == DEPART_EYE_TICKS_BESIDE || c->depart == DEPART_EYE_TICKS_BAND ||
+           c->depart == DEPART_CARD_TICKS || c->depart == DEPART_SPRITE_TICKS;
 }
 
-static float tickShift(const Case *c, int tick)
+/* the model's move at tick's camera (x, y, z) */
+static void tickMove(const Case *c, int tick, float d[3])
 {
-    return tick == 0 ? 0.0f : c->depart == DEPART_EYE_TICKS ? 2.0f : 0.5f;
+    d[0] = d[1] = d[2] = 0.0f;
+    switch (c->depart) {
+    case DEPART_EYE_TICKS:
+        d[2] = tick ? 2.0f : 0.0f;
+        break;
+    case DEPART_EYE_TICKS_BOTH:
+        d[2] = tick ? 0.5f : 0.0f;
+        break;
+    case DEPART_EYE_TICKS_BESIDE:
+        d[0] = tick ? 0.0f : 66.0f;
+        d[2] = tick ? 0.5f : 1.5f;
+        break;
+    case DEPART_EYE_TICKS_BAND:
+        d[0] = tick ? 0.0f : 40.0f;
+        d[2] = tick ? 0.5f : 1.5f;
+        break;
+    case DEPART_CARD_TICKS:
+        d[0] = tick ? 0.0f : 500.0f;
+        d[2] = tick ? 0.0f : 6.0f;
+        break;
+    case DEPART_SPRITE_TICKS:
+        d[0] = tick ? 0.0f : -2.0f;
+        break;
+    default:
+        break;
+    }
+}
+
+/* the vertex behind the blended camera's eye: the tick cases but the card
+ * and the sprite */
+static int eyeTickCase(const Case *c)
+{
+    return tickCase(c) && c->depart != DEPART_CARD_TICKS && c->depart != DEPART_SPRITE_TICKS;
 }
 
 /* photo mode's free camera: the draw carries ICO_VU_BEHIND_EYE */
@@ -1072,7 +1134,7 @@ static float targetLeft(const Case *c)
         return 2168.0f;
     }
     return c->depart == DEPART_BESIDE || c->depart == DEPART_SPRITE_BESIDE ||
-                   c->depart == DEPART_ABOVE
+                   c->depart == DEPART_ABOVE || c->depart == DEPART_EYE_TICKS_BAND
                ? 2320.0f
                : 2048.0f - RT / 2;
 }
@@ -1125,7 +1187,7 @@ static int triReaches(const Case *c, const CaseRef *cr, int k)
 /* a tick case's reference at each tick's camera, while the case's
  * indices are made */
 static const CaseRef *s_tickRef[2];
-static int ticksDraw(const Case *c, int k, int strip, int d);
+static int ticksDraw(const Case *c, int k, int strip, int d, int card);
 
 /* What the port draws of strip triangle k (vertices k-2..k): the oracle's
  * rule (vu1_ref.h vu1ref_region_draw); every static kick of a program
@@ -1154,7 +1216,10 @@ static int portDraws(const Case *c, const CaseRef *cr, const VuGsVertex *v, int 
     if (!cr || !s_tickRef[0] || !s_tickRef[1]) {
         return d;
     }
-    return ticksDraw(c, k, strip, d);
+    /* the blended camera's verdict is the card test's (VU_RULE_STRIP) */
+    const int card = !freeCamera(c) && c->mark != MARK_HIDE && reaches && front &&
+                     extendedState(c) && !(v[k - 2].inside && v[k - 1].inside && v[k].inside);
+    return ticksDraw(c, k, strip, d, card);
 }
 
 /* the CPU side of one case */
@@ -1202,7 +1267,10 @@ static float rnd(float lo, float hi)
  * (DEPART_CARD): x = -744 (X -3904), z = 2, past the window on the left.
  * out 9 (DEPART_BESIDE): GS X 2330..2378, right of the camera's picture.
  * out 10 (DEPART_ABOVE): (-6, -7756, 2), GS (2000, -60000), far above the
- * picture. out 11 (DEPART_REFL_BESIDE): GS X 2178..2226. */
+ * picture. out 11 (DEPART_REFL_BESIDE): GS X 2178..2226. out 12
+ * (DEPART_EYE_TICKS_BESIDE, _BAND): z 2, GS X 2056..2064, Y 4 to 10
+ * above the centre for an even vertex, below for an odd one. out 13
+ * (DEPART_EYE_TICKS_BAND): the same at GS X 2228..2348. */
 static void makeVertex(int prog, float (*v)[4], int k, int start, int out, int zmode, int scissor)
 {
     float z = zmode == 2 ? (k & 1 ? 0.5f : 2.0f) : zmode == 1 ? 2.0f : rnd(1.8f, 2.4f);
@@ -1228,6 +1296,10 @@ static void makeVertex(int prog, float (*v)[4], int k, int start, int out, int z
         z = 2.0f;
     } else if (out == 11) {
         x = rnd(130.0f, 178.0f) * z / 16.0f;
+    } else if (out == 12 || out == 13) {
+        z = 2.0f;
+        x = (out == 12 ? rnd(8.0f, 16.0f) : rnd(180.0f, 300.0f)) * z / 16.0f;
+        y = (k & 1 ? 1.0f : -1.0f) * rnd(4.0f, 10.0f) * z / 16.0f;
     } else if (out) {
         x = scissor ? 150.0f : out == 2 ? 255.875f : out == 3 ? 744.0f : 600.0f;
         z = 2.0f;
@@ -1261,12 +1333,15 @@ static int tagOffset(const Case *c)
     return c->hdr - (c->prog == P_MESH ? 2 : 1);
 }
 
-/* portDraws at a camera blended between the ticks (s_tickRef): the rule at
- * each tick's camera with the blended camera's card test (strip), then
- * vu1ref_region_between with d, the blended camera's */
-static int ticksDraw(const Case *c, int k, int strip, int d)
+/* portDraws at a camera blended between the ticks (s_tickRef): whether
+ * each tick showed the triangle (the rule at its camera with the blended
+ * camera's card test (strip) draws it, and what the GPU draws of it there,
+ * portPolygon, reaches the frame: the RT x RT target), then
+ * vu1ref_region_between with d, the blended camera's verdict, and card,
+ * whether that was the card test's */
+static int ticksDraw(const Case *c, int k, int strip, int d, int card)
 {
-    int at[2];
+    int shown[2];
     for (int t = 0; t < 2; t++) {
         const VuGsVertex *u = s_tickRef[t]->v;
         int r = 0;
@@ -1278,11 +1353,20 @@ static int ticksDraw(const Case *c, int k, int strip, int d)
             }
         }
         const int f = u[k - 2].clipW > 0.0f && u[k - 1].clipW > 0.0f && u[k].clipW > 0.0f;
-        at[t] =
+        const int at =
             vu1ref_region_draw(extendedState(c), freeCamera(c), u[k - 2].inside, u[k - 1].inside,
                                u[k].inside, c->mark == MARK_HIDE, r, f, joinedCase(c), strip);
+        float poly[4][2];
+        const float frame[4] = {0.0f, (float)RT, 0.0f, (float)RT};
+        const int n = at != VU1REF_DRAW_NONE ? portPolygon(c, s_tickRef[t], k, poly) : 0;
+        if (n < 0) {
+            FAILF("%s: triangle %d: the frame reach at tick %d cannot be predicted\n", c->name, k,
+                  t);
+        }
+        shown[t] =
+            n < 0 || (n >= 3 && vu1ref_polygon_reaches_picture((const float (*)[2])poly, n, frame));
     }
-    return vu1ref_region_between(d, at[0], at[1]);
+    return vu1ref_region_between(d, card, shown[0], shown[1]);
 }
 
 /* Fill the case's VU input (batches, each hdr + vpb * vq qwords) into in;
@@ -1305,7 +1389,8 @@ static int makeInput(const Case *c, float (*in)[4])
                i == 3 ? 0.0f : (float)(int)rnd(1, 128));
         }
         qw(in[6], 300, 0, 4, 2); /* outside the window: skipped by the VU (Enhanced draws it) */
-        if (c->depart == DEPART_SPRITE || c->depart == DEPART_SPRITE_FREE) {
+        if (c->depart == DEPART_SPRITE || c->depart == DEPART_SPRITE_FREE ||
+            c->depart == DEPART_SPRITE_TICKS) {
             /* h = (5120, 4096, 3 * 2^20, 2), half extent 16 * 65 / 2 = 520:
              * corners (2040, 1528) and (3080, 2568) */
             qw(in[6], 64, 0, 2, 65);
@@ -1340,7 +1425,10 @@ static int makeInput(const Case *c, float (*in)[4])
             if (c->wide != 1.0f && c->clip == ICO_VU_CLIP_REGION) {
                 out = k == 7 ? 2 : k == 9 ? 3 : 0;
             }
-            if ((c->depart == DEPART_EYE || c->depart == DEPART_EYE_FREE || tickCase(c)) &&
+            if (c->depart == DEPART_EYE_TICKS_BESIDE || c->depart == DEPART_EYE_TICKS_BAND) {
+                out = c->depart == DEPART_EYE_TICKS_BAND ? 13 : 12;
+            }
+            if ((c->depart == DEPART_EYE || c->depart == DEPART_EYE_FREE || eyeTickCase(c)) &&
                 k == 7) {
                 out = 4;
             }
@@ -1350,7 +1438,7 @@ static int makeInput(const Case *c, float (*in)[4])
             if (c->depart == DEPART_CARD) {
                 out = k == 7 ? 8 : 6;
             }
-            if (c->depart == DEPART_CARD_STRIP) {
+            if (c->depart == DEPART_CARD_STRIP || c->depart == DEPART_CARD_TICKS) {
                 out = k == 7 || k == 9 ? 8 : 6;
             }
             if (c->depart == DEPART_GRID_ROW) {
@@ -1473,25 +1561,27 @@ static void makeVuCB(const Case *c, const Vu1Ref *r, IcoVuCB *cb, IcoVuBoneCB *b
                   (extendedState(c) ? ICO_VU_EXTENDED : 0u);
     if (tickCase(c)) {
         /* each tick's camera, R = M T M^-1 (M the model to GS screen
-         * matrix, mem 16..19; T the model moved by tickShift along z, the
+         * matrix, mem 16..19; T the model moved by tickMove, the
          * camera moved back), as rd_interp.c gives S_tick St^-1 */
         cb->draw[2] |= ICO_VU_TICKS;
         double m[16], im[16];
         for (int col = 0; col < 4; col++) {
             for (int row = 0; row < 4; row++) {
-                m[col * 4 + row] = r->mem[16 + col][row];
+                m[col * 4 + row] = cb->mem[16 + col][row];
             }
         }
         if (!invert4(m, im)) {
             FAILF("%s: the model matrix is singular\n", c->name);
         }
         for (int t = 0; t < 2; t++) {
-            /* M T M^-1 = I + s (M e_z) (row 3 of M^-1) */
-            const double sh = tickShift(c, t);
+            /* M T M^-1 = I + (M d) (row 3 of M^-1), d the move */
+            float d[3];
+            tickMove(c, t, d);
             for (int col = 0; col < 4; col++) {
                 for (int row = 0; row < 4; row++) {
+                    const double md = d[0] * m[0 + row] + d[1] * m[4 + row] + d[2] * m[8 + row];
                     cb->ticks[t * 4 + col][row] =
-                        (float)((row == col ? 1.0 : 0.0) + sh * m[8 + row] * im[col * 4 + 3]);
+                        (float)((row == col ? 1.0 : 0.0) + md * im[col * 4 + 3]);
                 }
             }
         }
@@ -1574,8 +1664,27 @@ static void runRef(const Case *c, const float (*in)[4], int nq, CaseRef *cr)
                                             (float)added.xyz[0][1] / 16.0f - top,
                                             (float)added.xyz[1][0] / 16.0f - targetLeft(c),
                                             (float)added.xyz[1][1] / 16.0f - top, pic);
-            const int d =
+            int d =
                 vu1ref_particle_draw(extendedState(c), freeCamera(c), drawn, cr->shown[k], reaches);
+            if (d == VU1REF_DRAW_NONE && cr->shown[k] && s_tickRef[0] && s_tickRef[1]) {
+                /* between two ticks: drawn whole when a tick's VU drew it
+                 * on the frame (the RT x RT target) */
+                int shownAt[2] = {0, 0};
+                for (int t = 0; t < 2; t++) {
+                    const VuParticleOut *po = &s_tickRef[t]->po;
+                    for (int j = 0; j < po->count; j++) {
+                        const VuGsSprite *ts = &po->s[j];
+                        const float frame[4] = {0.0f, (float)RT, 0.0f, (float)RT};
+                        shownAt[t] |=
+                            ts->index == k && vu1ref_rect_reaches_picture(
+                                                  (float)ts->xyz[0][0] / 16.0f - targetLeft(c),
+                                                  (float)ts->xyz[0][1] / 16.0f - top,
+                                                  (float)ts->xyz[1][0] / 16.0f - targetLeft(c),
+                                                  (float)ts->xyz[1][1] / 16.0f - top, frame);
+                    }
+                }
+                d = vu1ref_region_between(d, 0, shownAt[0], shownAt[1]);
+            }
             if (drawn) {
                 s = &cr->po.s[pi++];
             } else if (d == VU1REF_DRAW_CLIPPED) {
@@ -1978,6 +2087,19 @@ static const Case kCases[] = {
      1.0f, DEPART_EYE_TICKS_BOTH, VU1REF_ENHANCED, MARK_NONE, 0, 0},
     {"lit eye both", "vu_lit_vs", P_NORMALL, 32, ICO_VU_CLIP_REGION, 4, 1, 1, 12, 0, 0, 0, 1.0f,
      DEPART_EYE_TICKS_BOTH, VU1REF_ORIGINAL, MARK_NONE, 0, 0},
+    /* S1: wholly beside the picture at the tick before, behind the eye at
+     * this tick: off the frame at 4:3 (never seen), not drawn between the
+     * ticks; on the band beside the picture of a wider frame, drawn */
+    {"prelit eye beside", "vu_prelit_vs", P_NORMALC, 32, ICO_VU_CLIP_REGION, 3, 1, 2, 12, 0, 0, 0,
+     1.0f, DEPART_EYE_TICKS_BESIDE, VU1REF_ORIGINAL, MARK_NONE, 0, 0},
+    {"lit eye beside enh", "vu_lit_vs", P_NORMALL, 32, ICO_VU_CLIP_REGION, 4, 1, 1, 12, 0, 0, 0,
+     1.0f, DEPART_EYE_TICKS_BESIDE, VU1REF_ENHANCED, MARK_NONE, 0, 0},
+    {"prelit eye band enh", "vu_prelit_vs", P_NORMALC, 32, ICO_VU_CLIP_REGION, 3, 1, 2, 12, 0, 0, 0,
+     1.0f, DEPART_EYE_TICKS_BAND, VU1REF_ENHANCED, MARK_NONE, 0, 0},
+    /* a card the tick before showed inside the picture: the card test at
+     * the blended camera drops it */
+    {"prelit card ticks enh", "vu_prelit_vs", P_NORMALC, 32, ICO_VU_CLIP_REGION, 3, 1, 2, 12, 0, 0,
+     0, 1.0f, DEPART_CARD_TICKS, VU1REF_ENHANCED, MARK_NONE, 0, 0},
     /* photo mode's free camera: drawn, GPU-clipped, in either preset */
     {"prelit 32 free", "vu_prelit_vs", P_NORMALC, 32, ICO_VU_CLIP_REGION, 3, 1, 2, 12, 0, 0, 0,
      1.0f, DEPART_EYE_FREE, VU1REF_ORIGINAL, MARK_NONE, 0, 0},
@@ -2045,6 +2167,9 @@ static const Case kCases[] = {
      DEPART_SPRITE, VU1REF_ORIGINAL, MARK_NONE, 0, 0},
     {"particle past enh", "vu_particle_vs", P_PARTICLE, 18, 0, 2, 6, 1, 12, 0, 0, 0, 0.375f,
      DEPART_SPRITE, VU1REF_ENHANCED, MARK_NONE, 0, 0},
+    /* between two ticks, the tick before's VU drew it: drawn whole */
+    {"particle past ticks", "vu_particle_vs", P_PARTICLE, 18, 0, 2, 6, 1, 12, 0, 0, 0, 1.0f,
+     DEPART_SPRITE_TICKS, VU1REF_ORIGINAL, MARK_NONE, 0, 0},
     {"particle free", "vu_particle_vs", P_PARTICLE, 18, 0, 2, 6, 1, 12, 0, 0, 0, 1.0f,
      DEPART_SPRITE_FREE, VU1REF_ORIGINAL, MARK_NONE, 0, 0},
     {"particle beside enh", "vu_particle_vs", P_PARTICLE, 18, 0, 2, 6, 1, 12, 0, 0, 0, 0.375f,
@@ -2223,23 +2348,35 @@ static int gpuTests(void)
         memset(in, 0, sizeof(in));
         int nq = makeInput(c, in);
         const float wide = c->wide;
-        runRef(c, (const float (*)[4])in, nq, &cr);
         /* a tick case: the reference at each tick's camera, the input's
-         * positions moved by tickShift along z (makeVuCB's T) */
+         * positions moved by tickMove (makeVuCB's T), before the blended
+         * camera's (a particle's verdict is made in runRef) */
         static CaseRef crTick[2];
         static float inTick[1024][4];
         s_tickRef[0] = s_tickRef[1] = NULL;
         for (int t = 0; t < 2 && tickCase(c); t++) {
             memcpy(inTick, in, sizeof(inTick));
-            for (int b = 0, at = 0; b < c->nbatch; b++) {
+            for (int k = 0; c->prog == P_PARTICLE && k < c->vpb; k++) {
+                float d[3];
+                tickMove(c, t, d);
+                for (int i = 0; i < 3; i++) {
+                    inTick[6 + 2 * k][i] += d[i];
+                }
+            }
+            for (int b = 0, at = 0; c->prog != P_PARTICLE && b < c->nbatch; b++) {
+                float d[3];
+                tickMove(c, t, d);
                 for (int k = 0; k < c->vpb; k++) {
-                    inTick[at + c->hdr + k * c->vq][2] += tickShift(c, t);
+                    for (int i = 0; i < 3; i++) {
+                        inTick[at + c->hdr + k * c->vq][i] += d[i];
+                    }
                 }
                 at += c->hdr + c->vpb * c->vq + c->trail;
             }
             runRef(c, (const float (*)[4])inTick, nq, &crTick[t]);
             s_tickRef[t] = &crTick[t];
         }
+        runRef(c, (const float (*)[4])in, nq, &cr);
 
         rhi_wait_frame();
         if (c->tagless) {
@@ -2500,7 +2637,8 @@ static int gpuTests(void)
             const int clips =
                 !hidden &&
                 (freeCamera(c) || c->depart == DEPART_BESIDE || c->depart == DEPART_ABOVE ||
-                 c->depart == DEPART_EYE_TICKS || c->depart == DEPART_REFL_BESIDE || c->strip);
+                 c->depart == DEPART_EYE_TICKS || c->depart == DEPART_EYE_TICKS_BAND ||
+                 c->depart == DEPART_REFL_BESIDE || c->strip);
             if (c->clip == ICO_VU_CLIP_REGION && (hidden  ? nclip != 0
                                                   : clips ? nnone != 0
                                                           : nnone == 0)) {
@@ -2520,7 +2658,7 @@ static int gpuTests(void)
                       pcov);
             }
             const int eyeCase =
-                c->depart == DEPART_EYE || c->depart == DEPART_EYE_FREE || tickCase(c);
+                c->depart == DEPART_EYE || c->depart == DEPART_EYE_FREE || eyeTickCase(c);
             if (eyeCase) {
                 int eye = 0;
                 for (int i = nkept; i < nidx; i += 3) {
@@ -2550,7 +2688,7 @@ static int gpuTests(void)
             FAILF("%s: particle 1 behind the eye is drawn\n", c->name);
         }
         if ((c->depart == DEPART_SPRITE || c->depart == DEPART_SPRITE_FREE ||
-             c->depart == DEPART_SPRITE_BESIDE) &&
+             c->depart == DEPART_SPRITE_TICKS || c->depart == DEPART_SPRITE_BESIDE) &&
             ((cr.po.count > 0 && cr.po.s[0].index == 0) || !cr.shown[0])) {
             FAILF("%s: particle 0 is not one the VU skips\n", c->name);
         }
@@ -2560,7 +2698,8 @@ static int gpuTests(void)
          * the free camera and in any other state (VIS-WINDOW; in the
          * reference image too) */
         if (c->prog == P_PARTICLE) {
-            const int adds = freeCamera(c) || extendedState(c) || c->depart != DEPART_SPRITE;
+            const int adds = freeCamera(c) || extendedState(c) || c->depart != DEPART_SPRITE ||
+                             c->depart == DEPART_SPRITE_TICKS;
             if (adds ? (cr.added == 0 || cr.dropped != 0) : (cr.added != 0 || cr.dropped == 0)) {
                 FAILF("%s: %d particles the VU skips drawn whole, %d dropped\n", c->name, cr.added,
                       cr.dropped);

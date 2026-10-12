@@ -91,7 +91,7 @@ StructuredBuffer<float4> vu_stream : register(t0, space1);
 // The draw is seen through a camera blended between two ticks' (rd_interp.c
 // camSetup; rd_replay.c sets it from RdFrame.tickCams): vu_ticks holds the
 // ticks' cameras, and a triangle the region rule drops at the blended
-// camera is drawn, clipped, when the rule draws it at either tick's camera
+// camera is drawn, clipped, when either tick showed it on the frame
 // (vu_region_rule)
 #define VU_F_TICKS 512u
 // Issue 25: the index bit of a triangle that overlaps an earlier triangle of
@@ -387,13 +387,37 @@ float4 vu_picture_ndc()
     return float4(a.x, b.x, a.y, b.y);
 }
 
+// The frame the bound target shows, in vu_picture_ndc's form: the
+// target's GS extent about its centre (a Full pixel target's: the frame's
+// exact width, less the texels it leaves out each side, g_vpo.z). At 4:3
+// the frame's camera's frame is its picture; on a wider frame it holds
+// the picture and the bands beside it.
+float4 vu_frame_ndc()
+{
+    precise float2 c = g_origin.xy + g_target.xy * 0.5;
+    precise float2 h = g_target.xy * 0.5;
+    if (g_vp.x != 0.0 && g_vp.z > 0.0) {
+        h.x = h.x - g_vpo.z / g_vp.z;
+    }
+    float2 a = vu_ndc(c - h);
+    float2 b = vu_ndc(c + h);
+    return float4(a.x, b.x, a.y, b.y);
+}
+
+// Whether a clip-space x range lo .. hi meets the columns of the edges e
+// (vu_picture_ndc's form). Conservative at its edges: a range that ends
+// exactly on an edge covers no pixel centre inside, but counts as reaching
+// it.
+bool vu_reaches_columns(float lo, float hi, float4 e)
+{
+    return lo < e.y && hi > e.x;
+}
+
 // Whether a clip-space x range lo .. hi meets the camera's picture's
-// columns. Conservative at its edges: a range that ends exactly on an edge
-// covers no pixel centre inside, but counts as reaching it.
+// columns (vu_reaches_columns).
 bool vu_reaches_picture(float lo, float hi)
 {
-    float4 e = vu_picture_ndc();
-    return lo < e.y && hi > e.x;
+    return vu_reaches_columns(lo, hi, vu_picture_ndc());
 }
 
 // Whether a clip-space rectangle lo .. hi (a sprite's corners) meets the
@@ -432,19 +456,19 @@ void vu_clip_corners(inout float4 p[VU_CUT_CORNERS], inout uint n, float4 plane)
 }
 
 // Whether what the GPU draws of the triangle with clip-space corners a, b
-// and c (vu_cut_position) reaches into the camera's picture: the triangle
-// cut to 0 <= z <= w as the GPU clips it and to the picture's top and
-// bottom, its x extent met with the picture's columns (vu_reaches_picture).
-// Cut to the rows first: a triangle whose part within the picture's
-// columns lies wholly above or below the picture (only sky over it) but
-// that covers frame pixels beside the picture lies wholly beside it, and
-// is drawn there. A triangle cut away whole reaches nothing. The corners
-// keep w >= 0 after the z cut, so the row planes cut in homogeneous form.
-bool vu_cut_reaches_picture(float4 a, float4 b, float4 c)
+// and c (vu_cut_position) reaches into the rectangle with the edges e
+// (vu_picture_ndc's form): the triangle cut to 0 <= z <= w as the GPU
+// clips it and to e's top and bottom, its x extent met with e's columns
+// (vu_reaches_columns). Cut to the rows first: a triangle whose part
+// within the picture's columns lies wholly above or below the picture
+// (only sky over it) but that covers frame pixels beside the picture lies
+// wholly beside it, and is drawn there. A triangle cut away whole reaches
+// nothing. The corners keep w >= 0 after the z cut, so the row planes cut
+// in homogeneous form.
+bool vu_cut_reaches(float4 a, float4 b, float4 c, float4 e)
 {
     float4 p[VU_CUT_CORNERS] = {a, b, c, c, c, c, c};
     uint n = 3u;
-    float4 e = vu_picture_ndc();
     vu_clip_corners(p, n, float4(0.0, 0.0, 1.0, 0.0));
     vu_clip_corners(p, n, float4(0.0, 0.0, -1.0, 1.0));
     vu_clip_corners(p, n, float4(0.0, -1.0, 0.0, e.z)); // y <= top * w
@@ -457,7 +481,13 @@ bool vu_cut_reaches_picture(float4 a, float4 b, float4 c)
         lo = min(lo, x);
         hi = max(hi, x);
     }
-    return n >= 3u && vu_reaches_picture(lo, hi);
+    return n >= 3u && vu_reaches_columns(lo, hi, e);
+}
+
+// Whether it reaches into the camera's picture (vu_picture_ndc)
+bool vu_cut_reaches_picture(float4 a, float4 b, float4 c)
+{
+    return vu_cut_reaches(a, b, c, vu_picture_ndc());
 }
 
 VuVSOut vu_out_init()
@@ -719,7 +749,12 @@ uint vu_region_rule_at(VuVtx a, VuVtx b, VuVtx c)
 
 // The vertex as tick k's camera gave it (0 the tick before, 1 this tick):
 // h_k = R_k h, R_k = S_k St^-1 (vu_ticks), then the program's divide and
-// its region test with its bounds lo, hi (vu_inside)
+// its region test with its bounds lo, hi (vu_inside).  h is the vertex
+// through the blended camera at the object's blended pose (rd_interp.c
+// blends a matched draw's model matrix with the camera), so this is the
+// tick's camera looking at the blended pose: only the camera is moved
+// back to the tick, never the object (an object moving between the ticks
+// is tested where it is drawn).
 VuVtx vu_tick_vertex(VuVtx v, uint k, float4 lo, float4 hi)
 {
     VuVtx o = vu_vtx_init();
@@ -745,29 +780,44 @@ VuVtx vu_tick_vertex(VuVtx v, uint k, float4 lo, float4 hi)
 // gsb_cull_test --stage DISC --eye: on a yaw orbit 500 units out, 200 a
 // tick, holes of 15636 of the 688 x 448 native pixels at 16:9, 35786 of
 // 2048 x 448 at 48:9; the same rule drops some triangles that are beside
-// the picture at a tick, drawn there, too).  So under VU_F_TICKS a triangle the rule drops at the blended
-// camera is drawn, clipped by the GPU at the native frustum, when the rule
-// draws it at either tick's camera (exactly or clipped); when it would go
-// to the card test there, the card test decides (at the blended camera);
-// it stays dropped when the rule drops it at both ticks.  The PS2's rule
-// is unchanged at every tick's own picture (no VU_F_TICKS: t = 0, the
+// the picture at a tick, drawn there, too).  So under VU_F_TICKS a
+// triangle the rule drops at the blended camera is drawn, clipped by the
+// GPU at the native frustum, when a tick SHOWED it: the rule draws it at
+// that tick's camera (exactly or clipped) and what the GPU draws of it
+// there reaches the frame (vu_frame_ndc, the bound target: at 4:3 the
+// picture, so a triangle wholly beside the picture at a tick, drawn there
+// off the frame, was never seen and does not count; on a wider frame the
+// bands beside the picture count).  A triangle neither tick showed stays
+// dropped: between the ticks the port shows nothing the PS2 hid at both.
+// When the rule would go to the card test at a showing tick, the card
+// test decides (at the blended camera, as when the blended camera's own
+// verdict is the card test: VU_RULE_STRIP is returned as it is, so a card
+// never enters the picture between the ticks either).  The PS2's rule is
+// unchanged at every tick's own picture (no VU_F_TICKS: t = 0, the
 // Original framerate, a still camera) and under the free camera.
+// vu1_ref.h vu1ref_region_between is the CPU mirror.
 uint vu_region_rule(VuVtx a, VuVtx b, VuVtx c, float4 lo, float4 hi)
 {
     uint r = vu_region_rule_at(a, b, c);
     if (r != VU_RULE_DROP || (vu_draw.z & VU_F_TICKS) == 0u) {
         return r;
     }
+    float4 frame = vu_frame_ndc();
     uint at = VU_RULE_DROP;
-    [loop] for (uint k = 0u; k < 2u; k++) {
-        uint rk = vu_region_rule_at(vu_tick_vertex(a, k, lo, hi), vu_tick_vertex(b, k, lo, hi),
-                                    vu_tick_vertex(c, k, lo, hi));
-        if (rk == VU_RULE_EXACT || rk == VU_RULE_CLIP) {
+    [loop] for (uint k = 0u; k < 2u; k++)
+    {
+        VuVtx ak = vu_tick_vertex(a, k, lo, hi);
+        VuVtx bk = vu_tick_vertex(b, k, lo, hi);
+        VuVtx ck = vu_tick_vertex(c, k, lo, hi);
+        uint rk = vu_region_rule_at(ak, bk, ck);
+        if (rk == VU_RULE_DROP ||
+            !vu_cut_reaches(vu_cut_position(ak), vu_cut_position(bk), vu_cut_position(ck), frame)) {
+            continue; // not shown at tick k
+        }
+        if (rk != VU_RULE_STRIP) {
             return VU_RULE_CLIP;
         }
-        if (rk == VU_RULE_STRIP) {
-            at = VU_RULE_STRIP;
-        }
+        at = VU_RULE_STRIP;
     }
     return at;
 }
