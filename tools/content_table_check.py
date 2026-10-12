@@ -37,9 +37,21 @@ rd__content_hide_set: "N=off", "N=hide").
           and a picture with them in magenta (OUT/report/...png).  Inside
           the picture there should be none.  A report, not a gate.
   all     decide over the dump list, then report (the default)
+  chains  the chains table (port/render/rd_content_chain.c, Natural chains)
+          against the disc image (--disc, ICO_DISC_IMAGE or baserom/
+          Ico_PAL.iso; an .iso only): each entry's stage animation row
+          (its group, unique), its Null (type 1, the keyed scale changing on
+          the entry's axis alone, below 1 and up to 1), the links under it
+          (one model, still, unturned and unscaled, evenly from the anchor to
+          the end along the axis) and the model's reach past a node toward
+          the anchor and away from it; then every stage animation of every pack scanned for a
+          Null scaled on one axis over three or more links of one model laid
+          along it: the ones found must be the table's.  Needs no replay
+          tool and no dump.
 
   python3 -I tools/content_table_check.py [--tool T] [--out DIR] [--dumps LIST]
           [decide | report [--mesh NAME ...] [SOURCE ...] | all]
+  python3 -I tools/content_table_check.py [--disc ISO] chains
 
 The dump list is tools/native_frame_dumps.txt (or ICO_DUMPS, or --dumps):
 machine-local paths, dumps are never committed.  The report's default
@@ -402,6 +414,263 @@ def cmd_report(args, groups):
 
 # -------------------------------------------------------------------- main
 
+# ------------------------------------------------------------------ chains
+
+CHAIN_TABLE = os.path.join(ROOT, "port", "render", "rd_content_chain.c")
+TABLE_DESC = os.path.join(ROOT, "port", "data", "gen", "table_desc.c")
+
+
+def read_chains(path=CHAIN_TABLE):
+    """[{bga, group, null, axis, anchor, end, reach, fall}] in the table's order."""
+    src = open(path, encoding="utf-8").read()
+    body = src[src.index("rd__chains[] = {"):]
+    body = body[:body.index("};")]
+    num = r"\s*(-?[\d.]+)f?\s*"
+    out = []
+    for m in re.finditer(r'\{"([^"]+)",' + ",".join([num] * 7) + r"\}", body):
+        v = [float(x) for x in m.groups()[1:]]
+        out.append(dict(bga=m.group(1), group=int(v[0]), null=int(v[1]), axis=int(v[2]),
+                        anchor=v[3], end=v[4], reach=v[5], fall=v[6]))
+    return out
+
+
+def table_range(name):
+    """(EE address, record count) of a table in port/data/gen/table_desc.c."""
+    src = open(TABLE_DESC, encoding="utf-8").read()
+    m = re.search(r'\{"[^"]*",\s*"%s",\s*\w+,\s*(0x[0-9A-Fa-f]+)u,\s*0x[0-9A-Fa-f]+u,\s*'
+                  r'0x[0-9A-Fa-f]+u,\s*\d+,\s*(\d+)' % name, src)
+    if not m:
+        raise SystemExit("content_table_check: %s not in %s" % (name, TABLE_DESC))
+    return int(m.group(1), 16), int(m.group(2))
+
+
+class Disc:
+    """The PAL disc image (ISO 9660): its files, DATA.DF's packs, the ELF."""
+
+    def __init__(self, path):
+        self.f = open(path, "rb")
+        pvd = self.sectors(16, 1)
+        if pvd[1:6] != b"CD001":
+            raise ValueError("%s: not an ISO 9660 image" % path)
+        self.root = struct.unpack_from("<I", pvd, 158)[0], struct.unpack_from("<I", pvd, 166)[0]
+        self.df = self.find("DFDATAS/DATA.DF")
+        n = struct.unpack("<I", self.read_df(0, 4))[0]
+        raw = self.read_df(4, n * 40)
+        self.entries = [(raw[i * 40:i * 40 + 32].split(b"\0")[0].decode("latin-1"),
+                         struct.unpack_from("<II", raw, i * 40 + 32)) for i in range(n)]
+
+    def sectors(self, lsn, n):
+        self.f.seek(lsn * 2048)
+        return self.f.read(n * 2048)
+
+    def find(self, path):
+        lsn, size = self.root
+        for comp in path.split("/"):
+            d = self.sectors(lsn, (size + 2047) // 2048)
+            at, hit = 0, None
+            while at < len(d):
+                ln = d[at]
+                if ln == 0:
+                    at = (at // 2048 + 1) * 2048
+                    continue
+                name = d[at + 33:at + 33 + d[at + 32]].decode("latin-1").split(";")[0]
+                if name.upper() == comp.upper():
+                    hit = struct.unpack_from("<I", d, at + 2)[0], struct.unpack_from("<I", d, at + 10)[0]
+                    break
+                at += ln
+            if hit is None:
+                raise ValueError("%s: no %s on the disc" % (path, comp))
+            lsn, size = hit
+        return lsn, size
+
+    def read_df(self, off, n):
+        self.f.seek(self.df[0] * 2048 + off)
+        return self.f.read(n)
+
+    def packs(self):
+        """(member name, id, bytes) of every member of every pack, pack by pack."""
+        for name, (off, size) in self.entries:
+            if not name.upper().endswith(".DF"):
+                continue
+            data = zlib.decompressobj(-15).decompress(self.read_df(off, size))
+            n = struct.unpack_from("<I", data, 0)[0]
+            at = 16 + n * 0x224
+            for k in range(n):
+                e = data[16 + k * 0x224:16 + (k + 1) * 0x224]
+                mid, _kind, _w, sz = struct.unpack_from("<IIII", e, 0)
+                yield e[16:].split(b"\0")[0].decode("latin-1"), mid, data[at:at + sz]
+                at += sz
+
+    def elf(self):
+        lsn, size = self.find("SCES_507.60")
+        return self.sectors(lsn, (size + 2047) // 2048)[:size]
+
+
+def elf_reader(elf):
+    phoff, = struct.unpack_from("<I", elf, 0x1C)
+    phsize, phnum = struct.unpack_from("<HH", elf, 0x2A)
+    segs = []
+    for i in range(phnum):
+        kind, off, va, _pa, fsz = struct.unpack_from("<IIIII", elf, phoff + i * phsize)
+        if kind == 1:
+            segs.append((va, off, fsz))
+
+    def read(va, n):
+        for s0, off, fsz in segs:
+            if s0 <= va and va + n <= s0 + fsz:
+                return elf[off + va - s0:off + va - s0 + n]
+        raise ValueError("EE address %#x not in the ELF" % va)
+    return read
+
+
+def bga_nodes(b):
+    """The nodes of a BGA file: {num, type, name, parent, keys: [(pos, rot, scale)]}."""
+    if b[:3] != b"BGA":
+        return []
+    off = struct.unpack_from("<I", b, 0x0C)[0]
+    nodes = []
+    while off and off + 0x48 <= len(b):
+        kind, num = struct.unpack_from("<HH", b, off)
+        name = b[off + 4:off + 36].split(b"\0")[0].decode("latin-1")
+        nxt = struct.unpack_from("<I", b, off + 0x24)[0]
+        key, n = struct.unpack_from("<Ii", b, off + 0x34)
+        parent = struct.unpack_from("<h", b, off + 0x44)[0]
+        keys = []
+        if kind != 13 and 0 <= n < 4096 and key + n * 0x34 <= len(b):
+            for k in range(n):
+                v = struct.unpack_from("<9f", b, key + k * 0x34)
+                keys.append((v[0:3], v[3:6], v[6:9]))
+        nodes.append(dict(num=num, type=kind, name=name, parent=parent, keys=keys))
+        off = nxt
+    return nodes
+
+
+def chain_links(nodes, null, axis):
+    """The links under node null when they are a chain along axis: one model,
+    three or more, each still (one place over its keys), unturned, unscaled,
+    the same off-axis place, evenly spaced along the axis; else None."""
+    kids = [d for d in nodes if d["parent"] == null]
+    if len(kids) < 3 or any(d["type"] != 0 or not d["keys"] for d in kids):
+        return None
+    if len(set(d["name"] for d in kids)) != 1:
+        return None
+    places = []
+    for d in kids:
+        p0 = d["keys"][0][0]
+        for pos, rot, sc in d["keys"]:
+            if pos != p0 or any(abs(r) > 1e-6 for r in rot) or any(abs(x - 1) > 1e-6 for x in sc):
+                return None
+        places.append(p0)
+    off = [tuple(p[i] for i in range(3) if i != axis) for p in places]
+    if len(set(off)) != 1:
+        return None
+    along = sorted(p[axis] for p in places)
+    step = along[1] - along[0]
+    if step <= 0 or any(abs(along[i + 1] - along[i] - step) > 1e-3 for i in range(len(along) - 1)):
+        return None
+    return kids[0]["name"], along
+
+
+def scaled_axes(node):
+    """The axes on which a node's keyed scale changes."""
+    return [a for a in range(3) if len(set(k[2][a] for k in node["keys"])) > 1]
+
+
+def p2o_reach(b, axis, toward_minus):
+    """How far a model's vertices reach past its origin on axis, toward minus or plus."""
+    tbl, n = struct.unpack_from("<iI", b, 4)
+    lo, hi = 0.0, 0.0
+    for i in range(n):
+        part = struct.unpack_from("<i", b, tbl + 4 * i)[0]
+        vtx, cnt = struct.unpack_from("<iI", b, part + 0x90)
+        for k in range(cnt):
+            c = struct.unpack_from("<f", b, vtx + 16 * k + 4 * axis)[0]
+            lo, hi = min(lo, c), max(hi, c)
+    return -lo if toward_minus else hi
+
+
+def cmd_chains(args):
+    path = args.disc or os.environ.get("ICO_DISC_IMAGE") or os.path.join(ROOT, "baserom", "Ico_PAL.iso")
+    if not path.lower().endswith(".iso") or not os.path.exists(path):
+        say("SKIP chains: no disc image (.iso) at %s" % path)
+        return EXIT_SKIP
+    disc = Disc(path)
+    read = elf_reader(disc.elf())
+    base, count = table_range("stageTable")
+    rows = []
+    for i in range(count):
+        r = read(base + i * 0x5C, 0x5C)
+        rows.append((r[:64].split(b"\0")[0].decode("latin-1"), struct.unpack_from("<i", r, 0x48)[0]))
+    table = read_chains()
+    rc = 0
+    if not table:
+        say("FAIL chains: no entry read from %s" % CHAIN_TABLE)
+        return 1
+    bgas, models, found = {}, {}, set()
+    for name, _mid, data in disc.packs():
+        if name.endswith(".bga") and name not in bgas:
+            bgas[name] = data
+            nodes = bga_nodes(data)
+            for d in nodes:
+                if d["type"] != 1 or len(d["keys"]) < 2:
+                    continue
+                ax = scaled_axes(d)
+                if len(ax) == 1 and chain_links(nodes, d["num"], ax[0]):
+                    found.add((name.rsplit("/", 1)[-1][:-4], d["num"]))
+        elif name.endswith(".p2o"):
+            models.setdefault(name.rsplit("/", 1)[-1][:-4], data)
+    for e in table:
+        where = "chains: %s" % e["bga"]
+        hits = [(p, g) for p, g in rows if p.endswith("/%s.bga" % e["bga"])]
+        same = [p for p, g in rows if g == e["group"] and p != "NULL"]
+        if len(hits) != 1 or hits[0][1] != e["group"] or len(same) != 1:
+            say("FAIL %s: the stage animation rows %s, the rows of group %d %s" % (where, hits, e["group"], same))
+            rc = 1
+            continue
+        nodes = bga_nodes(bgas.get(hits[0][0], b""))
+        null = [d for d in nodes if d["num"] == e["null"]]
+        if len(null) != 1 or null[0]["type"] != 1:
+            say("FAIL %s: no Null (type 1) numbered %d" % (where, e["null"]))
+            rc = 1
+            continue
+        sc = [k[2][e["axis"]] for k in null[0]["keys"]]
+        if scaled_axes(null[0]) != [e["axis"]] or not (min(sc) < 1.0 and abs(max(sc) - 1.0) < 1e-6):
+            say("FAIL %s: the Null's keyed scale (%s) does not lengthen the chain on axis %d"
+                % (where, sorted(set(sc)), e["axis"]))
+            rc = 1
+            continue
+        links = chain_links(nodes, e["null"], e["axis"])
+        lo, hi = min(e["anchor"], e["end"]), max(e["anchor"], e["end"])
+        if not links or abs(links[1][0] - lo) > 1e-3 or abs(links[1][-1] - hi) > 1e-3:
+            say("FAIL %s: the links under the Null are not a chain from %g to %g (%s)"
+                % (where, e["anchor"], e["end"], links and (links[0], links[1][0], links[1][-1])))
+            rc = 1
+            continue
+        model = models.get(links[0])
+        down = e["end"] >= e["anchor"]
+        reach = p2o_reach(model, e["axis"], down) if model else None
+        fall = p2o_reach(model, e["axis"], not down) if model else None
+        if reach is None or abs(reach - e["reach"]) > 0.01 or abs(fall - e["fall"]) > 0.01:
+            say("FAIL %s: %s reaches %s past a node toward the anchor and %s away, the table %g "
+                "and %g" % (where, links[0], reach, fall, e["reach"], e["fall"]))
+            rc = 1
+            continue
+        say("%s: group %d, Null %d scaled %g..%g on axis %d, %d links of %s from %g to %g, "
+            "reach %.2f and %.2f: ok" % (where, e["group"], e["null"], min(sc), max(sc), e["axis"],
+                                         len(links[1]), links[0], e["anchor"], e["end"], reach,
+                                         fall))
+    listed = set((e["bga"], e["null"]) for e in table)
+    for extra in sorted(found - listed):
+        say("FAIL chains: %s Null %d lets a chain down by scaling and is not listed" % extra)
+        rc = 1
+    for missing in sorted(listed - found):
+        say("FAIL chains: %s Null %d is listed but the scan does not find it" % missing)
+        rc = 1
+    say("chains: %d stage animations scanned, %d chains found, %d listed"
+        % (len(bgas), len(found), len(table)))
+    return rc
+
+
 def read_list(path):
     if os.path.isdir(path):
         return sorted(os.path.join(path, f) for f in os.listdir(path)
@@ -426,9 +695,15 @@ def main():
     p.add_argument("--out", default=os.path.join(ROOT, "build-host", "tmp", "content_table_check"))
     p.add_argument("--dumps", default=os.environ.get("ICO_DUMPS") or DEFAULT_LIST)
     p.add_argument("--mesh", action="append", help="report: a mesh name (repeatable)")
-    p.add_argument("mode", nargs="?", default="all", choices=["decide", "report", "all"])
+    p.add_argument("--disc", help="chains: the disc image (.iso)")
+    p.add_argument("mode", nargs="?", default="all", choices=["decide", "report", "all", "chains"])
     p.add_argument("sources", nargs="*", help="report: dumps, F12 zips or aspect sweep zips")
     args = p.parse_args()
+    if args.mode == "chains":
+        rc = cmd_chains(args)
+        if rc != EXIT_SKIP:
+            say("ok" if rc == 0 else "FAILED")
+        return rc
     if not os.path.exists(args.tool):
         say("no replay tool at %s (build rd_replay_tool, or --tool)" % args.tool)
         return 2

@@ -495,6 +495,9 @@ const char *const ui_strings_es[UI_STR_COUNT] = {
     [UI_STR_OPT_DOOR_FIX] = "Puerta del reflector este",
     [UI_STR_OPT_DOOR_FIX_NOTE] =
         "De la mano, Ico y Yorda ya no vuelven a salir enseguida por una puerta.",
+    [UI_STR_OPT_NATURAL_CHAINS] = "Cadenas naturales",
+    [UI_STR_OPT_NATURAL_CHAINS_NOTE] =
+        "Una cadena que baja para Ico conserva sus eslabones del tamaño correcto durante todo el descenso.",
     [UI_STR_OPT_AA] = "Antialiasing",
     [UI_STR_OPT_AA_NOTE] =
         "Suaviza los bordes dentados. El supermuestreo dibuja la imagen más grande y la reduce; el MSAA suaviza los bordes de las formas.",

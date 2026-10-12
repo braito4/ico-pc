@@ -45,7 +45,8 @@
 // vu_batch x = header qwords before each batch's vertices (the GIF tag:
 //          1; mesh: the tag and the batch colour, 2, or 3 with the VIF qword
 //          of an unstripped Mesh3D buffer), y = qwords after each batch's
-//          vertices (an unstripped Mesh3D buffer's MSCNT: 1), zw reserved
+//          vertices (an unstripped Mesh3D buffer's MSCNT: 1), z = a clip
+//          plane's code (0 none; vu_plane_distance), w = its offset's bits
 cbuffer VuCB : register(b2, space1)
 {
     float4 vu_mem[36];
@@ -232,6 +233,7 @@ struct VuVSOut
     float4 pos : SV_Position;
     VK_LOC(0) noperspective float4 col : COLOR0;   // RGBA 0..255, the GS interpolates in screen space
     VK_LOC(1) noperspective float3 stq : TEXCOORD0; // S, T, Q linear in screen space, divided per pixel
+    VK_LOC(2) noperspective float plane : TEXCOORD1; // vu_plane_distance; drawn where >= 0
 };
 
 // GS pixels (XYOFFSET-relative window coordinates / 16) to clip space;
@@ -422,6 +424,42 @@ VuVSOut vu_out_init()
     o.pos = VU_CULLED;
     o.col = float4(0.0, 0.0, 0.0, 0.0);
     o.stq = float3(0.0, 0.0, 1.0);
+    o.plane = 1.0;
+    return o;
+}
+
+// A clip plane in the model's space (port/render/rd_chain.h, Natural
+// chains: a chain's link drawn at its size, the part still at the top not
+// drawn): vu_batch.z = 0 for none, else the axis + 1 in bits 0..1 and bit 2
+// for the minus side, vu_batch.w the offset's bits.  The distance of
+// vertex v (its stream position, qword 0 of a prelit or lit vertex) is the
+// coordinate on the axis, negated for the minus side, plus the offset; the
+// pixels where it is negative are discarded (vu_pixel, DF_PLANE).  Like
+// every VU varying it runs linearly in screen space, as the GS's colours
+// and STs do; a link's triangles are a few pixels long.
+float vu_plane_distance(uint v)
+{
+    float4 p = vu_stream[vu_vertex_qw(v)];
+    uint axis = (vu_batch.z & 3u) - 1u;
+    float c = axis == 0u ? p.x : (axis == 1u ? p.y : p.z);
+    precise float d = ((vu_batch.z & 4u) != 0u ? -c : c) + asfloat(vu_batch.w);
+    return d;
+}
+
+// The plane on a drawn triangle k-2, k-1, k (me: the corner output): its
+// distance at the corner, and the triangle not drawn when all three are
+// past the plane.
+VuVSOut vu_plane_out(VuVSOut o, uint kick, uint me)
+{
+    if (vu_batch.z == 0u) {
+        return o;
+    }
+    float da = vu_plane_distance(kick - 2u), db = vu_plane_distance(kick - 1u);
+    float dc = vu_plane_distance(kick);
+    if (da < 0.0 && db < 0.0 && dc < 0.0) {
+        o.pos = VU_CULLED;
+    }
+    o.plane = me == 0u ? da : (me == 1u ? db : dc);
     return o;
 }
 
@@ -633,6 +671,9 @@ Texture2D<float> g_dateSnap : register(t2, space2);
 // DATE; the entry (vu_prelit.hlsl) writes the result (GS_RETURN).
 uint4 vu_pixel(VuVSOut i)
 {
+    if ((g_mode.x & DF_PLANE) != 0u && i.plane < 0.0) {
+        discard;
+    }
     if ((g_mode.x & DF_DATE) != 0u) {
         if (gs_date_discard(g_mode.x, g_dateSnap.Load(int3(int2(i.pos.xy), 0)))) {
             discard;
@@ -656,6 +697,9 @@ uint4 vu_pixel(VuVSOut i)
 // planner gives it (the texture formats and TEXA modes of sprite_texa_ps).
 uint4 vu_pixel_texa(VuVSOut i)
 {
+    if ((g_mode.x & DF_PLANE) != 0u && i.plane < 0.0) {
+        discard;
+    }
     if ((g_mode.x & DF_DATE) != 0u) {
         if (gs_date_discard(g_mode.x, g_dateSnap.Load(int3(int2(i.pos.xy), 0)))) {
             discard;

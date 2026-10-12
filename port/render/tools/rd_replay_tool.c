@@ -432,6 +432,10 @@ static void listCmd(void *user, int list, uint32_t index, const RdCmd *c, const 
             /* pool.c's ST formula (rd.h rd_grid_screen_st) and its scales */
             printf(" screen st %u (%g, %g)", c->b[5], (double)c->f[0], (double)c->f[1]);
         }
+        if (c->type == RDC_MESH && c->b[5]) {
+            /* a clip plane in the model's space (rd_chain.h, Natural chains) */
+            printf(" plane %u %g", c->b[5], (double)c->f[0]);
+        }
         if (c->type == RDC_SKINNED) {
             skinnedPlace(f, c, st);
         }

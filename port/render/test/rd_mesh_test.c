@@ -38,6 +38,14 @@
  *            frame's width covers all 688 columns
  *   content table  rd_content_hide.c's verbs on the top of the listed
  *            closing box (st08a_p4), below ("the content table")
+ *   natural chains  rd_content_chain.c's table and a let-down chain laid
+ *            out as BgAnimation.c lays it out with the option on: the links
+ *            at their size along the chain, the far end where the keyed
+ *            scale puts it, one clip plane at the top for all of them; the
+ *            planes reach the draws of the noted nodes through reg_DispObj
+ *            (RDC_MESH b[5], f[0]); on the device the plane's far side is
+ *            not drawn, its near side byte for byte as without it, below
+ *            ("natural chains")
  *   strip order  the title logo's strips Packet.c draws in another order of
  *            their entries (pac_HostStrips): the table, the I's through
  *            p2o_MakePacket, and with the disc image given as the argument
@@ -87,6 +95,7 @@
 #include "gltf.h"
 #include "host_fs.h"
 #include "modelpack.h"
+#include "rd_chain.h"
 #include "rd_internal.h"
 #include "rd_mesh.h"
 #include "shader_consts.h"
@@ -1963,6 +1972,278 @@ static void modelPackChecks(void)
     packHookChecks();
 }
 
+/* ----------------------------------------------------- natural chains */
+/* rd_chain.h.  Recording: the table names the two let-down chains (st10l's
+ * Null 21, st19a's Null 22, Y, 1000 units of links 50 apart); a chain at
+ * the Stone Pillar's first keyed scale (0.1) laid out as BgAnimation.c lays
+ * it out with the option on (rd_chain_null for the Null, rd_chain_link per
+ * link) fills the stretch the disc's squashed chain fills, with its links
+ * at unit scale 50 apart: the last link's bottom where the squashed one's
+ * is (the Null's place + 0.1 x (1000 + 54.82)) and one plane for all of
+ * them where the squashed top link begins (0.1 x -5.37): the links wholly
+ * above it clipped whole, the last one whole, two cut; at full length the
+ * layout is the disc's (no move, nothing clipped).  A prelit model
+ * drawn as a stage animation draws it (dispType 2, two nodes) through
+ * reg_DispObj: the noted node's draw carries its plane (b[5], f[0]), the
+ * other none, and none once the note is cleared.
+ * Device: a quad y -1000..1000 drawn with the plane y >= 0 is drawn below
+ * the quad's middle only, those rows byte for byte the plain draw's; the
+ * minus side the other half; an offset past the quad clips nothing (the
+ * plain picture) and one before it draws nothing. */
+
+/* the y of a link's node in the Null's frame and the world y of its plane,
+   for the chain c at scale s: link i's node at pos (unscaled) */
+static void chainLink(const RdChain *c, float s, float nullY, float pos, float *nodeY,
+                      float *planeY, uint8_t *code)
+{
+    const float sc[3] = {1.0f, s, 1.0f};
+    float so[3], t[4], off;
+    rd_chain_null(c, sc, so, t);
+    rd_chain_link(c, s, pos, code, &off);
+    /* the Null at nullY, unscaled along Y (so[1]), moved by t; the link at
+       pos below it; the plane where the link's own y is -off */
+    *nodeY = nullY + so[1] * (t[1] + pos);
+    *planeY = *nodeY - off;
+}
+
+static void chainTableChecks(void)
+{
+    const RdChain *a = rd_chain_find(731), *b = rd_chain_find(636);
+    CHECK(rd__chain_count == 2 && a && b && !rd_chain_find(0) && !rd_chain_find(349),
+          "natural chains: two listed (%d), by their groups", rd__chain_count);
+    if (!a || !b) {
+        return;
+    }
+    CHECK(a->null == 21 && a->axis == 1 && a->anchor == 0.0f && a->end == 1000.0f &&
+              b->null == 22 && b->axis == 1 && b->anchor == 2700.0f && b->end == 3700.0f,
+          "natural chains: st10l Null 21 Y 0..1000, st19a Null 22 Y 2700..3700");
+    /* the Stone Pillar's chain at its first keyed scale */
+    const float sc[3] = {1.0f, 0.1f, 1.0f};
+    float so[3], t[4];
+    rd_chain_null(a, sc, so, t);
+    CHECK(so[0] == 1.0f && so[1] == 1.0f && so[2] == 1.0f && t[0] == 0.0f &&
+              fabsf(t[1] + 0.9f * 1054.82f) < 1e-3f && t[2] == 0.0f && t[3] == 1.0f,
+          "natural chains: the Null at scale 0.1 keeps scale 1 and moves -0.9 x 1054.82 (%g %g "
+          "%g, %g)",
+          (double)so[0], (double)so[1], (double)so[2], (double)t[1]);
+    const float nullY = -50.0f; /* st10l_chain_down's Null */
+    float first = 0.0f, prevY = 0.0f;
+    int whole = 0, clipped = 0, part = 0, samePlane = 1, pitch = 1, codes = 1;
+    for (int i = 0; i <= 20; i++) {
+        float y, py;
+        uint8_t code;
+        chainLink(a, 0.1f, nullY, 50.0f * (float)i, &y, &py, &code);
+        codes &= code == rd_chain_plane_code(1, 0);
+        if (i == 0) {
+            first = py;
+        } else {
+            samePlane &= fabsf(py - first) < 1e-3f;
+            pitch &= fabsf(y - prevY - 50.0f) < 1e-3f;
+        }
+        prevY = y;
+        /* chain4: y -5.37 .. 54.82 about its node */
+        if (y - 5.37f >= py - 1e-3f) {
+            whole++;
+        } else if (y + 54.82f <= py) {
+            clipped++;
+        } else {
+            part++;
+        }
+    }
+    CHECK(codes && samePlane && fabsf(first - (nullY - 0.1f * 5.37f)) < 1e-3f,
+          "natural chains: one plane on Y for every link, where the squashed top link begins "
+          "(%g)",
+          (double)first);
+    CHECK(pitch && fabsf(prevY + 54.82f - (nullY + 0.1f * 1054.82f)) < 1e-3f,
+          "natural chains: the links 50 apart at their size, the last one's bottom where the "
+          "squashed one's is (%g)",
+          (double)(prevY + 54.82f));
+    CHECK(whole == 1 && part == 2 && clipped == 18,
+          "natural chains: the last link whole, two cut, 18 above the top (%d %d %d)", whole, part,
+          clipped);
+    /* at full length: the disc's layout, nothing clipped */
+    const float one[3] = {1.0f, 1.0f, 1.0f};
+    rd_chain_null(b, one, so, t);
+    int none = t[1] == 0.0f && so[1] == 1.0f;
+    for (int i = 0; i <= 20; i++) {
+        float y, py;
+        uint8_t code;
+        chainLink(b, 1.0f, 0.0f, 2700.0f + 50.0f * (float)i, &y, &py, &code);
+        none &= y == 2700.0f + 50.0f * (float)i && y - 5.37f >= py - 1e-3f;
+    }
+    CHECK(none, "natural chains: at full length the disc's layout and nothing clipped");
+}
+
+static void chainDrawChecks(void)
+{
+    /* the prelit model as a stage animation draws it: two nodes */
+    const int nodeNum = s_objA.nodeNum, dispType = s_objA.dispType;
+    struct DObjNode saved[2];
+    memcpy(saved, s_modelA.nodes, sizeof(saved));
+    s_objA.nodeNum = 2;
+    s_objA.dispType = 2;
+    for (int i = 0; i < 2; i++) {
+        s_modelA.nodes[i].fade = 0.0f;
+        s_modelA.nodes[i].alpha = 1.0f; /* stage_Init's: drawn */
+    }
+    const uint8_t code = rd_chain_plane_code(1, 0);
+    rd_chain_reset();
+    rd_chain_note(&s_objA, 1, code, -12.5f);
+    recordPrelit(&s_objA, 1);
+    const RdFrame *f = rd__last_frame();
+    Found fd;
+    walkFrame(f, &fd);
+    CHECK(fd.n == 2 && fd.cmd[0]->type == RDC_MESH && fd.cmd[1]->type == RDC_MESH,
+          "natural chains: two node draws (%d)", fd.n);
+    if (fd.n == 2) {
+        CHECK(fd.cmd[0]->b[5] == 0 && fd.cmd[0]->f[0] == 0.0f,
+              "natural chains: node 0, not noted, has no plane (%u %g)", fd.cmd[0]->b[5],
+              (double)fd.cmd[0]->f[0]);
+        CHECK(fd.cmd[1]->b[5] == code && fd.cmd[1]->f[0] == -12.5f,
+              "natural chains: node 1 carries its plane (%u %g)", fd.cmd[1]->b[5],
+              (double)fd.cmd[1]->f[0]);
+    }
+    rd_chain_note(&s_objA, 1, 0, 0.0f); /* the option off: cleared */
+    recordPrelit(&s_objA, 1);
+    f = rd__last_frame();
+    walkFrame(f, &fd);
+    CHECK(fd.n == 2 && fd.cmd[0]->b[5] == 0 && fd.cmd[1]->b[5] == 0,
+          "natural chains: cleared, no draw has a plane");
+    rd_chain_reset();
+    s_objA.nodeNum = nodeNum;
+    s_objA.dispType = dispType;
+    memcpy(s_modelA.nodes, saved, sizeof(saved));
+}
+
+static const char kChainKey;
+
+/* a quad x and y -1000..1000 (z 0), prelit, one strip */
+static RdMesh chainQuad(void)
+{
+    float qw[1 + 4 * 3][4];
+    memset(qw, 0, sizeof(qw));
+    const uint32_t tag = 0x8000u | 4u; /* NLOOP 4, EOP */
+    memcpy(&qw[0][0], &tag, 4);
+    for (int k = 0; k < 4; k++) {
+        qw[1 + k * 3][0] = (k & 1) ? 1000.0f : -1000.0f;
+        qw[1 + k * 3][1] = (k & 2) ? 1000.0f : -1000.0f;
+        qw[1 + k * 3][3] = 1.0f;
+        qw[2 + k * 3][0] = (float)(k & 1);
+        qw[2 + k * 3][2] = 1.0f;
+        qw[2 + k * 3][3] = k == 0 ? 0.0f : 1.0f; /* the strip starts at vertex 0 */
+        qw[3 + k * 3][0] = 200.0f;
+        qw[3 + k * 3][1] = 120.0f;
+        qw[3 + k * 3][2] = 30.0f;
+        qw[3 + k * 3][3] = 127.0f;
+    }
+    const RdVuBatchDesc bd = {0, 0, 0};
+    RdVuMeshDesc md;
+    memset(&md, 0, sizeof(md));
+    md.qw = (const float (*)[4])qw;
+    md.qwCount = 1 + 4 * 3;
+    md.qwPerVertex = RD_VU_QW_PRELIT;
+    md.batchCount = 1;
+    md.batches = &bd;
+    md.materialCount = 1;
+    md.debugName = "chain quad";
+    return rd_create_vu_mesh(&md);
+}
+
+/* one frame: SCENE cleared grey, the quad by code 32 at GS 2048 + 0.08 x,
+   2048 + 0.08 y (rows 176..336), with the plane code / offset (0: none);
+   the picture into img, false when it cannot be read */
+static int chainDraw(RdMesh m, uint8_t code, float offset, uint8_t *img, uint32_t *w)
+{
+    static const uint8_t grey[4] = {40, 40, 60, 0x80};
+    dl_Clear();
+    dl_SetDLPriority(0);
+    rd_set_target(rd_target(RD_TARGET_SCENE), rd_target(RD_TARGET_SCENE), s_sceneW, 512, 1);
+    rd_clear_target(rd_target(RD_TARGET_SCENE), grey, 1, 0);
+    rd_test_gs(RD_TEST_Z_GEQUAL);
+    rd_z_write(1);
+    rd_blend(RD_BLEND_LERP_AS, 0x80, 0);
+    rd_abe(0);
+    rd_pabe(0);
+    rd_fba(0);
+    rd_gouraud(1);
+    rd_texture_off();
+    RdVuDraw d;
+    memset(&d, 0, sizeof(d));
+    d.prog = RD_PROG_PRELIT;
+    d.code = 32;
+    d.clip = RD_VU_CLIP_REGION;
+    d.plane = code;
+    d.planeOffset = offset;
+    d.vu.mem[16][0] = 0.08f;
+    d.vu.mem[17][1] = 0.08f;
+    d.vu.mem[19][0] = 2048.0f;
+    d.vu.mem[19][1] = 2048.0f;
+    d.vu.mem[19][2] = 1000.0f;
+    d.vu.mem[19][3] = 1.0f;
+    rd_draw_vu_mesh(m, &d, RD_KEY(&kChainKey, 0, 32));
+    dl_Swap();
+    return closingRead(img, w);
+}
+
+/* the texels drawn (not the grey clear) in rows y0..y1 - 1 */
+static int chainRows(const uint8_t *img, uint32_t w, int y0, int y1)
+{
+    int n = 0;
+    for (int y = y0; y < y1; y++) {
+        for (uint32_t x = 0; x < w; x++) {
+            const uint8_t *p = &img[((size_t)y * w + x) * 4];
+            n += p[0] != 40 || p[1] != 40 || p[2] != 60;
+        }
+    }
+    return n;
+}
+
+static uint8_t s_chainPlain[WT * 512 * 4];
+
+static void chainPixels(void)
+{
+    const RdMesh m = chainQuad();
+    uint32_t w = 0, wp = 0;
+    if (!chainDraw(m, 0, 0.0f, s_chainPlain, &wp)) {
+        CHECK(0, "natural chains: SCENE read");
+        rd_destroy_vu_mesh(m);
+        return;
+    }
+    const int top = chainRows(s_chainPlain, wp, 0, 254),
+              bottom = chainRows(s_chainPlain, wp, 258, 512);
+    CHECK(top >= 5000 && bottom >= 5000,
+          "natural chains: the plain quad above and below its middle "
+          "(%d, %d)",
+          top, bottom);
+    const uint8_t plus = rd_chain_plane_code(1, 0), minus = rd_chain_plane_code(1, 1);
+    /* y >= 0: the rows below the middle only, as the plain draw has them */
+    if (chainDraw(m, plus, 0.0f, s_closingA, &w)) {
+        const int t = chainRows(s_closingA, w, 0, 254), b = chainRows(s_closingA, w, 258, 512);
+        const size_t at = (size_t)258 * w * 4;
+        CHECK(t == 0 && b == bottom && w == wp &&
+                  memcmp(s_closingA + at, s_chainPlain + at, (size_t)(512 - 258) * w * 4) == 0,
+              "natural chains: y >= 0 draws the lower half only, as the plain draw (%d above, %d "
+              "below)",
+              t, b);
+    }
+    /* -y >= 0: the other half */
+    if (chainDraw(m, minus, 0.0f, s_closingA, &w)) {
+        const int t = chainRows(s_closingA, w, 0, 254), b = chainRows(s_closingA, w, 258, 512);
+        CHECK(t == top && b == 0 && memcmp(s_closingA, s_chainPlain, (size_t)254 * w * 4) == 0,
+              "natural chains: -y >= 0 draws the upper half only (%d above, %d below)", t, b);
+    }
+    /* past the quad: nothing clipped; before it: nothing drawn */
+    if (chainDraw(m, plus, 1500.0f, s_closingA, &w)) {
+        CHECK(w == wp && memcmp(s_closingA, s_chainPlain, (size_t)512 * w * 4) == 0,
+              "natural chains: a plane past the quad clips nothing");
+    }
+    if (chainDraw(m, plus, -1500.0f, s_closingA, &w)) {
+        CHECK(chainRows(s_closingA, w, 0, 512) == 0,
+              "natural chains: a plane before the quad draws nothing");
+    }
+    rd_destroy_vu_mesh(m);
+}
+
 /* ----------------------------------------------------------- the setup */
 
 /* ---- VIS-RULES (v0.6.1): the box culls' rules in RegistPacket.c
@@ -2212,6 +2493,8 @@ static void recordingChecks(void)
     checkParticleRecording();
     checkStretchRecording();
     closingPlaneChecks();
+    chainTableChecks();
+    chainDrawChecks();
     stripTableChecks();
     stripPacketChecks();
     modelPackChecks();
@@ -2274,6 +2557,7 @@ int main(int argc, char **argv)
               k->gs.program, k->vs, k->gs.blend, k->gs.ztst, k->gs.zwrite);
     }
     closingPixels(0);
+    chainPixels();
     CHECK(rhi_vk_validation_error_count() == 0, "%u validation errors",
           rhi_vk_validation_error_count());
     CHECK(rd__not_implemented_count() == 0, "no stubbed command replayed");

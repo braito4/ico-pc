@@ -492,6 +492,9 @@ const char *const ui_strings_en[UI_STR_COUNT] = {
     [UI_STR_OPT_DOOR_FIX] = "East Reflector door fix",
     [UI_STR_OPT_DOOR_FIX_NOTE] =
         "Holding hands, Ico and Yorda no longer come straight back out of a doorway.",
+    [UI_STR_OPT_NATURAL_CHAINS] = "Natural chains",
+    [UI_STR_OPT_NATURAL_CHAINS_NOTE] =
+        "A chain that comes down for Ico keeps its links the right size the whole way down.",
     [UI_STR_OPT_AA] = "Anti-aliasing",
     [UI_STR_OPT_AA_NOTE] =
         "Smooths jagged edges. Supersampling draws the picture larger and shrinks it; MSAA smooths the edges of shapes.",

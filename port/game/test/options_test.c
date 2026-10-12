@@ -114,6 +114,12 @@ static void test_defaults(void)
     CHECK(ico_opt_door_fix() == 1);
     ico_opt_reload();
     CHECK(ico_opt_door_fix() == 0);
+    /* Natural chains: the same (off, the setter's 0 or 1, back on reload) */
+    CHECK(ico_opt_natural_chains() == 0);
+    ico_opt_set_natural_chains(9);
+    CHECK(ico_opt_natural_chains() == 1);
+    ico_opt_reload();
+    CHECK(ico_opt_natural_chains() == 0);
     ico_opt_set_developer_mode(3);
     CHECK(ico_opt_developer_mode() == 1);
     ico_opt_set_yorda_safe(5);
@@ -141,7 +147,7 @@ static void test_config(const char *dir)
         return;
     }
     fputs("[gameplay]\nstick_fix = true\nyorda_safe = true\ndoor_fix = true\nmirror = true\n"
-          "developer_mode = true\n[dev]\ndebug_option = 1\n",
+          "developer_mode = true\nnatural_chains = true\n[dev]\ndebug_option = 1\n",
           f);
     fclose(f);
     ico_config_reset(path, "/nonexistent/options_test.ini");
@@ -149,6 +155,7 @@ static void test_config(const char *dir)
     CHECK(ico_opt_stick_fix() == 1);
     CHECK(ico_opt_yorda_safe() == 1);
     CHECK(ico_opt_door_fix() == 1);
+    CHECK(ico_opt_natural_chains() == 1);
     CHECK(ico_opt_mirror() == 1);
     /* developer mode and the debug option file switch */
     CHECK(ico_opt_developer_mode() == 1);

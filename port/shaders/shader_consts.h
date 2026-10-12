@@ -104,7 +104,10 @@ enum {
     ICO_DF_NODUAL_ALPHA_PASS = 131072,
     /* the texture has its GS mipmap levels: sample at the GS's level from
      * Q and TEX1's fields in DrawCB.blend[3] (common.hlsli gs_lod) */
-    ICO_DF_GS_LOD = 262144
+    ICO_DF_GS_LOD = 262144,
+    /* bit 23 (past the write mask's 19..22): a VU draw with a clip plane
+     * (VuCB vu_batch.zw, rd_chain.h) discards the pixels past it */
+    ICO_DF_PLANE = 8388608
 };
 
 /* DrawCB.mode[0] bits 19..22 on a destination-read pass (the *_dstrov and
@@ -264,7 +267,9 @@ _Static_assert(sizeof(IcoSpriteStqVertex) == 24, "STQ vertex size");
  *          ICO_VU_* flags, vertices per batch (0 = one batch)
  *   batch  qwords before each batch's vertices (GIF tag 1; mesh: tag and
  *          colour 2, 3 with the VIF qword of a Mesh3D buffer), qwords after
- *          them (a Mesh3D buffer's MSCNT: 1), 0, 0 */
+ *          them (a Mesh3D buffer's MSCNT: 1), the clip plane's code and its
+ *          offset's float bits (0, 0: none; rd_chain.h, static prelit and lit
+ *          meshes) */
 typedef struct IcoVuCB {
     float mem[36][4];
     uint32_t draw[4];

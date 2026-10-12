@@ -50,7 +50,7 @@ VuVSOut vu_prelit_vs(uint vid : SV_VertexID)
     VuVtx b = vu_prelit_vertex(kick - 1u, mode, false);
     VuVtx c = vu_prelit_vertex(kick, mode, false);
     VuVtx me = vu_prelit_vertex(kick - 2u + corner, mode, true);
-    VuVSOut o = vu_triangle_out(a, b, c, me, mode);
+    VuVSOut o = vu_plane_out(vu_triangle_out(a, b, c, me, mode), kick, corner);
     if ((vid & VU_INDEX_LATER) != 0u) {
         o = vu_later_out(o, a, b, c);
     }

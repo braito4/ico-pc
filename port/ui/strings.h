@@ -565,6 +565,9 @@ typedef enum UiStrId {
     /* Gameplay > Doorway fix ([gameplay] door_fix) and its explanation */
     UI_STR_OPT_DOOR_FIX,
     UI_STR_OPT_DOOR_FIX_NOTE,
+    /* Gameplay > Natural chains ([gameplay] natural_chains) and its explanation */
+    UI_STR_OPT_NATURAL_CHAINS,
+    UI_STR_OPT_NATURAL_CHAINS_NOTE,
     /* Display > Anti-aliasing ([video] anti_aliasing), its note and values */
     UI_STR_OPT_AA,
     UI_STR_OPT_AA_NOTE,

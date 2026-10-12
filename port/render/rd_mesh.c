@@ -1417,6 +1417,12 @@ void rd_draw_vu_mesh(RdMesh mesh, const RdVuDraw *d, RdKey key)
         /* b[4]: RD_VU_VIEW_*, how the model matrices follow the camera
          * (rd_interp.c's re-base); 0 in older dumps */
         c->b[4] = d->bones ? 0 : d->view;
+        /* b[5], f[0]: the clip plane (RdVuDraw.plane, planeOffset), 0 for
+         * none and in older dumps; rd_replay.c gives it to VuCB vu_batch.zw */
+        if (!d->bones && d->plane != 0) {
+            c->b[5] = d->plane;
+            c->f[0] = d->planeOffset;
+        }
     }
 }
 

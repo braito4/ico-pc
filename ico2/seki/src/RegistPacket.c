@@ -23,6 +23,7 @@
 
 #include <string.h>
 #include "GifHost.h"
+#include "rd_chain.h"
 #include "rd_mesh.h"
 #include "modelpack.h"
 
@@ -187,6 +188,11 @@ static void regHostMesh(PacHeader *pk, int pass)
     gif_HostWriteRegs(prim, 1);
     if (rd_vu_draw_from_state(&d)) {
         d.view = regKeyView;
+        /* Natural chains (rd_chain.h): a let-down chain's link carries its
+           clip plane (BgAnimation.c notes it per object and node) */
+        if (n >= 0) {
+            (void)rd_chain_plane(regKeyObj, regKeyIdx, &d.plane, &d.planeOffset);
+        }
         rd_draw_vu_mesh(m, &d,
                         n >= 0 ? RD_KEY(regKeyObj, regKeyIdx, n * 4 + pass)
                                : RD_KEY(pk, rd_current_list(), d.code));

@@ -1245,6 +1245,8 @@ static const char *rawValue(int opt, char *buf, unsigned size)
         return onOff(ico_opt_yorda_safe());
     case UI_OPT_DOOR_FIX:
         return onOff(ico_opt_door_fix());
+    case UI_OPT_NATURAL_CHAINS:
+        return onOff(ico_opt_natural_chains());
     case UI_OPT_LANGUAGE:
         return languageName(NonLinearCameraMove);
     case UI_OPT_DEVELOPER:
@@ -1674,6 +1676,11 @@ void ui_settings_step(UiSettingsOpt opt, int dir)
     case UI_OPT_DOOR_FIX:
         ico_opt_set_door_fix(!ico_opt_door_fix());
         ico_config_set_bool("gameplay.door_fix", ico_opt_door_fix());
+        s_dirtyConfig = 1;
+        break;
+    case UI_OPT_NATURAL_CHAINS:
+        ico_opt_set_natural_chains(!ico_opt_natural_chains());
+        ico_config_set_bool("gameplay.natural_chains", ico_opt_natural_chains());
         s_dirtyConfig = 1;
         break;
     case UI_OPT_LANGUAGE: {
@@ -2210,6 +2217,7 @@ static void buildOptionPage(int id, int header, const int *opts, const int *strs
     case UI_PAGE_GAMEPLAY:
         addNote(pg, UI_OPT_YORDA, UI_STR_OPT_YORDA_NOTE);
         addNote(pg, UI_OPT_DOOR_FIX, UI_STR_OPT_DOOR_FIX_NOTE);
+        addNote(pg, UI_OPT_NATURAL_CHAINS, UI_STR_OPT_NATURAL_CHAINS_NOTE);
         addNote(pg, UI_OPT_PLAYERS, UI_STR_PLAYERS_NOTE);
         break;
     case UI_PAGE_EXTRAS:
@@ -2714,11 +2722,16 @@ static void build(void)
     static const int ctlLinks[] = {
         UI_PAGE_REMAP, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
     /* the game's Film effect and Players, once the game is cleared */
-    static const int gameOpts[] = {UI_OPT_YORDA,       UI_OPT_STICK_FIX, UI_OPT_DOOR_FIX,
-                                   UI_OPT_FILM_EFFECT, UI_OPT_PLAYERS,   UI_OPT_BACK};
-    static const int gameStrs[] = {UI_STR_OPT_YORDA,    UI_STR_OPT_STICK_FIX,
-                                   UI_STR_OPT_DOOR_FIX, UI_STR_OPT_FILM_EFFECT,
-                                   UI_STR_OPT_PLAYERS,  UI_STR_BACK};
+    static const int gameOpts[] = {
+        UI_OPT_YORDA,       UI_OPT_STICK_FIX, UI_OPT_DOOR_FIX, UI_OPT_NATURAL_CHAINS,
+        UI_OPT_FILM_EFFECT, UI_OPT_PLAYERS,   UI_OPT_BACK};
+    static const int gameStrs[] = {UI_STR_OPT_YORDA,
+                                   UI_STR_OPT_STICK_FIX,
+                                   UI_STR_OPT_DOOR_FIX,
+                                   UI_STR_OPT_NATURAL_CHAINS,
+                                   UI_STR_OPT_FILM_EFFECT,
+                                   UI_STR_OPT_PLAYERS,
+                                   UI_STR_BACK};
     _Static_assert(sizeof(dispOpts) == sizeof(dispStrs), "a string for each Display row");
     _Static_assert(sizeof(ctlOpts) == sizeof(ctlStrs) && sizeof(ctlOpts) == sizeof(ctlLinks),
                    "a string and a link for each Controls row");

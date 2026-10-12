@@ -56,6 +56,9 @@
  *   (RDC_GRID's b[5], f[0] and f[1], rd.h rd_grid_screen_st: 0 in the dumps
  *   from before them, whose pool grids blend their STs as they always did;
  *   the version is unchanged)
+ *   (RDC_MESH's b[5] and f[0], a clip plane in the model's space (rd_chain.h,
+ *   Natural chains): 0 in the dumps from before them, drawn whole as they
+ *   were; the version is unchanged)
  *   (the VU draws' b[3] and b[6], RdCamera.pictureW/H of a reflection
  *   camera, rd_mesh.c pushVu: 0 in the dumps from before them, which
  *   replay with the full screen's picture as they did; the version is

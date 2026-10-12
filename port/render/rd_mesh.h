@@ -253,6 +253,12 @@ typedef struct RdVuDraw {
     uint8_t clip;   /* RdVuClip, from the table above */
     uint8_t scroll; /* RD_VU_SCROLL_*: which axes of mem[2]'s UV offset are sine scrolls */
     uint8_t view;   /* RD_VU_VIEW_* */
+    /* a clip plane in the model's space (rd_chain.h, Natural chains):
+     * plane RD_CHAIN_PLANE_* (0 none), drawn where the vertex's coordinate
+     * on the plane's axis, negated for RD_CHAIN_PLANE_NEG, + planeOffset
+     * is not negative; static prelit and lit meshes */
+    uint8_t plane;
+    float planeOffset;
     RdVuBlock vu;
     /* skinned: the quadwords SET_CLUSTER_MATRIX copied to VU memory 16..
      * (bone i at 16 + 4 i: nodeMtx x clusterMtx), boneQw = 4 x bones; the

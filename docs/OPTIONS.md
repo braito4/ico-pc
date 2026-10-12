@@ -196,7 +196,7 @@ The six mouse rows do not show on phones and tablets.
 
 ## Gameplay
 
-The first three are off unless you turn them on, on a phone too.
+The first four are off unless you turn them on, on a phone too.
 
 - **Shadows never take Yorda** makes the game gentler. A few scenes in the
   story still show her being taken.
@@ -208,6 +208,12 @@ The first three are off unless you turn them on, on a phone too.
   of the ladder in the East Reflector. For a few seconds after you come
   through a door holding her hand, that door does not take you back.
   [Why this is needed](FAQ.md#ico-and-yorda-come-straight-back-out-of-a-doorway).
+- **Natural chains** changes how two chains look as they come down for
+  Ico: the one at the Stone Pillar and one underground, by the water
+  wheel. In the original game the links look squashed until the chain is
+  all the way down. With this on, the links stay the right size and more
+  of the chain shows as it comes down. It only changes the picture, not
+  the game.
 
 Two more rows are the game's own, and only show up in the pause menu's
 Options once you have finished the game:

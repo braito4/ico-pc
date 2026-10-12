@@ -3880,6 +3880,12 @@ static void vuDraw(Replay *r, const RdStateBlock *s, const DrawSetup *ds, RhiBin
         pl[i].key.vs = vs;
         /* the planner's sprite_texa_ps becomes vu_texa_ps */
         pl[i].key.fs = pl[i].key.fs == RD_FS_SPRITE_TEXA ? RD_FS_VU_TEXA : RD_FS_VU;
+        if (vcb->batch[2] != 0u) {
+            /* a clip plane (rd_chain.h): the pixels past it are discarded,
+             * which the exact blend's storage path must know (rd_dst_read.c
+             * passDiscards) */
+            pl[i].flags |= ICO_DF_PLANE;
+        }
     }
     /* the exact blend's passes, two passes without dual-source blend */
     const int np = expandPasses(r, pl, npl, dp);
@@ -4006,6 +4012,13 @@ static void doVuDraw(Replay *r, const RdFrame *f, const RdCmd *c)
     const uint8_t vs = vuVs(p.prog, p.code);
     vcb.draw[0] = 0;
     vcb.draw[2] = p.clip;
+    if (c->type == RDC_MESH && c->b[5] != 0) {
+        /* a clip plane in the model's space (rd_chain.h, rd_mesh.c's b[5]
+         * and f[0]): vu_batch.z its code, w its offset (vu_common.hlsli
+         * vu_plane_distance) */
+        vcb.batch[2] = c->b[5];
+        memcpy(&vcb.batch[3], &c->f[0], sizeof(vcb.batch[3]));
+    }
     if (f->camera.freeCamera) {
         /* photo mode: behind-eye triangles clipped, not dropped */
         vcb.draw[2] |= ICO_VU_BEHIND_EYE;

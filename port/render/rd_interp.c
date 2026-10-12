@@ -37,7 +37,8 @@
  *                           as the game orders them by strength,
  *                           pairLights; a lit program's L1 then turns with
  *                           the model, rotateLight); the bones; not qw 0,
- *                           1, 3 (constants and the GIF tag)
+ *                           1, 3 (constants and the GIF tag); a mesh's
+ *                           clip plane offset (b[5], f[0], rd_chain.h)
  *   RDC_GRID                the VU block and each vertex's position (and
  *                           normal when lit), and its ST when the grid
  *                           samples a target (the pool's surface: the STs
@@ -4828,6 +4829,12 @@ const RdFrame *rd__interp_frame(const RdFrame *prev, const RdFrame *cur, float a
                 if (r == R_LERP && (c->type == RDC_MESH || c->type == RDC_SKINNED)) {
                     st.morph += morphDraw(c, prev, pc, cur, t);
                     blendedMesh((uint32_t)l, i);
+                }
+                if (r == R_LERP && c->type == RDC_MESH && c->b[5] != 0 && pc->b[5] == c->b[5] &&
+                    isfinite(pc->f[0]) && isfinite(c->f[0])) {
+                    /* a clip plane (rd_chain.h) moves with its link: its
+                     * offset blends as the model matrix's place does */
+                    c->f[0] = pc->f[0] + (c->f[0] - pc->f[0]) * t;
                 }
             }
         }

@@ -18,6 +18,7 @@ int ico_mv_active;
 static int s_stick_fix = -1;
 static int s_yorda_safe = -1;
 static int s_door_fix = -1;
+static int s_natural_chains = -1;
 static int s_mirror = -1;
 static int s_developer_mode = -1;
 static int s_circle_back = -1;
@@ -81,6 +82,16 @@ int ico_opt_door_fix(void)
 void ico_opt_set_door_fix(int on)
 {
     s_door_fix = on != 0;
+}
+
+int ico_opt_natural_chains(void)
+{
+    return get(&s_natural_chains, "gameplay.natural_chains");
+}
+
+void ico_opt_set_natural_chains(int on)
+{
+    s_natural_chains = on != 0;
 }
 
 int ico_opt_mirror(void)
@@ -256,6 +267,7 @@ void ico_opt_output_toggled(int mode)
 void ico_opt_reload(void)
 {
     s_stick_fix = s_yorda_safe = s_door_fix = s_mirror = s_developer_mode = s_circle_back = -1;
+    s_natural_chains = -1;
     s_output = -2;
     /* the characters' colours ([characters], appearance.h) */
     ico_appearance_reload();

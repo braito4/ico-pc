@@ -117,6 +117,9 @@ cbuffer DrawCB : register(b1, space1)
 // A destination-read pass (the *_dstrov and *_dstatt entries): the channels
 // it writes, R G B A = bits 19..22 (shader_consts.h ICO_DF_WMASK_SHIFT)
 #define DF_WMASK_SHIFT 19u
+// A VU draw with a clip plane (vu_common.hlsli vu_plane_distance,
+// port/render/rd_chain.h): the pixels past it are discarded
+#define DF_PLANE 8388608u
 
 // TEST.DATE. snap is the R8 DATE snapshot (1.0 where the destination alpha
 // had its MSB set when the snapshot was taken). Returns true when the

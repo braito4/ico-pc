@@ -450,6 +450,7 @@ static void test_first_run(void)
     CHECK_STR(ico_config_get_string("audio.output", "?"), "auto");
     CHECK_STR(ico_config_get_string("audio.device", "?"), "");
     CHECK_STR(ico_config_get_string("game.language", "?"), "auto");
+    CHECK(ico_config_get_bool("gameplay.natural_chains", 1) == 0); /* Natural chains, off */
     CHECK_STR(ico_config_get_string("paths.iso", "?"), "");
     /* photo mode's keys */
     CHECK(ico_config_get_float("photo.stick_speed", 0.0) == 1.0);

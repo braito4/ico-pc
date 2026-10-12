@@ -104,6 +104,7 @@ add_library(ico_render STATIC
     rd_interp.c # interpolation between the retained frames
     rd_mesh.c
     rd_content_hide.c # the content table: stage geometry made for the 4:3 picture
+    rd_content_chain.c # Natural chains: the chains a stage animation lets down
     modelpack.c # model packs, the index, the glTF conversion, the dump
     rd_perf.c # per-replay performance records
     rd_pipeline.c

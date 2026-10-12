@@ -113,7 +113,7 @@ VuVSOut vu_lit_main(uint vid, uint variant)
     VuVtx b = vu_lit_vertex(kick - 1u, mode, variant, false);
     VuVtx c = vu_lit_vertex(kick, mode, variant, false);
     VuVtx me = vu_lit_vertex(kick - 2u + corner, mode, variant, true);
-    VuVSOut o = vu_triangle_out(a, b, c, me, mode);
+    VuVSOut o = vu_plane_out(vu_triangle_out(a, b, c, me, mode), kick, corner);
     if ((vid & VU_INDEX_LATER) != 0u) {
         o = vu_later_out(o, a, b, c);
     }

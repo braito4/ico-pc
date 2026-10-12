@@ -1814,6 +1814,65 @@ static void testDoorFix(void)
     gFlagGameClear = 0;
 }
 
+/* Gameplay > Natural chains ([gameplay] natural_chains): a row from the title
+   and the pause menu after the East Reflector door fix, Off by default; a
+   step turns it on and sets the key, the saved file has it, its note shows
+   on the cursor, a step back turns it off, and the page with the game
+   finished (every row shown) still fits */
+static void testNaturalChains(void)
+{
+    char p[1100];
+
+    gFlagGameClear = 0;
+    for (int title = 1; title >= 0; title--) {
+        stage_no = title ? 1 : 11;
+        const int mainL = enterMain(title);
+        openPage(mainL, 5, UI_PAGE_GAMEPLAY);
+        const int row = ui_settings_row_of(UI_PAGE_GAMEPLAY, UI_OPT_NATURAL_CHAINS);
+        CHECK(row >= 0 && !lt_ext_prop(row)->defaultMask && !lt_ext_prop(row)->masked,
+              "title %d: the Natural chains row", title);
+        CHECK(row >= 0 && strcmp(lt_ext_row_text(row), "Natural chains") == 0,
+              "title %d: its label \"%s\"", title, row >= 0 ? lt_ext_row_text(row) : "");
+        CHECK(row == ui_settings_row_of(UI_PAGE_GAMEPLAY, UI_OPT_DOOR_FIX) + 1,
+              "title %d: right after the East Reflector door fix", title);
+        CHECK(ico_opt_natural_chains() == 0 &&
+                  strcmp(ui_settings_value_text(UI_OPT_NATURAL_CHAINS), "Off") == 0,
+              "title %d: Off by default", title);
+        press(0x10);
+        CHECK(settle(mainL, 60), "Gameplay: back");
+    }
+
+    gFlagGameClear = 1;
+    stage_no = 11;
+    const int mainL = enterMain(0);
+    const int gameL = openPage(mainL, 5, UI_PAGE_GAMEPLAY);
+    checkPageFits(UI_PAGE_GAMEPLAY, "Gameplay (cleared, with Natural chains)");
+    const int row = ui_settings_row_of(UI_PAGE_GAMEPLAY, UI_OPT_NATURAL_CHAINS);
+    lt_ext_layout(gameL)->curItem = row;
+    press(0x2000);
+    CHECK(ico_opt_natural_chains() == 1 &&
+              strcmp(ui_settings_value_text(UI_OPT_NATURAL_CHAINS), "On") == 0 &&
+              ico_config_get_bool("gameplay.natural_chains", 0) == 1,
+          "Right: Natural chains On and the key set");
+    const int note = noteStarting(UI_PAGE_GAMEPLAY, "A chain that comes down");
+    CHECK(note >= 0 && !lt_ext_prop(note)->masked, "the Natural chains note on the cursor");
+    CHECK(ui_settings_save() == 0, "save");
+    path(p, sizeof(p), "settings_test.toml");
+    IcoToml *t = ico_toml_load(p);
+    CHECK(t != NULL && ico_toml_get_bool(t, "gameplay.natural_chains", 0) == 1,
+          "saved: gameplay.natural_chains = true");
+    if (t != NULL) {
+        ico_toml_free(t);
+    }
+    press(0x8000);
+    CHECK(ico_opt_natural_chains() == 0 && ico_config_get_bool("gameplay.natural_chains", 1) == 0,
+          "Left: Natural chains Off again");
+    press(0x10);
+    CHECK(settle(mainL, 60), "Gameplay: back");
+    ico_opt_set_natural_chains(0);
+    gFlagGameClear = 0;
+}
+
 int main(int argc, char **argv)
 {
     snprintf(s_dir, sizeof(s_dir), "%s", argc > 1 ? argv[1] : ".");
@@ -1850,6 +1909,7 @@ int main(int argc, char **argv)
     testAntiAlias();
     /* Gameplay > East Reflector door fix */
     testDoorFix();
+    testNaturalChains();
     if (failures) {
         printf("settings_extra_test: %d failure(s)\n", failures);
         return 1;
