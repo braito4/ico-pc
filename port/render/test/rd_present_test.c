@@ -49,7 +49,9 @@
  *             the present DISPLAY byte for byte, the frame's 4:3 columns
  *             the 4:3 picture at the box's height byte for byte (SCENE;
  *             DISPLAY but the reduction's edge columns); the Full pixel off
- *             frame's columns against them logged
+ *             frame's columns against them logged, and where the old frame
+ *             is even (a whole-texel crop: 2580 and 3870 wide) byte for
+ *             byte the same (SCENE; DISPLAY but its edge columns)
  *   present info  with interpolation off, rd_last_present_info names the
  *             frame rd_end_frame presented
  *   full pixel  the reduction draws the whole frame: the box's edges show
@@ -2317,6 +2319,22 @@ static void checkExactWindow(const char *name, float aspect, uint32_t outW, uint
             printf("%s: full pixel off: SCENE %ux%u; its columns %u.. against Full pixel's: %u of "
                    "%u differ\n",
                    name, c.sw, c.sh, off, bad, a.sw);
+            if (c.sw % 2u == 0u && a.sw % 2u == 0u) {
+                /* a whole-texel crop (an even old frame: its centre on a
+                   texel edge, as Full pixel's): the same picture shifted,
+                   SCENE byte for byte, DISPLAY but the reduction's border
+                   columns at the old frame's edges */
+                CHECK(bad == 0,
+                      "%s: a whole-texel crop: SCENE is the Full pixel off one's columns %u.. "
+                      "byte for byte (%u differ, the first %u)",
+                      name, off, bad, first);
+                const uint32_t edge = 16;
+                const uint32_t dbad = colsDiffer(a.disp, a.dw, edge, c.disp, c.dw, off + edge,
+                                                 a.dw - 2u * edge, a.dh, &first);
+                CHECK(dbad == 0,
+                      "%s: a whole-texel crop: DISPLAY likewise (%u differ, the first %u)", name,
+                      dbad, first);
+            }
         } else {
             printf("%s: full pixel off: SCENE %ux%u (the same frame: the aspect has no crop)\n",
                    name, c.sw, c.sh);
