@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # Build the current checkout into an unsigned IPA for LiveContainer.
 # tools/package_ios.sh [<label>] [CMake arguments...]
-# <label> (v0.6.2) gives the bundle its version, as package_win.sh does
-# (CMakeLists.txt ICO_VERSION_LABEL; 0.0.0 without one). The other
-# arguments go to CMake (e.g. -DICO_DXC=/path/to/host/dxc).
+# <label> (v0.7.0) gives the bundle its version, as package_win.sh does
+# (CMakeLists.txt ICO_VERSION_LABEL; 0.0.0 without one), and the files
+# their names: dist/ico-pc-<label>-ios-unsigned.ipa and
+# dist/ico-pc-<label>-ios.map (ico-pc-ios-unsigned.ipa and ico-pc-ios.map
+# without one). The other arguments go to CMake (e.g.
+# -DICO_DXC=/path/to/host/dxc).
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
@@ -28,7 +31,8 @@ ditto "$app" "$stage/Payload/ICO.app"
 rm -f "$stage/Payload/ICO.app/ico_pc.map"
 cp LICENSE "$stage/Payload/ICO.app/LICENSE"
 python3 tools/gen_notices.py --platform ios --out "$stage/Payload/ICO.app/NOTICES.txt"
-ditto -c -k --keepParent "$stage/Payload" "$stage/ico-pc-ios-unsigned.ipa"
-mv "$stage/ico-pc-ios-unsigned.ipa" "$root/dist/ico-pc-ios-unsigned.ipa"
-cp "$app/ico_pc.map" "$root/dist/ico-pc-ios.map"
-echo "IPA: $root/dist/ico-pc-ios-unsigned.ipa"
+name="ico-pc${label:+-$label}-ios"
+ditto -c -k --keepParent "$stage/Payload" "$stage/$name-unsigned.ipa"
+mv "$stage/$name-unsigned.ipa" "$root/dist/$name-unsigned.ipa"
+cp "$app/ico_pc.map" "$root/dist/$name.map"
+echo "IPA: $root/dist/$name-unsigned.ipa"
