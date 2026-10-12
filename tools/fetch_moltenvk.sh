@@ -18,7 +18,9 @@ case "$PLATFORM" in
     *) echo 'Usage: tools/fetch_moltenvk.sh [ios|macos]' >&2; exit 1 ;;
 esac
 [[ "$(uname -s)" == Darwin ]] || { echo 'Xcode on macOS is required.' >&2; exit 1; }
-for tool in cmake ninja xcrun curl shasum; do command -v "$tool" >/dev/null; done
+for tool in cmake ninja xcrun curl shasum; do
+    command -v "$tool" >/dev/null || { echo "fetch_moltenvk: $tool is not on PATH" >&2; exit 1; }
+done
 source "$ROOT/tools/fetch_common.sh"
 mkdir -p "$DEST/moltenvk" "$DEST/sdl3"
 TMP="$(mktemp -d "$DEST/.moltenvk.XXXXXX")"
@@ -34,18 +36,21 @@ if ! stamped "$DEST/moltenvk/$PLATFORM" 'v1.4.2'; then
 fi
 LICENSE_DIR="$DEST/moltenvk/$PLATFORM/licenses"
 mkdir -p "$LICENSE_DIR"
-# The revisions embedded in MoltenVK v1.4.2 (ExternalRevisions/).
+# The revisions embedded in MoltenVK v1.4.2 (ExternalRevisions/); cereal
+# (USCiLab, BSD-3-Clause) is compiled into MoltenVK's pipeline cache.
 while read -r repo revision file sum; do
-    name="${repo}-LICENSE.txt"
+    name="${repo##*/}-LICENSE.txt"
     if [[ ! -f "$LICENSE_DIR/$name" ]]; then
-        fetch "https://raw.githubusercontent.com/KhronosGroup/${repo}/${revision}/${file}" \
+        fetch "https://raw.githubusercontent.com/${repo}/${revision}/${file}" \
             "$sum" "$TMP/$name"
         mv "$TMP/$name" "$LICENSE_DIR/$name"
     fi
 done <<'LICENSES'
-SPIRV-Cross 6c09849fe88c48eaed08413aa022aaa136a3a057 LICENSE cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30
-SPIRV-Tools 0d6fd73ca73830ccab5fa1f00ed5ed40124e2c55 LICENSE cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30
-Vulkan-Headers e3b1eec08173d6b825cd3ac88c885a63b621504a LICENSES/MIT.txt 1ca3502222d967f3be5751c55f6b7ee735b5383909c3b501495f54b216dbf227
+KhronosGroup/SPIRV-Cross 6c09849fe88c48eaed08413aa022aaa136a3a057 LICENSE cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30
+KhronosGroup/SPIRV-Tools 0d6fd73ca73830ccab5fa1f00ed5ed40124e2c55 LICENSE cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30
+KhronosGroup/SPIRV-Headers 29981f65241605e08b0ede4cfeb999fe3b723c6a LICENSE ea43b1de38a6f90c488800d66dec1ed671e68cda530266bc96951fb5b6307613
+KhronosGroup/Vulkan-Headers e3b1eec08173d6b825cd3ac88c885a63b621504a LICENSES/MIT.txt 1ca3502222d967f3be5751c55f6b7ee735b5383909c3b501495f54b216dbf227
+USCiLab/cereal a56bad8bbb770ee266e930c95d37fff2a5be7fea LICENSE 58604a126af6a671ea390ee3d5b3e42228aa59b2858fb7af1d5b20b31739ccbb
 LICENSES
 SDL_PREFIX="$DEST/sdl3/${PLATFORM}-arm64"
 if ! stamped "$SDL_PREFIX" "SDL3-${SDL3_VERSION}+moltenvk"; then

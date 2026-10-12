@@ -176,6 +176,23 @@ subset. No custom Metal backend is used. `ICO_MOLTENVK_ROOT` can override
 the extracted release root. Apple package notices can be generated with
 `tools/gen_notices.py --platform ios --out NOTICES.txt` (or `macos`).
 
+### Checking out on a Mac
+
+The game sources `.gitattributes` checks out as EUC-JP
+([EUC-JP sources](#euc-jp-sources)) need macOS's `EUC-JP-MS` instead:
+macOS's iconv does not keep their ASCII backslashes under `EUC-JP`. For
+these files `EUC-JP-MS` gives the same bytes as `EUC-JP` does on Linux. Set
+it in the clone's own attributes, which take precedence over the tracked
+file, and check the files out again:
+
+```sh
+attrs="$(git rev-parse --git-path info/attributes)"
+mkdir -p "$(dirname "$attrs")"
+sed -n 's/ working-tree-encoding=EUC-JP$/ working-tree-encoding=EUC-JP-MS/p' .gitattributes >>"$attrs"
+files=$(sed -n 's/ working-tree-encoding=EUC-JP$//p' .gitattributes)
+rm -f $files && git checkout -- $files
+```
+
 ### macOS application
 
 After building a macOS host DXC as described below, build the native Apple
@@ -194,7 +211,8 @@ to the user's Application Support folder and the image is not bundled with
 the app.
 
 For a distributable ad-hoc-signed bundle, notices, ZIP and DMG, run
-`tools/package_macos.sh`. It writes `dist/ICO.app`,
+`tools/package_macos.sh <label>` (a label such as `v0.6.2` gives the bundle
+its version, as `tools/package_win.sh` does; without one it is 0.0.0). It writes `dist/ICO.app`,
 `dist/ico-pc-macos-arm64.zip`, `dist/ico-pc-macos-arm64.dmg` and the separate
 link map used to interpret crash offsets. The package is not notarized for
 distribution outside the building Mac.
@@ -204,16 +222,16 @@ distribution outside the building Mac.
 Build the current working checkout into an unsigned IPA:
 
 ```sh
-tools/package_ios.sh -DICO_DXC=/absolute/path/to/macos/host/dxc
+tools/package_ios.sh <label> -DICO_DXC=/absolute/path/to/macos/host/dxc
 ```
+
+The label (`v0.6.2`) gives the bundle its version, as for macOS.
 
 The `ios-app` preset defaults to the host DXC at
 `tools/toolchain/deps/dxc-build/bin/dxc`; omit the argument if it exists.
 The script builds the app and writes `dist/ico-pc-ios-unsigned.ipa`, with
 licenses inside the bundle and a separate `dist/ico-pc-ios.map` for crash
 offsets. No provisioning profile or signing identity is required.
-The app includes an original AI-generated illustration as its iPhone and
-iPad icon (`port/platform/ios/icons/`), not artwork extracted from the disc.
 iOS defaults to the previous fixed-function blend path: the new storage
 interlock path caused visual and performance regressions on an iPhone 12
 through MoltenVK, resolved in a device comparison using fixed-function
@@ -257,8 +275,7 @@ graphics settings. Settings are stored in `config.toml`.
 The wrapper uses SDL's UIKit entry point and a guarded 32 MB coroutine
 stack on the main thread. Shared game angle conversions explicitly go
 through `int` before `short`, preserving the EE's halfword wrapping on
-ARM64. Git uses `EUC-JP-MS` for Japanese source files to preserve C
-backslashes with macOS iconv.
+ARM64.
 
 ## Presets
 
@@ -282,8 +299,11 @@ how several configurations of one preset live side by side under
 | `linux-x64-clang`, `win-x64-clang` | the same two targets, headless | llvm-mingw clang 23 (the host glibc for Linux) |
 | `linux-arm64` | Linux arm64 (aarch64), built on an arm64 host ([below](#linux-arm64)); window build, `ICO_LINK_EXE=ON`, no Direct3D 12 and no DXIL shaders | host gcc 14 |
 | `android-arm64` | Android arm64-v8a, `libmain.so` alone: a compile check without Gradle (`tools/fetch_android.sh` first); window build, `ICO_LINK_EXE=ON`, no Direct3D 12 and no DXIL shaders | NDK clang |
+| `ios-moltenvk`, `macos-moltenvk` | iOS 15 and macOS 12 arm64, the renderer libraries over MoltenVK, built on a Mac ([above](#apple-vulkan-renderer-moltenvk)) | Xcode clang |
+| `ios-app`, `macos-app` | the iOS app (unsigned) and the macOS app bundle, `ICO_LINK_EXE=ON` | Xcode clang |
 
-The port targets x86-64 (Windows and Linux) and arm64 (Linux and Android).
+The port targets x86-64 (Windows and Linux) and arm64 (Linux, Android, iOS
+and macOS).
 
 ### Options
 
@@ -507,9 +527,9 @@ without one.
 
 Some game sources carry Japanese text in EUC-JP, and their string literals
 are the ROM's bytes. `.gitattributes` lists each of them with
-`working-tree-encoding=EUC-JP-MS`: git stores the file as UTF-8 and checks it
-out as EUC-JP-MS, which is what the compiler reads. This variant preserves
-ASCII C backslashes with macOS iconv. An editor or a pipe that
+`working-tree-encoding=EUC-JP`: git stores the file as UTF-8 and checks it
+out as EUC-JP, which is what the compiler reads. On a Mac, see
+[Checking out on a Mac](#checking-out-on-a-mac). An editor or a pipe that
 rewrites one of these files as UTF-8 changes its bytes; change them with an
 ASCII patch and `git apply`.
 
@@ -828,17 +848,6 @@ two PNGs. Exit status 77 means no graphics device or no dump file, as in the
 ctest skip convention.
 
 ## Continuous integration
-
-`.github/workflows/ios.yml` builds an unsigned ARM64 IPA on `macos-15` only
-when the maintainer publishes a release. It does not run for ordinary
-commits, pull requests, or manual dispatches. For a published `vX.Y.Z`
-release, it builds the tagged source with that bundle version, and a
-separate job attaches the IPA to the same GitHub release as the other
-platform downloads. No checksum file is generated or uploaded. Only the
-publishing job has write permissions; the build needs no secrets or game data.
-The pinned host DXC is built from source on a cache miss. No signing
-certificate, provisioning profile, or Apple developer account is required.
-Publishing to another repository is not configured by this workflow.
 
 `.github/workflows/ci.yml` runs on every push to main, every pull request and
 every pushed `v*` tag (which also packages for arm64, see

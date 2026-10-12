@@ -1,12 +1,20 @@
 #!/usr/bin/env bash
 # Build and package the native Apple silicon macOS app.
-# Additional arguments go to CMake (e.g. -DICO_DXC=/path/to/host/dxc).
+# tools/package_macos.sh [<label>] [CMake arguments...]
+# <label> (v0.6.2) gives the bundle its version, as package_win.sh does
+# (CMakeLists.txt ICO_VERSION_LABEL; 0.0.0 without one). The other
+# arguments go to CMake (e.g. -DICO_DXC=/path/to/host/dxc).
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 
 tools/fetch_moltenvk.sh macos
-cmake --preset macos-app "$@"
+label=""
+if [[ $# -gt 0 && "$1" != -* ]]; then
+    label="$1"
+    shift
+fi
+cmake --preset macos-app "-DICO_VERSION_LABEL=$label" "$@"
 cmake --build --preset macos-app --parallel "${ICO_BUILD_JOBS:-6}"
 
 app="$root/build-host/macos-app/ICO.app"
