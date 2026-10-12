@@ -1,4 +1,5 @@
 # cmake/IcoShardCheck.cmake: -DPROGRAM=<exe> -DSHARDS=<N> [-DARGS=...] -P this file.
+cmake_minimum_required(VERSION 3.25) # script mode: IN_LIST (CMP0057) and the other modern policies
 # The sharded test's --list-cases names every case with the shard that owns it;
 # the shards 1..N together own every case once and none of them is empty.
 execute_process(COMMAND "${PROGRAM}" ${ARGS} --shard 1/${SHARDS} --list-cases
