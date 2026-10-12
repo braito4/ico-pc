@@ -960,7 +960,9 @@ static void checkPipelines(void)
     for (uint32_t i = 0; i < rd__pipeline_count(); i++) {
         const RdPipeKeyInt *k = rd__pipeline_key_at(i);
         int found = 0;
-        for (uint32_t j = 0; j < n && j < 512; j++) {
+        /* the whole set: since EXACT-RASTER's plane keys (v0.6.1) the
+           shadow family sits past the first 512 */
+        for (uint32_t j = 0; j < n && j < RD_PIPELINE_REACHABLE_MAX; j++) {
             found |= rd__pipe_key_equal(&keys[j], k);
         }
         CHECK(found, "created pipeline %u (prog %u vs %u fs %u stencil %u) is not enumerated", i,
