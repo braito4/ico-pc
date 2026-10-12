@@ -323,7 +323,11 @@ static int rm_cb(const char *path, const char *name, void *user)
 
 static void p(char *out, size_t n, const char *rel)
 {
-    snprintf(out, n, "%s/%s", s_base, rel);
+    const int len = snprintf(out, n, "%s/%s", s_base, rel);
+    if (len < 0 || (size_t)len >= n) {
+        fprintf(stderr, "steam_shortcut_test: path too long: %s/%s\n", s_base, rel);
+        exit(1);
+    }
 }
 
 static void mk(const char *rel)
