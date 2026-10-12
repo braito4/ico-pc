@@ -263,9 +263,8 @@ void queen_barrier_disp_init(void)
 
     for (i = 0, x = -16384.0f; x < 16384.0f; i++, x += step) {
         for (j = 0, y = 16384.0f; y < 49152.0f; j++, y += step) {
-            QVec v = {{GetTableSin((short)(int)y) * GetTableCos((short)(int)x),
-                       GetTableSin((short)(int)x),
-                       GetTableCos((short)(int)y) * GetTableCos((short)(int)x), 1.0f}};
+            QVec v = {{GetTableSin((short)(int)y) * GetTableCos((short)x), GetTableSin((short)x),
+                       GetTableCos((short)(int)y) * GetTableCos((short)x), 1.0f}};
 
             pos = barrierMesh->pos;
             nrm = barrierMesh->nrm;

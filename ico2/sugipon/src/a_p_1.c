@@ -717,7 +717,7 @@ static void calcSubMission(GObj *self)
             {
                 float f = t * 49152.0f + -32768.0f;
 
-                MatrixDrive_RotMatrixY((short)(int)(i == 0 ? -f : f));
+                MatrixDrive_RotMatrixY((short)(i == 0 ? -f : f));
             }
             _ApplyMatrix(&v, MatrixDrive_GetMatrix(), &part->home);
             v.m[3] = 1.0f;

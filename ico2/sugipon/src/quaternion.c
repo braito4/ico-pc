@@ -159,8 +159,8 @@ void RegularizeQuaternion(void *q)
    callee leaves unspecified (the x86-64 clang build returned 16383 as
    0x13FFF, which this slerp then multiplied; issue 19) */
 extern short GetTableArcCos(float c);
-/* Darwin requires callers to narrow short arguments. */
-extern float GetTableSin(short x);
+/* float (int) here, float (short) in tableSin.h */
+extern float GetTableSin(int x);
 
 void GetSlerpQuaternionNoRegularize(void *out, void *qa, void *qb, float t)
 {
@@ -235,8 +235,8 @@ inline void PopQuaternion(void)
     }
 }
 
-/* Same argument type as tableSin.c. */
-extern float GetTableCos(short x);
+/* float (int) here, float (short) in tableSin.h */
+extern float GetTableCos(int x);
 
 inline void SetQuaternionByAxisRotateVWithNoRegularize(float *self, short ang, float *src)
 {
