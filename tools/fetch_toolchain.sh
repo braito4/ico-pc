@@ -22,6 +22,10 @@
 # (tools/toolchain/cmake/bin/cmake); the system's CMake 3.25 or later works
 # too (CMakeLists.txt, cmake_minimum_required).
 #
+# Section 5 installs ccache (GPL-3.0-or-later; a build tool, nothing of it is
+# shipped) at tools/toolchain/ccache/bin/ccache, the compiler launcher every
+# CMakePresets.json preset names. Without it the build runs uncached.
+#
 # The host is x86-64 or arm64 (aarch64) Linux (tools/fetch_common.sh). An
 # arm64 host takes Kitware's aarch64 build of the same CMake release. It
 # skips section 1 unless SKIP_LLVM_MINGW=0 (the presets that use llvm-mingw
@@ -37,6 +41,8 @@
 #   SKIP_LLVM_MINGW=1                   skip section 1 (the default on arm64)
 #   SKIP_MINGW_GCC=1                    skip section 3 (the default on arm64)
 #   SKIP_CMAKE=1                        skip section 4
+#   CCACHE_VERSION, CCACHE_SHA256       pin another ccache release
+#   SKIP_CCACHE=1                       skip section 5 (the default on arm64)
 # =============================================================================
 set -euo pipefail
 
@@ -153,6 +159,34 @@ else
     mv "$TMP/$CMAKE_NAME" "$CMAKE_DIR"
     echo "$CMAKE_NAME" > "$CMAKE_DIR/.ico-release"
     "$CMAKE_DIR/bin/cmake" --version | head -n 1
+fi
+
+# --- 5. ccache ---------------------------------------------------------------
+#
+# The project's static Linux x86-64 release, pinned by version and by the
+# SHA-256 of the tarball. ccache publishes no Linux arm64 build: an arm64
+# host builds without it (CMakeLists.txt drops the launcher when the file is
+# missing; a ccache of the host's own can be linked in at
+# tools/toolchain/ccache/bin/ccache). The cache itself stays at the default
+# ~/.cache/ccache; the compiler's -g embeds absolute paths, so each checkout
+# fills its own entries.
+CCACHE_VERSION="${CCACHE_VERSION:-4.11.3}"
+CCACHE_SHA256="${CCACHE_SHA256:-7766991b91b3a5a177ab33fa043fe09e72c68586d5a86d20a563a05b74f119c0}"
+CCACHE_NAME="ccache-${CCACHE_VERSION}-linux-x86_64"
+CCACHE_DIR_TOOL="$DEST/ccache"
+if [[ "${SKIP_CCACHE:-$(by_arch 0 1)}" == "1" ]]; then
+    echo "==> ccache: not fetched on this host or by request; the build runs without it"
+elif stamped "$CCACHE_DIR_TOOL" "$CCACHE_NAME" && [[ -x "$CCACHE_DIR_TOOL/bin/ccache" ]]; then
+    echo "==> ccache ${CCACHE_VERSION} already at $CCACHE_DIR_TOOL"
+else
+    fetch "https://github.com/ccache/ccache/releases/download/v${CCACHE_VERSION}/${CCACHE_NAME}.tar.xz" \
+        "$CCACHE_SHA256" "$TMP/$CCACHE_NAME.tar.xz"
+    tar -C "$TMP" -xJf "$TMP/$CCACHE_NAME.tar.xz"
+    rm -rf "$CCACHE_DIR_TOOL"
+    mkdir -p "$CCACHE_DIR_TOOL/bin"
+    mv "$TMP/$CCACHE_NAME/ccache" "$CCACHE_DIR_TOOL/bin/ccache"
+    echo "$CCACHE_NAME" > "$CCACHE_DIR_TOOL/.ico-release"
+    "$CCACHE_DIR_TOOL/bin/ccache" --version | head -n 1
 fi
 "$ROOT/tools/fetch_deps.sh" # library dependencies: Vulkan headers, volk, SDL3
 echo "==> done: $DEST"

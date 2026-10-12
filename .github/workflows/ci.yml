@@ -77,6 +77,17 @@ jobs:
           path: tools/toolchain
           key: toolchain-${{ runner.os }}-${{ hashFiles('tools/fetch_toolchain.sh', 'tools/fetch_deps.sh', 'tools/fetch_common.sh', 'tools/fetch_android.sh') }}
 
+      # ccache (the presets' compiler launcher, tools/toolchain/ccache): the
+      # cache is keyed by this job and the toolchain files that pin the compiler
+      # and the ccache version, and saved even when a later step fails
+      - name: ccache (restore)
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-linux-${{ runner.os }}-${{ hashFiles('tools/fetch_toolchain.sh', 'tools/fetch_deps.sh', 'tools/fetch_common.sh', 'tools/fetch_android.sh') }}-${{ github.sha }}
+          restore-keys: |
+            ccache-linux-${{ runner.os }}-${{ hashFiles('tools/fetch_toolchain.sh', 'tools/fetch_deps.sh', 'tools/fetch_common.sh', 'tools/fetch_android.sh') }}-
+
       # ---- hygiene: fast, so they fail first ----
       - name: No disc data in the tree
         run: tools/check_no_rom.sh
@@ -113,7 +124,7 @@ jobs:
       - name: linux-x64, headless
         run: |
           $CMAKE/cmake --preset linux-x64 -DICO_LINK_EXE=ON -DCMAKE_C_COMPILER=$ICO_CC
-          $CMAKE/cmake --build build-host/linux-x64 --parallel
+          $CMAKE/cmake --build build-host/linux-x64 --parallel --target all tests
           $CMAKE/ctest --test-dir build-host/linux-x64 --output-on-failure --parallel 4
 
       - name: linux-x64, window build
@@ -121,21 +132,28 @@ jobs:
           $CMAKE/cmake --preset linux-x64 -DICO_HEADLESS=OFF -DICO_LINK_EXE=ON \
             -DCMAKE_C_COMPILER=$ICO_CC \
             -B build-host/linux-x64-window
-          $CMAKE/cmake --build build-host/linux-x64-window --parallel
+          $CMAKE/cmake --build build-host/linux-x64-window --parallel --target all tests
           $CMAKE/ctest --test-dir build-host/linux-x64-window --output-on-failure --parallel 4
 
       - name: linux-x64-clang
         run: |
           $CMAKE/cmake --preset linux-x64-clang -DICO_LINK_EXE=ON
-          $CMAKE/cmake --build build-host/linux-x64-clang --parallel
+          $CMAKE/cmake --build build-host/linux-x64-clang --parallel --target all tests
           $CMAKE/ctest --test-dir build-host/linux-x64-clang --output-on-failure --parallel 4
 
       - name: win-x64 (cross-compiled; the tests are built, not run)
         run: |
           $CMAKE/cmake --preset win-x64 -DICO_LINK_EXE=ON
-          $CMAKE/cmake --build build-host/win-x64 --parallel
+          $CMAKE/cmake --build build-host/win-x64 --parallel --target all tests
           test -f build-host/win-x64/ico_pc.exe
           test -f build-host/win-x64/SDL3.dll
+
+      - name: ccache (save)
+        if: ${{ !cancelled() }}
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-linux-${{ runner.os }}-${{ hashFiles('tools/fetch_toolchain.sh', 'tools/fetch_deps.sh', 'tools/fetch_common.sh', 'tools/fetch_android.sh') }}-${{ github.sha }}
 
   # The presets the main job does not build, one runner each so the job
   # stays well inside its timeout. Each restores the toolchain the `linux`
@@ -179,6 +197,17 @@ jobs:
       - name: Fetch toolchain and dependencies
         run: tools/fetch_toolchain.sh
 
+      # ccache (the presets' compiler launcher, tools/toolchain/ccache): the
+      # cache is keyed by the preset and the toolchain files that pin the compiler
+      # and the ccache version, and saved even when a later step fails
+      - name: ccache (restore)
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-${{ matrix.preset }}-${{ runner.os }}-${{ hashFiles('tools/fetch_toolchain.sh', 'tools/fetch_deps.sh', 'tools/fetch_common.sh', 'tools/fetch_android.sh') }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ matrix.preset }}-${{ runner.os }}-${{ hashFiles('tools/fetch_toolchain.sh', 'tools/fetch_deps.sh', 'tools/fetch_common.sh', 'tools/fetch_android.sh') }}-
+
       # asan: AddressSanitizer + UBSan (Debug, -O1); fptrap: float
       # divide-by-zero and invalid trap. Headless with the exe linked, as the
       # linux-x64 headless step.
@@ -186,7 +215,7 @@ jobs:
         if: matrix.preset != 'win-x64-clang'
         run: |
           $CMAKE/cmake --preset ${{ matrix.preset }} -DICO_LINK_EXE=ON -DCMAKE_C_COMPILER=$ICO_CC
-          $CMAKE/cmake --build build-host/${{ matrix.preset }} --parallel
+          $CMAKE/cmake --build build-host/${{ matrix.preset }} --parallel --target all tests
           $CMAKE/ctest --test-dir build-host/${{ matrix.preset }} --output-on-failure --parallel 4
 
       - name: win-x64-clang (cross-compiled; the tests are built, not run)
@@ -194,9 +223,16 @@ jobs:
         run: |
           # the window build, as win-x64 (the preset itself is headless)
           $CMAKE/cmake --preset win-x64-clang -DICO_HEADLESS=OFF -DICO_LINK_EXE=ON
-          $CMAKE/cmake --build build-host/win-x64-clang --parallel
+          $CMAKE/cmake --build build-host/win-x64-clang --parallel --target all tests
           test -f build-host/win-x64-clang/ico_pc.exe
           test -f build-host/win-x64-clang/SDL3.dll
+
+      - name: ccache (save)
+        if: ${{ !cancelled() }}
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-${{ matrix.preset }}-${{ runner.os }}-${{ hashFiles('tools/fetch_toolchain.sh', 'tools/fetch_deps.sh', 'tools/fetch_common.sh', 'tools/fetch_android.sh') }}-${{ github.sha }}
 
   # The linux-arm64 preset on GitHub's arm64 runner, built and tested. Its
   # toolchain cache has its own key (an arm64 host fetches aarch64 tools and
@@ -256,7 +292,7 @@ jobs:
       - name: linux-arm64
         run: |
           $CMAKE/cmake --preset linux-arm64 -DCMAKE_C_COMPILER=$ICO_CC
-          $CMAKE/cmake --build build-host/linux-arm64 --parallel
+          $CMAKE/cmake --build build-host/linux-arm64 --parallel --target all tests
           $CMAKE/ctest --test-dir build-host/linux-arm64 --output-on-failure --parallel 4 \
             -E '^(rd_(pixel|gsbase|present|crt)(_[a-z0-9_]+)?|rd_replay_tool(_list)?)$'
 

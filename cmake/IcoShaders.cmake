@@ -72,8 +72,25 @@ function(ico_add_shader name file entry stage)
         message(FATAL_ERROR "ico_add_shader(${name}): stage must be vertex or fragment")
     endif()
     get_filename_component(src "${file}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
-    file(GLOB _hlsli CONFIGURE_DEPENDS "${ICO_SHADER_DIR}/*.hlsli")
     set(spv "${ICO_SHADER_OUT_DIR}/${name}.spv")
+    # The headers a shader includes come from DXC itself (-MF: a Makefile
+    # dependency file whose target is the -Fo path, the SPIR-V output and the
+    # command's first OUTPUT), so a header edit rebuilds only the shaders that
+    # include it. Other generators (no DEPFILE for custom commands) depend on
+    # every header.
+    if(CMAKE_GENERATOR MATCHES "Ninja|Makefiles")
+        set(_ico_sh_dep "${ICO_SHADER_OUT_DIR}/${name}.d")
+        set(_ico_sh_depfile DEPFILE "${_ico_sh_dep}")
+        # -MF with -Fo writes only the dependency file (no output blob), so it
+        # is a command of its own, after the compile
+        set(_ico_sh_depcmd COMMAND "${ICO_DXC_EXE}" ${ICO_DXC_SPIRV_FLAGS} ${ICO_DXC_COMMON_FLAGS}
+            ${_ico_sh_d} -T ${profile} -E ${entry} "${src}" -Fo "${spv}" -MF "${_ico_sh_dep}")
+        set(_hlsli "")
+    else()
+        set(_ico_sh_depfile "")
+        set(_ico_sh_depcmd "")
+        file(GLOB _hlsli CONFIGURE_DEPENDS "${ICO_SHADER_DIR}/*.hlsli")
+    endif()
     if(ICO_SHADERS_DXIL)
         set(dxil "${ICO_SHADER_OUT_DIR}/${name}.dxil")
         add_custom_command(
@@ -83,7 +100,9 @@ function(ico_add_shader name file entry stage)
                     ${_ico_sh_d} -T ${profile} -E ${entry} "${src}" -Fo "${spv}"
             COMMAND "${ICO_DXC_EXE}" ${ICO_DXC_COMMON_FLAGS}
                     ${_ico_sh_d} -T ${profile} -E ${entry} "${src}" -Fo "${dxil}"
+            ${_ico_sh_depcmd}
             DEPENDS "${src}" ${_hlsli} "${ICO_DXC_EXE}"
+            ${_ico_sh_depfile}
             COMMENT "DXC ${name} (${entry}, ${profile}): SPIR-V and DXIL"
             VERBATIM)
         set_property(GLOBAL APPEND PROPERTY ICO_SHADER_BLOBS "${spv}" "${dxil}")
@@ -95,7 +114,9 @@ function(ico_add_shader name file entry stage)
             COMMAND "${CMAKE_COMMAND}" -E make_directory "${ICO_SHADER_OUT_DIR}"
             COMMAND "${ICO_DXC_EXE}" ${ICO_DXC_SPIRV_FLAGS} ${ICO_DXC_COMMON_FLAGS}
                     ${_ico_sh_d} -T ${profile} -E ${entry} "${src}" -Fo "${spv}"
+            ${_ico_sh_depcmd}
             DEPENDS "${src}" ${_hlsli} "${ICO_DXC_EXE}"
+            ${_ico_sh_depfile}
             COMMENT "DXC ${name} (${entry}, ${profile}): SPIR-V"
             VERBATIM)
         set_property(GLOBAL APPEND PROPERTY ICO_SHADER_BLOBS "${spv}")

@@ -16,9 +16,13 @@ python3 -m venv .venv && .venv/bin/pip install -r tools/requirements.txt
 tools/fetch_toolchain.sh          # about 1.6 GB under tools/toolchain/, no root
 CMAKE=tools/toolchain/cmake/bin
 $CMAKE/cmake --preset linux-x64 -DICO_HEADLESS=OFF -DICO_LINK_EXE=ON
-$CMAKE/cmake --build build-host/linux-x64
+$CMAKE/cmake --build build-host/linux-x64 --target all tests
 $CMAKE/ctest --test-dir build-host/linux-x64
 ```
+
+The test programs are not part of the default target: `--target all tests`
+builds the game and every test, plain `--build` only the game and the tools
+(see ["Building one package"](#building-one-package)).
 
 `tools/setup.sh` does the venv step and installs the git hooks (below).
 
@@ -37,6 +41,7 @@ and fills `tools/toolchain/` (gitignored, about 1.6 GB):
 | `llvm-mingw/` | clang 23, lld and the mingw-w64 UCRT runtime for x86-64 Windows; the same clang targets Linux | [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) release 20260922, `ucrt-ubuntu-22.04-x86_64`, SHA-256 pinned (not fetched on an arm64 host unless `SKIP_LLVM_MINGW=0`, which takes the pinned `-aarch64` build) |
 | `mingw-gcc/` | mingw-w64 gcc 14 and binutils for x86-64 Windows (x86-64 hosts only) | Debian 13 `gcc-mingw-w64-*-win32` 14.2.0-19+27+b1, `binutils-mingw-w64-*` 2.44-3+12+b1, `mingw-w64-*-dev` 12.0.0-5, SHA-256 pinned |
 | `cmake/` | CMake 4.4.4 (`cmake`, `ctest`) | [Kitware's release](https://github.com/Kitware/CMake/releases/tag/v4.4.4) `cmake-4.4.4-linux-x86_64.tar.gz` (`-linux-aarch64` on an arm64 host), SHA-256 pinned |
+| `ccache/` | ccache 4.11.3, the compiler launcher every preset names (`tools/toolchain/ccache/bin/ccache`) | [ccache's release](https://github.com/ccache/ccache/releases/tag/v4.11.3) `ccache-4.11.3-linux-x86_64.tar.xz`, SHA-256 pinned (no arm64 build exists: that host builds without it; `SKIP_CCACHE=1` skips it elsewhere) |
 | `deps/` | SDL3, volk, the Vulkan headers, the validation layer, DXC, libmpeg2 and libchdr | `tools/fetch_deps.sh`, which `fetch_toolchain.sh` runs last ([`THIRD_PARTY.md`](THIRD_PARTY.md)) |
 
 The pins the fetch scripts share (the SDL3 version and its SHA-256,
@@ -142,7 +147,7 @@ and the link map `ico_pc.map` under
 ```sh
 CMAKE=tools/toolchain/cmake/bin
 $CMAKE/cmake --preset win-x64
-$CMAKE/cmake --build --preset win-x64
+$CMAKE/cmake --build --preset win-x64 --target all tests
 $CMAKE/ctest --preset linux-x64   # the unit tests, on the Linux presets
 ```
 
@@ -182,6 +187,58 @@ At run time, the environment variable `ICO_TTY` (any value) turns on the
 game's `scePrintf` output on stdout, which the retail game sent to the
 development kit's TTY; it is off otherwise. Release programs have no
 console, so use it with `--console` on a program started from a terminal.
+
+## Building one package
+
+Agents and developers working on one change build only what it touches.
+
+```sh
+tools/dev_build.sh . ico_pc rd_present_test -- -R '^rd_present$'
+tools/dev_build.sh /path/to/worktree ico_pc tests -- -L render -j2
+```
+
+`tools/dev_build.sh <worktree-or-.> <target>... [-- <ctest args>]` configures
+`<worktree>/build-host/linux-x64` once with the `linux-x64` preset and
+`-DICO_LINK_EXE=ON` (a checkout with no `baserom/` also gets
+`-DICO_DISC_IMAGE=/nonexistent -DICO_BASE_ELF=/nonexistent`, so no test can
+start the game), builds exactly the named targets at `-j4` under `flock` on
+`build-host/tmp/build.lock` (`ICO_BUILD_LOCK` names another lock file), runs
+`ctest` with the arguments after `--`, and prints one summary line. A
+`--` selection that matches no test fails. The full build and the full
+`ctest` stay the gate on `main`.
+
+- **The `tests` target.** Every test program (a target named `*_test`, or one
+  a test runs) is `EXCLUDE_FROM_ALL`; `cmake/IcoTests.cmake` collects them
+  under the custom target `tests`. `cmake --build <dir>` builds the game and
+  the tools (`rd_replay_tool`, `mc_import`); `--target tests` builds every
+  test program; `--target rd_present_test` one. `ctest` on a tree whose test
+  programs were not built reports each of those tests as "Not Run" and fails:
+  it never passes with nothing run. CI builds `--target all tests`.
+- **Labels.** Each test carries the label of the directory that registers it,
+  so `ctest -L render` runs one area: `render` (`port/render`), `ui`,
+  `platform` (`port/platform`, `port/input`, `port/config`), `audio`, `game`
+  (`port/game`, `port/math`, `port/null`, `port/test`), `data` (`port/data`,
+  `port/fmv`), `rhi` (`port/rhi`, `port/shaders`), `save`; a test that runs a
+  script from `tools/` also has `tools`. `ctest -N -L <label>` lists a label
+  without running it. Labels are set by the `add_test` wrapper, so a new test
+  needs no extra line.
+- **ccache.** Every preset sets `CMAKE_C_COMPILER_LAUNCHER` to
+  `${sourceDir}/tools/toolchain/ccache/bin/ccache`, installed by
+  `tools/fetch_toolchain.sh`. The cache is `~/.cache/ccache` (no `base_dir`):
+  the compiler's `-g` records the absolute source directory, so each checkout
+  (and the package worktree `build-host/pkg-wt`) fills its own entries and a
+  rebuild of unchanged files in the same directory is served from the cache.
+  The object files are the ones the compiler writes; `ccache -s` shows the
+  hit rate. Where the file is missing (an arm64 host, a toolchain not yet
+  fetched) configure prints a line and the build runs without it. A worktree
+  shares the main checkout's toolchain by a link:
+  `ln -s <main>/tools/toolchain <worktree>/tools/toolchain`.
+- **Shaders.** Each of the HLSL shader steps lists the headers it includes
+  from the compiler itself (`dxc -MD`/`-MF` depfile), so editing one header
+  rebuilds only the shaders that include it.
+- **Packages.** `tools/package_win.sh` builds `ico_pc rhi_d3d12_test
+  rd_replay_tool mc_import`, `tools/package_linux.sh` `ico_pc mc_import`; the
+  Android package goes through Gradle, which builds `ico_pc` and nothing else.
 
 ## Compilers
 
@@ -648,6 +705,7 @@ more preset; `linux-arm64` and `android` are described after the table.
 | --- | --- |
 | host packages, venv | gcc 14 (the runner's default gcc 13 also configures, since `cmake/IcoFlags.cmake` drops warning flags a compiler does not know), the X11, ALSA and PulseAudio headers SDL3 builds against, lavapipe (`mesa-vulkan-drivers`, `libvulkan1`) so the render tests run on a CPU Vulkan device, `tools/requirements.txt` |
 | cache and `tools/fetch_toolchain.sh` | `tools/toolchain/` is cached on the hash of `fetch_toolchain.sh`, `fetch_deps.sh`, `fetch_common.sh` and `fetch_android.sh`, restored and saved as separate steps so a cold fetch is saved even when a later step fails |
+| ccache | `~/.cache/ccache` is restored before the builds and saved after them (also when a build fails), keyed by the job or preset and the same four scripts' hash, with the commit as the last part so every run saves its entries; the `linux-arm64` job has no ccache |
 | `tools/check_no_rom.sh` | the IP scan over every tracked file |
 | `tools/format.sh --check` | clang-format over the tracked C |
 | `tools/strip_host_gates.py --check` | no `ICO_HOST` conditional in `ico2/` or `sce/` |
@@ -655,7 +713,7 @@ more preset; `linux-arm64` and `android` are described after the table.
 | `tools/struct_cast_audit.py` (`--selftest`, then the tree) | no fixed array, buffer or smaller record in `ico2/` cast to a struct whose host size is larger (records holding pointers are wider on the host than the EE's 4-byte pointers: `ClipWork` is 0xF0 bytes, not 0xC0), sized by compiling the file with the host compiler; checked exceptions are in `tools/struct_cast_allow.txt` |
 | `tools/check_call_types.py` | no call through a function-pointer cast that passes fewer arguments than the function it reaches reads, and no `extern` in an `ico2/` `.c` file that differs from its definition in parameter count, integer width or return width; checked exceptions are in `tools/check_call_types_allow.txt` |
 | `gen_data_desc.py`, `gen_layout_asserts.py`, `gen_sources.py` with `--check` | the generated files are fresh |
-| `linux-x64` headless | configure with `-DICO_LINK_EXE=ON`, build, `ctest` |
+| `linux-x64` headless | configure with `-DICO_LINK_EXE=ON`, build `all tests`, `ctest` |
 | `linux-x64` window | `-DICO_HEADLESS=OFF -DICO_LINK_EXE=ON` into `build-host/linux-x64-window`, build, `ctest` |
 | `linux-x64-clang` | build, `ctest` |
 | `win-x64` | cross-compile the window build and `ico_pc.exe`; the tests are built, not run |

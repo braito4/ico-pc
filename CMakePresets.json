@@ -16,6 +16,7 @@
             },
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+                "CMAKE_C_COMPILER_LAUNCHER": "${sourceDir}/tools/toolchain/ccache/bin/ccache",
                 "ICO_HEADLESS": "ON"
             }
         },

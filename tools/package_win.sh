@@ -44,7 +44,7 @@ fi
 export PATH="$wt/.venv/bin:$PATH"
 cd "$wt"
 run cmake --preset "$p" -DICO_LINK_EXE=ON
-run cmake --build "build-host/$p"
+run cmake --build "build-host/$p" --target ico_pc rhi_d3d12_test rd_replay_tool mc_import
 for f in ico_pc.exe ico_pc.map SDL3.dll port/rhi/rhi_d3d12_test.exe port/render/rd_replay_tool.exe port/save/mc_import.exe; do
     [[ -f "build-host/$p/$f" ]] || fail "$p did not produce $f"
 done

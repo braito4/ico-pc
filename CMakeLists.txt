@@ -2,6 +2,17 @@
 # are in CMakePresets.json; docs/BUILDING.md describes them. (The PS2 ELF build
 # is the decompilation's, not this repository's.)
 cmake_minimum_required(VERSION 3.25)
+
+# The presets name the pinned ccache (tools/fetch_toolchain.sh) as the compiler
+# launcher. Where it is not there (an arm64 host, a checkout that has not
+# fetched the toolchain) the build runs without it, never fails on it.
+if(CMAKE_C_COMPILER_LAUNCHER AND NOT EXISTS "${CMAKE_C_COMPILER_LAUNCHER}"
+   AND CMAKE_C_COMPILER_LAUNCHER MATCHES "/tools/toolchain/ccache/")
+    message(STATUS "ico: ${CMAKE_C_COMPILER_LAUNCHER} not found (tools/fetch_toolchain.sh): no ccache")
+    unset(CMAKE_C_COMPILER_LAUNCHER CACHE)
+    unset(CMAKE_C_COMPILER_LAUNCHER)
+endif()
+
 project(ico_pc LANGUAGES C)
 
 include(cmake/IcoFlags.cmake)
@@ -236,6 +247,7 @@ endif()
 
 # --- Tests ------------------------------------------------------------------
 enable_testing()
+include(cmake/IcoTests.cmake) # before the first add_test: labels, and the test programs leave `all`
 # ctest runs the test programs only where they can run: a native build, a
 # cross build with an emulator, or a cross build for the host's own system.
 # Every directory below reads this one switch.
@@ -389,3 +401,7 @@ function(ico_link_host_fs dir)
     endforeach()
 endfunction()
 ico_link_host_fs("${CMAKE_SOURCE_DIR}")
+
+# The test programs build with `--target tests`, not with `all` (cmake/IcoTests.cmake)
+# (deferred: some directories create their test programs in deferred calls)
+cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL ico_finalize_tests)
