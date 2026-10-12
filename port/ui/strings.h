@@ -574,6 +574,19 @@ typedef enum UiStrId {
     UI_STR_AA_MSAA2,
     UI_STR_AA_MSAA4,
     UI_STR_AA_MSAA8,
+    /* Extras > Add to Steam: the row and the popups (title, then body) */
+    UI_STR_EXTRAS_STEAM,
+    UI_STR_STEAM_ADDED,
+    UI_STR_STEAM_ADDED_BODY,
+    UI_STR_STEAM_EXISTS,
+    UI_STR_STEAM_RUNNING,
+    UI_STR_STEAM_RUNNING_BODY,
+    UI_STR_STEAM_NOT_FOUND,
+    UI_STR_STEAM_NOT_FOUND_BODY,
+    UI_STR_STEAM_NO_USER,
+    UI_STR_STEAM_NO_USER_BODY,
+    UI_STR_STEAM_FAILED,
+    UI_STR_STEAM_FAILED_BODY,
     UI_STR_COUNT
 } UiStrId;
 

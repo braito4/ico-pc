@@ -504,4 +504,17 @@ const char *const ui_strings_it[UI_STR_COUNT] = {
     [UI_STR_AA_MSAA2] = "MSAA 2x",
     [UI_STR_AA_MSAA4] = "MSAA 4x",
     [UI_STR_AA_MSAA8] = "MSAA 8x",
+    [UI_STR_EXTRAS_STEAM] = "Aggiungi a Steam",
+    [UI_STR_STEAM_ADDED] = "Aggiunto a Steam",
+    [UI_STR_STEAM_ADDED_BODY] = "Avviare Steam e cercare ICO\nnella libreria.",
+    [UI_STR_STEAM_EXISTS] = "Già nella libreria di Steam",
+    [UI_STR_STEAM_RUNNING] = "Chiudere prima Steam",
+    [UI_STR_STEAM_RUNNING_BODY] = "Poi riprovare. Su Steam Deck,\nusare la modalità Desktop.",
+    [UI_STR_STEAM_NOT_FOUND] = "Steam non è stato trovato",
+    [UI_STR_STEAM_NOT_FOUND_BODY] = "Installare prima Steam.",
+    [UI_STR_STEAM_NO_USER] = "Nessun account Steam trovato",
+    [UI_STR_STEAM_NO_USER_BODY] = "Accedere a Steam una volta,\npoi riprovare.",
+    [UI_STR_STEAM_FAILED] = "Impossibile aggiungere a Steam",
+    [UI_STR_STEAM_FAILED_BODY] =
+        "L’elenco dei collegamenti non è stato modificato.\nIl README spiega come aggiungerlo a mano.",
 };

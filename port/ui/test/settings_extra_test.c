@@ -518,6 +518,94 @@ static void testGpuDriver(void)
           "Spanish question");
 }
 
+/* Extras > Add to Steam: hidden without a host handler, on the pause menu,
+   and shown on the title with one; Cross runs the handler once and its
+   answer is the popup; the strings exist in five languages */
+static int s_steamCalls, s_steamAnswer;
+
+static int fakeSteam(void)
+{
+    s_steamCalls++;
+    return s_steamAnswer;
+}
+
+static void testAddToSteam(void)
+{
+    static const struct {
+        int answer;
+        const char *title;
+    } kAnswers[] = {{UI_STEAM_ADDED, "Added to Steam"},
+                    {UI_STEAM_EXISTS, "Already in your Steam library"},
+                    {UI_STEAM_RUNNING, "Close Steam first"},
+                    {UI_STEAM_NOT_FOUND, "Steam was not found"},
+                    {UI_STEAM_NO_USER, "No Steam account found"},
+                    {UI_STEAM_FAILED, "Could not add to Steam"},
+                    {99, "Could not add to Steam"}};
+
+    int mainL, exL, row;
+
+    ui_popup_reset();
+    ui_settings_set_steam_handler(NULL);
+
+    /* no handler (Android, or a build without it): the row is hidden */
+    mainL = enterMain(1);
+    exL = openPage(mainL, 8, UI_PAGE_EXTRAS);
+    CHECK(ui_settings_row_of(UI_PAGE_EXTRAS, UI_OPT_EXTRAS_STEAM) >= 0 &&
+              !an22bShown(UI_PAGE_EXTRAS, UI_OPT_EXTRAS_STEAM),
+          "no handler: the row is hidden");
+
+    /* a handler, on the pause menu: still hidden (Extras leaves the stage) */
+    ui_settings_set_steam_handler(fakeSteam);
+    mainL = enterMain(0);
+    exL = openPage(mainL, 8, UI_PAGE_EXTRAS);
+    CHECK(!an22bShown(UI_PAGE_EXTRAS, UI_OPT_EXTRAS_STEAM), "pause menu: the row is hidden");
+
+    /* a handler, on the title: shown, after Characters and before Back */
+    mainL = enterMain(1);
+    exL = openPage(mainL, 8, UI_PAGE_EXTRAS);
+    row = ui_settings_row_of(UI_PAGE_EXTRAS, UI_OPT_EXTRAS_STEAM);
+    CHECK(an22bShown(UI_PAGE_EXTRAS, UI_OPT_EXTRAS_STEAM), "title: the row shows");
+    CHECK(strcmp(lt_ext_row_text(row), "Add to Steam") == 0, "the row's text \"%s\"",
+          lt_ext_row_text(row));
+    {
+        int el[8];
+        const int en = ui_settings_page_rows(UI_PAGE_EXTRAS, el, NULL, NULL, 8);
+
+        CHECK(en == 6 && el[4] == row, "six rows, Add to Steam before Back (%d)", en);
+    }
+
+    /* Cross: the handler once, its answer as the popup */
+    for (unsigned i = 0; i < sizeof(kAnswers) / sizeof(kAnswers[0]); i++) {
+        ui_popup_reset();
+        s_steamCalls = 0;
+        s_steamAnswer = kAnswers[i].answer;
+        lt_ext_layout(exL)->curItem = row;
+        frame(0);
+        press(0x40);
+        CHECK(s_steamCalls == 1, "answer %d: the handler ran once (%d)", kAnswers[i].answer,
+              s_steamCalls);
+        CHECK(ui_popup_active() && strcmp(ui_popup_title(), kAnswers[i].title) == 0,
+              "answer %d: popup \"%s\"", kAnswers[i].answer, ui_popup_title());
+        CHECK(current_layout_id == exL, "answer %d: stays on the page", kAnswers[i].answer);
+    }
+    ui_popup_reset();
+    ui_settings_set_steam_handler(NULL);
+
+    static const UiStrId kIds[] = {
+        UI_STR_EXTRAS_STEAM,       UI_STR_STEAM_ADDED,          UI_STR_STEAM_ADDED_BODY,
+        UI_STR_STEAM_EXISTS,       UI_STR_STEAM_RUNNING,        UI_STR_STEAM_RUNNING_BODY,
+        UI_STR_STEAM_NOT_FOUND,    UI_STR_STEAM_NOT_FOUND_BODY, UI_STR_STEAM_NO_USER,
+        UI_STR_STEAM_NO_USER_BODY, UI_STR_STEAM_FAILED,         UI_STR_STEAM_FAILED_BODY};
+    for (int l = 1; l < UI_LANG_COUNT; l++) {
+        for (unsigned i = 0; i < sizeof(kIds) / sizeof(kIds[0]); i++) {
+            const char *t = ui_str_in((UiLang)l, kIds[i]);
+
+            CHECK(t[0] != '\0' && strcmp(t, ui_str_in(UI_LANG_EN, kIds[i])) != 0,
+                  "language %d, string %d translated", l, kIds[i]);
+        }
+    }
+}
+
 static void testQuitGame(void)
 {
     static const char *const kAsk[2] = {"Quit to desktop?", "Quit the game?"};
@@ -1740,6 +1828,7 @@ int main(int argc, char **argv)
     testItemSelectArg();
     /* Settings > Graphics driver, the Quit game label */
     testGpuDriver();
+    testAddToSteam();
     testQuitGame();
     /* Controls > the mouse camera rows */
     testMouseCamera();

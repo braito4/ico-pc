@@ -46,6 +46,8 @@
 #ifdef __ANDROID__
 #include "android/gpu_driver_android.h"
 #include "android/host_android.h"
+#else
+#include "steam_shortcut.h"
 #endif
 
 /* The window's first client size: 4:3, three times 320 x 240. */
@@ -304,6 +306,20 @@ static int window_fullscreen(void)
 {
     return s_window != NULL && (SDL_GetWindowFlags(s_window) & SDL_WINDOW_FULLSCREEN) != 0;
 }
+
+#ifndef __ANDROID__
+/* Extras > Add to Steam: steam_shortcut.c's answers are the menu's */
+_Static_assert(ICO_STEAM_ADDED == UI_STEAM_ADDED && ICO_STEAM_EXISTS == UI_STEAM_EXISTS &&
+                   ICO_STEAM_RUNNING == UI_STEAM_RUNNING &&
+                   ICO_STEAM_NOT_FOUND == UI_STEAM_NOT_FOUND &&
+                   ICO_STEAM_NO_USER == UI_STEAM_NO_USER && ICO_STEAM_FAILED == UI_STEAM_FAILED,
+               "the Steam answers match the menu's");
+
+static int steam_add_handler(void)
+{
+    return ico_steam_add_this_game();
+}
+#endif
 
 /* The window's mode now, from SDL's flags: fullscreen, a
    frameless window, or windowed.  Android's window is fullscreen. */
@@ -939,6 +955,10 @@ int ico_window_open(unsigned int gsW, unsigned int gsH)
     ui_settings_set_window_mode_query(window_mode_now);
     /* Display > Texture pack says "None installed" without one */
     ui_settings_set_texture_pack_count(texpack_count);
+#ifndef __ANDROID__
+    /* Extras > Add to Steam (desktop only; the Android build never sets it) */
+    ui_settings_set_steam_handler(steam_add_handler);
+#endif
 #ifdef __ANDROID__
     /* the Graphics driver page, and "Quit game" for the
        title's Quit row (a phone has no desktop to quit to); both before the
@@ -2468,6 +2488,9 @@ void ico_window_close(void)
     ui_settings_set_window_mode_query(NULL);
     ui_settings_set_texture_pack_count(NULL);
     ui_settings_set_touch_query(NULL);
+#ifndef __ANDROID__
+    ui_settings_set_steam_handler(NULL);
+#endif
 #ifdef __ANDROID__
     ui_settings_set_gpu_driver_host(NULL);
     ui_settings_set_quit_is_game(NULL);

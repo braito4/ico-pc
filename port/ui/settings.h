@@ -152,6 +152,17 @@ typedef struct UiGpuDriverHost {
 
 /* NULL (or never called) hides the link and the page. The struct is copied. */
 void ui_settings_set_gpu_driver_host(const UiGpuDriverHost *host);
+/* Settings > Extras > Add to Steam (desktop only): fn adds the program to
+   the player's Steam library and returns one of UI_STEAM_*; the menu
+   answers with a popup. NULL (or never called) hides the row; Android never
+   sets it. */
+#define UI_STEAM_ADDED 0     /* added */
+#define UI_STEAM_EXISTS 1    /* it was in the library already */
+#define UI_STEAM_RUNNING 2   /* Steam runs: nothing was changed */
+#define UI_STEAM_NOT_FOUND 3 /* no Steam on this computer */
+#define UI_STEAM_NO_USER 4   /* no Steam account to add it to */
+#define UI_STEAM_FAILED 5    /* the shortcut list could not be changed */
+void ui_settings_set_steam_handler(int (*fn)(void));
 /* Settings > Extras > Models opens the layout fn returns
    (port/game/model_viewer.c's model list), or nothing when it returns -1 or
    none is set ("extras: models not available" in the log). */
@@ -322,7 +333,10 @@ typedef enum UiSettingsOpt {
        driver (file picker), Remove this driver */
     UI_OPT_GPU_DRIVER,
     UI_OPT_GPU_ADD,
-    UI_OPT_GPU_REMOVE
+    UI_OPT_GPU_REMOVE,
+    /* Extras > Add to Steam (desktop; shown from the title while a host
+       handler is set) */
+    UI_OPT_EXTRAS_STEAM
 } UiSettingsOpt;
 
 /* The entry rows and the menu's layouts (-1 before ui_settings_install):

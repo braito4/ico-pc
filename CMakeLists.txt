@@ -325,6 +325,13 @@ if(TARGET ico_pc AND NOT ICO_HEADLESS)
     target_sources(ico_pc PRIVATE port/platform/window_host.c port/platform/window_video.c
                                   port/platform/dump_zip.c)
     target_link_libraries(ico_pc PRIVATE ico_render ico_miniz SDL3::SDL3-shared)
+    if(NOT ANDROID)
+        # Extras > Add to Steam: desktop only (Windows, Linux, Steam Deck)
+        target_sources(ico_pc PRIVATE port/platform/steam_shortcut.c)
+        if(WIN32)
+            target_link_libraries(ico_pc PRIVATE advapi32)
+        endif()
+    endif()
     if(ANDROID)
         # The player's own graphics driver (Options > Graphics
         # driver), loaded with libadrenotools (BSD-2-Clause, Billy Laws;

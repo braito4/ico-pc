@@ -233,9 +233,9 @@ them, and the list shows them.
 
 ## Extras
 
-On the title screen's Options this page has Music, Models, Credits and
-Character Customization. In the pause menu's Options it has only Character
-Customization.
+On the title screen's Options this page has Music, Models, Credits,
+Character Customization and, on Windows and Linux, Add to Steam. In the
+pause menu's Options it has only Character Customization.
 
 - **Music:** listen to the game's music and sound effects.
 - **Models:** the model viewer. Look closely at the characters and some
@@ -243,6 +243,17 @@ Customization.
 - **Credits:** watch the ending credits again. It unlocks once you have
   finished the game.
 - **Character Customization:** change the colours of Ico and Yorda. [Details below](#character-customization).
+- **Add to Steam** (Windows and Linux, including the Steam Deck): adds the
+  game to your Steam library as a non-Steam game, so you can start it from
+  Steam. Close Steam first: the game will not change Steam's list while
+  Steam is open, and says so if Steam is running. On a Steam Deck, use
+  Desktop Mode, where you can quit Steam from its icon in the taskbar
+  (right-click it, then Exit Steam). If Steam has several accounts, the game goes to the one
+  used last. It adds no pictures, so Steam shows its plain tile for it. If
+  the game is already in your library, the row says so and changes
+  nothing; a copy of the old list is kept as `shortcuts.vdf.bak` in the
+  same folder. If you move the game to another folder, add it again from
+  there. The row is not in the Android version.
 
 ### Character Customization
 

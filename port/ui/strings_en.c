@@ -501,4 +501,17 @@ const char *const ui_strings_en[UI_STR_COUNT] = {
     [UI_STR_AA_MSAA2] = "MSAA 2x",
     [UI_STR_AA_MSAA4] = "MSAA 4x",
     [UI_STR_AA_MSAA8] = "MSAA 8x",
+    [UI_STR_EXTRAS_STEAM] = "Add to Steam",
+    [UI_STR_STEAM_ADDED] = "Added to Steam",
+    [UI_STR_STEAM_ADDED_BODY] = "Start Steam and look for ICO\nin your library.",
+    [UI_STR_STEAM_EXISTS] = "Already in your Steam library",
+    [UI_STR_STEAM_RUNNING] = "Close Steam first",
+    [UI_STR_STEAM_RUNNING_BODY] = "Then try again. On Steam Deck,\nuse Desktop mode.",
+    [UI_STR_STEAM_NOT_FOUND] = "Steam was not found",
+    [UI_STR_STEAM_NOT_FOUND_BODY] = "Install Steam first.",
+    [UI_STR_STEAM_NO_USER] = "No Steam account found",
+    [UI_STR_STEAM_NO_USER_BODY] = "Sign in to Steam once,\nthen try again.",
+    [UI_STR_STEAM_FAILED] = "Could not add to Steam",
+    [UI_STR_STEAM_FAILED_BODY] =
+        "The shortcut list could not be changed.\nThe README shows how to add it by hand.",
 };

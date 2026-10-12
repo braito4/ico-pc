@@ -121,13 +121,15 @@ static void testBuild(void)
     CHECK(labelsAre(UI_PAGE_MAIN, mainOpts, mainStrs, 13), "main page rows");
     CHECK(labelsAre(UI_PAGE_EFFECTS, fxOpts, fxStrs, 13), "effects rows");
     {
-        /* Characters (a link) before Back */
-        static const int extrasOpts[] = {UI_OPT_EXTRAS_MUSIC, UI_OPT_EXTRAS_MODELS,
-                                         UI_OPT_EXTRAS_CREDITS, UI_OPT_LINK, UI_OPT_BACK};
-        static const int extrasStrs[] = {UI_STR_EXTRAS_MUSIC, UI_STR_EXTRAS_MODELS,
+        /* Characters (a link), then Add to Steam (hidden without a host
+           handler) before Back */
+        static const int extrasOpts[] = {UI_OPT_EXTRAS_MUSIC,   UI_OPT_EXTRAS_MODELS,
+                                         UI_OPT_EXTRAS_CREDITS, UI_OPT_LINK,
+                                         UI_OPT_EXTRAS_STEAM,   UI_OPT_BACK};
+        static const int extrasStrs[] = {UI_STR_EXTRAS_MUSIC,   UI_STR_EXTRAS_MODELS,
                                          UI_STR_EXTRAS_CREDITS, UI_STR_SECTION_CHARACTERS,
-                                         UI_STR_BACK};
-        CHECK(labelsAre(UI_PAGE_EXTRAS, extrasOpts, extrasStrs, 5), "Extras page rows");
+                                         UI_STR_EXTRAS_STEAM,   UI_STR_BACK};
+        CHECK(labelsAre(UI_PAGE_EXTRAS, extrasOpts, extrasStrs, 6), "Extras page rows");
     }
     CHECK(labelsAre(UI_PAGE_DISPLAY, dispOpts, dispStrs, 11),
           "display rows (Frame rate without a framerate key)");
