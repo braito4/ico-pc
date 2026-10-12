@@ -180,6 +180,11 @@ void ico_audio_sdl_pause(int paused)
 {
     (void)paused;
 }
+
+void ico_audio_set_rate_ratio(double ratio)
+{
+    (void)ratio;
+}
 #endif
 
 /* Left and right swapped in place (mirror mode, audio_host.h). */

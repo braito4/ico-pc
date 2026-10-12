@@ -99,5 +99,12 @@ void ico_audio_sdl_device_removed(uint32_t which);
    emptied, so no stale audio plays on return. Nothing without an open
    stream; a stub without the SDL output. */
 void ico_audio_sdl_pause(int paused);
+/* The rate the output plays the pushed samples at, over 48 kHz: the
+   window's vsync lock runs the simulation at the display's rate (0.1 %
+   fast on a 60.00 Hz screen under the 59.94 Hz game), so the output plays
+   that much faster and its queue neither grows (dropped blocks) nor runs
+   dry.  1.0 is normal; kept across a device reopen.  On every SDL output
+   (the desktop and Android share out_sdl.c); nothing without it. */
+void ico_audio_set_rate_ratio(double ratio);
 
 #endif

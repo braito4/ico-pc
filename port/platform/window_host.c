@@ -148,6 +148,19 @@ static struct {
     int mailbox;  /* rhi_prefer_mailbox as last applied: vsync on and presenting between ticks */
     int vsync;    /* vsync on and presenting between ticks */
     int fifoLock; /* vsync on and the cap equals the display's refresh: FIFO, a present a vblank */
+    /* the vsync lock (pace_policy.h PaceLock): under fifoLock with the cap a
+       whole multiple of the simulation's rate, the display's vblanks are
+       the simulation's clock */
+    PaceLock lock;
+    unsigned lockN;       /* n the lock was started with (0: not locked at the last vsync) */
+    Uint64 lockRefresh;   /* the refresh it was started with */
+    int lockDropped;      /* PACE_LOCK_DROP_*: dropped until the next settings change */
+    int lockDropApply;    /* a drop for ico_window_pace to apply (the present mode) */
+    unsigned lockResyncs; /* lock.resyncs already counted in statResyncs */
+    Uint64 lockDroppedNs; /* lock.droppedNs already counted in statDropped */
+    double audioRatio;    /* the audio's rate ratio last set (ico_audio_set_rate_ratio) */
+    Uint64 lastReturn;    /* when the last present returned (0: none yet) */
+    Uint64 lateMaxNs;     /* the block's latest step against when it was due */
     /* the slow-step lines ([dev] slow_step_ms, 0 off): the threshold,
        the block's count and lines, ico_window_pump's time, the renderer's
        texture decodes and pipeline creations at the last pace's end */
@@ -210,6 +223,13 @@ static Uint64 display_refresh_ns(Uint64 fallback)
 
     return dm != NULL && dm->refresh_rate > 1.0f ? (Uint64)(1e9 / (double)dm->refresh_rate)
                                                  : fallback;
+}
+
+/* Words for why the vsync lock was dropped (PaceLock.dropped) */
+static const char *lock_drop_reason(int why)
+{
+    return why == PACE_LOCK_DROP_AT_ONCE ? "presents did not wait for the display"
+                                         : "the display did not keep its refresh rate";
 }
 
 static void video_settings(RdSettings *rs, int w, int h)
@@ -288,9 +308,12 @@ static void video_settings(RdSettings *rs, int w, int h)
        mailbox presents cannot do against the simulation's 59.94 Hz clock
        (issue 74).  D3D12 is FIFO already. */
     {
-        const int lock =
-            s_pres.vsync && pace_cap_equals_refresh(s_pres.framerate, display_refresh_ns(0));
-        if (lock != s_pres.fifoLock) {
+        /* not after the lock was dropped (pace), until the options change
+           (video_apply) */
+        const int lock = s_pres.vsync &&
+                         pace_cap_equals_refresh(s_pres.framerate, display_refresh_ns(0)) &&
+                         !s_pres.lockDropped;
+        if (lock != s_pres.fifoLock && !(s_pres.lockDropped && !lock)) {
             fprintf(stderr, "window: the cap %s the refresh: present mode %s\n",
                     lock ? "equals" : "no longer equals", lock ? "fifo" : "as the options say");
         }
@@ -416,6 +439,11 @@ static void video_apply(int force)
         return;
     }
     s_videoSerial = ico_video_serial();
+    if (!force) {
+        /* a settings change tries the vsync lock again (pace drops it when
+           the display does not hold it) */
+        s_pres.lockDropped = 0;
+    }
     ico_video_get(&o);
     /* on a change of the options only (never a resize's forced call: a
        refused request would be made again at every size event), and
@@ -660,6 +688,8 @@ static void lc_pace_reset(void *u)
     memset(&s_pres.paceHist, 0, sizeof(s_pres.paceHist));
     s_pres.paceSlow = false;
     s_pres.cost = 0;
+    s_pres.lockN = 0; /* the lock starts again from now */
+    s_pres.lastReturn = 0;
 }
 
 static int lc_config_dirty(void *u)
@@ -2146,12 +2176,39 @@ static void pace_log(Uint64 now)
         snprintf(movieFailed, sizeof(movieFailed), " (%u failed)",
                  movieFail - s_pres.statMovieFail);
     }
+    /* the vsync lock's state, and the audio's rate: under the lock the
+       simulation runs at the display's rate over n (0.1 % fast on a 60.00
+       Hz screen), and the audio plays the samples that much faster, so its
+       queue neither grows nor runs dry; 1 otherwise */
+    char lock[128];
+    double ratio = 1.0;
+
+    if (s_pres.lockN > 0) {
+        /* 0: the block is too short to measure (F11's one-second lines):
+           the last ratio stays */
+        const double r = pace_lock_rate_ratio(&s_pres.lock);
+
+        ratio = r > 0.0 ? r : (s_pres.audioRatio > 0.0 ? s_pres.audioRatio : 1.0);
+        snprintf(lock, sizeof(lock), "lock held (%u present%s a vsync, audio rate x%.4f)",
+                 s_pres.lockN, s_pres.lockN == 1 ? "" : "s", ratio);
+    } else if (s_pres.fifoLock) {
+        snprintf(lock, sizeof(lock), "lock held (steps on the game's own timer)");
+    } else if (s_pres.lockDropped) {
+        snprintf(lock, sizeof(lock), "lock dropped (%s)", lock_drop_reason(s_pres.lockDropped));
+    } else {
+        snprintf(lock, sizeof(lock), "lock off");
+    }
+    if (ratio != s_pres.audioRatio) {
+        s_pres.audioRatio = ratio;
+        ico_audio_set_rate_ratio(ratio);
+    }
     fprintf(stderr,
             "window: %u presents, %u movie presents%s and %u game frames (%u frame numbers) in "
             "%.1f s: %.1f "
             "presented fps, %.1f game fps; %u vsyncs (%.1f Hz simulated), %u resyncs dropping "
             "%.0f ms; longest replay %.1f ms of %u; %u steps over %.0f ms; framerate %s, present "
-            "%s, display %.2f Hz (%.3f presents a refresh), window %dx%d%s\n",
+            "%s, display %.2f Hz (%.3f presents a refresh), window %dx%d%s; step late max %.1f "
+            "ms; %s\n",
             s_pres.statPresents, movie - s_pres.statMovie, movieFailed, s_pres.statFrames,
             fn - s_pres.statFrameNo, sec, s_pres.statPresents / sec, s_pres.statFrames / sec,
             s_pres.statVsyncs, s_pres.statVsyncs / sec, s_pres.statResyncs,
@@ -2160,7 +2217,7 @@ static void pace_log(Uint64 now)
             dm != NULL ? (double)dm->refresh_rate : 0.0,
             dm != NULL && dm->refresh_rate > 1.0f ? s_pres.statPresents / sec / dm->refresh_rate
                                                   : 0.0,
-            pw, ph, window_fullscreen() ? " fullscreen" : "");
+            pw, ph, window_fullscreen() ? " fullscreen" : "", (double)s_pres.lateMaxNs / 1e6, lock);
     perf_drain();
     perf_log();
     s_pres.statAt = now;
@@ -2170,6 +2227,7 @@ static void pace_log(Uint64 now)
     s_pres.statMovie = movie;
     s_pres.statMovieFail = movieFail;
     s_pres.slowSteps = s_pres.slowLogged = 0;
+    s_pres.lateMaxNs = 0;
 }
 
 /* The start-up's presents, one log line each: the boot shows black (keep
@@ -2293,6 +2351,12 @@ void ico_window_pace(int hz)
         }
     }
     pace(hz);
+    if (s_pres.lockDropApply) {
+        /* the vsync lock was dropped: the present mode as if the cap did
+           not equal the refresh (mailbox, the timer) */
+        s_pres.lockDropApply = 0;
+        video_apply(1);
+    }
     perf_drain(); /* every vsync, so the record queue never overflows */
     if (s_autoRes.tickBudget) {
         /* two fields a tick: 40 ms PAL, 33.4 ms NTSC (pace's periods) */
@@ -2307,6 +2371,132 @@ void ico_window_pace(int hz)
         s_pres.pipeCreates = rs != NULL ? rs->pipelineCreates : 0;
     }
     s_pres.paceEnd = SDL_GetTicksNS();
+    /* the step starts now: how late against when it was due (the
+       deadline, or under the vsync lock the vblank it follows) */
+    if (s_pres.paceEnd > s_deadline && s_pres.paceEnd - s_deadline > s_pres.lateMaxNs) {
+        s_pres.lateMaxNs = s_pres.paceEnd - s_deadline;
+    }
+}
+
+/* A game frame closed in the step before this pace: its time is closeAt
+   (when that step was due) */
+static int frame_seen(Uint64 closeAt)
+{
+    const uint32_t fn = rd_frame_number();
+
+    if (fn == s_pres.frame) {
+        return 0;
+    }
+    s_pres.frame = fn;
+    s_pres.tickPrev = s_pres.tickAt;
+    s_pres.tickAt = closeAt;
+    if (!s_pollRestarted) {
+        /* the first game frame (the opening scene follows it)
+           restarts the surface-size poll's every-present spell */
+        s_pollRestarted = 1;
+        rhi_surface_poll_restart();
+    }
+    s_pres.statFrames++;
+    return 1;
+}
+
+/* One rd_present at alpha a, timed (s_pres.cost) and counted; false when
+   nothing was presented */
+static int present_once(float a, Uint64 refresh, Uint64 period)
+{
+    const Uint64 t0 = SDL_GetTicksNS();
+    ico_diag_present_enter();
+    const int ok = rd_present(a);
+    ico_diag_present_leave();
+    const Uint64 now = SDL_GetTicksNS();
+
+    s_pres.cost = now - t0;
+    if (!ok) {
+        return 0;
+    }
+    /* the cost smoothed over the last presents, with hysteresis;
+       a present is slower with an effects program loaded */
+    s_pres.paceSlow = pace_slow_present(&s_pres.paceHist, s_pres.cost, refresh, period,
+                                        rhi_injector_name() != NULL);
+    /* the start-up log line, after the cost */
+    boot_log(a);
+    s_pres.lastPresent = t0;
+    s_pres.lastReturn = now;
+    s_pres.presentedFrame = s_pres.frame;
+    s_pres.statPresents++;
+#ifdef __ANDROID__
+    ico_gpu_driver_android_presented(); /* the driver's trial */
+#endif
+    return 1;
+}
+
+/* the vsync lock's window side (pace_policy.h PaceLockIo) */
+typedef struct LockIoCtx {
+    Uint64 refresh, period;
+} LockIoCtx;
+
+static uint64_t lock_io_now(void *u)
+{
+    (void)u;
+    return SDL_GetTicksNS();
+}
+
+static bool lock_io_present(void *u, float a)
+{
+    const LockIoCtx *c = u;
+
+    return present_once(a, c->refresh, c->period) != 0;
+}
+
+static void lock_io_sleep(void *u, uint64_t ns)
+{
+    const Uint64 now = SDL_GetTicksNS();
+
+    (void)u;
+    if (now < ns) {
+        SDL_DelayPrecise(ns - now);
+    }
+}
+
+/* One simulated vsync under the vsync lock (pace_policy.h): n presents,
+   the step right after the n-th returns.  s_deadline is when the step
+   was due. */
+static void pace_locked(unsigned n, Uint64 period)
+{
+    LockIoCtx ctx;
+    const PaceLockIo io = {&ctx, lock_io_now, lock_io_present, lock_io_sleep};
+
+    ctx.refresh = display_refresh_ns(period);
+    ctx.period = period;
+    s_pres.statVsyncs++;
+    if (s_pres.lockN != n || s_pres.lockRefresh != ctx.refresh) {
+        /* a new lock: from the last step's due time */
+        pace_lock_reset(&s_pres.lock, n, ctx.refresh, period, s_deadline);
+        s_pres.lockN = n;
+        s_pres.lockRefresh = ctx.refresh;
+        s_pres.lockResyncs = 0;
+        s_pres.lockDroppedNs = 0;
+        s_pres.nextPresent = 0;
+    }
+    /* the frame closed in the step that was due at the last return */
+    const int newFrame = frame_seen(s_deadline);
+
+    s_deadline = pace_lock_vsync(&s_pres.lock, &io, newFrame != 0);
+    /* the lag the lock dropped, as the resync lines count it */
+    s_pres.statResyncs += s_pres.lock.resyncs - s_pres.lockResyncs;
+    s_pres.statDropped += s_pres.lock.droppedNs - s_pres.lockDroppedNs;
+    s_pres.lockResyncs = s_pres.lock.resyncs;
+    s_pres.lockDroppedNs = s_pres.lock.droppedNs;
+    if (s_pres.lock.dropped) {
+        fprintf(stderr,
+                "window: vsync lock dropped (%s, %u misses in a row); presenting on a timer "
+                "until the display settings change\n",
+                lock_drop_reason(s_pres.lock.dropped), PACE_LOCK_MISSES);
+        s_pres.lockDropped = s_pres.lock.dropped;
+        s_pres.lockDropApply = 1;
+        s_pres.lockN = 0;
+    }
+    pace_log(SDL_GetTicksNS());
 }
 
 static void pace(int hz)
@@ -2316,27 +2506,21 @@ static void pace(int hz)
     const Uint64 period = hz == 50 ? 20000000ull : 16683333ull;
     Uint64 now;
 
-    int newFrame = 0;
-
+    /* the vsync lock: the cap equals the refresh under FIFO and is a whole
+       multiple of the simulation's rate (60 or 120 on 59.94) */
+    {
+        const unsigned n = s_pres.fifoLock && !s_pres.lockDropped && rd_interpolation_active()
+                               ? pace_lock_presents(s_pres.framerate, period)
+                               : 0;
+        if (n > 0) {
+            pace_locked(n, period);
+            return;
+        }
+        s_pres.lockN = 0;
+    }
     s_deadline += period;
     s_pres.statVsyncs++;
-    {
-        const uint32_t fn = rd_frame_number();
-
-        if (fn != s_pres.frame) {
-            newFrame = 1;
-            s_pres.frame = fn;
-            s_pres.tickPrev = s_pres.tickAt;
-            s_pres.tickAt = s_deadline - period;
-            if (!s_pollRestarted) {
-                /* the first game frame (the opening scene follows it)
-                   restarts the surface-size poll's every-present spell */
-                s_pollRestarted = 1;
-                rhi_surface_poll_restart();
-            }
-            s_pres.statFrames++;
-        }
-    }
+    const int newFrame = frame_seen(s_deadline - period);
     if (!rd_interpolation_active()) {
         /* framerate "original": rd_end_frame presented the frame once; the
            picture is held until the next.  That present's start-up log line
@@ -2398,6 +2582,25 @@ static void pace(int hz)
            per present (a software driver): one present per new frame, none
            more, so the presents never slow the simulation below the
            original's one replay per frame */
+        /* under FIFO with a cap that is not a whole multiple of the
+           simulation's rate (144 on 59.94, 60 on PAL's 50) and a refresh
+           shorter than the period: no present that would return on a
+           vblank past the deadline, whether the frame was shown or not
+           (it is shown at the next vsync).  A FIFO present returns on the
+           first vblank after it is made, so on the last return's grid of
+           refreshes; starting one just before the deadline
+           blocked a whole refresh and ran the step late (issue 74) */
+        if (s_pres.fifoLock && refresh < period && s_pres.lastReturn != 0 &&
+            now >= s_pres.lastReturn) {
+            const Uint64 k = (now - s_pres.lastReturn) / refresh + 1;
+
+            if (s_pres.lastReturn + k * refresh > s_deadline) {
+                if (now < s_deadline) {
+                    SDL_DelayPrecise(s_deadline - now);
+                }
+                break;
+            }
+        }
         /* nor a further present of a frame already shown that would
            end past the deadline (its cost the last present's): the next
            simulation step is never late for one */
@@ -2435,20 +2638,8 @@ static void pace(int hz)
                 now > s_pres.tickAt ? (double)(now - s_pres.tickAt) / (double)tick : 0.0;
             a = (float)(r > 0.999 ? 0.999 : r);
         }
-        const Uint64 t0 = now;
-        ico_diag_present_enter();
-        const int ok = rd_present(a);
-        ico_diag_present_leave();
+        const int ok = present_once(a, refresh, period);
         now = SDL_GetTicksNS();
-        s_pres.cost = now - t0;
-        if (ok) {
-            /* the cost smoothed over the last presents, with hysteresis;
-               a present is slower with an effects program loaded */
-            s_pres.paceSlow = pace_slow_present(&s_pres.paceHist, s_pres.cost, refresh, period,
-                                                rhi_injector_name() != NULL);
-            /* the start-up log line, after the cost */
-            boot_log(a);
-        }
         if (!ok) {
             /* a movie on the output, or nothing closed yet */
             if (now < s_deadline) {
@@ -2456,13 +2647,8 @@ static void pace(int hz)
             }
             break;
         }
-        s_pres.lastPresent = t0;
-        s_pres.nextPresent = gap ? pace_next_present(s_pres.nextPresent, t0, gap) : 0;
-        s_pres.presentedFrame = s_pres.frame;
-        s_pres.statPresents++;
-#ifdef __ANDROID__
-        ico_gpu_driver_android_presented(); /* the driver's trial */
-#endif
+        s_pres.nextPresent =
+            gap ? pace_next_present(s_pres.nextPresent, s_pres.lastPresent, gap) : 0;
     }
     now = SDL_GetTicksNS();
     pace_log(now);

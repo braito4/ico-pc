@@ -52,7 +52,7 @@ if(ICO_HEAP_STATS)
 endif()
 
 # --- Tests ------------------------------------------------------------------
-foreach(t sched fiber arena diag hotkeys pace_policy lifecycle)
+foreach(t sched fiber arena diag hotkeys pace_policy pace_loop lifecycle)
     add_executable(${t}_test test/${t}_test.c)
     target_include_directories(${t}_test PRIVATE "${ICO_COMPAT_DIR}")
     target_compile_options(${t}_test PRIVATE ${ICO_SEMANTIC_OPTIONS} ${ICO_PORT_WARNINGS})

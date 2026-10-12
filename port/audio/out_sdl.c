@@ -14,6 +14,10 @@
  * (a stall) one vsync of silence is queued ahead of the block to rebuild
  * the cushion, and when more than four vsyncs are queued (the simulation ran
  * ahead) the block is dropped.  Both are counted and logged at the close.
+ * Under the window's vsync lock the display is the simulation's clock, so
+ * the simulation runs a little off 59.94 Hz (60.00 on a 60.00 Hz screen);
+ * the window measures the rate every 10 s and the stream plays at that
+ * ratio (ico_audio_set_rate_ratio, SDL_SetAudioStreamFrequencyRatio).
  *
  * Volume: each block is scaled by audio_host.h's ico_audio_volume_q8()
  * (0..256 in 1/256 steps) just before it is queued, so a change from the
@@ -42,6 +46,7 @@ static SDL_AudioDeviceID chosen; /* the named device the stream is on, 0: the de
 static int logged_unknown;
 static unsigned long underruns;
 static unsigned long drops;
+static float rate_ratio = 1.0f; /* ico_audio_set_rate_ratio */
 static int16_t silence[1024 * CHANNELS];
 static int16_t scaled[1024 * CHANNELS];
 
@@ -108,6 +113,9 @@ static int open_stream(const char *name)
     if (stream == NULL) {
         fprintf(stderr, "audio: no audio device (%s); no sound\n", SDL_GetError());
         return -1;
+    }
+    if (rate_ratio != 1.0f) {
+        SDL_SetAudioStreamFrequencyRatio(stream, rate_ratio);
     }
     SDL_ResumeAudioStreamDevice(stream);
     if (chosen != 0) {
@@ -191,6 +199,20 @@ void ico_audio_sdl_pause(int paused)
     SDL_ClearAudioStream(stream);
     if (!SDL_ResumeAudioStreamDevice(stream)) {
         fprintf(stderr, "audio: resume: %s\n", SDL_GetError());
+    }
+}
+
+void ico_audio_set_rate_ratio(double ratio)
+{
+    /* SDL takes 0.01 .. 100; the window's ratios are within 2 % of 1 */
+    const float r = ratio > 0.5 && ratio < 2.0 ? (float)ratio : 1.0f;
+
+    if (r == rate_ratio) {
+        return;
+    }
+    rate_ratio = r;
+    if (stream != NULL && !SDL_SetAudioStreamFrequencyRatio(stream, r)) {
+        fprintf(stderr, "audio: rate ratio: %s\n", SDL_GetError());
     }
 }
 

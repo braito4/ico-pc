@@ -5,7 +5,8 @@
  * presents above it and leaving below 80 % of it, no flicker on a borderline
  * sequence, one spike changing nothing, the injector's higher threshold.
  * Resolution "auto"'s steps (testAutoResolution).  The gap between presents
- * (testPresentGap).
+ * (testPresentGap).  The vsync lock's n and alphas (testLockTable); its
+ * loop is pace_loop_test's.
  */
 #include <stdio.h>
 #include "pace_policy.h"
@@ -207,11 +208,25 @@ static void testCapEqualsRefresh(void)
     CHECK(!pace_cap_equals_refresh(59, r6000));
     CHECK(!pace_cap_equals_refresh(30, r6000));
     CHECK(pace_present_gap(60, false, true, r120) == 16666666ull);
-    /* the edges: 0.5 Hz either side of 60 still equal, a whole Hz not */
+    /* the edges: 0.5 Hz either side of 60 still equal, a whole Hz above not */
     CHECK(pace_cap_equals_refresh(60, 1000000000ull * 2 / 119));
     CHECK(pace_cap_equals_refresh(60, 1000000000ull * 2 / 121 + 1));
     CHECK(!pace_cap_equals_refresh(60, 1000000000ull / 61));
-    CHECK(!pace_cap_equals_refresh(60, 1000000000ull / 59));
+    /* a whole-number report is a rate cut down (Windows): up to 1 Hz above
+       it equal, so 60 equals a reported 59 (a 59.x screen) */
+    CHECK(pace_cap_equals_refresh(60, 1000000000ull / 59));
+    CHECK(!pace_cap_equals_refresh(60, 1000000000ull / 58));
+    /* issue 74: Windows reports 143.9 Hz as 143.0 and 239.8 as 239.0;
+       within 1.0 Hz above a whole number, 0.5 Hz otherwise */
+    CHECK(pace_cap_equals_refresh(144, (uint64_t)(1e9 / 143.0)));
+    CHECK(!pace_cap_equals_refresh(144, (uint64_t)(1e9 / 142.0)));
+    CHECK(pace_cap_equals_refresh(240, (uint64_t)(1e9 / 239.0)));
+    CHECK(pace_cap_equals_refresh(144, (uint64_t)(1e9 / 143.9)));
+    CHECK(!pace_cap_equals_refresh(144, (uint64_t)(1e9 / 143.4)));
+    CHECK(pace_cap_equals_refresh(60, (uint64_t)(1e9 / 59.94)));
+    CHECK(pace_cap_equals_refresh(60, (uint64_t)(1e9 / 60.0)));
+    CHECK(pace_cap_equals_refresh(120, (uint64_t)(1e9 / 119.88)));
+    CHECK(!pace_cap_equals_refresh(143, (uint64_t)(1e9 / 144.0)));
     /* no cap */
     CHECK(!pace_cap_equals_refresh(0, r6000));
     CHECK(!pace_cap_equals_refresh(-1, r6000));
@@ -294,6 +309,51 @@ static void testLimiterGrid(void)
         CHECK(g >= 143.5 && g <= 144.5);
         CHECK(o < 143.0); /* the old scheduling fell short */
     }
+}
+
+/* The vsync lock's n (presents a simulated vsync) for the caps a display
+   runs at, under NTSC (59.94) and PAL (50); 0: no whole multiple, the
+   window steps on the game's timer.  The k-th vblank's alpha after a frame
+   closed (frames every two vsyncs) is k / (n * 2). */
+static void testLockTable(void)
+{
+    static const struct {
+        int cap;
+        unsigned ntsc, pal;
+    } t[] = {{60, 1, 0}, {120, 2, 0}, {144, 0, 0}, {240, 4, 0}, {50, 0, 1}, {100, 0, 2}};
+
+    const uint64_t ntsc = 16683333ull, pal = 20000000ull;
+
+    for (unsigned i = 0; i < sizeof(t) / sizeof(t[0]); i++) {
+        const unsigned a = pace_lock_presents(t[i].cap, ntsc),
+                       b = pace_lock_presents(t[i].cap, pal);
+
+        if (a != t[i].ntsc || b != t[i].pal) {
+            printf("FAIL lock n cap %d: %u/%u, want %u/%u\n", t[i].cap, a, b, t[i].ntsc, t[i].pal);
+            fails++;
+        }
+        /* the alphas of a two-vsync frame: k / (2n), the last exactly 1 */
+        const unsigned n = a ? a : b;
+
+        for (unsigned k = 1; n && k <= 2 * n; k++) {
+            CHECK(pace_lock_alpha(k, n, 2) == (float)k / (float)(2 * n));
+        }
+        CHECK(!n || pace_lock_alpha(2 * n, n, 2) == 1.0f);
+        CHECK(!n || pace_lock_alpha(2 * n + 1, n, 2) == 1.0f); /* a late frame holds */
+    }
+    CHECK(pace_lock_alpha(1, 1, 2) == 0.5f);
+    CHECK(pace_lock_alpha(3, 2, 2) == 0.75f);
+    CHECK(pace_lock_alpha(1, 4, 2) == 0.125f);
+    CHECK(pace_lock_alpha(1, 1, 3) == 1.0f / 3.0f); /* a three-vsync frame */
+    CHECK(pace_lock_alpha(1, 0, 2) == 0.0f);
+    CHECK(pace_lock_presents(0, ntsc) == 0);
+    CHECK(pace_lock_presents(-1, ntsc) == 0);
+    /* the guard's 2 % */
+    CHECK(pace_lock_rate_ok(16666667ull, 16666667ull));
+    CHECK(pace_lock_rate_ok(16683333ull, 16666667ull));
+    CHECK(pace_lock_rate_ok(16666667ull * 1015 / 1000, 16666667ull));
+    CHECK(!pace_lock_rate_ok(17000001ull, 16666667ull)); /* 2 % and a ns */
+    CHECK(!pace_lock_rate_ok(16666667ull * 98 / 100, 16666667ull));
 }
 
 int main(void)
@@ -402,6 +462,7 @@ int main(void)
     testPresentGap();
     testCapEqualsRefresh();
     testLimiterGrid();
+    testLockTable();
 
     if (fails) {
         printf("pace_policy_test: %d failures\n", fails);
