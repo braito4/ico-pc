@@ -143,12 +143,15 @@ static void testExtras(void)
         CHECK(settle(exL, 60), "the Extras page");
         int el[8], eo[8], ev[8];
         int en = ui_settings_page_rows(UI_PAGE_EXTRAS, el, eo, ev, 8);
-        CHECK(en == 5 && lt_ext_layout(exL)->curItem == el[0], "five rows, the cursor on Music");
+        /* the page keeps every row; Add to Steam (el[4]) is hidden without a
+           host handler (testAddToSteam in settings_extra_test.c shows it) */
+        CHECK(en == 6 && lt_ext_layout(exL)->curItem == el[0] && lt_ext_prop(el[4])->defaultMask,
+              "six rows, Add to Steam hidden, the cursor on Music");
         CHECK(strcmp(lt_ext_row_text(el[0]), "Music") == 0 &&
                   strcmp(lt_ext_row_text(el[1]), "Models") == 0 &&
                   strcmp(lt_ext_row_text(el[2]), "Credits") == 0 &&
                   strcmp(lt_ext_row_text(el[3]), "Character Customization") == 0 &&
-                  strcmp(lt_ext_row_text(el[4]), "Back") == 0,
+                  strcmp(lt_ext_row_text(el[5]), "Back") == 0,
               "Music, Models, Credits, Character Customization, Back");
         /* the row's name fits its box of 300 at 60 % or more */
         for (int g = 0; g < UI_LANG_COUNT; g++) {
@@ -217,7 +220,7 @@ static void testExtras(void)
         press(0x40);
         CHECK(settle(exL, 60), "Extras after the handler's layout");
         /* Back and Triangle return to the main page, the cursor on Extras */
-        lt_ext_layout(exL)->curItem = el[4];
+        lt_ext_layout(exL)->curItem = el[5];
         press(0x40);
         CHECK(settle(mainL, 60) && lt_ext_layout(mainL)->curItem == ex,
               "Back: the cursor on Extras");
@@ -1108,16 +1111,16 @@ static void testCharacters(void)
         for (int k = 0; k < 4; k++) {
             frame(0);
         }
-        CHECK(en == 5, "pause: Extras has its five rows (%d)", en);
+        CHECK(en == 6, "pause: Extras has its six rows (%d)", en);
         CHECK(lt_ext_prop(el[0])->defaultMask && lt_ext_prop(el[1])->defaultMask &&
-                  lt_ext_prop(el[2])->defaultMask,
-              "pause: Music, Models and Credits are hidden");
-        CHECK(!lt_ext_prop(el[3])->defaultMask && !lt_ext_prop(el[4])->defaultMask,
+                  lt_ext_prop(el[2])->defaultMask && lt_ext_prop(el[4])->defaultMask,
+              "pause: Music, Models, Credits and Add to Steam are hidden");
+        CHECK(!lt_ext_prop(el[3])->defaultMask && !lt_ext_prop(el[5])->defaultMask,
               "pause: Characters and Back are shown");
         lt_ext_layout(exL)->curItem = el[3];
         frame(0);
         press(0x4000);
-        CHECK(lt_ext_layout(exL)->curItem == el[4], "pause: Down from Characters lands on Back");
+        CHECK(lt_ext_layout(exL)->curItem == el[5], "pause: Down from Characters lands on Back");
         /* the budget keeps its spare (testBudget has the count) */
         printf("settings_extras_test: Characters: %d of %d properties used\n", lt_ext_prop_count(),
                LT_EXT_MAX_PROPERTIES);
