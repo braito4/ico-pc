@@ -112,6 +112,7 @@ add_library(ico_render STATIC
     rd_post.c
     rd_present.c
     rd_replay.c
+    rd_screen_planes.c # EXACT-RASTER: the screen-prim triangles' planes
     rd_shadow.c
     rd_tex.c
     rd_water.c # block targets, aliases, camera scopes

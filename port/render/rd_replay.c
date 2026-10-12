@@ -82,7 +82,11 @@ static const char *const s_vsNames[RD_VS_COUNT] = {"sprite_ui_vs" /* indexed by 
                                                    "sprite_aa1_world_vs",
                                                    "sprite_stq_ui_vs",
                                                    "sprite_stq_world_vs",
-                                                   "crt_vs"};
+                                                   "crt_vs",
+                                                   "sprite_plane_ui_vs",
+                                                   "sprite_plane_world_vs",
+                                                   "sprite_stq_plane_ui_vs",
+                                                   "sprite_stq_plane_world_vs"};
 
 static const char *const s_fsNames[RD_FS_COUNT] = {"sprite_ps" /* indexed by RD_FS_* */,
                                                    "blit_ps",
@@ -3282,6 +3286,23 @@ static void doScreen(Replay *r, const RdFrame *f, const RdCmd *c)
             stride = sizeof(IcoSpriteStqVertex);
         }
     }
+    /* EXACT-RASTER: a triangle command's triangles with their planes
+     * (rd_screen_planes.c); sprites and points keep their axis-aligned path */
+    if (!aa1 && s_vpExact && topo == RD_PRIM_TRIANGLES && c->b[0] != RD_PRIM_SPRITES &&
+        c->b[0] != RD_PRIM_POINTS && nv % 3 == 0) {
+        RdDrawPass pp[2];
+        int planes = 1;
+        memcpy(pp, dp, sizeof(pp));
+        for (int i = 0; i < np && planes; i++) {
+            planes = rd__plane_pass(&pp[i]);
+        }
+        const IcoSpritePlaneVertex *pv = planes ? rd__screen_planes(vb, stride, nv) : NULL;
+        if (pv) {
+            memcpy(dp, pp, sizeof(pp));
+            vb = pv;
+            stride = sizeof(IcoSpritePlaneVertex);
+        }
+    }
     uint32_t nDraw = nv, nFirst = nv;
     if (aa1) {
         int split = 0;
@@ -5254,6 +5275,8 @@ static uint64_t estimateRing(const RdFrame *f, int keep)
             total += 4 * align;
             if (c->type == RDC_SCREEN) {
                 total += (uint64_t)c->u[1] * 6 * sizeof(IcoSpriteVertex) + 16;
+                /* a triangle command's planes: at most 3 vertices a vertex */
+                total += (uint64_t)c->u[1] * 3 * sizeof(IcoSpritePlaneVertex) + 16;
                 if (hasAa1) {
                     total += (uint64_t)c->u[1] * 21 * sizeof(IcoSpriteAa1Vertex) + 16;
                 }

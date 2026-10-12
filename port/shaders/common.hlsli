@@ -697,6 +697,26 @@ float2 gs_xy_to_ndc(uint2 xy)
     return gs_px_to_ndc(float2(xy) * (1.0 / 16.0));
 }
 
+// The exact viewport's attribute planes (vu_common.hlsli vu_attr_planes,
+// sprite.hlsl sprite_plane_attrs).  gs_texel_offset: GS pixels to texels
+// from the target's centre (gs_px_to_ndc's q: exact on the 1/16 grid at an
+// integer scale, the same numbers at every frame width).  gs_plane_offset:
+// a pixel's offset in texels from a corner given that way (pixel centres
+// are k + 0.5, the centre a whole or half texel: exact).
+float2 gs_texel_offset(float2 px)
+{
+    precise float2 c = g_origin.xy + g_target.xy * 0.5;
+    precise float2 q = (px - c) * g_vp.zw + g_frame.w;
+    return q;
+}
+
+float2 gs_plane_offset(float4 pos, float2 corner)
+{
+    precise float2 c = g_target.xy * g_vp.zw * 0.5;
+    precise float2 d = (pos.xy - c) - corner;
+    return d;
+}
+
 float gs_depth(uint z)
 {
     precise float d = gs_z_to_depth(z, g_z.x);

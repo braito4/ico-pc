@@ -482,9 +482,7 @@ VuVSOut vu_out_init()
 // on the 1/16 grid at an integer scale)
 float2 vu_texel_offset_px(float2 px)
 {
-    precise float2 c = g_origin.xy + g_target.xy * 0.5;
-    precise float2 q = (px - c) * g_vp.zw + g_frame.w;
-    return q;
+    return gs_texel_offset(px);
 }
 
 // A corner's position in texels from the target's centre, on the 12.4 grid
@@ -572,8 +570,7 @@ VuVSOut vu_pixel_attrs(VuVSOut i)
     if (i.r.z == 0.0) {
         return i;
     }
-    precise float2 c = g_target.xy * g_vp.zw * 0.5;
-    precise float2 d = (i.pos.xy - c) - i.r.xy;
+    float2 d = gs_plane_offset(i.pos, i.r.xy);
     precise float4 col = i.a0 + i.x0 * d.x + i.y0 * d.y;
     precise float4 sp = i.a1 + i.x1 * d.x + i.y1 * d.y;
     i.col = col;

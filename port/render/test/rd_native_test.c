@@ -47,8 +47,9 @@
  *      per channel; on the frame without the UI sprite (s_noUi: a UI item
  *      is the 4:3 picture's, its edge is the band's by design).
  *   p  corners and edges on pixel boundaries and pixel centres
- *      (checkBoundaryCorners): every W, every preset, the 4:3 columns of
- *      SCENE equal the W = 512 render's byte for byte.  Failed before
+ *      (checkBoundaryCorners), and a Gouraud screen-prim triangle (the CPU
+ *      GIF path): every W, every preset, the 4:3 columns of SCENE equal the
+ *      W = 512 render's byte for byte.  Failed before
  *      EXACT-RASTER at every wider W, 2048 included (the two triangles
  *      across the band edges: their pixel-centre ties on the edge the GPU
  *      clipped at the W 512 target's edge went the other way).
@@ -1239,6 +1240,15 @@ static int renderCorners(const Cfg *cfg, int W, Img *scene)
     for (int i = 0; i < NCORNERS; i++) {
         triDraw(meshes[i], &kCorners[i], i);
     }
+    /* a Gouraud screen-prim triangle (the CPU GIF path, sprite.hlsl): its
+       colours from the pixel's offset to its corner, the same at every
+       width (rd_screen_planes.c) */
+    static const uint8_t g0[4] = {230, 40, 40, 0x80}, g1[4] = {40, 230, 40, 0x80},
+                         g2[4] = {40, 40, 230, 0x80};
+    RdScreenVtx gv[3] = {vtx(2010 * 16, 2010 * 16, g0, 0, 0), vtx(2140 * 16, 2030 * 16, g1, 0, 0),
+                         vtx(2040 * 16, 2140 * 16, g2, 0, 0)};
+    rd_gouraud(1);
+    rd_screen_prims(RD_PRIM_TRIANGLES, gv, 3, RD_SPACE_WORLD, 1, 0);
     rd_end_frame(0);
     const bool ok = readImg(RD_TARGET_SCENE, scene);
     for (int i = 0; i < NCORNERS; i++) {
@@ -1266,6 +1276,8 @@ static void checkBoundaryCorners(void)
             CHECK(drawnAt(&ref, BAND, at[t][0], at[t][1]), "corners, %s: \"%s\" is drawn at W 512",
                   kCfgs[c].name, kCorners[t].what);
         }
+        CHECK(drawnAt(&ref, BAND, 2060, 2060), "corners, %s: the Gouraud screen prim is drawn",
+              kCfgs[c].name);
         for (int i = 1; i < NWIDTHS; i++) {
             Img im;
             if (renderCorners(&kCfgs[c], kWidths[i], &im) != R_OK) {

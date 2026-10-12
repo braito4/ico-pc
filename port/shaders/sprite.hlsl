@@ -30,11 +30,30 @@ struct SpriteVSIn
     VK_LOC(3) float2 uv : TEXCOORD0;
 };
 
+// The planes of a screen-prim triangle (EXACT-RASTER, v0.6.1;
+// sprite_plane_*_vs, rd_screen_planes.c), flat: p0 the colour at the
+// triangle's first corner, p1 and p2 its change per texel across and down;
+// p3.xyz S, T, Q there (S and T normalised), p4.xyz and p5.xyz their
+// changes; p3.w and p4.w the corner in texels from the target's centre,
+// p5.w 1 when the planes hold (else the GPU's interpolation).  The GPU
+// interpolates from the pixel's place in the target, which moved the
+// Gouraud colours of the 4:3 columns by a step with the frame width; the
+// planes are evaluated at the pixel's offset from the corner, the same
+// numbers at every width.
+#define SPRITE_PLANES                                                                              \
+    VK_LOC(2) nointerpolation float4 p0 : TEXCOORD3;                                               \
+    VK_LOC(3) nointerpolation float4 p1 : TEXCOORD4;                                               \
+    VK_LOC(4) nointerpolation float4 p2 : TEXCOORD5;                                               \
+    VK_LOC(5) nointerpolation float4 p3 : TEXCOORD6;                                               \
+    VK_LOC(6) nointerpolation float4 p4 : TEXCOORD7;                                               \
+    VK_LOC(7) nointerpolation float4 p5 : TEXCOORD8;
+
 struct SpriteVSOut
 {
     float4 pos : SV_Position;
     VK_LOC(0) float4 col : COLOR0; // 0..255, interpolated
     VK_LOC(1) float2 uv : TEXCOORD0; // normalised
+    SPRITE_PLANES
 };
 
 SpriteVSOut sprite_vertex(SpriteVSIn i)
@@ -43,7 +62,86 @@ SpriteVSOut sprite_vertex(SpriteVSIn i)
     o.pos = float4(gs_xy_to_ndc(i.xy), gs_depth(i.z), 1.0);
     o.col = float4(i.col);
     o.uv = i.uv * g_tex.zw;
+    o.p0 = o.p1 = o.p2 = o.p3 = o.p4 = o.p5 = float4(0.0, 0.0, 0.0, 0.0);
     return o;
+}
+
+// The vertex of sprite_plane_*_vs and sprite_stq_plane_*_vs
+// (IcoSpritePlaneVertex): SpriteVSIn, Q, and the triangle's planes per GS
+// pixel (shader_consts.h)
+struct SpritePlaneVSIn
+{
+    VK_LOC(0) uint2 xy : POSITION;
+    VK_LOC(1) uint z : TEXCOORD1;
+    VK_LOC(2) uint4 col : COLOR0;
+    VK_LOC(3) float2 uv : TEXCOORD0;
+    VK_LOC(4) float q : TEXCOORD2;
+    VK_LOC(5) float4 c0 : TEXCOORD3;
+    VK_LOC(6) float4 cx : TEXCOORD4;
+    VK_LOC(7) float4 cy : TEXCOORD5;
+    VK_LOC(8) float4 s0 : TEXCOORD6;
+    VK_LOC(9) float4 sx : TEXCOORD7;
+    VK_LOC(10) float4 sy : TEXCOORD8;
+};
+
+// the planes per texel of the bound target (the GS pixel's changes over
+// its texels per GS pixel), S and T normalised; none without the exact
+// viewport
+void sprite_planes(SpritePlaneVSIn i, out float4 p0, out float4 p1, out float4 p2, out float4 p3,
+                   out float4 p4, out float4 p5)
+{
+    p0 = p1 = p2 = p3 = p4 = p5 = float4(0.0, 0.0, 0.0, 0.0);
+    if (g_vp.x == 0.0) {
+        return;
+    }
+    precise float2 k = 1.0 / g_vp.zw;
+    precise float2 corner = gs_texel_offset(float2(i.s0.w, i.sx.w));
+    precise float3 n = float3(g_tex.zw, 1.0);
+    p0 = i.c0;
+    precise float4 cx = i.cx * k.x;
+    precise float4 cy = i.cy * k.y;
+    precise float3 s0 = i.s0.xyz * n;
+    precise float3 sx = i.sx.xyz * n * k.x;
+    precise float3 sy = i.sy.xyz * n * k.y;
+    p1 = cx;
+    p2 = cy;
+    p3 = float4(s0, corner.x);
+    p4 = float4(sx, corner.y);
+    p5 = float4(sy, 1.0);
+}
+
+SpriteVSOut sprite_plane_vertex(SpritePlaneVSIn i)
+{
+    SpriteVSOut o;
+    o.pos = float4(gs_xy_to_ndc(i.xy), gs_depth(i.z), 1.0);
+    o.col = float4(i.col);
+    o.uv = i.uv * g_tex.zw / i.q; // Q is 1 here (rd_screen_planes.c), read so the input is used
+    sprite_planes(i, o.p0, o.p1, o.p2, o.p3, o.p4, o.p5);
+    return o;
+}
+
+SpriteVSOut sprite_plane_ui_vs(SpritePlaneVSIn i)
+{
+    return sprite_plane_vertex(i);
+}
+
+SpriteVSOut sprite_plane_world_vs(SpritePlaneVSIn i)
+{
+    return sprite_plane_vertex(i);
+}
+
+// The pixel's colour and S, T, Q from the planes (p5.w 1), else the GPU's
+void sprite_plane_attrs(float4 pos, float4 p0, float4 p1, float4 p2, float4 p3, float4 p4,
+                        float4 p5, inout float4 col, inout float3 stq)
+{
+    if (p5.w == 0.0) {
+        return;
+    }
+    float2 d = gs_plane_offset(pos, float2(p3.w, p4.w));
+    precise float4 c = p0 + p1 * d.x + p2 * d.y;
+    precise float3 s = p3.xyz + p4.xyz * d.x + p5.xyz * d.y;
+    col = c;
+    stq = s;
 }
 
 SpriteVSOut sprite_ui_vs(SpriteVSIn i)
@@ -65,6 +163,9 @@ Texture2D<float> g_dateSnap : register(t2, space2);
 
 GS_PS_ATTR GS_PS_OUT sprite_ps(SpriteVSOut i)
 {
+    float3 st = float3(i.uv, 1.0);
+    sprite_plane_attrs(i.pos, i.p0, i.p1, i.p2, i.p3, i.p4, i.p5, i.col, st);
+    i.uv = st.xy;
     if ((g_mode.x & DF_DATE) != 0u) {
         if (gs_date_discard(g_mode.x, g_dateSnap.Load(int3(int2(i.pos.xy), 0)))) {
             discard;
@@ -91,6 +192,9 @@ GS_PS_ATTR GS_PS_OUT sprite_ps(SpriteVSOut i)
 // itself is unchanged.
 GS_PS_ATTR GS_PS_OUT sprite_texa_ps(SpriteVSOut i)
 {
+    float3 st = float3(i.uv, 1.0);
+    sprite_plane_attrs(i.pos, i.p0, i.p1, i.p2, i.p3, i.p4, i.p5, i.col, st);
+    i.uv = st.xy;
     if ((g_mode.x & DF_DATE) != 0u) {
         if (gs_date_discard(g_mode.x, g_dateSnap.Load(int3(int2(i.pos.xy), 0)))) {
             discard;
@@ -220,6 +324,7 @@ struct SpriteStqVSOut
     float4 pos : SV_Position;
     VK_LOC(0) float4 col : COLOR0;
     VK_LOC(1) noperspective float3 stq : TEXCOORD0; // s, t normalised, q
+    SPRITE_PLANES
 };
 
 SpriteStqVSOut sprite_stq_vertex(SpriteStqVSIn i)
@@ -228,7 +333,29 @@ SpriteStqVSOut sprite_stq_vertex(SpriteStqVSIn i)
     o.pos = float4(gs_xy_to_ndc(i.xy), gs_depth(i.z), 1.0);
     o.col = float4(i.col);
     o.stq = float3(i.uv * g_tex.zw, i.q);
+    o.p0 = o.p1 = o.p2 = o.p3 = o.p4 = o.p5 = float4(0.0, 0.0, 0.0, 0.0);
     return o;
+}
+
+// sprite_stq_vertex with the triangle's planes (IcoSpritePlaneVertex)
+SpriteStqVSOut sprite_stq_plane_vertex(SpritePlaneVSIn i)
+{
+    SpriteStqVSOut o;
+    o.pos = float4(gs_xy_to_ndc(i.xy), gs_depth(i.z), 1.0);
+    o.col = float4(i.col);
+    o.stq = float3(i.uv * g_tex.zw, i.q);
+    sprite_planes(i, o.p0, o.p1, o.p2, o.p3, o.p4, o.p5);
+    return o;
+}
+
+SpriteStqVSOut sprite_stq_plane_ui_vs(SpritePlaneVSIn i)
+{
+    return sprite_stq_plane_vertex(i);
+}
+
+SpriteStqVSOut sprite_stq_plane_world_vs(SpritePlaneVSIn i)
+{
+    return sprite_stq_plane_vertex(i);
 }
 
 SpriteStqVSOut sprite_stq_ui_vs(SpriteStqVSIn i)
@@ -243,6 +370,7 @@ SpriteStqVSOut sprite_stq_world_vs(SpriteStqVSIn i)
 
 GS_PS_ATTR GS_PS_OUT sprite_stq_ps(SpriteStqVSOut i)
 {
+    sprite_plane_attrs(i.pos, i.p0, i.p1, i.p2, i.p3, i.p4, i.p5, i.col, i.stq);
     uint4 col = sprite_colour(i.pos, i.col, i.stq.xy / i.stq.z, i.stq.z);
     if (gs_alpha_discard(g_mode.z, g_mode.w, col.a)) {
         discard;

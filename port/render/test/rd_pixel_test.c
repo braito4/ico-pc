@@ -2919,7 +2919,10 @@ static void testPipelines(void)
     CHECK(nNd < RD_PIPELINE_REACHABLE_MAX,
           "reachable pipelines with the two-pass fallback %u >= %d", nNd,
           RD_PIPELINE_REACHABLE_MAX);
-    CHECK(ns < 250, "reachable screen and post pipelines %u >= 250", ns);
+    /* 250 before EXACT-RASTER (v0.6.1) added the triangle commands' plane
+     * shaders (rd_screen_planes.c), a second vertex shader for each
+     * triangle pass: 347 */
+    CHECK(ns < 400, "reachable screen and post pipelines %u >= 400", ns);
     /* the keys a frame with the dark volume's FBMSK (colour mask 7 until the
      * next FRAME write) and the lightning's perspective STQ would otherwise
      * create at run time */
@@ -2939,8 +2942,12 @@ static void testPipelines(void)
                                                     RD_SPACE_UI, RHI_FMT_RGBA8_UNORM, depth, dp);
                 for (int i = 0; i < np; i++) {
                     int found = 0;
+                    /* a triangle command draws with its planes
+                       (EXACT-RASTER, rd_screen_planes.c) */
+                    RdDrawPass pl = dp[i];
+                    CHECK(prim || rd__plane_pass(&pl), "a UI triangle pass takes the planes");
                     for (uint32_t j = 0; j < ns; j++) {
-                        found |= rd__pipe_key_equal(&dp[i].key, &keys[j]);
+                        found |= rd__pipe_key_equal(&pl.key, &keys[j]);
                     }
                     CHECK(dp[i].key.gs.colorMask == 0x7 && found,
                           "UI draw under colour mask 7 (lines %d, depth %d) is not enumerated",
@@ -2968,7 +2975,8 @@ static void testPipelines(void)
                                                 RHI_FMT_RGBA8_UNORM, depth, dp);
             for (int i = 0; i < np; i++) {
                 int found = 0;
-                CHECK(rd__stq_pass(&dp[i]), "a plain world sprite pass takes the STQ shaders");
+                CHECK(rd__stq_pass(&dp[i]) && rd__plane_pass(&dp[i]),
+                      "a plain world sprite pass takes the STQ shaders and the planes");
                 for (uint32_t j = 0; j < ns; j++) {
                     found |= rd__pipe_key_equal(&dp[i].key, &keys[j]);
                 }

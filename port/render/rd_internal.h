@@ -763,6 +763,12 @@ typedef enum RdVsId {
     RD_VS_SPRITE_STQ_WORLD,
     RD_VS_CRT, /* crt_vs (the CRT filter), the fullscreen triangle with 0..1 across the
                   viewport */
+    /* IcoSpritePlaneVertex, screen-prim triangles with their planes
+     * (rd_screen_planes.c): sprite_plane_*_vs, sprite_stq_plane_*_vs */
+    RD_VS_SPRITE_PLANE_UI,
+    RD_VS_SPRITE_PLANE_WORLD,
+    RD_VS_SPRITE_STQ_PLANE_UI,
+    RD_VS_SPRITE_STQ_PLANE_WORLD,
     RD_VS_COUNT
 } RdVsId;
 
@@ -916,6 +922,17 @@ const char *rd__blend_exact_name(int mode);
 /* Turns a planned pass of a command whose prims carry Q != 1
  * into the STQ shaders (IcoSpriteStqVertex); 0 when the pass keeps its own. */
 int rd__stq_pass(RdDrawPass *dp);
+
+/* EXACT-RASTER (v0.6.1), rd_screen_planes.c.  rd__plane_pass: converts a
+ * planned screen pass of sprite_ps, sprite_texa_ps or sprite_stq_ps to the
+ * vertex shader of its kind that reads the triangles' planes; returns
+ * whether it did (the other fragment entries keep theirs).
+ * rd__screen_planes: the triangle list vb (n vertices, stride
+ * sizeof(IcoSpriteVertex) or sizeof(IcoSpriteStqVertex)) with each
+ * triangle's colour and STQ planes per GS pixel, in a buffer of the file's
+ * kept until the next call; NULL when it cannot be had. */
+int rd__plane_pass(RdDrawPass *dp);
+const struct IcoSpritePlaneVertex *rd__screen_planes(const void *vb, uint32_t stride, uint32_t n);
 /* Whether a draw under this state samples a PSMCT24 or
  * PSMCT16 texture (or one with a 24- or 16-bit CLUT: RdTexRec.src not
  * RGBA32) under a TEXA with AEM through a linear MAG or MIN filter, the
@@ -945,7 +962,7 @@ uint32_t rd__enumerate_reachable(RdPipeKeyInt *out, uint32_t max);
  * set's size however small out is.  Every rd__enumerate_reachable* family
  * adds its keys through it. */
 uint32_t rd__add_pipe_key(RdPipeKeyInt *out, uint32_t max, uint32_t n, const RdPipeKeyInt *k);
-/* The screen and post families alone (rd_state_test holds them under 250,
+/* The screen and post families alone (rd_state_test holds them under 400,
  * and the whole set under RD_PIPELINE_REACHABLE_MAX). */
 uint32_t rd__enumerate_reachable_screen(RdPipeKeyInt *out, uint32_t max);
 /* The VU program families (rd_mesh.c): each VU vertex shader

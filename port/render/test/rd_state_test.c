@@ -48,8 +48,8 @@
  *              the scissor), not the whole target; a sprite larger than the
  *              target clamps to it; rd_perf_test's DATE sprites still take
  *              one snapshot each (rd__date_retake)
- *   pipelines  the reachable screen and post set is under 250 keys (the
- *              sprite_texa_ps twins included), with the VU program families
+ *   pipelines  the reachable screen and post set is under 400 keys (the
+ *              sprite_texa_ps twins and the triangle planes included), with the VU program families
  *              under RD_PIPELINE_REACHABLE_MAX; font_sheet_ps has font_ps's
  *              10 keys
  *
@@ -883,7 +883,7 @@ static void testEnumeration(void)
     const uint32_t ns = rd__enumerate_reachable_screen(keys, RD_PIPELINE_REACHABLE_MAX);
     n = rd__enumerate_reachable(keys, RD_PIPELINE_REACHABLE_MAX);
     printf("  reachable pipelines: %u (screen and post %u, VU programs %u)\n", n, ns, n - ns);
-    CHECK(ns > 0 && ns < 250, "reachable screen and post pipelines %u must stay under 250", ns);
+    CHECK(ns > 0 && ns < 400, "reachable screen and post pipelines %u must stay under 400", ns);
     CHECK(n < RD_PIPELINE_REACHABLE_MAX, "reachable pipeline count %u must stay under %d", n,
           RD_PIPELINE_REACHABLE_MAX);
     for (uint32_t i = 0; i < n && i < 512; i++) {

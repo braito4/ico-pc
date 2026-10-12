@@ -211,6 +211,23 @@ typedef struct IcoSpriteStqVertex {
     float q;
 } IcoSpriteStqVertex;
 
+/* The vertex of sprite_plane_*_vs and sprite_stq_plane_*_vs, 120 bytes
+ * (EXACT-RASTER, v0.6.1): a screen-prim triangle's vertex (q 1 for a prim
+ * without STQ) and its triangle's planes, the same on its three vertices
+ * (rd_screen_planes.c): the colour at the triangle's first corner and its
+ * change per GS pixel across and down (loc 5..7), S, T and Q there (S and
+ * T in texels of t1, times Q) and their changes (loc 8..10, xyz), the first
+ * corner's GS x and y in s0[3] and sx[3], 1 in sy[3].  sprite.hlsl
+ * sprite_plane_attrs evaluates them per pixel, the same at every frame
+ * width. */
+typedef struct IcoSpritePlaneVertex {
+    IcoSpriteStqVertex s;
+    float c0[4], cx[4], cy[4];
+    float s0[4], sx[4], sy[4];
+} IcoSpritePlaneVertex;
+
+_Static_assert(sizeof(IcoSpritePlaneVertex) == 120, "IcoSpritePlaneVertex size");
+
 _Static_assert(offsetof(IcoFrameCB, view) == 0, "view");
 
 _Static_assert(offsetof(IcoFrameCB, proj) == 64, "proj");
