@@ -180,6 +180,14 @@ static inline int vu1ref_extended(int preset, int frameW, float scale)
  * drawn). */
 int vu1ref_region_draw(int extended, int freeCamera, int insideA, int insideB, int insideC,
                        int hide, int reaches, int front, int joined, int stripPasses);
+/* The rule at a camera blended between two ticks' (ICO_VU_TICKS, issue 76;
+ * vu_common.hlsli vu_region_rule): drawT what vu1ref_region_draw gives at
+ * the blended camera, drawPrev and drawCur what it gives with each tick's
+ * camera's positions (the region tests, the reach, front) and the blended
+ * camera's card test (joined, stripPasses) and HIDE.  A triangle the rule
+ * does not draw at the blended camera is drawn clipped when it draws it at
+ * either tick, else not drawn; the rest as drawT. */
+int vu1ref_region_between(int drawT, int drawPrev, int drawCur);
 /* Whether a triangle of the strip of static kick k passes the region test
  * (vu_common.hlsli vu_strip_of and the programs' vu_*_strip_passes): the
  * strip is the run of static kicks (vu1ref_static_kicks; stw and

@@ -82,7 +82,7 @@ VuVSOut vu_prelit_vs(uint vid : SV_VertexID)
     } else if (corner == 2u) {
         me = c;
     }
-    uint rule = mode == VU_CLIP_REGION ? vu_region_rule(a, b, c) : VU_RULE_EXACT;
+    uint rule = mode == VU_CLIP_REGION ? vu_region_rule(a, b, c, VU_LO0, VU_HI4094) : VU_RULE_EXACT;
     if (rule == VU_RULE_STRIP) {
         // a joined strip is not a card; a free-standing one is unless a
         // triangle of it passes

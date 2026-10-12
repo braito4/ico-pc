@@ -4256,6 +4256,13 @@ static void doVuDraw(Replay *r, const RdFrame *f, const RdCmd *c)
          * to a card (vu_region_rule) */
         vcb.draw[2] |= ICO_VU_EXTENDED;
     }
+    if (f->hasTickCams && c->u[3] == RD_VU_TICK_CAMERAS) {
+        /* issue 76: drawn through a camera blended between two ticks'; a
+         * triangle the rule drops there is clipped when the rule draws it
+         * at either tick's camera (vu_region_rule) */
+        vcb.draw[2] |= ICO_VU_TICKS;
+        memcpy(vcb.ticks, f->tickCams, sizeof(vcb.ticks));
+    }
 
     if (c->type == RDC_GRID) {
         /* the Mesh3D buffer as it is: per strip the VIF qword, tag and colour

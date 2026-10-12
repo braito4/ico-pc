@@ -126,7 +126,7 @@ VuVSOut vu_skin_main(uint vid, uint variant)
     } else if (corner == 2u) {
         me = c;
     }
-    uint rule = vu_region_rule(a, b, c);
+    uint rule = vu_region_rule(a, b, c, vu_mem[0], vu_mem[1]);
     if (rule == VU_RULE_STRIP) {
         // a joined strip is not a card; a free-standing one is unless a
         // triangle of it passes

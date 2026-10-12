@@ -141,6 +141,14 @@ enum { RD_OTEXT_ITEM = 0, RD_OTEXT_OP = 1 };
 #define RD_SCREEN_FRAME_CAMERA 1
 #define RD_SHADOW_FRAME_CAMERA 1
 
+/* A VU draw's u[3] in a frame rd_interp.c blended between two ticks
+ * (issue 76): its block is the frame camera's (rd_interp.c CAM_FULL), placed
+ * through the view (not locked to the camera), re-based onto the blended
+ * camera, so RdFrame.tickCams take its positions to the ticks' cameras
+ * (rd_replay.c sets ICO_VU_TICKS; vu_common.hlsli vu_region_rule).  0 in
+ * every recorded frame and every dump. */
+#define RD_VU_TICK_CAMERAS 1u
+
 /* A post pass recorded after deferred text (rd_post.c), as the present folds
  * it into the items before it: FADE and BRIGHTNESS lerp the whole frame to
  * rgb by rgba[3] / 128, LETTERBOX lerps two bands of `lines` lines to black
@@ -303,6 +311,13 @@ typedef struct RdFrame {
      * the first RD_CULL_DROPS_MAX of cullDropCount */
     uint32_t cullDropCount;
     RdCullDrop cullDrops[RD_CULL_DROPS_MAX];
+    /* rd_interp.c's blended frame; not dumped: hasTickCams 1 when its
+     * camera is blended between two ticks' that differ, tickCams the two
+     * ticks' cameras as R = S_tick St^-1 (column-major; [0] the tick
+     * before's, [1] this tick's; S = proj view, St the blended camera's),
+     * for the draws marked RD_VU_TICK_CAMERAS (IcoVuCB.ticks) */
+    uint32_t hasTickCams;
+    float tickCams[2][16];
 } RdFrame;
 
 void rd__frame_reset(RdFrame *f);

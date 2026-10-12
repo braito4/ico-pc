@@ -50,12 +50,17 @@
 // vu_strip x, y = the draw's vertices, the first and one past the last
 //          (the region rule's strip test, vu_strip_of; y 0: no strip test,
 //          the PS2's rule), zw reserved
+// vu_ticks under VU_F_TICKS: the two ticks' cameras of a blended picture,
+//          R = S_tick St^-1 (columns; 0..3 the tick before's, 4..7 this
+//          tick's), a vertex's h through the blended camera St to the h the
+//          tick's camera gave (vu_tick_vertex)
 cbuffer VuCB : register(b2, space1)
 {
     float4 vu_mem[36];
     uint4 vu_draw;
     uint4 vu_batch;
     uint4 vu_strip;
+    float4 vu_ticks[8];
 };
 
 StructuredBuffer<float4> vu_stream : register(t0, space1);
@@ -83,6 +88,12 @@ StructuredBuffer<float4> vu_stream : register(t0, space1);
 // triangle the region test drops is drawn, GPU-clipped, unless it belongs
 // to a card (vu_region_rule)
 #define VU_F_EXTENDED 128u
+// The draw is seen through a camera blended between two ticks' (rd_interp.c
+// camSetup; rd_replay.c sets it from RdFrame.tickCams): vu_ticks holds the
+// ticks' cameras, and a triangle the region rule drops at the blended
+// camera is drawn, clipped, when the rule draws it at either tick's camera
+// (vu_region_rule)
+#define VU_F_TICKS 512u
 // Issue 25: the index bit of a triangle that overlaps an earlier triangle of
 // its mesh in the same plane (shader_consts.h ICO_VU_INDEX_LATER; static
 // prelit and lit meshes, rd_mesh.c markLaterOverlaps); vu_later_out
@@ -690,7 +701,7 @@ VuVSOut vu_plane_out(VuVSOut o, VuVtx a, VuVtx b, VuVtx c, uint kick, uint me)
 // changes the blending along its cut rim; and vu_later_out's bias needs
 // all three GS positions, so a later-marked triangle with a corner
 // saturated or below GS Z 0 is drawn without it.
-uint vu_region_rule(VuVtx a, VuVtx b, VuVtx c)
+uint vu_region_rule_at(VuVtx a, VuVtx b, VuVtx c)
 {
     if (a.inside && b.inside && c.inside) {
         return VU_RULE_EXACT;
@@ -704,6 +715,61 @@ uint vu_region_rule(VuVtx a, VuVtx b, VuVtx c)
         return VU_RULE_STRIP;
     }
     return VU_RULE_DROP;
+}
+
+// The vertex as tick k's camera gave it (0 the tick before, 1 this tick):
+// h_k = R_k h, R_k = S_k St^-1 (vu_ticks), then the program's divide and
+// its region test with its bounds lo, hi (vu_inside)
+VuVtx vu_tick_vertex(VuVtx v, uint k, float4 lo, float4 hi)
+{
+    VuVtx o = vu_vtx_init();
+    uint b = 4u * k;
+    precise float4 h = vu_ticks[b] * v.h.x + vu_ticks[b + 1u] * v.h.y + vu_ticks[b + 2u] * v.h.z +
+                       vu_ticks[b + 3u] * v.h.w;
+    o.h = h;
+    vu_divide(o);
+    o.inside = vu_inside(o.p, lo, hi);
+    return o;
+}
+
+// The region rule of the triangle a, b, c (vu_region_rule_at), whose
+// program's region test has the bounds lo, hi.  Issue 76 (v0.6.2): the PS2
+// drew only the ticks' pictures, each with the rule at its own camera; the
+// port also draws pictures between two ticks, through a camera blended
+// between theirs (rd_interp.c camSetup: the eye on the straight line
+// between the two eyes, the turn slerped).  A triangle beside the camera,
+// close to it, in front of the eye at both ticks, can have a vertex behind
+// the blended camera's eye: the rule dropped it there (the vertex behind
+// the eye) and the wall it belonged to opened for the pictures between the
+// ticks and closed at the tick (st18a about the issue 76 camera,
+// gsb_cull_test --stage DISC --eye: on a yaw orbit 500 units out, 200 a
+// tick, holes of 15636 of the 688 x 448 native pixels at 16:9, 35786 of
+// 2048 x 448 at 48:9; the same rule drops some triangles that are beside
+// the picture at a tick, drawn there, too).  So under VU_F_TICKS a triangle the rule drops at the blended
+// camera is drawn, clipped by the GPU at the native frustum, when the rule
+// draws it at either tick's camera (exactly or clipped); when it would go
+// to the card test there, the card test decides (at the blended camera);
+// it stays dropped when the rule drops it at both ticks.  The PS2's rule
+// is unchanged at every tick's own picture (no VU_F_TICKS: t = 0, the
+// Original framerate, a still camera) and under the free camera.
+uint vu_region_rule(VuVtx a, VuVtx b, VuVtx c, float4 lo, float4 hi)
+{
+    uint r = vu_region_rule_at(a, b, c);
+    if (r != VU_RULE_DROP || (vu_draw.z & VU_F_TICKS) == 0u) {
+        return r;
+    }
+    uint at = VU_RULE_DROP;
+    [loop] for (uint k = 0u; k < 2u; k++) {
+        uint rk = vu_region_rule_at(vu_tick_vertex(a, k, lo, hi), vu_tick_vertex(b, k, lo, hi),
+                                    vu_tick_vertex(c, k, lo, hi));
+        if (rk == VU_RULE_EXACT || rk == VU_RULE_CLIP) {
+            return VU_RULE_CLIP;
+        }
+        if (rk == VU_RULE_STRIP) {
+            at = VU_RULE_STRIP;
+        }
+    }
+    return at;
 }
 
 // The strip test's longest scan, in vertices each way: a strip of the

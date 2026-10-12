@@ -764,6 +764,11 @@ typedef struct CamBlend {
     double lp[16];         /* Pt Pp^-1, valid with zoomPrev: for a draw of prev alone */
     int zoomPrev;
     float itf[16];
+    /* the ticks' cameras S_tick St^-1 (S = proj view; St = Pt Vt, the
+     * blended camera every re-based block draws through), [0] prev's, [1]
+     * cur's; valid with ticks (RdFrame.tickCams) */
+    int ticks;
+    float tick[2][16];
 } CamBlend;
 
 static CamBlend s_cam;
@@ -821,6 +826,20 @@ static void camSetup(const RdFrame *prev, const RdFrame *cur, float t)
     for (int i = 0; i < 16; i++) {
         s_cam.itf[i] = (float)s_cam.it[i];
     }
+    /* issue 76: the ticks' cameras from the blended one's positions
+     * (vu_common.hlsli vu_region_rule) */
+    double st[16], ist[16], sk[16], r[16];
+    mul4d(s_cam.zoom ? pt : s_cam.pc, s_cam.vt, st);
+    if (invert4d(st, ist)) {
+        for (int k = 0; k < 2; k++) {
+            mul4d(k ? s_cam.pc : pp, k ? s_cam.vc : s_cam.vp, sk);
+            mul4d(sk, ist, r);
+            for (int i = 0; i < 16; i++) {
+                s_cam.tick[k][i] = (float)r[i];
+            }
+        }
+        s_cam.ticks = 1;
+    }
     s_cam.on = 1;
 }
 
@@ -877,6 +896,14 @@ static int camOfUncached(const float (*m)[4], const double *v, const double *pro
         }
     }
     return CAM_FULL;
+}
+
+/* RD_VU_TICK_CAMERAS for a VU draw re-based from a block of the frame's
+ * camera (CAM_FULL) placed through the view: the ticks' cameras
+ * (s_cam.tick) take its positions to theirs */
+static uint32_t tickMark(int how, int view)
+{
+    return how == CAM_FULL && view != RD_VU_VIEW_LOCKED && s_cam.ticks ? RD_VU_TICK_CAMERAS : 0u;
 }
 
 static void storeQw4(float (*m)[4], int at, const double *d)
@@ -1544,6 +1571,7 @@ static void camCurDraw(RdCmd *c)
                   how == CAM_FULL && s_cam.zoom ? s_cam.lc : NULL, s_cam.vc, vuView(c))) {
         s_rebased++;
         s_rebasedCur++;
+        c->u[3] = tickMark(how, vuView(c));
         /* the pool's grids: their STs through the camera they are now drawn
          * with, as a matched one's */
         gridCameraSts(c, op);
@@ -2197,8 +2225,12 @@ static bool s_gridScreenSt;
 
 static int s_gridSt; /* grids whose STs blended (s_gridScreenSt), this present */
 
+/* blendVu's RD_VU_TICK_CAMERAS for the draw it blended (tickMark) */
+static uint32_t s_vuTicks;
+
 static int blendVu(uint8_t *op, const RdFrame *prev, const RdCmd *pc, const RdCmd *cc, float t)
 {
+    s_vuTicks = 0;
     s_rotated = 0;
     s_drawTurn = 0.0;
     if (pc->u[2] != cc->u[2]) {
@@ -2265,9 +2297,16 @@ static int blendVu(uint8_t *op, const RdFrame *prev, const RdCmd *pc, const RdCm
     /* both ticks' blocks through the blended camera (the camera parts
      * then agree; only the object's own motion is left to blend) */
     float vpr[36][4];
+    int howCur = CAM_NONE;
     if (s_cam.on && !s_cam.still && camOf(vp, s_cam.vp, NULL) != CAM_NONE &&
-        camOf((const float (*)[4])vc, s_cam.vc, s_cam.pc) != CAM_NONE) {
+        (howCur = camOf((const float (*)[4])vc, s_cam.vc, s_cam.pc)) != CAM_NONE) {
         const int mats = camModelMats(cc->type, cc->b[0]);
+        /* both blocks the frame's camera: the blend of the two re-based
+         * screens is the blended camera's (Pt Vt), the ticks' cameras apply */
+        const uint32_t ticks =
+            tickMark(howCur, vuView(cc)) != 0u && camOfUncached(vp, s_cam.vp, s_cam.pp) == CAM_FULL
+                ? RD_VU_TICK_CAMERAS
+                : 0u;
         float vcr[36][4];
         memcpy(vpr, vp, sizeof(vpr));
         memcpy(vcr, vc, sizeof(vcr));
@@ -2279,6 +2318,7 @@ static int blendVu(uint8_t *op, const RdFrame *prev, const RdCmd *pc, const RdCm
             memcpy(vo[4], vc[4], 24 * sizeof(vo[0])); /* qw 4..27 */
             vp = (const float (*)[4])vpr;
             s_rebased++;
+            s_vuTicks = ticks;
         }
     }
     /* prev's lights in the slots of the lights of cur they pair with, before
@@ -3474,6 +3514,7 @@ typedef struct UmIns {
     float weight;       /* alpha weight, 1: whole */
     uint32_t cmds;      /* the commands it adds: the bracket and the draw */
     uint32_t inc;       /* a shadow volume's increment vertices, signed again (reprojDraw) */
+    uint32_t ticks;     /* a VU draw's RD_VU_TICK_CAMERAS (rebasePrev) */
     RdStateBlock want;  /* prev's state at the draw */
     RdStateBlock have;  /* cur's at pos */
 } UmIns;
@@ -4052,10 +4093,11 @@ static bool prevAlone(const RdFrame *prev, uint32_t k)
 }
 
 /* prev's VU block m (its copy in s_out) through the blended camera */
-static bool rebasePrev(float (*m)[4], const RdCmd *pc)
+static bool rebasePrev(float (*m)[4], const RdCmd *pc, uint32_t *ticks)
 {
     const int how = camOfUncached((const float (*)[4])m, s_cam.vp, s_cam.pp);
     const bool proj = how == CAM_FULL && s_cam.zoom;
+    *ticks = tickMark(how, vuView(pc));
     if (how == CAM_NONE || (proj && !s_cam.zoomPrev)) {
         return false;
     }
@@ -4243,7 +4285,9 @@ static void unmatchedPass(const RdFrame *prev, float t)
         RdCmd rc = *pc;
         reprojDraw(&rc, dst, s_rp.ip); /* prev's points through the blended camera */
         in->inc = rc.u[0];
-        if (isVuDraw(pc) && !rebasePrev((float (*)[4])(void *)(dst + sizeof(RdVuPayload)), pc)) {
+        in->ticks = 0;
+        if (isVuDraw(pc) &&
+            !rebasePrev((float (*)[4])(void *)(dst + sizeof(RdVuPayload)), pc, &in->ticks)) {
             in->node = ~0u; /* held: not through the blended camera */
             s_umPrevHeld++;
             continue;
@@ -4295,6 +4339,9 @@ static void unmatchedPass(const RdFrame *prev, float t)
                 const uint32_t nv = c.u[0] + c.u[3];
                 c.u[0] = in->inc; /* the faces' signs through the blended camera */
                 c.u[3] = nv - in->inc;
+            }
+            if (isVuDraw(&c)) {
+                c.u[3] = in->ticks;
             }
             if (c.type == RDC_MESH || c.type == RDC_SKINNED) {
                 (void)morphDraw(&c, NULL, NULL, prev, 1.0f); /* the stream prev drew */
@@ -4730,9 +4777,14 @@ const RdFrame *rd__interp_frame(const RdFrame *prev, const RdFrame *cur, float a
     s_rp.on = 0;
     s_rebased = s_rebasedCur = 0;
     s_reproj = 0;
+    s_out.hasTickCams = 0;
     if (blend) {
         camSetup(prev, cur, t); /* the blended camera */
         reprojSetup(t);         /* and the CPU-projected draws' */
+        if (s_cam.on && !s_cam.still && s_cam.ticks) {
+            memcpy(s_out.tickCams, s_cam.tick, sizeof(s_out.tickCams));
+            s_out.hasTickCams = 1;
+        }
         if (prev->hasCamera && cur->hasCamera) {
             lerpCamera(&s_out.camera, &prev->camera, &cur->camera, t);
             if (s_cam.on) {
@@ -4804,6 +4856,9 @@ const RdFrame *rd__interp_frame(const RdFrame *prev, const RdFrame *cur, float a
                     s_gridScreenSt = c->type == RDC_GRID && readsAnyTarget(&rs);
                     r = s_matchApart ? R_JUMP : blendVu(op, prev, pc, c, t);
                     s_gridScreenSt = false;
+                    if (r == R_LERP) {
+                        c->u[3] = s_vuTicks;
+                    }
                     break;
                 }
                 st.apart += s_matchApart; /* a draw of another place: the tick's */

@@ -148,6 +148,15 @@ int vu1ref_region_draw(int extended, int freeCamera, int insideA, int insideB, i
     return VU1REF_DRAW_NONE;
 }
 
+int vu1ref_region_between(int drawT, int drawPrev, int drawCur)
+{
+    if (drawT != VU1REF_DRAW_NONE) {
+        return drawT;
+    }
+    return drawPrev != VU1REF_DRAW_NONE || drawCur != VU1REF_DRAW_NONE ? VU1REF_DRAW_CLIPPED
+                                                                       : VU1REF_DRAW_NONE;
+}
+
 /* whether static kick k (vertices k-2..k) is drawn: vu1ref_static_kicks */
 static int staticKick(const float *stw, const int *batchFirst, int k)
 {

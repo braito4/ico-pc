@@ -293,7 +293,7 @@ _Static_assert(sizeof(IcoSpriteStqVertex) == 24, "STQ vertex size");
  * stream (float4 quadwords as the VIF unpacked them), b2 = IcoVuCB,
  * b3 = IcoVuBoneCB (cluster only). */
 
-/* VuCB: group 1, slot 2 (register b2, space1). 624 bytes.
+/* VuCB: group 1, slot 2 (register b2, space1). 752 bytes.
  *   mem    VU1 data memory 0..35 as the program reads it: 0..15 the common
  *          block (RdVuCommon), 16..27 the per-object matrices, 28..35 the
  *          light matrices (vu_common.hlsli lists what each program keeps
@@ -307,12 +307,19 @@ _Static_assert(sizeof(IcoSpriteStqVertex) == 24, "STQ vertex size");
  *          meshes)
  *   strip  the draw's first vertex and one past its last (the region
  *          rule's strip test, vu_common.hlsli vu_strip_of; both 0: no strip
- *          test), 0, 0 */
+ *          test), 0, 0
+ *   ticks  under ICO_VU_TICKS: the two ticks' cameras of a picture blended
+ *          between them, as the matrices R = S_tick St^-1 (columns; 0..3
+ *          the tick before's, 4..7 this tick's) that take a vertex's
+ *          position h = St M pos through the blended camera St to the one
+ *          each tick's camera gave (rd_interp.c, RdFrame.tickCams;
+ *          vu_common.hlsli vu_region_rule); unused without the flag */
 typedef struct IcoVuCB {
     float mem[36][4];
     uint32_t draw[4];
     uint32_t batch[4];
     uint32_t strip[4];
+    float ticks[8][4];
 } IcoVuCB;
 
 /* VuBoneCB: group 1, slot 3 (register b3, space1): VU memory 16..255, the
@@ -332,15 +339,19 @@ enum {
     ICO_VU_CLIP_NONE = 1,    /* normal_c code 34: no test, X/Y wrap to 16 bits */
     ICO_VU_CLIP_SCISSOR = 2, /* code 36: clip-space flags, trivial reject, GPU clipping */
     ICO_VU_CLIP_MASK = 3,
-    ICO_VU_PROBE = 16,      /* tests: one value per pixel of a 16-wide RGBA8_UINT target */
-    ICO_VU_CUT_ONLY = 32,   /* scissor: only the triangles SCISSOR_COMMON draws (first draw) */
-    ICO_VU_KICK_ONLY = 64,  /* scissor: only the triangles the strip kicks (second draw) */
-    ICO_VU_EXTENDED = 128,  /* region test: the picture is not the PS2's out of the box (the
+    ICO_VU_PROBE = 16,       /* tests: one value per pixel of a 16-wide RGBA8_UINT target */
+    ICO_VU_CUT_ONLY = 32,    /* scissor: only the triangles SCISSOR_COMMON draws (first draw) */
+    ICO_VU_KICK_ONLY = 64,   /* scissor: only the triangles the strip kicks (second draw) */
+    ICO_VU_EXTENDED = 128,   /* region test: the picture is not the PS2's out of the box (the
                              * Enhanced preset, wider than 4:3 or scaled up; rd_replay.c
                              * vuExtended) */
-    ICO_VU_BEHIND_EYE = 256 /* region test and particle window: a failing triangle or
+    ICO_VU_BEHIND_EYE = 256, /* region test and particle window: a failing triangle or
                                * sprite is GPU-clipped, not dropped, in either preset
                                * (photo mode's free camera, RdCamera.freeCamera) */
+    ICO_VU_TICKS = 512       /* region test: the draw is seen through a camera blended
+                              * between two ticks' (IcoVuCB.ticks): a triangle the rule
+                              * drops is drawn, clipped, when the rule draws it at either
+                              * tick's camera (vu_common.hlsli vu_region_rule) */
 };
 
 /* The native frame's constants (port/include/ico_frame.h ICO_FRAME_BASE_W,
@@ -386,7 +397,8 @@ _Static_assert(offsetof(IcoVuCB, draw) == 576, "vu draw");
 _Static_assert(offsetof(IcoVuCB, batch) == 592, "vu batch");
 _Static_assert(offsetof(IcoVuCB, strip) == 608, "vu strip");
 
-_Static_assert(sizeof(IcoVuCB) == 624, "VuCB size");
+_Static_assert(offsetof(IcoVuCB, ticks) == 624, "vu ticks");
+_Static_assert(sizeof(IcoVuCB) == 752, "VuCB size");
 
 _Static_assert(sizeof(IcoVuBoneCB) == 3840, "VuBoneCB size");
 

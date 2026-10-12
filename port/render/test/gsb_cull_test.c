@@ -88,6 +88,13 @@
  *            two ticks shows (t = 1/16 .. 15/16, rdcb_blend_view) is
  *            registered by this tick; culled with one camera instead, some
  *            are left to the tick before's draws (the sweep's control).
+ *            The triangles the region rule drops for a vertex behind the
+ *            eye at the dump's camera are counted (none reach its picture).
+ *            --stage DISC --eye (not a ctest, some 40 minutes) also
+ *            rasterises every picture between the ticks with and without
+ *            the triangles the rule drops for a vertex behind the
+ *            in-between eye, and prints the holes (VIS-RULES item 12,
+ *            issue 76; eyePicture).
  */
 #include <math.h>
 #include <stdio.h>
@@ -1781,6 +1788,410 @@ static int stagePartCount(void)
     return n;
 }
 
+/* --------------------------------- behind the eye, between the ticks
+ *
+ * VIS-RULES item 12 (vu_common.hlsli vu_region_rule): a triangle with a
+ * vertex behind the eye (clip w <= 0) whose GPU-clipped extent reaches the
+ * camera's picture (GS 2048 -+ 256 across, -+ half the height down) is not
+ * drawn.  The PS2 tested it at the tick's camera only; the presenter tests
+ * it at the in-between camera, whose eye is on the straight line between
+ * the two ticks' eyes.  For every picture between the ticks, st18a's
+ * triangles rasterised at the native frame's pixels (the nearest surface,
+ * 1 / w), every triangle drawn (clipped), then without the triangles the
+ * rule drops at the in-between camera: a pixel whose nearest surface is
+ * farther there (or missing) is a hole.  A pop: a hole the rule kept only
+ * for a triangle it drops at both ticks' cameras (vu_region_rule under
+ * ICO_VU_TICKS) does not have; of them, the holes of triangles the rule
+ * drops at neither tick (no picture the PS2 drew between the two ticks
+ * had them).  --stage DISC --eye (not a ctest: about 40 minutes). */
+
+typedef struct EyeWorst {
+    int pixels, step, model, part;
+    double t;
+    char label[64];
+} EyeWorst;
+
+#define EYE_WORST 6
+
+typedef struct EyeStats {
+    long pictures;    /* pictures between the ticks */
+    long withDrop;    /* of them, with a triangle the in-between rule drops */
+    long withPop;     /* of them, with a pop */
+    long withNeither; /* of them, with a pop of a triangle dropped at neither tick */
+    long holes;       /* pixels the in-between rule leaves farther than every triangle drawn */
+    long pops;        /* pixels it leaves farther than the both-ticks rule */
+    long popsNeither; /* of them, of triangles the rule drops at neither tick */
+    long dropT;       /* triangles the in-between rule drops, summed over the pictures */
+    long dropBoth;    /* of them, dropped at both ticks' cameras too */
+    long dropNoTick;  /* of them, dropped at neither tick's camera */
+    EyeWorst worst[EYE_WORST], worstNeither[EYE_WORST];
+} EyeStats;
+
+static EyeStats s_eye;
+static int s_eyeOn, s_eyeWanted; /* --eye */
+static int s_eyeStep;
+static char s_eyeLabel[64];
+
+/* st18a's triangles with an area, flat, with their model and part */
+static float (*s_tri)[3][3];
+static unsigned short (*s_triOf)[2];
+static int s_triCount;
+
+static int flattenStage(void)
+{
+    int n = 0;
+    for (int m = 0; m < s_stageCount; m++) {
+        for (int j = 0; j < s_stage[m].parts; j++) {
+            n += s_stage[m].part[j].tris;
+        }
+    }
+    s_tri = calloc(n ? (size_t)n : 1u, sizeof(*s_tri));
+    s_triOf = calloc(n ? (size_t)n : 1u, sizeof(*s_triOf));
+    if (!s_tri || !s_triOf) {
+        return 0;
+    }
+    s_triCount = 0;
+    for (int m = 0; m < s_stageCount; m++) {
+        for (int j = 0; j < s_stage[m].parts; j++) {
+            const StagePart *sp = &s_stage[m].part[j];
+            for (int q = 0; q < sp->tris; q++) {
+                const float (*v)[3] = sp->tri[q];
+                double e1[3], e2[3], c[3];
+                for (int k = 0; k < 3; k++) {
+                    e1[k] = (double)v[1][k] - v[0][k];
+                    e2[k] = (double)v[2][k] - v[0][k];
+                }
+                c[0] = e1[1] * e2[2] - e1[2] * e2[1];
+                c[1] = e1[2] * e2[0] - e1[0] * e2[2];
+                c[2] = e1[0] * e2[1] - e1[1] * e2[0];
+                if (c[0] * c[0] + c[1] * c[1] + c[2] * c[2] <= 0.0) {
+                    continue; /* a strip's turn: no area, nothing drawn */
+                }
+                memcpy(s_tri[s_triCount], v, sizeof(s_tri[0]));
+                s_triOf[s_triCount][0] = (unsigned short)m;
+                s_triOf[s_triCount][1] = (unsigned short)j;
+                s_triCount++;
+            }
+        }
+    }
+    return s_triCount;
+}
+
+/* h = m (p, 1) for the triangle's corners */
+static void triClip(const double *m, const float (*v)[3], double (*h)[4])
+{
+    for (int k = 0; k < 3; k++) {
+        const double p[3] = {v[k][0], v[k][1], v[k][2]};
+        xform(m, p, h[k]);
+    }
+}
+
+/* a convex polygon in clip space cut to dot(pl, h) >= 0 */
+static int cutPoly(double (*p)[4], int n, const double *pl)
+{
+    double q[12][4];
+    int m = 0;
+    for (int i = 0; i < n; i++) {
+        const double *a = p[i], *b = p[(i + 1) % n];
+        const double da = pl[0] * a[0] + pl[1] * a[1] + pl[2] * a[2] + pl[3] * a[3];
+        const double db = pl[0] * b[0] + pl[1] * b[1] + pl[2] * b[2] + pl[3] * b[3];
+        if (da >= 0.0 && m < 12) {
+            memcpy(q[m++], a, sizeof(q[0]));
+        }
+        if ((da >= 0.0) != (db >= 0.0) && m < 12) {
+            const double s = da / (da - db);
+            for (int c = 0; c < 4; c++) {
+                q[m][c] = a[c] + s * (b[c] - a[c]);
+            }
+            m++;
+        }
+    }
+    memcpy(p, q, (size_t)m * sizeof(q[0]));
+    return m;
+}
+
+/* the GPU's depth clip, 0 <= GS Z <= 2^32 (vu_homogeneous_position: z =
+   16 h.z / 2^32, 0 <= z <= w) */
+static int cutDepth(double (*p)[4], int n)
+{
+    static const double zLo[4] = {0.0, 0.0, 1.0, 0.0};
+    static const double zHi[4] = {0.0, 0.0, -16.0, 4294967296.0};
+    n = cutPoly(p, n, zLo);
+    return n >= 3 ? cutPoly(p, n, zHi) : n;
+}
+
+/* vu_region_rule's drop for a triangle of the extended picture (every
+   vertex in front of the eye is drawn, clipped): a vertex behind the eye
+   (w <= 0) and the GPU-clipped extent reaching the picture
+   (vu_cut_reaches_picture) */
+static int eyeDrops(const double (*h)[4])
+{
+    if (!(h[0][3] <= 0.0 || h[1][3] <= 0.0 || h[2][3] <= 0.0)) {
+        return 0;
+    }
+    double p[12][4];
+    memcpy(p, h, 3 * sizeof(p[0]));
+    const double hh = halfH();
+    const double top[4] = {0.0, -1.0, 0.0, 2048.0 + hh};      /* y <= (2048 + hh) w */
+    const double bottom[4] = {0.0, 1.0, 0.0, -(2048.0 - hh)}; /* y >= (2048 - hh) w */
+    int n = cutDepth(p, 3);
+    if (n >= 3) {
+        n = cutPoly(p, n, top);
+    }
+    if (n >= 3) {
+        n = cutPoly(p, n, bottom);
+    }
+    if (n < 3) {
+        return 0;
+    }
+    double lo = 1e30, hi = -1e30;
+    for (int i = 0; i < n; i++) {
+        const double x = p[i][3] > 0.0 ? p[i][0] / p[i][3] : (p[i][0] >= 0.0 ? 1e30 : -1e30);
+        lo = x < lo ? x : lo;
+        hi = x > hi ? x : hi;
+    }
+    return lo < 2048.0 + 256.0 && hi > 2048.0 - 256.0;
+}
+
+#define EYE_MAX_W 2560
+#define EYE_MAX_H 448
+
+/* the nearest 1 / w: every triangle; the both-ticks rule; the in-between
+   rule; the both-ticks rule less the triangles dropped at neither tick */
+static float s_dAll[EYE_MAX_W * EYE_MAX_H], s_dNew[EYE_MAX_W * EYE_MAX_H],
+    s_dNow[EYE_MAX_W * EYE_MAX_H], s_dNei[EYE_MAX_W * EYE_MAX_H];
+static int s_idNew[EYE_MAX_W * EYE_MAX_H];
+static unsigned char
+    *s_flag; /* bit 0: dropped at t, bit 1: at the tick before, bit 2: at this tick */
+static double (*s_h)[3][4];
+
+/* the polygon's pixels (centres) inside the tile x0..x1, y0..y1 (frame
+   pixels, the frame's left top at GS fx, fy): 1 / w into the buffers the
+   mask names (1 all, 2 new, 4 now, 8 nei), the nearest kept */
+static void rasterPoly(double (*p)[4], int n, double fx, double fy, int fw, int x0, int y0, int x1,
+                       int y1, int mask, int id)
+{
+    double s[12][3];
+    for (int i = 0; i < n; i++) {
+        s[i][0] = p[i][0] / p[i][3] - fx;
+        s[i][1] = p[i][1] / p[i][3] - fy;
+        s[i][2] = 1.0 / p[i][3];
+    }
+    for (int k = 1; k + 1 < n; k++) {
+        const double *a = s[0], *b = s[k], *c = s[k + 1];
+        const double area = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+        if (area == 0.0) {
+            continue;
+        }
+        double mnx = fmin(a[0], fmin(b[0], c[0])), mxx = fmax(a[0], fmax(b[0], c[0]));
+        double mny = fmin(a[1], fmin(b[1], c[1])), mxy = fmax(a[1], fmax(b[1], c[1]));
+        int ix0 = (int)floor(mnx - 0.5), ix1 = (int)ceil(mxx - 0.5);
+        int iy0 = (int)floor(mny - 0.5), iy1 = (int)ceil(mxy - 0.5);
+        ix0 = ix0 < x0 ? x0 : ix0;
+        iy0 = iy0 < y0 ? y0 : iy0;
+        ix1 = ix1 > x1 ? x1 : ix1;
+        iy1 = iy1 > y1 ? y1 : iy1;
+        for (int y = iy0; y <= iy1; y++) {
+            const double py = y + 0.5;
+            for (int x = ix0; x <= ix1; x++) {
+                const double px = x + 0.5;
+                const double w0 = ((b[0] - px) * (c[1] - py) - (b[1] - py) * (c[0] - px)) / area;
+                const double w1 = ((c[0] - px) * (a[1] - py) - (c[1] - py) * (a[0] - px)) / area;
+                const double w2 = 1.0 - w0 - w1;
+                if (w0 < 0.0 || w1 < 0.0 || w2 < 0.0) {
+                    continue;
+                }
+                const float iw = (float)(w0 * a[2] + w1 * b[2] + w2 * c[2]);
+                const int at = y * fw + x;
+                if ((mask & 1) && iw > s_dAll[at]) {
+                    s_dAll[at] = iw;
+                }
+                if ((mask & 2) && iw > s_dNew[at]) {
+                    s_dNew[at] = iw;
+                    s_idNew[at] = id;
+                }
+                if ((mask & 4) && iw > s_dNow[at]) {
+                    s_dNow[at] = iw;
+                }
+                if ((mask & 8) && iw > s_dNei[at]) {
+                    s_dNei[at] = iw;
+                }
+            }
+        }
+    }
+}
+
+/* 1 when the nearest surface b is farther than a (or missing) */
+static int farther(float a, float b)
+{
+    return a > 0.0f && b < a * (1.0f - 1e-5f);
+}
+
+static void eyeNoteWorst(EyeWorst *w, int pixels, double t, int part)
+{
+    const int n = EYE_WORST;
+    int at = n;
+    while (at > 0 && pixels > w[at - 1].pixels) {
+        at--;
+    }
+    if (at >= n) {
+        return;
+    }
+    memmove(&w[at + 1], &w[at], (size_t)(n - 1 - at) * sizeof(w[0]));
+    w[at].pixels = pixels;
+    w[at].t = t;
+    w[at].step = s_eyeStep;
+    w[at].model = part / 64; /* the part, model * 64 + part */
+    w[at].part = part % 64;
+    snprintf(w[at].label, sizeof(w[at].label), "%s", s_eyeLabel);
+}
+
+/* the picture at t (view vt, projection pt) between the ticks (vp, pp) and
+   (vc, pc) */
+static void eyePicture(const double *vp, const double *pp, const double *vc, const double *pc,
+                       const double *vt, const double *pt, double t)
+{
+    double st[16], sp[16], sc[16], hp[3][4], hc[3][4];
+    rdcb_mul4d(pt, vt, st);
+    rdcb_mul4d(pp, vp, sp);
+    rdcb_mul4d(pc, vc, sc);
+    if (!s_flag) {
+        s_flag = calloc((size_t)s_triCount, 1);
+        s_h = calloc((size_t)s_triCount, sizeof(*s_h));
+        if (!s_flag || !s_h) {
+            CHECK(0, "eye: no memory");
+            return;
+        }
+    }
+    s_eye.pictures++;
+    const int fw = gsFrame.w, fh = ScreenHeight;
+    const double fx = 2048.0 - fw / 2, fy = 2048.0 - fh / 2;
+    int any = 0, popTris = 0, tx0 = fw, ty0 = fh, tx1 = -1, ty1 = -1;
+    for (int i = 0; i < s_triCount; i++) {
+        triClip(st, (const float (*)[3])s_tri[i], s_h[i]);
+        s_flag[i] = (unsigned char)eyeDrops((const double (*)[4])s_h[i]);
+        if (!s_flag[i]) {
+            continue;
+        }
+        any = 1;
+        triClip(sp, (const float (*)[3])s_tri[i], hp);
+        triClip(sc, (const float (*)[3])s_tri[i], hc);
+        s_flag[i] |= (unsigned char)(eyeDrops((const double (*)[4])hp) << 1);
+        s_flag[i] |= (unsigned char)(eyeDrops((const double (*)[4])hc) << 2);
+        s_eye.dropT++;
+        s_eye.dropBoth += s_flag[i] == 7;
+        s_eye.dropNoTick += s_flag[i] == 1;
+        if (s_flag[i] == 7) {
+            continue;
+        }
+        popTris++;
+        /* the tile: the dropped triangle's clipped extent in the frame */
+        double p[12][4];
+        memcpy(p, s_h[i], sizeof(s_h[i]));
+        const int n = cutDepth(p, 3);
+        for (int k = 0; k < n; k++) {
+            if (!(p[k][3] > 0.0)) {
+                tx0 = ty0 = 0;
+                tx1 = fw - 1;
+                ty1 = fh - 1;
+                continue;
+            }
+            const double x = p[k][0] / p[k][3] - fx, y = p[k][1] / p[k][3] - fy;
+            const int ix = x < -1.0 ? -1 : x > fw + 1.0 ? fw + 1 : (int)floor(x);
+            const int iy = y < -1.0 ? -1 : y > fh + 1.0 ? fh + 1 : (int)floor(y);
+            tx0 = ix < tx0 ? ix : tx0;
+            ty0 = iy < ty0 ? iy : ty0;
+            tx1 = ix + 1 > tx1 ? ix + 1 : tx1;
+            ty1 = iy + 1 > ty1 ? iy + 1 : ty1;
+        }
+    }
+    s_eye.withDrop += any;
+    if (!popTris) {
+        return;
+    }
+    tx0 = tx0 < 0 ? 0 : tx0;
+    ty0 = ty0 < 0 ? 0 : ty0;
+    tx1 = tx1 > fw - 1 ? fw - 1 : tx1;
+    ty1 = ty1 > fh - 1 ? fh - 1 : ty1;
+    if (tx1 < tx0 || ty1 < ty0) {
+        return;
+    }
+    for (int y = ty0; y <= ty1; y++) {
+        for (int x = tx0; x <= tx1; x++) {
+            const int at = y * fw + x;
+            s_dAll[at] = s_dNew[at] = s_dNow[at] = s_dNei[at] = 0.0f;
+            s_idNew[at] = -1;
+        }
+    }
+    for (int i = 0; i < s_triCount; i++) {
+        const double (*h)[4] = (const double (*)[4])s_h[i];
+        if (h[0][3] > 0.0 && h[1][3] > 0.0 && h[2][3] > 0.0) {
+            /* in front of the eye: off the tile by its corners alone */
+            double lo[2] = {1e30, 1e30}, hi[2] = {-1e30, -1e30};
+            for (int k = 0; k < 3; k++) {
+                for (int a = 0; a < 2; a++) {
+                    const double q = h[k][a] / h[k][3] - (a ? fy : fx);
+                    lo[a] = q < lo[a] ? q : lo[a];
+                    hi[a] = q > hi[a] ? q : hi[a];
+                }
+            }
+            if (hi[0] < tx0 || lo[0] > tx1 + 1 || hi[1] < ty0 || lo[1] > ty1 + 1) {
+                continue;
+            }
+        }
+        double p[12][4];
+        memcpy(p, s_h[i], sizeof(s_h[i]));
+        const int n = cutDepth(p, 3);
+        if (n < 3) {
+            continue;
+        }
+        const int f = s_flag[i];
+        const int mask = 1 | (f == 7 ? 0 : 2) | (f & 1 ? 0 : 4) | (f == 7 || f == 1 ? 0 : 8);
+        rasterPoly(p, n, fx, fy, fw, tx0, ty0, tx1, ty1, mask, i);
+    }
+    /* the part the most pop pixels show without the rule */
+    static int byPart[2][STAGE_MODELS * 64];
+    memset(byPart, 0, sizeof(byPart));
+    int pops = 0, holes = 0, nei = 0;
+    for (int y = ty0; y <= ty1; y++) {
+        for (int x = tx0; x <= tx1; x++) {
+            const int at = y * fw + x;
+            holes += farther(s_dAll[at], s_dNow[at]);
+            const int id = s_idNew[at];
+            const int part = id >= 0 ? s_triOf[id][0] * 64 + (s_triOf[id][1] & 63) : -1;
+            if (farther(s_dNew[at], s_dNow[at])) {
+                pops++;
+                byPart[0][part >= 0 ? part : 0]++;
+            }
+            if (farther(s_dNew[at], s_dNei[at])) {
+                nei++;
+                byPart[1][part >= 0 ? part : 0]++;
+            }
+        }
+    }
+    int best[2] = {0, 0};
+    for (int k = 0; k < 2; k++) {
+        for (int j = 1; j < STAGE_MODELS * 64; j++) {
+            best[k] = byPart[k][j] > byPart[k][best[k]] ? j : best[k];
+        }
+    }
+    s_eye.holes += holes;
+    s_eye.pops += pops;
+    s_eye.popsNeither += nei;
+    if (pops > 0) {
+        s_eye.withPop++;
+        eyeNoteWorst(s_eye.worst, pops, t, best[0]);
+    }
+    if (nei > 0) {
+        s_eye.withNeither++;
+        eyeNoteWorst(s_eye.worstNeither, nei, t, best[1]);
+    }
+    if (pops > 0) {
+        printf("  eye: W %d step %d (%s) t %.4f: pop %d pixels (%s part %d), neither tick %d\n", fw,
+               s_eyeStep, s_eyeLabel, t, pops, s_stage[best[0] / 64].name, best[0] % 64, nei);
+    }
+}
+
 /* the ticks c0, c1, c2 (the game's camera at each) and the pictures between
    c1 and c2: every part a picture shows registered at c2, or at c1 and
    passed by the gate */
@@ -1813,6 +2224,7 @@ static void sweepPair(const char *what, const Cam *c0, const Cam *c1, const Cam 
         st->snapped++; /* the presenter snaps: no picture between */
         return;
     }
+    s_eyeStep++;
     st->keepAll += views == 0;
     st->threeCams += views == 3;
     st->regOne += registerStage(keptOne, 1); /* the PS2's one camera, for the cost */
@@ -1834,6 +2246,9 @@ static void sweepPair(const char *what, const Cam *c0, const Cam *c1, const Cam 
         const double tx = (double)gsFrame.wExact * 0.5 / pt[0];
         const double ty = halfH() / pt[5];
         st->pictures++;
+        if (s_eyeOn) {
+            eyePicture(vp, scPrev, vc, s_screen, vt, pt, t);
+        }
         int at = 0;
         for (int m = 0; m < s_stageCount; m++) {
             for (int j = 0; j < s_stage[m].parts; j++, at++) {
@@ -1941,6 +2356,8 @@ static void sweepStage(const char *what, int oneCamera, SweepStats *st)
                     const Cam c0 = orbit(&cur, u, p, 2.0 * sgn * ang);
                     const Cam c1 = orbit(&cur, u, p, sgn * ang);
                     const Cam n1 = orbit(&cur, u, p, -sgn * ang);
+                    snprintf(s_eyeLabel, sizeof(s_eyeLabel), "orbit %g out, axis %d, %+g units",
+                             kDist[di], ax, sgn * kChord[ci]);
                     sweepAbout(what, &c0, &c1, &cur, &n1, I76_ZOOM, oneCamera, st);
                     if (ax == 0 && ci == 1) {
                         /* the zoom easing 10 % in the tick */
@@ -1967,6 +2384,8 @@ static void sweepStage(const char *what, int oneCamera, SweepStats *st)
                     c0.e[i] -= 2.0 * sgn * kChord[ci] * u[i];
                     n1.e[i] += sgn * kChord[ci] * u[i];
                 }
+                snprintf(s_eyeLabel, sizeof(s_eyeLabel), "eye alone, direction %d, %+g units", dir,
+                         sgn * kChord[ci]);
                 sweepAbout(what, &c0, &c1, &cur, &n1, I76_ZOOM, oneCamera, st);
             }
         }
@@ -1989,6 +2408,8 @@ static void sweepStage(const char *what, int oneCamera, SweepStats *st)
                 const Cam c0 = orbit(&cur, u, cur.e, 2.0 * ang);
                 const Cam c1 = orbit(&cur, u, cur.e, ang);
                 const Cam n1 = orbit(&cur, u, cur.e, -ang);
+                snprintf(s_eyeLabel, sizeof(s_eyeLabel), "turn alone, axis %d, %+g degrees", ax,
+                         sgn * kTurn[ti]);
                 sweepAbout(what, &c0, &c1, &cur, &n1, I76_ZOOM, oneCamera, st);
             }
         }
@@ -2002,7 +2423,30 @@ static void checkStageSweep(const char *what, int winW, int winH, int wantW)
     SweepStats st, one;
     memset(&st, 0, sizeof(st));
     memset(&one, 0, sizeof(one));
+    memset(&s_eye, 0, sizeof(s_eye));
+    s_eyeStep = 0;
+    s_eyeOn = s_eyeWanted;
     sweepStage(what, 0, &st);
+    s_eyeOn = 0;
+    if (s_eyeWanted) {
+        printf("gsb_cull_test: stage %s, behind the eye: %ld pictures, %ld with a triangle the "
+               "in-between camera drops (%ld triangles: %ld dropped at both ticks too, %ld at "
+               "neither); holes %ld pixels; pops (holes the both-ticks rule does not leave) %ld "
+               "pixels in %ld pictures, of triangles dropped at neither tick %ld pixels in %ld "
+               "pictures\n",
+               what, s_eye.pictures, s_eye.withDrop, s_eye.dropT, s_eye.dropBoth, s_eye.dropNoTick,
+               s_eye.holes, s_eye.pops, s_eye.withPop, s_eye.popsNeither, s_eye.withNeither);
+        for (int list = 0; list < 2; list++) {
+            for (int k = 0; k < EYE_WORST; k++) {
+                const EyeWorst *w = list ? &s_eye.worstNeither[k] : &s_eye.worst[k];
+                if (w->pixels > 0) {
+                    printf("  %s %s: %d pixels at step %d (%s), t %.4f, %s part %d\n", what,
+                           list ? "neither tick" : "pop", w->pixels, w->step, w->label, w->t,
+                           s_stage[w->model].name, w->part);
+                }
+            }
+        }
+    }
     printf("gsb_cull_test: stage %s (W %d): %d camera pairs (%d snapped, %d keeping every "
            "part, %d on three cameras), %d pictures between; parts registered %d (the PS2's one "
            "camera %d); parts a picture shows drawn as the tick before's %d, not drawn %d\n",
@@ -2044,6 +2488,24 @@ static void checkStageDump(void)
         }
     }
     registerStage(kept, 0);
+    {
+        /* the eye rule at the dump's own camera, as the PS2 drew it there */
+        double v[16], p[16], sv[16], h[3][4];
+        int behind = 0, dropped = 0;
+        for (int i = 0; i < 16; i++) {
+            v[i] = kI76View[i];
+            p[i] = ((const float *)(matrixptr + 0xC0))[i];
+        }
+        rdcb_mul4d(p, v, sv);
+        for (int i = 0; i < s_triCount; i++) {
+            triClip(sv, (const float (*)[3])s_tri[i], h);
+            behind += h[0][3] <= 0.0 || h[1][3] <= 0.0 || h[2][3] <= 0.0;
+            dropped += eyeDrops((const double (*)[4])h);
+        }
+        printf("gsb_cull_test: stage at the dump's camera: %d triangles with a vertex behind the "
+               "eye, %d of them reaching the picture (not drawn there)\n",
+               behind, dropped);
+    }
     CHECK(gsb_HostCullViewsUsed() == 1, "stage: the still camera culls with %d cameras",
           gsb_HostCullViewsUsed());
     CHECK(fabsf(((const float *)(matrixptr + 0xC0))[0] - I76_ZOOM) < 1e-3f,
@@ -2081,6 +2543,7 @@ static int checkStage(const char *disc)
     printf("gsb_cull_test: stage st18a: %d models, %d parts, %d triangles\n", s_stageCount, parts,
            tris);
     CHECK(s_stageCount >= 3 && tris > 1000, "stage: st18a from the disc");
+    CHECK(flattenStage() > 1000, "stage: st18a's triangles");
     checkStageDump();
     checkStageSweep("16:9", 1920, 1080, 688);
     checkStageSweep("48:9", 4800, 900, 2048);
@@ -2112,6 +2575,7 @@ int main(int argc, char **argv)
           ScreenHeight);
 
     if (argc > 2 && strcmp(argv[1], "--stage") == 0) {
+        s_eyeWanted = argc > 3 && strcmp(argv[3], "--eye") == 0;
         /* the disc's stage (ctest gsb_cull_stage): 77 without the disc */
         const int r = checkStage(argv[2]);
         rd_shutdown();

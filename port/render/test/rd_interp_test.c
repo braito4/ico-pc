@@ -139,6 +139,14 @@
  *             the same locked part of the tick alone recorded as a world
  *             object (the re-base before node flags reached it) is carried
  *             behind the eye or off the screen
+ *   eye ticks (on a device, issue 76) the camera orbits 28 degrees in the
+ *             tick: a wall strip's triangle with a vertex in front of both
+ *             ticks' eyes and behind the blended camera's is drawn half way
+ *             (Enhanced; the frame carries the ticks' cameras, the draw
+ *             RD_VU_TICK_CAMERAS, and they take a point's position through
+ *             the blended camera to each tick's); with the vertex behind
+ *             every camera it stays dropped; the ticks' own pictures (alpha
+ *             0 and 1) carry neither
  */
 #include <math.h>
 #include <stdio.h>
@@ -5719,6 +5727,187 @@ static void runCpu(void)
     testReprojectOneTick();
 }
 
+/* ------------------------------------------- issue 76: the ticks' eyes
+ *
+ * The camera orbits 28 degrees about the origin in a tick (s6OrbitEye: the
+ * eye on a circle of 500 units, looking at its centre); the picture half
+ * way has its eye half way along the chord, 14.9 units inside the circle.
+ * A wall strip A B C D: A, B, C in front of every camera, D on the circle
+ * half way round the arc (121, 0, -485): 14.8 units in front of both ticks'
+ * eyes, 14.8 behind the blended one's (the orbit of the issue 76 sweep,
+ * gsb_cull_test --stage).  Triangle B C D reaches the picture; its strip
+ * has a passing triangle (A B C).  At either tick D lies far beside the
+ * window, in front: drawn clipped (the strip rule, Enhanced); at the
+ * blended camera D is behind the eye, and the rule dropped it, a hole
+ * between the ticks.  Now drawn clipped through the interval
+ * (vu_region_rule, ICO_VU_TICKS); with D at (121, 0, -600), behind every
+ * camera, still dropped; the ticks' own pictures carry no ticks' cameras. */
+
+static const char kObjEye;
+
+static RdMesh eyeStrip(const float (*p)[3], int n)
+{
+    static float qw[1 + 4 * 3][4];
+    memset(qw, 0, sizeof(qw));
+    const uint32_t tag = 0x8000u | (uint32_t)n;
+    memcpy(&qw[0][0], &tag, 4);
+    for (int k = 0; k < n; k++) {
+        memcpy(qw[1 + k * 3], p[k], 3 * sizeof(float));
+        qw[1 + k * 3][3] = 1.0f;
+        qw[1 + k * 3 + 1][2] = 1.0f;
+        qw[1 + k * 3 + 1][3] = k == 0 ? 0.0f : 1.0f; /* the strip flag */
+        qw[1 + k * 3 + 2][0] = 200.0f;
+        qw[1 + k * 3 + 2][1] = 60.0f;
+        qw[1 + k * 3 + 2][2] = 60.0f;
+        qw[1 + k * 3 + 2][3] = 127.0f;
+    }
+    const RdVuBatchDesc bd = {0, 0, 0};
+    RdVuMeshDesc md;
+    memset(&md, 0, sizeof(md));
+    md.qw = (const float (*)[4])qw;
+    md.qwCount = (uint32_t)(1 + n * 3);
+    md.qwPerVertex = RD_VU_QW_PRELIT;
+    md.batchCount = 1;
+    md.batches = &bd;
+    return rd_create_vu_mesh(&md);
+}
+
+static void eyeFrame(RdMesh mesh, double deg)
+{
+    rd_begin_frame();
+    frameHead();
+    double eye[3], v[16], p[16], w[16];
+    s6OrbitEye(deg, eye);
+    s6View(deg, eye, v);
+    s6Proj(p);
+    RdCamera cam;
+    memset(&cam, 0, sizeof(cam));
+    for (int k = 0; k < 16; k++) {
+        cam.view[k] = (float)v[k];
+        cam.proj[k] = (float)p[k];
+    }
+    cam.zoom = 500.0f;
+    rd_set_camera(&cam);
+    s6Translate(w, 0.0, 0.0, 0.0);
+    s_s6List = 0;
+    s6Draw(mesh, v, w, RD_KEY(&kObjEye, 0, 32));
+    rd_end_frame(0);
+}
+
+/* proj view of a camera, as doubles */
+static void eyeScreen(const RdCamera *c, double *s)
+{
+    double p[16], v[16];
+    for (int i = 0; i < 16; i++) {
+        p[i] = c->proj[i];
+        v[i] = c->view[i];
+    }
+    mul4(p, v, s);
+}
+
+/* WORK0 of the present at alpha between the orbit's two ticks of mesh */
+static int eyePresent(RdMesh mesh, float alpha, uint8_t *img, const RdFrame **out)
+{
+    eyeFrame(mesh, 0.0);
+    eyeFrame(mesh, 28.0);
+    const RdFrame *f = rd__interp_frame(rd__prev_frame(), rd__last_frame(), alpha, 1, NULL);
+    *out = f;
+    if (!f || !rd__replay_frame(f, 0, false)) {
+        return 0;
+    }
+    rhi_wait_idle();
+    const uint8_t *p = readWork0();
+    if (!p) {
+        return 0;
+    }
+    memcpy(img, p, TW * TH * 4);
+    return 1;
+}
+
+static int eyeDiff(const uint8_t *a, const uint8_t *b)
+{
+    int n = 0;
+    for (int i = 0; i < TW * TH; i++) {
+        n += memcmp(a + i * 4, b + i * 4, 3) != 0;
+    }
+    return n;
+}
+
+static void testEyeTicks(void)
+{
+    static const float kWall[4][3] = {{40.0f, -20.0f, 0.0f},
+                                      {40.0f, 20.0f, 0.0f},
+                                      {60.0f, -20.0f, -200.0f},
+                                      {121.0f, 0.0f, -485.0f}};
+    static const float kBehind[4][3] = {{40.0f, -20.0f, 0.0f},
+                                        {40.0f, 20.0f, 0.0f},
+                                        {60.0f, -20.0f, -200.0f},
+                                        {121.0f, 0.0f, -600.0f}};
+    static uint8_t abc[TW * TH * 4], wall[TW * TH * 4], behind[TW * TH * 4], tick[TW * TH * 4];
+    RdSettings keep = *rd_get_settings(), s = keep;
+    s.preset = RD_PRESET_ENHANCED;
+    s.sceneScale = 1.0f;
+    s.interpolate = 1;
+    rd_set_settings(&s);
+    const RdMesh m3 = eyeStrip(kWall, 3), m4 = eyeStrip(kWall, 4), mb = eyeStrip(kBehind, 4);
+    CHECK(m3.id && m4.id && mb.id, "eye ticks: the meshes");
+    const RdFrame *f = NULL;
+    if (eyePresent(m3, 0.5f, abc, &f) && eyePresent(m4, 0.5f, wall, &f)) {
+        /* the blended frame carries the ticks' cameras, the wall's draw the mark */
+        const RdCmd *c = findKey(f, 0, RD_KEY(&kObjEye, 0, 32), 0);
+        CHECK(f->hasTickCams && c && c->u[3] == RD_VU_TICK_CAMERAS,
+              "eye ticks: the blended frame has the ticks' cameras (%u) and the draw the mark (%u)",
+              f->hasTickCams, c ? c->u[3] : 0u);
+        /* R_k (St A) = S_k A for a world point A */
+        double st[16], sk[16], ha[4], hk[4], want[4];
+        eyeScreen(&f->camera, st);
+        for (int k = 0; k < 2; k++) {
+            eyeScreen(k ? &rd__last_frame()->camera : &rd__prev_frame()->camera, sk);
+            double err = 0.0, size = 0.0;
+            for (int r = 0; r < 4; r++) {
+                ha[r] = st[r] * 60.0 + st[4 + r] * -20.0 + st[8 + r] * -200.0 + st[12 + r];
+                want[r] = sk[r] * 60.0 + sk[4 + r] * -20.0 + sk[8 + r] * -200.0 + sk[12 + r];
+            }
+            for (int r = 0; r < 4; r++) {
+                hk[r] = 0.0;
+                for (int j = 0; j < 4; j++) {
+                    hk[r] += (double)f->tickCams[k][j * 4 + r] * ha[j];
+                }
+                err = fmax(err, fabs(hk[r] - want[r]));
+                size = fmax(size, fabs(want[r]));
+            }
+            CHECK(err <= 1e-4 * size, "eye ticks: tick %d's camera off by %g of %g", k, err, size);
+        }
+        /* B C D drawn, clipped, beside A B C */
+        const int added = eyeDiff(wall, abc);
+        const uint8_t *q = &wall[((2048 - 1984) * TW + (2150 - 1920)) * 4];
+        CHECK(added > 500 && memcmp(q, &abc[((2048 - 1984) * TW + (2150 - 1920)) * 4], 3) != 0,
+              "eye ticks: the triangle with a vertex behind the blended eye, in front of both "
+              "ticks' eyes, is drawn half way (%d pixels)",
+              added);
+        printf("  eye ticks: half way the wall's triangle B C D adds %d pixels\n", added);
+    } else {
+        CHECK(0, "eye ticks: the presents");
+    }
+    if (eyePresent(mb, 0.5f, behind, &f)) {
+        CHECK(eyeDiff(behind, abc) == 0,
+              "eye ticks: behind the eye at both ticks, not drawn (%d pixels)",
+              eyeDiff(behind, abc));
+    }
+    /* the ticks' own pictures: no ticks' cameras, no mark */
+    for (int k = 0; k < 2; k++) {
+        if (eyePresent(m4, k ? 1.0f : 0.0f, tick, &f)) {
+            const RdCmd *c = findKey(f, 0, RD_KEY(&kObjEye, 0, 32), 0);
+            CHECK(!f->hasTickCams && c && c->u[3] == 0u,
+                  "eye ticks: the tick's picture (alpha %d) has no ticks' cameras", k);
+        }
+    }
+    rd_destroy_vu_mesh(m3);
+    rd_destroy_vu_mesh(m4);
+    rd_destroy_vu_mesh(mb);
+    rd_set_settings(&keep);
+}
+
 int main(void)
 {
     rd__set_not_implemented_fatal(true); /* a stub command replayed stops the test */
@@ -5746,6 +5935,7 @@ int main(void)
         testPixels();
         testMiragePresents();
         testPresent();
+        testEyeTicks();
         CHECK(rd__not_implemented_count() == 0, "no stubbed command replayed");
         const uint32_t verr = rhi_vk_validation_error_count();
         CHECK(verr == 0, "%u validation errors", verr);

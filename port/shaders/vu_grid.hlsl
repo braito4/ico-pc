@@ -92,7 +92,7 @@ VuVSOut vu_grid_main(uint vid, uint variant)
     } else if (corner == 2u) {
         me = c;
     }
-    uint rule = vu_region_rule(a, b, c);
+    uint rule = vu_region_rule(a, b, c, VU_LO0, VU_HI4094);
     if (rule == VU_RULE_STRIP) {
         // a grid's strips share their rows: joined; a grid of one strip is
         // a card unless a triangle of it passes
