@@ -44,4 +44,11 @@ extern int stagePreLoadSectorCnt;
 extern float mpegPlayFadeInSpeed;
 extern int stageExitDataCnt;
 
+#ifdef ICO_RD
+
+/* PC port: the stage a change in flight goes to (set before systemStatus[6];
+   kanban.c kanbanTitleCover) */
+extern int ico_stage_change_to;
+
+#endif
 #endif /* STAGEMANAGER_H */

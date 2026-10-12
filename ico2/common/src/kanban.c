@@ -7,6 +7,13 @@
 #include "charFileManager.h"
 #include "kanban.h"
 
+#ifdef ICO_RD
+
+#include "Basic.h"        /* PC port: fadeStatus, fadeSpeed, fadeColor (kanbanTitleCover) */
+#include "StageManager.h" /* PC port: ico_stage_change_to (kanbanTitleCover) */
+
+#endif
+
 typedef union { /* field names derived */
     int i[4];
     char b[16];
@@ -75,6 +82,7 @@ extern void gif_HostDrawKey(const void *obj, int part, int ordinal);
    numbers. */
 extern void gif_FullFrameBegin(void);
 extern void gif_FullFrameEnd(void);
+extern int gif_HostFrameWidth(void); /* the native frame's width (kanbanTitleCover) */
 
 #define KANBAN_FULL_BEGIN() gif_FullFrameBegin()
 #define KANBAN_FULL_END() gif_FullFrameEnd()
@@ -451,29 +459,48 @@ static void display_layout(Kanban *k)
 
 #ifdef ICO_RD
 
-/* PC port (v0.6.2, TITLE-COVER): the whole frame black while a stage change
-   is in flight, from the stage manager setting systemStatus[6]
-   (StageManager.c, after exit_stage) until the next fade has reached full
-   black.  The End Game and game over exits switch with a fade-out so slow it
-   never shows (stgmgrForceSwitchWithFade(1, 0.025, 4)), so the half-freed
-   stage was drawn, with the loading layout's near-black over the 4:3 box
-   only; on a wide frame the pieces of it that fail the region test beside
-   the box were GPU-clipped away on the PS2 and show here.  The title's own
-   fade then starts at level 144 (gsb_fade), already black, so the cover
-   ends when fadeColor[3] has reached 128 on that fade (fadeSpeed < 0), or
-   when no fade is running.  Same mechanism as kanbanExec's backdrop: list
-   11, recorded after the loading layout and the signs, so it is above them
-   and above the kept frame (a keep frame replays lists 11 and 12), full
-   frame at every aspect, alpha 128 of the GS's 0x80 scale: opaque.  Not
+/* PC port (v0.6.2, TITLE-COVER): the frame black while a stage change to
+   the title is in flight, from the stage manager setting systemStatus[6]
+   (StageManager.c, after exit_stage) until the title's fade has reached
+   full black.  The End Game and game over exits switch with a fade-out so
+   slow it never shows (stgmgrForceSwitchWithFade(1, 0.025, 4)), so the
+   half-freed stage was drawn, with the loading layout's near-black over the
+   4:3 box only; on a wide frame the pieces of it that fail the region test
+   beside the box were GPU-clipped away on the PS2 and show here.  Two
+   phases, so the PS2's own picture is kept wherever it shows: first only
+   the frame beside the 4:3 box (the two bands, full height; at 4:3 they are
+   off the frame, so nothing changes there), and the box keeps the PS2's
+   fade over the kept frame (the title demo skipped with Start fades out at
+   speed 8, the game over quit at 0.4, the credits' return at 16: gsb_fade,
+   speed / 2 a frame); then, once the box is black as well, the whole
+   frame: the fade-out has reached level 128 (fadeColor[3], rising), or
+   the loading layout (0x35, lt_switch_layout in the stage manager) is
+   fully in (lt_fade_status 2: End Game's case, whose fade never shows).
+   The title's own fade starts at level 144 (gsb_fade), already black, so
+   the cover ends when fadeColor[3] has reached 128 on that fade
+   (fadeSpeed < 0), or when no fade is running.  Same mechanism as
+   kanbanExec's backdrop: list 11, recorded after the loading layout and
+   the signs, so it is above them and above the kept frame (a keep frame
+   replays lists 11 and 12), alpha 128 of the GS's 0x80 scale: opaque; the
+   whole frame through gif_FullFrameBegin (kanbanSprite), the bands in the
+   640 grid of the centred 4:3 box, from its edges (grid x -+320, GS 2048
+   -+ 256 exactly) out past the widest frame, none on a 4:3 frame.  Not
    during the boot (kanbanBootEnd 0): the boot signs have their own
    backdrop.  Only for a change whose target is the title (stage 1): an
    in-game area change keeps its look. */
 extern int kanbanBootEnd;
-extern int ico_stage_change_to; /* StageManager.c: set before systemStatus[6] */
 
-#include "Basic.h" /* fadeStatus, fadeSpeed, fadeColor */
+#define TITLE_COVER_BANDS 1      /* titleCoverOn: the bands beside the 4:3 box */
+#define TITLE_COVER_FRAME 2      /* the whole frame */
+#define TITLE_COVER_LOADING 0x35 /* the loading layout (StageManager.c) */
 
-static int titleCoverOn; /* port: the cover is up */
+static int titleCoverOn; /* port: 0, or the cover's phase */
+
+/* the bands, in kanbanSprite's sixteenths of the 640 grid about its
+   centre: x from -2240 to -320 and 320 to 2240 (GS 2048 -+ 256 to -+ 1792;
+   the widest frame is 2560), the grid's 224 lines */
+static const Pkt16 titleCoverBand[2] = {{{-35840, -1792, 30720, 3584}},
+                                        {{5120, -1792, 30720, 3584}}};
 
 int kanbanTitleCoverActive(void)
 {
@@ -485,16 +512,24 @@ void kanbanTitleCover(void)
     static const unsigned char black[4] = {0, 0, 0, 128};
     unsigned char col[4];
     Pkt16 pkt;
+    int i;
 
     if (kanbanBootEnd == 0) {
         titleCoverOn = 0;
         return;
     }
     if (systemStatus[6] != 0 && ico_stage_change_to == 1) {
-        titleCoverOn = 1;
+        if (titleCoverOn == 0) {
+            titleCoverOn = TITLE_COVER_BANDS;
+        }
     } else if (titleCoverOn != 0 &&
                ((fadeColor[3] >= 128 && fadeSpeed < 0.0f) || fadeStatus == 0)) {
         titleCoverOn = 0;
+    }
+    if (titleCoverOn != 0 &&
+        ((fadeColor[3] >= 128 && fadeSpeed > 0.0f) ||
+         (current_layout_id == TITLE_COVER_LOADING && lt_fade_status() == 2))) {
+        titleCoverOn = TITLE_COVER_FRAME; /* the box is black too */
     }
     if (titleCoverOn == 0) {
         return;
@@ -504,12 +539,22 @@ void kanbanTitleCover(void)
     gif_SetZTest(0);
     gif_SetZWrite(0);
     gif_SetAlpha(1, 7, 0);
-    pkt = kanbanSprite;
-    KANBAN_FULL_BEGIN();
-    KANBAN_HOST_KEY(&titleCoverOn, 0);
-    gif_SpriteSensitive(pkt.i, 0xFFFFFFFFu, 0, col, 1);
-    KANBAN_HOST_KEY(0, 0);
-    KANBAN_FULL_END();
+    if (titleCoverOn == TITLE_COVER_FRAME) {
+        pkt = kanbanSprite;
+        KANBAN_FULL_BEGIN();
+        KANBAN_HOST_KEY(&titleCoverOn, 0);
+        gif_SpriteSensitive(pkt.i, 0xFFFFFFFFu, 0, col, 1);
+        KANBAN_HOST_KEY(0, 0);
+        KANBAN_FULL_END();
+    } else if (gif_HostFrameWidth() > 512) {
+        /* a 4:3 frame (512) has no band: nothing recorded */
+        for (i = 0; i < 2; i++) {
+            pkt = titleCoverBand[i];
+            KANBAN_HOST_KEY(&titleCoverOn, 1 + i);
+            gif_SpriteSensitive(pkt.i, 0xFFFFFFFFu, 0, col, 1);
+            KANBAN_HOST_KEY(0, 0);
+        }
+    }
     gif_SetZWrite(1);
     gif_SetZTest(1);
     gif_EndPacket();

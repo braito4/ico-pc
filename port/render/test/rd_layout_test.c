@@ -77,6 +77,14 @@ int screenOffsetX, screenOffsetY;
 int fbKeep;
 int kanbanBootEnd;
 int ico_stage_change_to;
+int current_layout_id;
+static int s_ltFade; /* lt_fade_status: 2 a layout fully in */
+
+int lt_fade_status(void)
+{
+    return s_ltFade;
+}
+
 int fadeStatus;
 float fadeSpeed;
 unsigned char fadeColor[4];
@@ -623,15 +631,22 @@ static void checkKanbanBackdrop(int fw)
 /* ------------------------------------------ the title exit's cover */
 
 /* kanbanTitleCover (common/src/kanban.c, PC port v0.6.2) records one frame
-   at a native width fw and returns the walk of it: the screen batches it
-   drew, and the first one's vertices in *vtx. */
-static int last_scr_space;
+   at a native width fw; its sprites (every screen batch's vertex pairs) go
+   to s_cover, their count returned (-1: no frame) */
+typedef struct CoverSprite {
+    int x0, x1, y0, y1; /* GS 1/16 pixels, as recorded (16 bits) */
+    uint8_t rgba[4];
+    int space;
+} CoverSprite;
 
-static int coverFrame(int fw, const RdScreenVtx **vtx)
+static CoverSprite s_cover[8];
+
+static int coverFrame(int fw)
 {
     static const uint8_t black[4] = {0, 0, 0, 0x80};
     static Walk w;
     const RdFrame *f;
+    int n = 0;
 
     gif_HostSetFrameWidth(fw);
     dl_SetDLPriority(0);
@@ -641,25 +656,61 @@ static int coverFrame(int fw, const RdScreenVtx **vtx)
     dl_Swap();
     gif_HostSetFrameWidth(512);
     memset(&w, 0, sizeof(w));
-    *vtx = NULL;
     f = rd__last_frame();
     if (!f) {
         return -1;
     }
-    RdStateBlock s = f->startState;
-    rd__walk(f, 0, &s, collect, &w);
-    if (w.screens > 0) {
-        *vtx = (const RdScreenVtx *)(f->payload + w.scr[0]->u[0]);
-        last_scr_space = w.scr[0]->b[1];
+    RdStateBlock st = f->startState;
+    rd__walk(f, 0, &st, collect, &w);
+    for (int i = 0; i < w.screens; i++) {
+        const RdScreenVtx *v = (const RdScreenVtx *)(f->payload + w.scr[i]->u[0]);
+        for (uint32_t k = 0; k + 1 < w.scr[i]->u[1] && n < 8; k += 2, n++) {
+            s_cover[n].x0 = v[k].x;
+            s_cover[n].x1 = v[k + 1].x;
+            s_cover[n].y0 = v[k].y;
+            s_cover[n].y1 = v[k + 1].y;
+            memcpy(s_cover[n].rgba, v[k + 1].rgba, 4);
+            s_cover[n].space = w.scr[i]->b[1];
+        }
     }
-    return w.screens;
+    return n;
 }
 
-/* the cover is up from systemStatus[6] until the next fade is at 128 and
-   falling, in the frame it records, and only then; the boot has none */
+/* every cover sprite opaque black over the grid's 224 lines */
+static void checkCoverBlack(int fw, int n, const char *what)
+{
+    const int y0 = 0x8000 - 1792 * 512 / 224, y1 = y0 + 3584 * 512 / 224;
+    for (int i = 0; i < n; i++) {
+        const CoverSprite *c = &s_cover[i];
+        CHECK(c->y0 == gs16(y0) && c->y1 == gs16(y1), "cover %d %s: the grid's 224 lines (%d, %d)",
+              fw, what, c->y0, c->y1);
+        CHECK(c->rgba[0] == 0 && c->rgba[1] == 0 && c->rgba[2] == 0 && c->rgba[3] == 128,
+              "cover %d %s: opaque black, alpha 128 (%u,%u,%u,%u)", fw, what, c->rgba[0],
+              c->rgba[1], c->rgba[2], c->rgba[3]);
+    }
+}
+
+/* the whole frame: one full-frame sprite across the native width */
+static void checkCoverFrame(int fw, int n, const char *what)
+{
+    const int c0 = 0x8000, half = fw / 2 * 16;
+    CHECK(n == 1, "cover %d %s: the whole frame, one sprite (%d)", fw, what, n);
+    if (n == 1) {
+        CHECK(s_cover[0].space == RD_SPACE_FULLFRAME, "cover %d %s: full-frame tagged", fw, what);
+        CHECK(s_cover[0].x0 == gs16(c0 - half) && s_cover[0].x1 == gs16(c0 + half),
+              "cover %d %s: spans the native width, GS 2048 -+ %d (%d, %d, want %d, %d)", fw, what,
+              fw / 2, s_cover[0].x0, s_cover[0].x1, gs16(c0 - half), gs16(c0 + half));
+        checkCoverBlack(fw, n, what);
+    }
+}
+
+/* the cover is up from systemStatus[6] until the title's fade is at 128
+   and falling: first the bands beside the 4:3 box only (none on a 4:3
+   frame), the box keeping the PS2's fade; the whole frame once the
+   fade-out has reached 128 or the loading layout is fully in; the boot
+   has none */
 static void checkTitleCover(int fw)
 {
-    const RdScreenVtx *v;
     int n;
 
     systemStatus[6] = 0;
@@ -667,53 +718,95 @@ static void checkTitleCover(int fw)
     fadeStatus = 0;
     fadeSpeed = 0.0f;
     fadeColor[3] = 0;
-    n = coverFrame(fw, &v);
-    CHECK(n == 0, "cover %d: none with no stage change (%d batches)", fw, n);
+    current_layout_id = 0;
+    s_ltFade = 2;
+    n = coverFrame(fw);
+    CHECK(n == 0, "cover %d: none with no stage change (%d sprites)", fw, n);
 
     systemStatus[6] = 1;
     kanbanBootEnd = 0;
-    n = coverFrame(fw, &v);
-    CHECK(n == 0, "cover %d: none during the boot (%d batches)", fw, n);
+    n = coverFrame(fw);
+    CHECK(n == 0, "cover %d: none during the boot (%d sprites)", fw, n);
 
     kanbanBootEnd = 1;
     ico_stage_change_to = 5;
-    n = coverFrame(fw, &v);
-    CHECK(n == 0, "cover %d: none for a change to another stage (%d batches)", fw, n);
+    n = coverFrame(fw);
+    CHECK(n == 0, "cover %d: none for a change to another stage (%d sprites)", fw, n);
 
+    /* the title demo skipped with Start: fade-out speed 8, at level 60;
+       the loading layout switched to, fading in */
     ico_stage_change_to = 1;
-    fadeStatus = 2; /* End Game's fade-out: 0.025 never shows */
+    fadeStatus = 1;
+    fadeSpeed = 8.0f;
+    fadeColor[3] = 60;
+    current_layout_id = 0x35;
+    s_ltFade = 1;
+    for (int f = 0; f < 2; f++) {
+        n = coverFrame(fw);
+        if (fw <= 512) {
+            CHECK(n == 0 && kanbanTitleCoverActive() != 0,
+                  "cover %d: up, nothing drawn on a 4:3 frame until the box is black (%d)", fw, n);
+            continue;
+        }
+        CHECK(n == 2, "cover %d: the two bands while the fade-out runs (%d)", fw, n);
+        if (n == 2) {
+            const int c0 = 0x8000;
+            const int lo = c0 - 256 * 16, hi = c0 + 256 * 16;
+            const int far = 1792 * 16;
+            CHECK(s_cover[0].space != RD_SPACE_FULLFRAME && s_cover[1].space != RD_SPACE_FULLFRAME,
+                  "cover %d: the bands in the 4:3 box's grid", fw);
+            CHECK(s_cover[0].x0 == gs16(c0 - far) && s_cover[0].x1 == gs16(lo),
+                  "cover %d: the left band from GS %d to the box's edge 1792 (%d, %d)", fw,
+                  2048 - fw / 2, s_cover[0].x0, s_cover[0].x1);
+            CHECK(s_cover[1].x0 == gs16(hi) && s_cover[1].x1 == gs16(c0 + far),
+                  "cover %d: the right band from the box's edge 2304 (%d, %d)", fw, s_cover[1].x0,
+                  s_cover[1].x1);
+            CHECK(c0 - far <= (2048 - fw / 2) * 16 && c0 + far >= (2048 + fw / 2) * 16,
+                  "cover %d: the bands reach the frame's edges", fw);
+            checkCoverBlack(fw, n, "bands");
+        }
+    }
+
+    /* the fade-out at 128: the box is black, the whole frame */
+    fadeColor[3] = 128;
+    n = coverFrame(fw);
+    checkCoverFrame(fw, n, "at the fade-out's 128");
+
+    /* End Game: fade 0.025 never shows; the loading layout fully in */
+    systemStatus[6] = 0;
+    fadeStatus = 0;
+    n = coverFrame(fw);
+    CHECK(n == 0 && kanbanTitleCoverActive() == 0, "cover %d: reset (%d)", fw, n);
+    systemStatus[6] = 1;
+    fadeStatus = 2;
     fadeSpeed = 0.025f;
     fadeColor[3] = 0;
-    n = coverFrame(fw, &v);
-    CHECK(n == 1, "cover %d: one batch while the stage change is in flight (%d)", fw, n);
-    if (n == 1 && v) {
-        const int c0 = 0x8000, half = fw / 2 * 16;
-        const int y0 = c0 - 1792 * 512 / 224, y1 = y0 + 3584 * 512 / 224;
-        CHECK(last_scr_space == RD_SPACE_FULLFRAME, "cover %d: full-frame tagged", fw);
-        CHECK(v[0].x == gs16(c0 - half) && v[1].x == gs16(c0 + half),
-              "cover %d: spans the native width, GS 2048 -+ %d (%d, %d, want %d, %d)", fw, fw / 2,
-              v[0].x, v[1].x, gs16(c0 - half), gs16(c0 + half));
-        CHECK(v[0].y == gs16(y0) && v[1].y == gs16(y1), "cover %d: the grid's 224 lines (%d, %d)",
-              fw, v[0].y, v[1].y);
-        CHECK(v[1].rgba[0] == 0 && v[1].rgba[1] == 0 && v[1].rgba[2] == 0 && v[1].rgba[3] == 128,
-              "cover %d: opaque black, alpha 128 (%u,%u,%u,%u)", fw, v[1].rgba[0], v[1].rgba[1],
-              v[1].rgba[2], v[1].rgba[3]);
-    }
+    s_ltFade = 1;
+    n = coverFrame(fw);
+    CHECK(n == (fw > 512 ? 2 : 0), "cover %d: End Game, the layout fading in: the bands (%d)", fw,
+          n);
+    s_ltFade = 2;
+    n = coverFrame(fw);
+    checkCoverFrame(fw, n, "with the loading layout in");
+    /* the layout leaves: the box stays black, the whole frame stays */
+    current_layout_id = 0;
+    n = coverFrame(fw);
+    checkCoverFrame(fw, n, "after the loading layout");
 
     /* the load ends: the title's fade has not started yet, the cover stays */
     systemStatus[6] = 0;
-    n = coverFrame(fw, &v);
-    CHECK(n == 1, "cover %d: stays until the title's fade is black (%d)", fw, n);
+    n = coverFrame(fw);
+    checkCoverFrame(fw, n, "until the title's fade is black");
 
     /* the title's fade: level 144, so fadeColor[3] 128 and falling */
     fadeStatus = 2;
     fadeSpeed = -4.0f;
     fadeColor[3] = 128;
-    n = coverFrame(fw, &v);
+    n = coverFrame(fw);
     CHECK(n == 0 && kanbanTitleCoverActive() == 0, "cover %d: ends at the title's fade (%d)", fw,
           n);
 
-    n = coverFrame(fw, &v);
+    n = coverFrame(fw);
     CHECK(n == 0, "cover %d: stays off afterwards (%d)", fw, n);
     fadeStatus = 0;
     fadeSpeed = 0.0f;
