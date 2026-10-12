@@ -124,3 +124,37 @@ PY
 pkg_assert_tar_has() {
     tar -tzf "$1" | grep -xF "$2" >/dev/null
 }
+
+# pkg_assert_zip_lacks <zip> <entry>: returns 1 when the zip lists the entry
+pkg_assert_zip_lacks() {
+    ! pkg_assert_zip_has "$1" "$2"
+}
+
+# pkg_assert_zip_line <zip> <entry> <regex>: returns 0 when some line of the
+# entry matches the (Python) regular expression, 1 otherwise or when the
+# entry is missing
+pkg_assert_zip_line() {
+    python3 -I - "$1" "$2" "$3" <<'PY'
+import re, sys, zipfile
+with zipfile.ZipFile(sys.argv[1]) as z:
+    try:
+        data = z.read(sys.argv[2]).decode("utf-8", "replace")
+    except KeyError:
+        sys.exit(1)
+rx = re.compile(sys.argv[3])
+sys.exit(0 if any(rx.search(l) for l in re.split(r"(?<=\n)", data)) else 1)
+PY
+}
+
+# pkg_assert_tar_lacks <tar.gz> <entry>: returns 1 when the archive lists the entry
+pkg_assert_tar_lacks() {
+    ! pkg_assert_tar_has "$1" "$2"
+}
+
+# pkg_assert_tar_line <tar.gz> <entry> <extended regex>: returns 0 when some
+# line of the entry matches
+pkg_assert_tar_line() {
+    local t
+    t="$(tar -xzOf "$1" "$2")" || return 1
+    printf '%s\n' "$t" | grep -E -- "$3" >/dev/null
+}

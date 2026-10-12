@@ -34,8 +34,22 @@ Portable mode keeps your saves, settings and the game's files beside the
 program instead, in a folder named `userdata`. That is handy on a USB
 stick, or to keep two separate copies of the game.
 
-To turn it on, make an empty folder named `userdata` beside the program.
-On Windows that is inside the `x64` folder. That is all.
+There are three ways to have it:
+
+- **Download the portable version.** The release has a portable download
+  for Windows and one for Linux (`...-win-portable.zip`,
+  `...-linux-portable.tar.gz`). It is the same game with portable mode
+  already on: unpack it where you want it and the game makes `userdata` at
+  the first start. Its `ico-pc.ini` has the line `portable=1`.
+- **Run the make-portable script** that comes in the normal download:
+  `make_portable.cmd` in the `x64` folder on Windows (double-click it) or
+  `make_portable.sh` on Linux. It makes the `userdata` folder for you. If
+  you already have saves in your user folder, it offers to move them in. It
+  stops without changing anything if the game is running or if `userdata`
+  already holds files.
+- **Make the folder yourself.** Make an empty folder named `userdata`
+  beside the program. On Windows that is inside the `x64` folder. That is
+  all.
 
 You can also turn it on in `ico-pc.ini`, the file beside the program. Open
 it in a text editor and find this line:
@@ -49,8 +63,8 @@ Delete the `#` at the start so it reads `portable=1`, and save the file.
 To check, look in `logs/ico-pc.log`: one of the first lines ends in
 "(portable)".
 
-To turn it off again even with a `userdata` folder there, put this line in
-`ico-pc.ini`:
+To turn it off again even with a `userdata` folder there (the portable
+download too), put this line in `ico-pc.ini`:
 
 ```
 portable=0
@@ -58,7 +72,7 @@ portable=0
 
 ## Move an existing game into portable mode
 
-The game does not move your files for you.
+The make-portable script above can move them for you. To do it by hand:
 
 1. Close the game.
 2. Copy everything from the user folder ([where it is](#where-your-saves-are))

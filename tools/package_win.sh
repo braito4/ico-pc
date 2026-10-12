@@ -4,7 +4,9 @@
 # Builds the Windows package for HEAD: a clean worktree of HEAD under
 # build-host/pkg-wt, win-x64 with the window build and
 # -DICO_LINK_EXE=ON, staged under dist/stage/x64/ and zipped as
-# dist/ico-pc-<label>-win.zip (root dir ico-pc-<label>/, with VERSION.txt). Quiet; the log is
+# dist/ico-pc-<label>-win.zip (root dir ico-pc-<label>/, with VERSION.txt)
+# and, from the same stage, dist/ico-pc-<label>-win-portable.zip (portable=1
+# in ico-pc.ini, no make_portable.cmd). Quiet; the log is
 # build-host/pkg-<label>.log. Safe to re-run. Needs no baserom (the binary holds
 # no disc data). ICO_PKG_FILES="path ..." overlays working-tree files on HEAD.
 set -euo pipefail
@@ -17,6 +19,7 @@ log="$root/build-host/pkg-$label.log"
 wt="$root/build-host/pkg-wt"
 stage="$root/dist/stage"
 zip="$root/dist/ico-pc-$label-win.zip"
+zipp="$root/dist/ico-pc-$label-win-portable.zip"
 : > "$log"
 
 trap cleanup EXIT
@@ -48,6 +51,7 @@ done
 for f in compare_backends.cmd compare_png.ps1; do
     [[ -f "port/rhi/test/$f" ]] || fail "port/rhi/test/$f is missing from HEAD"
 done
+[[ -f tools/portable/make_portable.cmd ]] || fail "tools/portable/make_portable.cmd is missing from HEAD"
 cd "$root"
 
 # the textures folder's note and the archive checks
@@ -88,6 +92,8 @@ sed -i 's/$/\r/' "$d/tools/README.txt"
 # cmd.exe runs it either way); the package gets CRLF, what Notepad and
 # cmd.exe expect of a batch file
 sed 's/$/\r/' "$wt/port/rhi/test/compare_backends.cmd" > "$d/tools/compare_backends.cmd"
+# the make-portable script (stored with LF, CRLF in the package)
+sed 's/$/\r/' "$wt/tools/portable/make_portable.cmd" > "$d/make_portable.cmd"
 # the textures folder, with a note in it (the zip keeps files, so the
 # note is what keeps the folder)
 rm -rf "$d/textures" "$d/models" "$d/reshade"
@@ -111,27 +117,48 @@ printf 'ico-pc %s\r\nbuilt %s\r\ncommit %s\r\n' "$label" "$date_str" "$commit" >
 # the stage folder is also where the build
 # is tried, so it can hold Ico_PAL.iso (found beside the exe), dumps\
 # (frames from the disc) and logs\, none of which may be shipped.
-rm -f "$zip"
-pkgroot="$root/build-host/tmp/zip-$label"
-rm -rf "$pkgroot"
-mkdir -p "$pkgroot/ico-pc-$label"
-cp -a "$stage/README.md" "$pkgroot/ico-pc-$label/README.md"
-cp -a "$stage/docs" "$pkgroot/ico-pc-$label/docs"
-cp -a "$stage/VERSION.txt" "$pkgroot/ico-pc-$label/VERSION.txt"
-mkdir -p "$pkgroot/ico-pc-$label/$a/tools" "$pkgroot/ico-pc-$label/$a/$pkg_textures_rel" "$pkgroot/ico-pc-$label/$a/$pkg_models_rel" "$pkgroot/ico-pc-$label/$a/$pkg_reshade_rel"
-for f in "ico_pc_$a.exe" "ico_pc_$a.map" SDL3.dll ico-pc.ini LICENSE.txt NOTICES.txt \
-    tools/rhi_d3d12_test.exe tools/rd_replay_tool.exe tools/mc_import.exe tools/SDL3.dll tools/compare_png.ps1 \
-    tools/compare_backends.cmd tools/README.txt "$pkg_textures_rel/README.txt" "$pkg_models_rel/README.txt" "$pkg_reshade_rel/README.txt"; do
-    cp -a "$stage/$a/$f" "$pkgroot/ico-pc-$label/$a/$f" || fail "stage: no $a/$f"
-done
-pkg_zip_dir "$pkgroot" "ico-pc-$label" "$zip" >>"$log" 2>&1 || fail "zip"
-rm -rf "$pkgroot"
-for n in "${pkg_player_docs[@]}"; do
-    pkg_assert_zip_has "$zip" "ico-pc-$label/docs/$n.md" || fail "the zip lacks docs/$n.md"
-done
-for r in "${pkg_note_rels[@]}"; do
-    pkg_assert_zip_has "$zip" "ico-pc-$label/$a/$r/README.txt" || fail "the zip lacks $a/$r/README.txt"
+# Two archives from the one stage: the normal one (with make_portable.cmd)
+# and the portable one (ico-pc.ini with portable=1, a paragraph in the README,
+# no make_portable.cmd).
+for variant in normal portable; do
+    if [[ "$variant" == portable ]]; then out="$zipp"; else out="$zip"; fi
+    rm -f "$out"
+    pkgroot="$root/build-host/tmp/zip-$label-$variant"
+    rm -rf "$pkgroot"
+    top="$pkgroot/ico-pc-$label"
+    mkdir -p "$top/$a/tools" "$top/$a/$pkg_textures_rel" "$top/$a/$pkg_models_rel" "$top/$a/$pkg_reshade_rel"
+    cp -a "$stage/README.md" "$top/README.md"
+    cp -a "$stage/docs" "$top/docs"
+    cp -a "$stage/VERSION.txt" "$top/VERSION.txt"
+    files=("ico_pc_$a.exe" "ico_pc_$a.map" SDL3.dll ico-pc.ini LICENSE.txt NOTICES.txt
+        tools/rhi_d3d12_test.exe tools/rd_replay_tool.exe tools/mc_import.exe tools/SDL3.dll tools/compare_png.ps1
+        tools/compare_backends.cmd tools/README.txt "$pkg_textures_rel/README.txt" "$pkg_models_rel/README.txt" "$pkg_reshade_rel/README.txt")
+    [[ "$variant" == portable ]] || files+=(make_portable.cmd)
+    for f in "${files[@]}"; do
+        cp -a "$stage/$a/$f" "$top/$a/$f" || fail "stage: no $a/$f"
+    done
+    if [[ "$variant" == portable ]]; then
+        pkg_write_ini "$top/$a/ico-pc.ini" windows "$iso" portable
+        pkg_portable_readme_note "$top/README.md"
+    fi
+    pkg_zip_dir "$pkgroot" "ico-pc-$label" "$out" >>"$log" 2>&1 || fail "zip $variant"
+    rm -rf "$pkgroot"
+    for n in "${pkg_player_docs[@]}"; do
+        pkg_assert_zip_has "$out" "ico-pc-$label/docs/$n.md" || fail "the $variant zip lacks docs/$n.md"
+    done
+    for r in "${pkg_note_rels[@]}"; do
+        pkg_assert_zip_has "$out" "ico-pc-$label/$a/$r/README.txt" || fail "the $variant zip lacks $a/$r/README.txt"
+    done
+    if [[ "$variant" == portable ]]; then
+        pkg_assert_zip_lacks "$out" "ico-pc-$label/$a/make_portable.cmd" || fail "the portable zip has make_portable.cmd"
+        pkg_assert_zip_line "$out" "ico-pc-$label/$a/ico-pc.ini" '^portable=1$' || fail "the portable zip's ico-pc.ini lacks portable=1"
+    else
+        pkg_assert_zip_has "$out" "ico-pc-$label/$a/make_portable.cmd" || fail "the zip lacks $a/make_portable.cmd"
+        pkg_assert_zip_line "$out" "ico-pc-$label/$a/ico-pc.ini" '^portable=1$' && fail "the normal zip's ico-pc.ini has portable=1"
+        pkg_assert_zip_line "$out" "ico-pc-$label/$a/make_portable.cmd" '\r$' || fail "make_portable.cmd is not CRLF"
+    fi
 done
 
 echo "$zip"
+echo "$zipp"
 echo "built from $commit"

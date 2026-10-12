@@ -656,10 +656,21 @@ Run the same steps locally before pushing.
 `tools/package_win.sh <label>` and `tools/package_linux.sh <label>` build
 the packages for HEAD in a clean worktree (`dist/ico-pc-<label>-win.zip`,
 `dist/ico-pc-<label>-linux.tar.gz`). Neither contains game data; both carry
-the README, the player guides, the licence files and the save importer.
+the README, the player guides, the licence files and the save importer, and
+a make-portable script (`x64/make_portable.cmd` in the zip, `make_portable.sh`
+in the tar; the sources are `tools/portable/`). Each script also writes a
+second archive from the same stage, the portable download:
+`dist/ico-pc-<label>-win-portable.zip` and
+`dist/ico-pc-<label>-linux-portable.tar.gz`. It differs in three ways: its
+`ico-pc.ini` has `portable=1` on (the game makes `userdata` beside the
+program at the first start), the README has a paragraph saying so, and it
+has no make-portable script. Both scripts check each archive's entries
+afterwards, and `tools/test/package_textures_test.sh` (ctest `package_textures`)
+covers the helpers.
 `tools/package_linux.sh` packages for the host's architecture: on an arm64
 host it builds `linux-arm64` into `dist/ico-pc-<label>-linux-arm64.tar.gz`
-(stage `dist/stage/linux-arm64/`, log `build-host/pkg-linux-arm64-<label>.log`),
+(stage `dist/stage/linux-arm64/`, log `build-host/pkg-linux-arm64-<label>.log`)
+and the portable `dist/ico-pc-<label>-linux-arm64-portable.tar.gz`,
 the same contents with the aarch64 program and SDL3 (and, in
 `NOTICES.txt`, the notices of the Wayland protocol files SDL3 is built
 with). On either architecture it fails when a shipped binary (`ico_pc`,
@@ -670,7 +681,7 @@ each binary's newest.
 The release's arm64 archive is built by CI, since the maintainer's machine
 is x86-64. Pushing a `v*` tag runs `ci.yml`, and its `linux-arm64` job,
 once its gating tests pass, runs `tools/package_linux.sh <tag>` and uploads
-the archive, its `.sha256` and the packaging log as the artifact
+both archives (normal and portable), their `.sha256` files and the packaging log as the artifact
 `ico-pc-<tag>-linux-arm64` (kept 30 days). Pull requests and pushes to main
 never package. To fetch it (the artifact keeps the `dist/` and
 `build-host/` folders):
@@ -678,8 +689,8 @@ never package. To fetch it (the artifact keeps the `dist/` and
 ```sh
 gh run list --workflow ci.yml --branch <tag> --limit 1     # the tag's run id
 gh run download <run-id> -n ico-pc-<tag>-linux-arm64 -D build-host/tmp/ci-arm64
-mv build-host/tmp/ci-arm64/dist/ico-pc-<tag>-linux-arm64.tar.gz* dist/
-(cd dist && sha256sum -c ico-pc-<tag>-linux-arm64.tar.gz.sha256)
+mv build-host/tmp/ci-arm64/dist/ico-pc-<tag>-linux-arm64*.tar.gz* dist/
+(cd dist && sha256sum -c ico-pc-<tag>-linux-arm64.tar.gz.sha256 ico-pc-<tag>-linux-arm64-portable.tar.gz.sha256)
 tar -xzOf dist/ico-pc-<tag>-linux-arm64.tar.gz ico-pc-<tag>/VERSION.txt  # the tag's commit
 ```
 
@@ -731,10 +742,11 @@ a release build into a function name, run
 `toolchains/llvm/prebuilt/linux-x86_64/bin/`) with the stage folder of the same
 build.
 
-A release uploads the three packages:
+A release uploads the three packages, each desktop one with its portable
+twin (the arm64 pair comes from CI, above):
 
 ```sh
-gh release create <tag> dist/ico-pc-<tag>-win.zip dist/ico-pc-<tag>-linux.tar.gz dist/ico-pc-<tag>-android.apk
+gh release create <tag> dist/ico-pc-<tag>-win.zip dist/ico-pc-<tag>-win-portable.zip dist/ico-pc-<tag>-linux.tar.gz dist/ico-pc-<tag>-linux-portable.tar.gz dist/ico-pc-<tag>-linux-arm64.tar.gz dist/ico-pc-<tag>-linux-arm64-portable.tar.gz dist/ico-pc-<tag>-android.apk
 ```
 
 ## Appendix, maintainers: the base ELF

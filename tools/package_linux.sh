@@ -5,7 +5,9 @@
 # build-host/pkg-linux-wt (no baserom, no uncommitted work), preset
 # linux-x64 with the window build (-DICO_HEADLESS=OFF -DICO_LINK_EXE=ON),
 # staged under dist/stage/linux/ and archived as dist/ico-pc-<label>-linux.tar.gz
-# (root dir ico-pc-<label>/), with tools/mc_import, README.md, the player guides in docs/ and VERSION.txt. Quiet; the log is build-host/pkg-linux-<label>.log.
+# (root dir ico-pc-<label>/) and, from the same stage, as
+# dist/ico-pc-<label>-linux-portable.tar.gz (portable=1 in ico-pc.ini, no
+# make_portable.sh), with tools/mc_import, README.md, the player guides in docs/ and VERSION.txt. Quiet; the log is build-host/pkg-linux-<label>.log.
 # Safe to re-run. Builds only: it never runs the game.
 #
 # ICO_PKG_FILES="path ..." copies those working-tree files over the HEAD
@@ -20,7 +22,8 @@
 # host the preset is linux-arm64 (the window build is its default), and the
 # names take -arm64: dist/ico-pc-<label>-linux-arm64.tar.gz, staged under
 # dist/stage/linux-arm64/, logged to build-host/pkg-linux-arm64-<label>.log.
-# The x86-64 names are as above.
+# The x86-64 names are as above; the portable archive is
+# dist/ico-pc-<label>-linux-arm64-portable.tar.gz there.
 set -euo pipefail
 
 pkg_name=package_linux
@@ -39,6 +42,7 @@ log="$root/build-host/pkg-$suffix-$label.log"
 wt="$root/build-host/pkg-$suffix-wt"
 stage="$root/dist/stage/$suffix"
 tgz="$root/dist/ico-pc-$label-$suffix.tar.gz"
+tgzp="$root/dist/ico-pc-$label-$suffix-portable.tar.gz"
 cmake="$root/tools/toolchain/cmake/bin/cmake"
 [[ -x "$cmake" ]] || cmake="$(command -v cmake || true)"
 : > "$log"
@@ -111,7 +115,7 @@ done
 # stage
 date_str="$(date +%Y-%m-%d)"
 mkdir -p "$stage"
-rm -f "$stage"/ico_pc "$stage"/ico_pc.map "$stage"/libSDL3.so* "$stage"/README.txt "$stage"/README.md
+rm -f "$stage"/make_portable.sh "$stage"/ico_pc "$stage"/ico_pc.map "$stage"/libSDL3.so* "$stage"/README.txt "$stage"/README.md
 rm -rf "$stage/tools" "$stage/textures"
 cp "$b/ico_pc" "$stage/ico_pc"
 chmod 755 "$stage/ico_pc"
@@ -132,6 +136,10 @@ cp "$wt/LICENSE" "$stage/LICENSE"
 run python3 "$wt/tools/gen_notices.py" --platform linux --arch "$arch" --root "$wt" \
     --out "$stage/NOTICES.txt"
 cp "$wt/docs/THIRD_PARTY.md" "$stage/THIRD_PARTY.md"
+# the make-portable script
+[[ -f "$wt/tools/portable/make_portable.sh" ]] || fail "tools/portable/make_portable.sh is missing from HEAD"
+cp "$wt/tools/portable/make_portable.sh" "$stage/make_portable.sh"
+chmod 755 "$stage/make_portable.sh"
 # the textures, models and reshade folders, each with a note in it
 pkg_stage_folder_notes "$stage" lf
 pkg_write_ini "$stage/ico-pc.ini" linux "$iso"
@@ -144,26 +152,47 @@ printf 'ico-pc %s\nbuilt %s\ncommit %s\n' "$label" "$date_str" "$commit" > "$sta
 # The files staged above and nothing else: the stage folder is also where
 # the build is tried, so it can hold Ico_PAL.iso (found beside ico_pc),
 # dumps/ (frames from the disc) and logs/, none of which may be shipped.
-rm -f "$tgz"
-pkgroot="$root/build-host/tmp/tar-$label"
-rm -rf "$pkgroot"; mkdir -p "$pkgroot/ico-pc-$label"
-mkdir -p "$pkgroot/ico-pc-$label/tools" "$pkgroot/ico-pc-$label/$pkg_textures_rel" "$pkgroot/ico-pc-$label/$pkg_models_rel" "$pkgroot/ico-pc-$label/$pkg_reshade_rel"
-for f in ico_pc libSDL3.so.0 LICENSE NOTICES.txt THIRD_PARTY.md ico-pc.ini README.md VERSION.txt tools/mc_import "$pkg_textures_rel/README.txt" "$pkg_models_rel/README.txt" "$pkg_reshade_rel/README.txt"; do
-    cp -a "$stage/$f" "$pkgroot/ico-pc-$label/$f" || fail "stage: no $f"
-done
-cp -a "$stage/docs" "$pkgroot/ico-pc-$label/docs"
-if [[ -f "$stage/ico_pc.map" ]]; then
-    cp -a "$stage/ico_pc.map" "$pkgroot/ico-pc-$label/ico_pc.map"
-fi
-tar -C "$pkgroot" --sort=name --owner=0 --group=0 --numeric-owner \
-    -czf "$tgz" "ico-pc-$label" >>"$log" 2>&1 || fail "tar"
-rm -rf "$pkgroot"
-for n in "${pkg_player_docs[@]}"; do
-    pkg_assert_tar_has "$tgz" "ico-pc-$label/docs/$n.md" || fail "the archive lacks docs/$n.md"
-done
-for r in "${pkg_note_rels[@]}"; do
-    pkg_assert_tar_has "$tgz" "ico-pc-$label/$r/README.txt" || fail "the archive lacks $r/README.txt"
+# Two archives from the one stage: the normal one (with make_portable.sh)
+# and the portable one (ico-pc.ini with portable=1, a paragraph in the
+# README, no make_portable.sh).
+for variant in normal portable; do
+    if [[ "$variant" == portable ]]; then out="$tgzp"; else out="$tgz"; fi
+    rm -f "$out"
+    pkgroot="$root/build-host/tmp/tar-$label-$variant"
+    rm -rf "$pkgroot"; mkdir -p "$pkgroot/ico-pc-$label"
+    top="$pkgroot/ico-pc-$label"
+    mkdir -p "$top/tools" "$top/$pkg_textures_rel" "$top/$pkg_models_rel" "$top/$pkg_reshade_rel"
+    files=(ico_pc libSDL3.so.0 LICENSE NOTICES.txt THIRD_PARTY.md ico-pc.ini README.md VERSION.txt tools/mc_import "$pkg_textures_rel/README.txt" "$pkg_models_rel/README.txt" "$pkg_reshade_rel/README.txt")
+    [[ "$variant" == portable ]] || files+=(make_portable.sh)
+    for f in "${files[@]}"; do
+        cp -a "$stage/$f" "$top/$f" || fail "stage: no $f"
+    done
+    cp -a "$stage/docs" "$top/docs"
+    if [[ -f "$stage/ico_pc.map" ]]; then
+        cp -a "$stage/ico_pc.map" "$top/ico_pc.map"
+    fi
+    if [[ "$variant" == portable ]]; then
+        pkg_write_ini "$top/ico-pc.ini" linux "$iso" portable
+        pkg_portable_readme_note "$top/README.md"
+    fi
+    tar -C "$pkgroot" --sort=name --owner=0 --group=0 --numeric-owner \
+        -czf "$out" "ico-pc-$label" >>"$log" 2>&1 || fail "tar $variant"
+    rm -rf "$pkgroot"
+    for n in "${pkg_player_docs[@]}"; do
+        pkg_assert_tar_has "$out" "ico-pc-$label/docs/$n.md" || fail "the $variant archive lacks docs/$n.md"
+    done
+    for r in "${pkg_note_rels[@]}"; do
+        pkg_assert_tar_has "$out" "ico-pc-$label/$r/README.txt" || fail "the $variant archive lacks $r/README.txt"
+    done
+    if [[ "$variant" == portable ]]; then
+        pkg_assert_tar_lacks "$out" "ico-pc-$label/make_portable.sh" || fail "the portable archive has make_portable.sh"
+        pkg_assert_tar_line "$out" "ico-pc-$label/ico-pc.ini" '^portable=1$' || fail "the portable archive's ico-pc.ini lacks portable=1"
+    else
+        pkg_assert_tar_has "$out" "ico-pc-$label/make_portable.sh" || fail "the archive lacks make_portable.sh"
+        pkg_assert_tar_line "$out" "ico-pc-$label/ico-pc.ini" '^portable=1$' && fail "the normal archive's ico-pc.ini has portable=1"
+    fi
 done
 
 echo "$tgz"
+echo "$tgzp"
 echo "built from $commit"
