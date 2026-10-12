@@ -2521,6 +2521,32 @@ static RdWrap drawWrap(const Replay *r, const DrawSetup *ds, RdWrap w)
     return t && t->kind == RD_TEXKIND_TARGET ? RD_WRAP_CLAMP : w;
 }
 
+/* FrameCB of the draw (r->frameBG), made again when the target, the frame
+ * size, the offset, the pass or the camera's picture changed since the last
+ * draw */
+static void frameRefresh(Replay *r, const DrawSetup *ds)
+{
+    const RdTargetRec *tc = ds->tc;
+    const uint32_t useOffset = drawOffset(r, ds);
+    const uint32_t fk[6] = {r->st.color, r->st.gsW,     r->st.gsH,
+                            useOffset,   r->passSerial, r->picture};
+    if (memcmp(fk, r->frameKey, sizeof(fk)) != 0) {
+        /* XYOFFSET = (2048 - w/2, 2048 - h/2), w the native frame's width
+         * (+ the preset's field offset when useOffset; zero in Original) */
+        float ox = 2048.0f - (float)(r->st.gsW >> 1);
+        float oy = 2048.0f - (float)(r->st.gsH >> 1);
+        if (useOffset & RD_TARGET_HALF_Y) {
+            oy += 0.5f; /* the flip's sceGsSetHalfOffset */
+        }
+        s_framePicture = r->picture;
+        s_framePictureFrameH = r->st.gsH;
+        r->frameBG = rd__frame_group_ex(tc->w, tc->h, ox, oy, rd__target_z_scale(ds->tdId),
+                                        rd__region_scale(tc), tc->sx, tc->sy);
+        s_framePicture = s_framePictureFrameH = 0;
+        memcpy(r->frameKey, fk, sizeof(fk));
+    }
+}
+
 /* The scissor, the pass and FrameCB; returns the texture group, id 0 when
  * the scissor leaves nothing to draw.  With scOut the scissor is returned
  * (doScreen sets it when it draws) instead of set, and the sampler's id
@@ -2550,24 +2576,7 @@ static RhiBindGroup bindDrawEx(Replay *r, const DrawSetup *ds, RhiRect *scOut, u
         beginPass(r, tc, ds->tdId ? rd__target_rec(ds->tdId) : NULL, r->st.color, ds->tdId,
                   RHI_LOAD_LOAD, NULL, RHI_LOAD_LOAD, 0.0f, false);
     }
-    const uint32_t useOffset = drawOffset(r, ds);
-    const uint32_t fk[6] = {r->st.color, r->st.gsW,     r->st.gsH,
-                            useOffset,   r->passSerial, r->picture};
-    if (memcmp(fk, r->frameKey, sizeof(fk)) != 0) {
-        /* XYOFFSET = (2048 - w/2, 2048 - h/2), w the native frame's width
-         * (+ the preset's field offset when useOffset; zero in Original) */
-        float ox = 2048.0f - (float)(r->st.gsW >> 1);
-        float oy = 2048.0f - (float)(r->st.gsH >> 1);
-        if (useOffset & RD_TARGET_HALF_Y) {
-            oy += 0.5f; /* the flip's sceGsSetHalfOffset */
-        }
-        s_framePicture = r->picture;
-        s_framePictureFrameH = r->st.gsH;
-        r->frameBG = rd__frame_group_ex(tc->w, tc->h, ox, oy, rd__target_z_scale(ds->tdId),
-                                        rd__region_scale(tc), tc->sx, tc->sy);
-        s_framePicture = s_framePictureFrameH = 0;
-        memcpy(r->frameKey, fk, sizeof(fk));
-    }
+    frameRefresh(r, ds);
     if (scOut) {
         *scOut = sc;
         *smpOut = smp.id;
@@ -3364,12 +3373,16 @@ static void doScreen(Replay *r, const RdFrame *f, const RdCmd *c)
         /* the open pass of the kind the run draws in (a run of the other
          * kind is drawn by the switch, in its own) */
         dstPassMode(r, &ex[0].key);
+        /* a switch to the storage pass began a new pass: the draw's FrameCB
+         * is the one the next command of the run finds (else every run
+         * under the storage blend broke after its first command) */
+        frameRefresh(r, &ds);
         nr.key = ex[0].key;
         nr.count = nDraw;
         nr.stride = stride;
         nr.prim = c->b[0];
         nr.pipe = p;
-        nr.frame = frame;
+        nr.frame = msExpand ? frame : r->frameBG;
         fillDrawCB(r, &ex[0], &ds, &nr.cb);
         nr.passes = (uint8_t)ne;
         memset(&nr.key2, 0, sizeof(nr.key2));
