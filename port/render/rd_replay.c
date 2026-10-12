@@ -2678,6 +2678,14 @@ static void fillDrawCB(const Replay *r, const RdDrawPass *dp, const DrawSetup *d
     if (ds->textured && ds->gsLevels) {
         cb->mode[0] |= ICO_DF_GS_LOD;
         cb->blend[3] = gsLodWord(r, ds);
+    } else if (ds->textured && !ds->replacement && r->st.ds.magFilter == RD_FILTER_NEAREST &&
+               r->st.ds.minFilter == RD_FILTER_NEAREST) {
+        /* nearest both ways on the one-level sampler texSampler binds: the
+         * GS's texel at a texel boundary (common.hlsli gs_nearest_uv), not
+         * whichever side the interpolated UV's rounding falls on, which
+         * depends on the pixel's place in the target (a 4:3 column of a
+         * wide frame took other texels than the 4:3 frame) */
+        cb->mode[0] |= ICO_DF_NEAREST;
     }
     cb->mode[2] = dp->modeZ;
     cb->mode[3] = dp->aref;

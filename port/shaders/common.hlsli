@@ -120,6 +120,9 @@ cbuffer DrawCB : register(b1, space1)
 // A VU draw with a clip plane (vu_common.hlsli vu_plane_distance,
 // port/render/rd_chain.h): the pixels past it are discarded
 #define DF_PLANE 8388608u
+// Both of the draw's filters nearest on the one-level sampler (rd_replay.c
+// fillDrawCB): gs_sample takes the texel the GS takes (gs_nearest_uv)
+#define DF_NEAREST 16777216u
 
 // TEST.DATE. snap is the R8 DATE snapshot (1.0 where the destination alpha
 // had its MSB set when the snapshot was taken). Returns true when the
@@ -278,12 +281,36 @@ float gs_lod_level(float q)
     return max(lv, 1.0 / 256.0);
 }
 
-// The texel at uv: at the GS's level with DF_GS_LOD, else as the sampler
+// The centre of the texel the GS's nearest filter takes at uvn (normalised
+// on tex's level 0). The GS samples a pixel at its integer coordinate (the
+// FrameCB origin puts it on the GPU pixel centre), so a UV step that is a
+// whole or half texel per pixel lands every few pixels exactly on a texel
+// boundary, where the GS takes the texel the boundary starts. The GPU's
+// interpolated UV is that value only to within float rounding, which
+// depends on the pixel's distance from the target's origin and on 1 / the
+// target's size: the same pixel of the picture took the texel on either
+// side depending on the frame's width and row. The coordinate is rounded
+// to the GS's 4-bit texel fraction (as gs_texa_texture's bilinear taps),
+// its integer part is the texel, and the texel's centre is what is read.
+float2 gs_nearest_uv(Texture2D<float4> tex, float2 uvn)
+{
+    uint w, h;
+    tex.GetDimensions(w, h);
+    const float2 size = float2(max(w, 1u), max(h, 1u));
+    const float2 texel = floor(floor(uvn * size * 16.0 + 0.5) * (1.0 / 16.0));
+    return (texel + 0.5) / size;
+}
+
+// The texel at uv: at the GS's level with DF_GS_LOD, the GS's nearest texel
+// with DF_NEAREST (the sampler has the one level), else as the sampler
 // takes it (q unused).
 float4 gs_sample(Texture2D<float4> tex, SamplerState smp, float2 uv, float q)
 {
     if ((g_mode.x & DF_GS_LOD) != 0u) {
         return tex.SampleLevel(smp, uv, gs_lod_level(q));
+    }
+    if ((g_mode.x & DF_NEAREST) != 0u) {
+        return tex.SampleLevel(smp, gs_nearest_uv(tex, uv), 0.0);
     }
     return tex.Sample(smp, uv);
 }

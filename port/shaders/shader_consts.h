@@ -107,7 +107,10 @@ enum {
     ICO_DF_GS_LOD = 262144,
     /* bit 23 (past the write mask's 19..22): a VU draw with a clip plane
      * (VuCB vu_batch.zw, rd_chain.h) discards the pixels past it */
-    ICO_DF_PLANE = 8388608
+    ICO_DF_PLANE = 8388608,
+    /* both of the draw's filters nearest on the one-level sampler:
+     * common.hlsli gs_sample reads the texel the GS takes (gs_nearest_uv) */
+    ICO_DF_NEAREST = 16777216
 };
 
 /* DrawCB.mode[0] bits 19..22 on a destination-read pass (the *_dstrov and

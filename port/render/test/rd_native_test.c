@@ -239,6 +239,8 @@ static void spriteAbs(int x0, int y0, int x1, int y1, const uint8_t c[4], RdSpac
     rd_screen_prims(RD_PRIM_SPRITES, v, 2, space, 1, 0);
 }
 
+static int s_grain;
+
 static RdTex makeTexture(void)
 {
     static uint8_t px[512 * 512 * 4];
@@ -250,6 +252,13 @@ static RdTex makeTexture(void)
             p[1] = (uint8_t)(y / 2);
             p[2] = (uint8_t)(chk ? 220 : 60);
             p[3] = (uint8_t)(chk ? 0x60 : 0x28);
+            if (s_grain == 2) {
+                /* the texel's own coordinates, opaque (texelAt) */
+                p[0] = (uint8_t)(x & 255);
+                p[1] = (uint8_t)(y & 255);
+                p[2] = (uint8_t)((x >> 8) | ((y >> 8) << 1));
+                p[3] = 0x80;
+            }
         }
     }
     return rd_create_texture(512, 512, px, RD_TEXA_80_80, "rd_native");
@@ -258,8 +267,6 @@ static RdTex makeTexture(void)
 /* ----------------------------------------------------------- the frame */
 
 /* 1: drawFrame adds the film grain (RD_POST_FILM_NOISE) after the fog stand-in */
-static int s_grain;
-
 static const uint8_t kBg[4] = {0x30, 0x50, 0x70, 0x80};
 
 /* The game frame at native width W: list 0 holds the head (the clear), the
@@ -311,14 +318,16 @@ static void drawFrame(int W, RdTex tex, const RdMesh *meshes)
 
     if (s_grain) {
         /* gsb_filmNoise: the noise texture bound, then the post (no source
-           target: it uses the bound texture), alpha 0x40, repeat 4.5: 4.5 texels per pixel, so no
-           pixel centre falls on a texel boundary (at 4.0 every centre does, 4x + 2, and
-           the nearest filter then picks by float rounding, which differs
-           with the column's absolute position) */
+           target: it uses the bound texture), alpha 0x40 (0x80 with the
+           texel texture: the texel replaces the frame), repeat 4.5: 4.5
+           texels per pixel.  The GS samples a pixel at its integer
+           coordinate, so every even column (4.5 x) and every other row lands
+           exactly on a texel boundary, where the GS takes the texel the
+           boundary starts (checkGrainTexels) */
         RdPostParams gp;
         memset(&gp, 0, sizeof(gp));
         gp.rgba[0] = gp.rgba[1] = gp.rgba[2] = 0x80;
-        gp.rgba[3] = 0x40;
+        gp.rgba[3] = s_grain == 2 ? 0x80 : 0x40;
         gp.scalar[0] = 4.5f;
         rd_sampler(RD_FILTER_NEAREST, RD_FILTER_NEAREST, RD_WRAP_CLAMP, RD_WRAP_CLAMP);
         rd_texture(tex, RD_TEXFN_MODULATE, RD_TCC_RGBA);
@@ -821,6 +830,59 @@ static void checkStripRule(void)
         free(eye4.px);
         free(joined3.px);
         free(joined7.px);
+/* the texel the texel texture (s_grain 2) put at pixel (x, y) of im */
+static void texelAt(const Img *im, uint32_t x, uint32_t y, int *u, int *v)
+{
+    const uint8_t *p = &im->px[((size_t)y * im->w + x) * 4];
+    *u = p[0] | ((p[2] & 1) << 8);
+    *v = p[1] | ((p[2] >> 1) << 8);
+}
+
+/* The grain's texels are the GS's (issue 75's centre rule at its root): the
+ * sprite's s and t run 0..4.5 over its 512 GS pixels from GS (1792, 1792),
+ * so the GS's pixel (x, y) of the 4:3 columns (sampled at its integer
+ * coordinate) reads texel floor(4.5 x), floor(4.5 (y + 32)) mod 512 (the
+ * frame's top row is GS y 1824), at every width.  Half the columns and
+ * half the rows sit exactly on a texel boundary: there the GS takes the
+ * texel the boundary starts.  Before the nearest filter was made the GS's
+ * (common.hlsli gs_nearest_uv), the interpolated UV fell on either side
+ * of the boundary by float rounding that depends on the pixel's place in
+ * the target: about half the boundary pixels took the texel before, and a
+ * different half at each width. */
+static void checkGrainTexels(void)
+{
+    static const int widths[] = {512, 688, 1376, 2560};
+    for (size_t i = 0; i < sizeof(widths) / sizeof(widths[0]); i++) {
+        const int W = widths[i];
+        Render g;
+        s_grain = 2;
+        const int st = renderAt(&kCfgs[0], W, &g);
+        s_grain = 0;
+        if (st != R_OK) {
+            CHECK(0, "grain texels: the W %d frame could not be rendered", W);
+            continue;
+        }
+        const uint32_t x0 = (uint32_t)(W / 2 - BAND / 2);
+        size_t bad = 0;
+        int shown = 0;
+        for (uint32_t y = 0; texelsPerPixel(&g.scene, W) == 1 && y < g.scene.h; y++) {
+            for (uint32_t x = 0; x < BAND; x++) {
+                int u, v;
+                texelAt(&g.scene, x0 + x, y, &u, &v);
+                const int eu = (int)(9 * x / 2) % 512, ev = (int)(9 * (y + 32) / 2) % 512;
+                if (u != eu || v != ev) {
+                    if (shown++ < 4) {
+                        printf("  grain W %d (%u,%u): texel %d,%d, the GS's %d,%d\n", W, x, y, u, v,
+                               eu, ev);
+                    }
+                    bad++;
+                }
+            }
+        }
+        CHECK(texelsPerPixel(&g.scene, W) == 1 && bad == 0,
+              "grain texels, W %d: %zu of the 4:3 columns' pixels read another texel than the GS",
+              W, bad);
+        freeRender(&g);
     }
 }
 
@@ -862,6 +924,7 @@ int main(void)
 
     checkFilmGrain();
     checkStripRule();
+    checkGrainTexels();
     if (gate) {
         /* the wide frames, Enhanced only (Original is the 4:3 picture) */
         for (int c = 1; c < NCFGS; c++) {
