@@ -102,8 +102,9 @@ cbuffer DrawCB : register(b1, space1)
 // *_nodual entries, built with ICO_NO_DUAL=1; rd_pipeline.c rd__expand_no_dual):
 #define DF_NODUAL_FACTOR 65536u      // colour pass: c0.a is the blend factor c1 would carry
 #define DF_NODUAL_ALPHA_PASS 131072u // alpha pass: c0.a is the stored alpha (RGB unused)
-// sprite_texa_ps and vu_texa_ps only (gs_texa_texture): the sampler state
-// the four-tap filter reproduces. Other entries never read these bits.
+// sprite_texa_ps and vu_texa_ps (gs_texa_texture): the sampler state the
+// four-tap filter reproduces; the CLAMP bits also for gs_sample_lod_nearest
+// (DF_GS_LOD with DF_NEAREST). Other entries never read these bits.
 #define DF_TEXA_MAG_LINEAR 1024u  // TEX1.MMAG linear
 #define DF_TEXA_MIN_LINEAR 2048u  // TEX1.MMIN linear
 #define DF_TEXA_CLAMP_S 4096u     // CLAMP on s (else REPEAT)
@@ -120,8 +121,9 @@ cbuffer DrawCB : register(b1, space1)
 // A VU draw with a clip plane (vu_common.hlsli vu_plane_distance,
 // port/render/rd_chain.h): the pixels past it are discarded
 #define DF_PLANE 8388608u
-// Both of the draw's filters nearest on the one-level sampler (rd_replay.c
-// fillDrawCB): gs_sample takes the texel the GS takes (gs_nearest_uv)
+// Both of the draw's filters nearest (rd_replay.c fillDrawCB): gs_sample
+// takes the texel the GS takes (gs_nearest_uv; with DF_GS_LOD
+// gs_sample_lod_nearest, which reads DF_TEXA_CLAMP_S/T for the wrap)
 #define DF_NEAREST 16777216u
 
 // TEST.DATE. snap is the R8 DATE snapshot (1.0 where the destination alpha
@@ -200,6 +202,19 @@ uint4 gs_bilerp(uint4 a, uint4 b, uint4 c, uint4 d, uint fu, uint fv)
 // sampler's: REPEAT or CLAMP at t1's own size. MAG or MIN by the
 // footprint (rho > 1 texel: minified), as the sampler picks it. uvn is the
 // normalised UV; flags g_mode.x.
+// The texel the GS's nearest filter takes at tc (in texels of the level
+// sampled): the coordinate at the GS's 4-bit texel fraction (rounded, as
+// the bilinear taps below take it), its integer part. The GS samples a
+// pixel at its integer coordinate, so a UV step of a whole or half texel
+// per pixel puts every few pixels exactly on a texel boundary, where the
+// GS takes the texel the boundary starts; the interpolated UV is that
+// value only to within float rounding, which depends on the pixel's place
+// in the target, and floor(tc) took the texel before on some of them.
+int2 gs_nearest_texel(float2 tc)
+{
+    return int2(floor(tc * 16.0 + 0.5)) >> 4;
+}
+
 uint4 gs_texa_load(Texture2D<float4> tex, int2 c, int2 size, uint flags)
 {
     c.x = (flags & DF_TEXA_CLAMP_S) != 0u ? clamp(c.x, 0, size.x - 1)
@@ -208,6 +223,17 @@ uint4 gs_texa_load(Texture2D<float4> tex, int2 c, int2 size, uint flags)
                                           : ((c.y % size.y) + size.y) % size.y;
     uint4 t = uint4(floor(tex.Load(int3(c, 0)) * 255.0 + 0.5));
     return gs_texa_expand(t, g_mode.y & 0xFFu, g_mode.y >> 8);
+}
+
+// The texel c of t1's mip level lv, 0..255, wrapped by DF_TEXA_CLAMP_S/T
+// (REPEAT or CLAMP at the level's size), before TEXA.
+uint4 gs_load_lv(Texture2D<float4> tex, int2 c, int2 size, uint lv, uint flags)
+{
+    c.x = (flags & DF_TEXA_CLAMP_S) != 0u ? clamp(c.x, 0, size.x - 1)
+                                          : ((c.x % size.x) + size.x) % size.x;
+    c.y = (flags & DF_TEXA_CLAMP_T) != 0u ? clamp(c.y, 0, size.y - 1)
+                                          : ((c.y % size.y) + size.y) % size.y;
+    return uint4(floor(tex.Load(int3(c, int(lv))) * 255.0 + 0.5));
 }
 
 uint4 gs_texa_texture(Texture2D<float4> tex, SamplerState smp, float2 uvn, uint flags)
@@ -225,7 +251,7 @@ uint4 gs_texa_texture(Texture2D<float4> tex, SamplerState smp, float2 uvn, uint 
     }
     const bool filtered = (flags & (minified ? DF_TEXA_MIN_LINEAR : DF_TEXA_MAG_LINEAR)) != 0u;
     if (!filtered) {
-        return gs_texa_load(tex, int2(floor(tc)), size, flags);
+        return gs_texa_load(tex, gs_nearest_texel(tc), size, flags);
     }
     const int2 q = int2(floor(tc * 16.0 + 0.5)) - int2(8, 8);
     const int2 i0 = q >> 4;
@@ -282,31 +308,53 @@ float gs_lod_level(float q)
 }
 
 // The centre of the texel the GS's nearest filter takes at uvn (normalised
-// on tex's level 0). The GS samples a pixel at its integer coordinate (the
-// FrameCB origin puts it on the GPU pixel centre), so a UV step that is a
-// whole or half texel per pixel lands every few pixels exactly on a texel
-// boundary, where the GS takes the texel the boundary starts. The GPU's
-// interpolated UV is that value only to within float rounding, which
-// depends on the pixel's distance from the target's origin and on 1 / the
-// target's size: the same pixel of the picture took the texel on either
-// side depending on the frame's width and row. The coordinate is rounded
-// to the GS's 4-bit texel fraction (as gs_texa_texture's bilinear taps),
-// its integer part is the texel, and the texel's centre is what is read.
+// on tex's level 0, gs_nearest_texel), for the sampler to read: the
+// interpolated UV's own rounding took the texel on either side of a
+// boundary depending on the frame's width and the row.
 float2 gs_nearest_uv(Texture2D<float4> tex, float2 uvn)
 {
     uint w, h;
     tex.GetDimensions(w, h);
     const float2 size = float2(max(w, 1u), max(h, 1u));
-    const float2 texel = floor(floor(uvn * size * 16.0 + 0.5) * (1.0 / 16.0));
-    return (texel + 0.5) / size;
+    return (float2(gs_nearest_texel(uvn * size)) + 0.5) / size;
 }
 
-// The texel at uv: at the GS's level with DF_GS_LOD, the GS's nearest texel
-// with DF_NEAREST (the sampler has the one level), else as the sampler
-// takes it (q unused).
+// gs_sample with DF_GS_LOD and DF_NEAREST (both filters nearest): the
+// GS's nearest texel (gs_nearest_texel) on the level gs_lod_level picks,
+// wrapped as the sampler wraps (DF_TEXA_CLAMP_S/T), and for MMIN 3 on the
+// level after it too, the two blended by the LOD's fraction in 256ths,
+// truncated (as gs_texa_texture_lod blends them).
+float4 gs_sample_lod_nearest(Texture2D<float4> tex, float2 uvn, float q)
+{
+    const float lv = gs_lod_level(q);
+    const uint l0 = uint(floor(lv));
+    uint w, h, n;
+    tex.GetDimensions(l0, w, h, n);
+    int2 size = max(int2(int(w), int(h)), int2(1, 1));
+    uint4 t = gs_load_lv(tex, gs_nearest_texel(uvn * float2(size)), size, l0, g_mode.x);
+    if (gs_lod(q) > 0.0 && (g_blend.w & 7u) == 3u) {
+        const uint f = uint(floor((lv - float(l0)) * 256.0));
+        if (f > 0u) {
+            tex.GetDimensions(l0 + 1u, w, h, n);
+            size = max(int2(int(w), int(h)), int2(1, 1));
+            const uint4 u =
+                gs_load_lv(tex, gs_nearest_texel(uvn * float2(size)), size, l0 + 1u, g_mode.x);
+            t = (t * (256u - f) + u * f) >> 8;
+        }
+    }
+    return float4(t) * (1.0 / 255.0);
+}
+
+// The texel at uv: at the GS's level with DF_GS_LOD (the GS's nearest
+// texel there with DF_NEAREST), the GS's nearest texel with DF_NEAREST
+// alone (the sampler has the one level), else as the sampler takes it (q
+// unused).
 float4 gs_sample(Texture2D<float4> tex, SamplerState smp, float2 uv, float q)
 {
     if ((g_mode.x & DF_GS_LOD) != 0u) {
+        if ((g_mode.x & DF_NEAREST) != 0u) {
+            return gs_sample_lod_nearest(tex, uv, q);
+        }
         return tex.SampleLevel(smp, uv, gs_lod_level(q));
     }
     if ((g_mode.x & DF_NEAREST) != 0u) {
@@ -318,12 +366,7 @@ float4 gs_sample(Texture2D<float4> tex, SamplerState smp, float2 uv, float q)
 // gs_texa_load at mip level lv of t1.
 uint4 gs_texa_load_lv(Texture2D<float4> tex, int2 c, int2 size, uint lv, uint flags)
 {
-    c.x = (flags & DF_TEXA_CLAMP_S) != 0u ? clamp(c.x, 0, size.x - 1)
-                                          : ((c.x % size.x) + size.x) % size.x;
-    c.y = (flags & DF_TEXA_CLAMP_T) != 0u ? clamp(c.y, 0, size.y - 1)
-                                          : ((c.y % size.y) + size.y) % size.y;
-    uint4 t = uint4(floor(tex.Load(int3(c, int(lv))) * 255.0 + 0.5));
-    return gs_texa_expand(t, g_mode.y & 0xFFu, g_mode.y >> 8);
+    return gs_texa_expand(gs_load_lv(tex, c, size, lv, flags), g_mode.y & 0xFFu, g_mode.y >> 8);
 }
 
 // gs_texa_texture's four taps at mip level lv (filtered: bilinear with the
@@ -335,7 +378,7 @@ uint4 gs_texa_level(Texture2D<float4> tex, float2 uvn, uint lv, bool filtered, u
     const int2 size = max(int2(int(w), int(h)), int2(1, 1));
     const float2 tc = uvn * float2(size);
     if (!filtered) {
-        return gs_texa_load_lv(tex, int2(floor(tc)), size, lv, flags);
+        return gs_texa_load_lv(tex, gs_nearest_texel(tc), size, lv, flags);
     }
     const int2 q = int2(floor(tc * 16.0 + 0.5)) - int2(8, 8);
     const int2 i0 = q >> 4;

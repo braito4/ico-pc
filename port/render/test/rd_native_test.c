@@ -53,6 +53,10 @@
  *      strip whose failing triangle has a vertex behind the eye add nothing
  *      in any state; the same card's strip joined to a passing strip (a
  *      plank's face, rd_mesh.c markJoinedStrips) is drawn as the wall is.
+ *   t  the nearest filter at exact texel boundaries (checkGrainTexels: the
+ *      film grain at W 512 to 2560; checkNearestTies: every path that
+ *      takes a nearest texel, at W 512 and 688) reads the GS's texel at
+ *      every pixel of the 4:3 columns.  Runs always.
  *   The W = 512 renders also have to show the frame (not the clear colour).
  * The wide cases (c, e) run only with ICO_NATIVE_GATE=1 in the environment;
  * without it the test checks W = 512 and exits 77 (skipped), so the ctest is
@@ -66,6 +70,7 @@
 
 #include "rd_internal.h"
 #include "rd_mesh.h"
+#include "rd_tex.h"
 #include "vk/rhi_vk.h"
 
 static int failures;
@@ -241,6 +246,59 @@ static void spriteAbs(int x0, int y0, int x1, int y1, const uint8_t c[4], RdSpac
 
 static int s_grain;
 
+/* checkNearestTies' case: the texture (kind), the filters or TEX1, the
+ * level the pixels read */
+typedef struct TieCase {
+    int kind; /* 0 one level RGBA32, 1 RGBA16 under 7F/81+AEM, 2 three GS levels */
+    RdFilter mag, min;
+    uint64_t tex1; /* kind 2: TEX1 (MMAG, MMIN, MXL 2, LCM 1, K) */
+    int lv;
+    const char *what;
+} TieCase;
+
+static const TieCase *s_tie;
+static RdTex s_tieTex;
+
+/* s_tie's texture: each texel holds its own coordinates (tieDecode) */
+static RdTex tieTexture(void)
+{
+    enum { N = 64 };
+
+    static uint8_t px[3][N * N * 4];
+    static const uint8_t mark[3] = {0, 200, 100};
+    RdTexImage ims[3];
+    memset(ims, 0, sizeof(ims));
+    for (int l = 0; l < 3; l++) {
+        const int n = N >> l;
+        for (int y = 0; y < n; y++) {
+            for (int x = 0; x < n; x++) {
+                uint8_t *p = &px[l][(y * n + x) * 4];
+                if (s_tie->kind == 1) {
+                    p[0] = (uint8_t)((x & 31) << 3);
+                    p[1] = (uint8_t)((y & 31) << 3);
+                    p[2] = (uint8_t)(((x >> 5) | ((y >> 5) << 1)) << 3);
+                    p[3] = 1;
+                } else {
+                    p[0] = (uint8_t)x;
+                    p[1] = (uint8_t)y;
+                    p[2] = mark[l];
+                    p[3] = 0x80;
+                }
+            }
+        }
+        ims[l].w = ims[l].h = (uint32_t)n;
+        ims[l].psm = RDTEX_PSMCT32;
+        ims[l].pixels = px[l];
+    }
+    if (s_tie->kind == 1) {
+        return rd_create_texture_src(N, N, px[0], RD_TEXSRC_RGBA16, "ties rgba16");
+    }
+    if (s_tie->kind == 2) {
+        return rdtex_store_levels(9003, 1, RDTEX_TEXA_REPLAY, ims, 3, NULL, "ties gs levels");
+    }
+    return rd_create_texture(N, N, px[0], RD_TEXA_80_80, "ties one level");
+}
+
 static RdTex makeTexture(void)
 {
     static uint8_t px[512 * 512 * 4];
@@ -334,6 +392,20 @@ static void drawFrame(int W, RdTex tex, const RdMesh *meshes)
         rd_post(RD_POST_FILM_NOISE, &gp);
     }
 
+    if (s_tie) {
+        /* checkNearestTies: an opaque sprite over the 4:3 square, UV 0..2304
+           texels (4.5 a pixel) both ways, REPEAT */
+        rd_abe(0);
+        rd_tex_a(s_tie->kind == 1 ? RD_TEXA_7F_81_AEM : RD_TEXA_80_80);
+        rd_texture(s_tieTex, RD_TEXFN_MODULATE, RD_TCC_RGBA);
+        rd_sampler(s_tie->mag, s_tie->min, RD_WRAP_REPEAT, RD_WRAP_REPEAT);
+        if (s_tie->kind == 2) {
+            rd_sampler_tex1(s_tie->tex1);
+        }
+        spriteAbs(bl, bl, br, br, grey, RD_SPACE_UI, 0, 0, 2304 * 16, 2304 * 16);
+        rd_tex_a(RD_TEXA_80_80);
+    }
+
     rd_select_list(12);
     RdPostParams pp;
     memset(&pp, 0, sizeof(pp));
@@ -393,6 +465,12 @@ static int renderAt(const Cfg *cfg, int W, Render *out)
         meshes[i] = triMesh(&kTris[i]);
     }
     const RdTex tex = makeTexture();
+    if (s_tie) {
+        s_tieTex = tieTexture();
+        CHECK(s_tie->kind != 2 ||
+                  (rd__tex_rec(s_tieTex.id) && rd__tex_rec(s_tieTex.id)->gsLevels == 3),
+              "ties: the coordinate levels kept as three GS levels");
+    }
     drawFrame(W, tex, meshes);
     const bool ok =
         readImg(RD_TARGET_SCENE, &out->scene) && readImg(RD_TARGET_DISPLAY, &out->display);
@@ -400,6 +478,11 @@ static int renderAt(const Cfg *cfg, int W, Render *out)
         rd_destroy_vu_mesh(meshes[i]);
     }
     rd_destroy_texture(tex);
+    if (s_tie && s_tie->kind == 2) {
+        rdtex_drop(9003);
+    } else if (s_tie) {
+        rd_destroy_texture(s_tieTex);
+    }
     const uint32_t verr = rhi_vk_validation_error_count();
     CHECK(verr == 0, "%s, W %d: %u validation errors", cfg->name, W, verr);
     rd_shutdown();
@@ -886,6 +969,95 @@ static void checkGrainTexels(void)
     }
 }
 
+/* the texel a pixel of s_tie's sprite read (its RGB); -1 when it is
+ * another level's (the blue marker) */
+static void tieDecode(const TieCase *tc, const uint8_t *p, int *u, int *v)
+{
+    static const uint8_t mark[3] = {0, 200, 100};
+    if (tc->kind == 1) {
+        const int b = p[2] >> 3;
+        *u = (p[0] >> 3) | ((b & 1) << 5);
+        *v = (p[1] >> 3) | ((b >> 1) << 5);
+        return;
+    }
+    *u = p[0];
+    *v = p[2] == mark[tc->lv] ? p[1] : -1;
+}
+
+/* The nearest filter at exact texel boundaries on every path that takes a
+ * nearest texel (common.hlsli gs_nearest_texel), at W 512 and 688: the
+ * sprite over the 4:3 square (GS 1792..2304 both ways) samples its pixel
+ * (i, j) at the integer coordinate, U = 4.5 i, V = 4.5 j (the frame's row y
+ * is j = y + 32), so every even column and row lands on a texel boundary,
+ * where the GS takes the texel the boundary starts: at level l
+ * floor(4.5 i / 2^l) mod the level's size.  The texture holds each texel's
+ * coordinates.  The paths:
+ *   sprite_ps, one level            gs_sample (gs_nearest_uv)
+ *   sprite_texa_ps, MMAG linear,    gs_texa_texture's nearest branch
+ *     MMIN nearest, minified
+ *   GS levels, MMAG linear, MMIN 2  the integer filter's nearest taps
+ *     (LCM 1, K 0.25 and 1)         (gs_texa_level), levels 0 and 1
+ *   GS levels, both nearest,        gs_sample under DF_GS_LOD
+ *     MMIN 2 and 3                  (gs_sample_lod_nearest)
+ * Before the GS's rounding each took the texel before the boundary on some
+ * of the boundary pixels (the interpolated UV's float rounding, which
+ * depends on the pixel's place in the target). */
+static void checkNearestTies(void)
+{
+    /* MXL 2, LCM 1; MMAG bit 5, MMIN bits 6..8, K bits 32..43 */
+#define TIE_TEX1(mag, mmin, k)                                                                     \
+    (1ull | (2ull << 2) | ((uint64_t)(mag) << 5) | ((uint64_t)(mmin) << 6) |                       \
+     ((uint64_t)((k) & 0xFFF) << 32))
+    static const TieCase cases[] = {
+        {0, RD_FILTER_NEAREST, RD_FILTER_NEAREST, 0, 0, "sprite_ps, nearest, one level"},
+        {1, RD_FILTER_LINEAR, RD_FILTER_NEAREST, 0, 0, "sprite_texa_ps, MMIN nearest"},
+        {2, RD_FILTER_LINEAR, RD_FILTER_LINEAR, TIE_TEX1(1, 2, 4), 0,
+         "GS levels, MMAG linear, MMIN 2, level 0"},
+        {2, RD_FILTER_LINEAR, RD_FILTER_LINEAR, TIE_TEX1(1, 2, 16), 1,
+         "GS levels, MMAG linear, MMIN 2, level 1"},
+        {2, RD_FILTER_LINEAR, RD_FILTER_LINEAR, TIE_TEX1(0, 2, 4), 0,
+         "GS levels, nearest, MMIN 2, level 0"},
+        {2, RD_FILTER_LINEAR, RD_FILTER_LINEAR, TIE_TEX1(0, 2, 16), 1,
+         "GS levels, nearest, MMIN 2, level 1"},
+        {2, RD_FILTER_LINEAR, RD_FILTER_LINEAR, TIE_TEX1(0, 3, 16), 1,
+         "GS levels, nearest, MMIN 3, LOD 1"},
+    };
+#undef TIE_TEX1
+    static const int widths[] = {BAND, 688};
+    for (size_t c = 0; c < sizeof(cases) / sizeof(cases[0]); c++) {
+        for (size_t wi = 0; wi < sizeof(widths) / sizeof(widths[0]); wi++) {
+            const int W = widths[wi];
+            Render g;
+            s_tie = &cases[c];
+            const int st = renderAt(&kCfgs[0], W, &g);
+            s_tie = NULL;
+            if (st != R_OK) {
+                CHECK(0, "ties, %s, W %d: the frame could not be rendered", cases[c].what, W);
+                continue;
+            }
+            const int n = 64 >> cases[c].lv;
+            const uint32_t x0 = (uint32_t)(W / 2 - BAND / 2);
+            size_t bad = 0;
+            for (uint32_t y = 0; texelsPerPixel(&g.scene, W) == 1 && y < g.scene.h; y++) {
+                for (uint32_t i = 0; i < BAND; i++) {
+                    int u, v;
+                    tieDecode(&cases[c], &g.scene.px[((size_t)y * g.scene.w + x0 + i) * 4], &u, &v);
+                    const int eu = (int)((9 * i / 2) >> cases[c].lv) % n;
+                    const int ev = (int)((9 * (y + 32) / 2) >> cases[c].lv) % n;
+                    if ((u != eu || v != ev) && bad++ < 3) {
+                        printf("  ties, %s, W %d (%u,%u): texel %d,%d, the GS's %d,%d\n",
+                               cases[c].what, W, i, y, u, v, eu, ev);
+                    }
+                }
+            }
+            CHECK(texelsPerPixel(&g.scene, W) == 1 && bad == 0,
+                  "ties, %s, W %d: %zu pixels of the 4:3 columns read another texel than the GS",
+                  cases[c].what, W, bad);
+            freeRender(&g);
+        }
+    }
+}
+
 int main(void)
 {
     const char *gateEnv = getenv("ICO_NATIVE_GATE");
@@ -925,6 +1097,7 @@ int main(void)
     checkFilmGrain();
     checkStripRule();
     checkGrainTexels();
+    checkNearestTies();
     if (gate) {
         /* the wide frames, Enhanced only (Original is the 4:3 picture) */
         for (int c = 1; c < NCFGS; c++) {

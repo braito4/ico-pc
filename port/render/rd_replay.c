@@ -2678,14 +2678,22 @@ static void fillDrawCB(const Replay *r, const RdDrawPass *dp, const DrawSetup *d
     if (ds->textured && ds->gsLevels) {
         cb->mode[0] |= ICO_DF_GS_LOD;
         cb->blend[3] = gsLodWord(r, ds);
-    } else if (ds->textured && !ds->replacement && r->st.ds.magFilter == RD_FILTER_NEAREST &&
-               r->st.ds.minFilter == RD_FILTER_NEAREST) {
-        /* nearest both ways on the one-level sampler texSampler binds: the
-         * GS's texel at a texel boundary (common.hlsli gs_nearest_uv), not
-         * whichever side the interpolated UV's rounding falls on, which
-         * depends on the pixel's place in the target (a 4:3 column of a
-         * wide frame took other texels than the 4:3 frame) */
+    }
+    if (ds->textured && !ds->replacement && r->st.ds.magFilter == RD_FILTER_NEAREST &&
+        r->st.ds.minFilter == RD_FILTER_NEAREST) {
+        /* nearest both ways (on the one-level sampler texSampler binds, or
+         * at the GS's level): the GS's texel at a texel boundary
+         * (common.hlsli gs_nearest_texel), not whichever side the
+         * interpolated UV's rounding falls on, which depends on the pixel's
+         * place in the target (a 4:3 column of a wide frame took other
+         * texels than the 4:3 frame).  At the GS's level the shader loads
+         * the texels itself (gs_sample_lod_nearest), wrapped as the sampler
+         * (gsLodSampler) wraps */
         cb->mode[0] |= ICO_DF_NEAREST;
+        if (ds->gsLevels) {
+            cb->mode[0] |= (drawWrap(r, ds, (RdWrap)r->st.ds.wrap.s) ? ICO_DF_TEXA_CLAMP_S : 0u) |
+                           (drawWrap(r, ds, (RdWrap)r->st.ds.wrap.t) ? ICO_DF_TEXA_CLAMP_T : 0u);
+        }
     }
     cb->mode[2] = dp->modeZ;
     cb->mode[3] = dp->aref;

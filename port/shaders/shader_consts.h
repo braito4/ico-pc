@@ -88,7 +88,9 @@ enum {
     ICO_DF_DATM = 256,     /* with DF_DATE: pass where the MSB is 1 (else where it is 0) */
     ICO_DF_AA1_FULL = 512, /* sprite_aa1_ps: PRIM.ABE 0, the coverage alpha replaces every alpha */
     /* the sampler state sprite_texa_ps and vu_texa_ps filter
-     * by (gs_texa_texture in common.hlsli); set only for those entries */
+     * by (gs_texa_texture in common.hlsli); set only for those entries,
+     * and the CLAMP bits for a nearest draw at the GS's level
+     * (ICO_DF_NEAREST with ICO_DF_GS_LOD) */
     ICO_DF_TEXA_MAG_LINEAR = 1024,
     ICO_DF_TEXA_MIN_LINEAR = 2048,
     ICO_DF_TEXA_CLAMP_S = 4096,
@@ -108,8 +110,9 @@ enum {
     /* bit 23 (past the write mask's 19..22): a VU draw with a clip plane
      * (VuCB vu_batch.zw, rd_chain.h) discards the pixels past it */
     ICO_DF_PLANE = 8388608,
-    /* both of the draw's filters nearest on the one-level sampler:
-     * common.hlsli gs_sample reads the texel the GS takes (gs_nearest_uv) */
+    /* both of the draw's filters nearest: common.hlsli gs_sample reads the
+     * texel the GS takes (gs_nearest_uv; with ICO_DF_GS_LOD
+     * gs_sample_lod_nearest, wrapped by ICO_DF_TEXA_CLAMP_S/T) */
     ICO_DF_NEAREST = 16777216
 };
 
