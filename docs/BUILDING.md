@@ -497,6 +497,21 @@ build-host/tmp/native_frame_ref` and commit `docs/native_frame_baseline.json`
 with the change. The manifest holds hashes only (plus the harness commit, the
 settings, and each dump's name, size and SHA-256).
 
+### Coverage corpus
+
+`tools/coverage_check.py` (ctest `coverage_corpus`) renders every dump of
+`tools/coverage_corpus.txt` (machine-local paths) at its own aspect with
+`--enhanced --present 1376x896`, once with `--aa off` and once with `--aa msaa4`
+(plus the interpolated frame for a dump with `interp=T:PREV`), and compares each
+with the previous run: a mesh drawn fewer times than before fails, and so does a
+picture whose changed pixels (per-channel difference above `tol`) exceed the
+dump's `pixels` percentage. The previous run's pictures and draw counts are in
+`tools/.coverage/` (`ICO_COVERAGE_DIR`); a passing dump rolls forward, a failing
+one keeps its old baseline. It skips (77) without the tool, Pillow or dumps.
+After a build, seed or re-seed the baseline with
+`python3 -I tools/coverage_check.py seed --tool build-host/linux-x64/port/render/rd_replay_tool`.
+`coverage_check_selftest` runs the logic on a fake tool.
+
 ## Frame captures (F12)
 
 F12 in the running game saves the frame on the screen, for a bug report or

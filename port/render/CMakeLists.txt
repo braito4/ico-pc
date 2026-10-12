@@ -698,6 +698,19 @@ if(ICO_RUN_TESTS)
         set_tests_properties(native_frame_gate_a native_frame_gate_b native_frame_check_selftest
                              PROPERTIES SKIP_RETURN_CODE 77)
         set_tests_properties(native_frame_gate_a PROPERTIES TIMEOUT 3600)
+        # the regression renders (tools/coverage_check.py, tools/coverage_corpus.txt): every
+        # corpus dump at its own aspect, per-mesh draw counts and the pixel change against the
+        # previous run's pictures in tools/.coverage.  Seed the baseline after a build with
+        #   python3 -I tools/coverage_check.py seed --tool <rd_replay_tool>
+        # Skips (77) when the dumps, the tool or Pillow are absent.
+        set(ICO_COV "${CMAKE_SOURCE_DIR}/tools/coverage_check.py")
+        add_test(NAME coverage_corpus
+                 COMMAND "${Python3_EXECUTABLE}" -I "${ICO_COV}" check --ctest
+                         --tool $<TARGET_FILE:rd_replay_tool>)
+        add_test(NAME coverage_check_selftest
+                 COMMAND "${Python3_EXECUTABLE}" -I "${ICO_COV}" selftest)
+        set_tests_properties(coverage_corpus coverage_check_selftest PROPERTIES SKIP_RETURN_CODE 77)
+        set_tests_properties(coverage_corpus PROPERTIES TIMEOUT 3600)
     endif()
     add_test(NAME rd_water COMMAND rd_water_test)
     set_tests_properties(rd_water PROPERTIES SKIP_RETURN_CODE 77)
