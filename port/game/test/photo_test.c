@@ -566,6 +566,9 @@ int main(int argc, char **argv)
         CHECK(fabsf(out.view[4]) < 1e-4f, "steep: the horizon stays level (right's world Y %.5f)",
               (double)out.view[4]);
         /* a shoulder held at enter does nothing until released */
+        ico_photo_exit();
+        ico_photo_enter();
+        CHECK(ico_photo_set_game(&steep), "steep: kept again");
         p = idle();
         p.held = ICO_PHOTO_L1;
         ticks(&p, 10, &out, &steep);
