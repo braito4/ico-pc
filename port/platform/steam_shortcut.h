@@ -71,7 +71,8 @@ int ico_steam_login_users(const char *text, size_t n, uint32_t *ids, int max);
 
 /* 1 when Steam runs by the env's checks. */
 int ico_steam_running(const IcoSteamEnv *env);
-/* 1 when pid is a live process (the platform's check). */
+/* 1 when pid is a live Steam process: alive and named steam (a stale pid
+   file whose pid another program now has does not count). */
 int ico_steam_pid_alive(long pid);
 
 /* The whole job against env: ICO_STEAM_*. */

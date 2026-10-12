@@ -1,6 +1,6 @@
 ## New
 
-- Options > Extras > Add to Steam (Windows and Linux): adds the game to your Steam library with one choice.
+- Options > Extras > Add to Steam on the title screen (Windows and Linux): adds the game to your Steam library with one choice.
 - A portable download for Windows and Linux keeps your saves and settings in a folder beside the game, and the normal downloads come with a make-portable script that does the same.
 - Options > Gameplay > Natural chains (off by default): the two chains that come down for Ico, at the Stone Pillar and in Underground 2, keep their links the right size the whole way down.
 

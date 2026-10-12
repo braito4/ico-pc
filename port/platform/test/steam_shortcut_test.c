@@ -22,6 +22,8 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #else
+#include <signal.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #endif
 
@@ -577,19 +579,68 @@ static void test_running(void)
     CHECK(rd(vdf, got, sizeof(got), &gotN) == 0 && gotN > 0);
 
 #ifndef _WIN32
-    /* the platform's own check: this process is alive, an absurd pid is not */
-    CHECK(ico_steam_pid_alive((long)getpid()));
+    /* the platform's own check: an absurd pid is not alive */
     CHECK(!ico_steam_pid_alive(2147483646L));
     CHECK(!ico_steam_pid_alive(0));
     env.pidAlive = NULL;
+    wr("steam.pid", "2147483646\n", 11);
+    CHECK(!ico_steam_running(&env)); /* a stale pid */
     {
-        char own[32];
-        const int len = snprintf(own, sizeof(own), "%ld\n", (long)getpid());
+        /* a live process that is not Steam (a pid reused after Steam was
+           killed) does not count; one named steam does */
+        char other[1100], link[1100], pidText[32];
+        char own[16] = "";
+        pid_t kid;
+        int len;
+        FILE *self = fopen("/proc/self/comm", "rb");
 
-        wr("steam.pid", own, (size_t)len);
-        CHECK(ico_steam_running(&env));
-        wr("steam.pid", "2147483646\n", 11);
-        CHECK(!ico_steam_running(&env));
+        if (self != NULL) {
+            own[fread(own, 1, sizeof(own) - 1, self)] = '\0';
+            fclose(self);
+        }
+
+        p(link, sizeof(link), "steamd");
+        p(other, sizeof(other), "notit");
+        ico_remove(link);
+        ico_remove(other);
+        CHECK(symlink("/bin/sleep", link) == 0 && symlink("/bin/sleep", other) == 0);
+        for (int isSteam = 0; isSteam < 2; isSteam++) {
+            const char *exe = isSteam ? link : other;
+
+            kid = fork();
+            if (kid == 0) {
+                execl(exe, exe, "30", (char *)NULL);
+                _exit(127);
+            }
+            CHECK(kid > 0);
+            /* exec has to have happened for the name to be the link's */
+            for (int k = 0; k < 200; k++) {
+                char c[64];
+                size_t n = 0;
+                FILE *f;
+
+                snprintf(c, sizeof(c), "/proc/%ld/comm", (long)kid);
+                f = fopen(c, "rb");
+                if (f != NULL) {
+                    n = fread(c, 1, sizeof(c) - 1, f);
+                    fclose(f);
+                    c[n] = '\0';
+                    if (strcmp(c, own) != 0) { /* this program's name: not yet */
+                        break;
+                    }
+                }
+                usleep(10000);
+            }
+            len = snprintf(pidText, sizeof(pidText), "%ld\n", (long)kid);
+            wr("steam.pid", pidText, (size_t)len);
+            CHECK(ico_steam_running(&env) == isSteam);
+            CHECK(ico_steam_pid_alive((long)kid) == isSteam);
+            kill(kid, SIGKILL);
+            waitpid(kid, NULL, 0);
+            CHECK(!ico_steam_running(&env)); /* gone: stale again */
+        }
+        ico_remove(link);
+        ico_remove(other);
     }
 #endif
 }

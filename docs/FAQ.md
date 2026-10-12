@@ -100,7 +100,7 @@ edges stay smooth and still parts keep their full detail.
 
 ## How do I start the game from Steam?
 
-Close Steam, start the game, and choose Options > Extras > Add to Steam.
+Close Steam, start the game, and choose Options > Extras > Add to Steam on the title screen.
 The game then shows in your Steam library, and on a Steam Deck in Game
 Mode. If Steam is open, the game tells you to close it first.
 [Details](OPTIONS.md#extras) and [Steam Deck tips](TROUBLESHOOTING.md#steam-deck).

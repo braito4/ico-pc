@@ -254,7 +254,8 @@ pause menu's Options it has only Character Customization.
 - **Credits:** watch the ending credits again. It unlocks once you have
   finished the game.
 - **Character Customization:** change the colours of Ico and Yorda. [Details below](#character-customization).
-- **Add to Steam** (Windows and Linux, including the Steam Deck): adds the
+- **Add to Steam** (Windows and Linux, including the Steam Deck; on the
+  title screen's Extras page only): adds the
   game to your Steam library as a non-Steam game, so you can start it from
   Steam. Close Steam first: the game will not change Steam's list while
   Steam is open, and says so if Steam is running. On a Steam Deck, use

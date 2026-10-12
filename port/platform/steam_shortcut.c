@@ -450,6 +450,28 @@ int ico_steam_login_users(const char *text, size_t n, uint32_t *ids, int max)
 
 /* --- Steam running ---------------------------------------------------------- */
 
+/* 1 when text holds "steam" in any case */
+static int has_steam(const char *text)
+{
+    static const char kWord[] = "steam";
+
+    for (; *text != '\0'; text++) {
+        size_t k = 0;
+
+        while (kWord[k] != '\0' && text[k] != '\0' && tolower((unsigned char)text[k]) == kWord[k]) {
+            k++;
+        }
+        if (kWord[k] == '\0') {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* A pid file outlives a Steam that was killed, and its pid can be given to
+   another process later, so a live pid counts only when the process is a
+   Steam one: its name has "steam" in it (Linux: /proc/<pid>/comm; Windows:
+   the image name steam.exe). Without /proc the pid alone decides. */
 int ico_steam_pid_alive(long pid)
 {
     if (pid <= 0) {
@@ -465,11 +487,41 @@ int ico_steam_pid_alive(long pid)
             return 0;
         }
         alive = GetExitCodeProcess(h, &code) && code == STILL_ACTIVE;
+        if (alive) {
+            wchar_t path[MAX_PATH];
+            DWORD n = MAX_PATH;
+
+            if (QueryFullProcessImageNameW(h, 0, path, &n) && n > 0) {
+                const wchar_t *base = path;
+
+                for (const wchar_t *c = path; *c != 0; c++) {
+                    if (*c == L'\\' || *c == L'/') {
+                        base = c + 1;
+                    }
+                }
+                alive = _wcsicmp(base, L"steam.exe") == 0;
+            } /* a name that cannot be read: the pid alone decides */
+        }
         CloseHandle(h);
         return alive;
     }
 #else
-    return kill((pid_t)pid, 0) == 0 || errno == EPERM;
+    {
+        char path[48], comm[64];
+        FILE *f;
+
+        if (kill((pid_t)pid, 0) != 0 && errno != EPERM) {
+            return 0;
+        }
+        snprintf(path, sizeof(path), "/proc/%ld/comm", pid);
+        f = fopen(path, "rb");
+        if (f == NULL) {
+            return 1; /* no /proc to ask */
+        }
+        comm[fread(comm, 1, sizeof(comm) - 1, f)] = '\0';
+        fclose(f);
+        return has_steam(comm);
+    }
 #endif
 }
 
