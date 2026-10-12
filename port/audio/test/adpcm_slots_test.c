@@ -173,6 +173,45 @@ int iosCdvdDiskStatusGet(void)
     return 0;
 }
 
+int SgGetSpuSlotMalloc(int mode)
+{
+    (void)mode;
+    return 0;
+}
+
+void SgStAdpcmInit(void) {}
+
+int iosCdvdBackGroundReadIOPm(CdvdBgReq *self, void *buf, int size)
+{
+    (void)self;
+    (void)buf;
+    (void)size;
+    return 0;
+}
+
+int iosSifAllocIopHeapDebug(int size, const char *file, int line)
+{
+    (void)size;
+    (void)file;
+    (void)line;
+    return 0;
+}
+
+SqEntry *soundDataAreaSearch(int *pk)
+{
+    int i;
+    for (i = 0; i < 16; i++) {
+        if (*(int *)&sqTbl[i] == *pk)
+            return &sqTbl[i];
+    }
+    return 0;
+}
+
+int soundOutputModeGet(void)
+{
+    return 0;
+}
+
 int sceSifFreeIopHeap(int a)
 {
     (void)a;
