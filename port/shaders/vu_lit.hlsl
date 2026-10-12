@@ -130,10 +130,20 @@ VuVSOut vu_lit_main(uint vid, uint variant)
     }
     uint kick = (vid & VU_INDEX_MASK) >> 2;
     uint corner = vid & 3u;
-    VuVtx a = vu_lit_vertex(kick - 2u, mode, variant, false);
-    VuVtx b = vu_lit_vertex(kick - 1u, mode, variant, false);
-    VuVtx c = vu_lit_vertex(kick, mode, variant, false);
-    VuVtx me = vu_lit_vertex(kick - 2u + corner, mode, variant, true);
+    // every corner's attributes under the exact viewport (the attribute
+    // planes, vu_common.hlsli vu_attr_planes), else only this corner's
+    bool full = g_vp.x != 0.0;
+    VuVtx a = vu_lit_vertex(kick - 2u, mode, variant, full);
+    VuVtx b = vu_lit_vertex(kick - 1u, mode, variant, full);
+    VuVtx c = vu_lit_vertex(kick, mode, variant, full);
+    VuVtx me = a;
+    if (!full) {
+        me = vu_lit_vertex(kick - 2u + corner, mode, variant, true);
+    } else if (corner == 1u) {
+        me = b;
+    } else if (corner == 2u) {
+        me = c;
+    }
     uint rule = mode == VU_CLIP_REGION ? vu_region_rule(a, b, c) : VU_RULE_EXACT;
     if (rule == VU_RULE_STRIP) {
         // a joined strip is not a card; a free-standing one is unless a
@@ -144,7 +154,7 @@ VuVSOut vu_lit_main(uint vid, uint variant)
             rule = vu_lit_strip_passes(kick, variant) ? VU_RULE_CLIP : VU_RULE_DROP;
         }
     }
-    VuVSOut o = vu_plane_out(vu_triangle_out(a, b, c, me, mode, rule), kick, corner);
+    VuVSOut o = vu_plane_out(vu_triangle_out(a, b, c, me, mode, rule), a, b, c, kick, corner);
     if ((vid & VU_INDEX_LATER) != 0u) {
         o = vu_later_out(o, a, b, c);
     }

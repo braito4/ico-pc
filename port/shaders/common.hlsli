@@ -47,16 +47,23 @@ cbuffer FrameCB : register(b0, space0)
     // y, z the drawing camera's picture, its half-width and half-height in
     // GS pixels about (2048, 2048) (vu_common.hlsli vu_picture_half: 256 by
     // half the native height for the frame's camera, a reflection camera's
-    // own); w reserved. g_frameRegs[1] reserved. Nothing transforms a
+    // own); w the exact viewport's half texel (below). Nothing transforms a
     // position: a GS X is drawn where the game put it, at every aspect, and
     // the VU programs' region test reads the position as computed
     // (vu_common.hlsli vu_triangle_out).
+    // g_frameRegs[1] (g_vp): the exact viewport (rd_replay.c
+    // rd__frame_group_ex, setViewport): x, y 2 / its width and height in
+    // texels (a power of two, centred on the target: positions on the GS's
+    // 1/16 grid map to the same texel at every frame width, exactly),
+    // z, w the target's texels per GS pixel; 0 when the viewport is the
+    // target (the present, the films, the shader tests: the plain mapping).
     float4 g_frameRegs[2];
     float4 g_z;         // x scale (1 / 2^24), yz the bound target's texels per GS
                         // pixel (1 in Original), w 1: the VU programs output
                         // unquantised X, Y (only the developer switch
                         // ICO_RD_VU_OFFGRID, Enhanced on a scaled target)
-    float4 g_misc;      // x frame counter, y preset (0 Original, 1 Enhanced), zw reserved
+    float4 g_misc;      // x frame counter, y preset (0 Original, 1 Enhanced), zw the
+                        // target's share of the exact viewport (fullscreen_triangle)
 };
 
 // ---------------------------------------------------------------- DrawCB
@@ -140,6 +147,7 @@ bool gs_date_discard(uint flags, float snap)
 }
 
 #define g_frame g_frameRegs[0]
+#define g_vp g_frameRegs[1]
 
 // ------------------------------------------------------------ vector forms
 
@@ -651,18 +659,42 @@ DstOut gs_dst_out(uint4 col)
 
 // ------------------------------------------------------- vertex helpers
 
-// A 12.4 GS window coordinate (as two u16 in a uint2) to clip space, the
-// same for every space tag.  precise (here and in gs_depth,
-// vu_common.hlsli vu_ndc and vu_homogeneous_position): no fused
-// multiply-add, so every pipeline that draws a primitive gets the same
-// position and depth bits (the two-pass blend of a device without
-// dual-source blending draws it twice, the second pass GEQUAL against the
-// depth the first wrote: rd_pipeline.c).
+// A GS window coordinate in GS pixels (XYOFFSET-relative / 16) to clip
+// space, the same for every space tag.  precise (here and in gs_depth,
+// vu_common.hlsli vu_homogeneous_position): no fused multiply-add, so every
+// pipeline that draws a primitive gets the same position and depth bits
+// (the two-pass blend of a device without dual-source blending draws it
+// twice, the second pass GEQUAL against the depth the first wrote:
+// rd_pipeline.c).
+//
+// With the exact viewport (g_vp.x set, rd_replay.c s_vpExact) every step
+// is exact for a position on the GS's 1/16 grid at an integer scale: the
+// offset from the target's centre (GS pixels, 4 fraction bits), times the
+// scale, plus the half texel, is the texel offset from the centre; times
+// 2 / the viewport's power-of-two size is clip space; the GPU's viewport
+// transform multiplies it back by half that size and adds the centre.  The
+// clip-space numbers are the same at every frame width (a frame-wide
+// target's centre is GS 2048 and the viewport's size is one for every
+// target), so is what the GPU clips of a triangle.  The plain mapping
+// (1 / the target's size, then the GPU's multiply by it) rounds at any
+// size that is not a power of two.
+float2 gs_px_to_ndc(float2 px)
+{
+    if (g_vp.x != 0.0) {
+        precise float2 c = g_origin.xy + g_target.xy * 0.5;
+        precise float2 q = (px - c) * g_vp.zw + g_frame.w;
+        precise float2 ndc = float2(q.x * g_vp.x, -(q.y * g_vp.y));
+        return ndc;
+    }
+    precise float2 p = px - g_origin.xy + g_origin.zw;
+    precise float2 ndc = float2(p.x * g_target.z * 2.0 - 1.0, 1.0 - p.y * g_target.w * 2.0);
+    return ndc;
+}
+
+// A 12.4 GS window coordinate (as two u16 in a uint2) to clip space.
 float2 gs_xy_to_ndc(uint2 xy)
 {
-    precise float2 px = float2(xy) * (1.0 / 16.0) - g_origin.xy + g_origin.zw;
-    precise float2 ndc = float2(px.x * g_target.z * 2.0 - 1.0, 1.0 - px.y * g_target.w * 2.0);
-    return ndc;
+    return gs_px_to_ndc(float2(xy) * (1.0 / 16.0));
 }
 
 float gs_depth(uint z)
@@ -672,11 +704,14 @@ float gs_depth(uint z)
 }
 
 // Fullscreen triangle from SV_VertexID, no vertex buffer: ndc covers the
-// target, t is 0..1 across it (y down).
+// target, t is 0..1 across it (y down).  Under the exact viewport the
+// target is the share g_misc.zw (a power of two's fraction: exact) of it
+// about its centre.
 void fullscreen_triangle(uint id, out float4 pos, out float2 t)
 {
     float2 c = float2((id << 1) & 2u, id & 2u);
-    pos = float4(c.x * 2.0 - 1.0, 1.0 - c.y * 2.0, 0.0, 1.0);
+    float2 k = g_misc.z != 0.0 ? g_misc.zw : float2(1.0, 1.0);
+    pos = float4((c.x * 2.0 - 1.0) * k.x, (1.0 - c.y * 2.0) * k.y, 0.0, 1.0);
     t = c;
 }
 

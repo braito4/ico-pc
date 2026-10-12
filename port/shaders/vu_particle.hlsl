@@ -130,5 +130,12 @@ VuVSOut vu_particle_vs(uint vid : SV_VertexID)
     o.pos = vu_gs_position(g, false);
     o.col = float4(s.rgba);
     o.stq = float3(right ? s.st.z : s.st.x, down ? s.st.w : s.st.y, 1.0);
-    return o;
+    // the sprite's planes (vu_common.hlsli vu_attr_planes): S runs across,
+    // T down, the same on both triangles
+    float2 p0 = vu_texel_offset_px(float2(s.c0.xy) * (1.0 / 16.0));
+    float2 p1 = vu_texel_offset_px(float2(s.c1.xy) * (1.0 / 16.0));
+    float4 col = float4(s.rgba);
+    return vu_attr_planes_at(o, p0, float2(p1.x, p0.y), float2(p0.x, p1.y), col, col, col,
+                             float3(s.st.xy, 1.0), float3(s.st.z, s.st.y, 1.0),
+                             float3(s.st.x, s.st.w, 1.0));
 }

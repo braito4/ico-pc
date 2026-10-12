@@ -23,20 +23,35 @@
  *     rule is that test's and W2-SPACES' business);
  *   - the DISPLAY reduction (RD_POST_REDUCTION) at the end of list 12.
  *
- * The cases, by the wave that makes each pass:
- *   c  every W, every preset: SCENE and DISPLAY columns
- *      [(W/2 - 256) s, +512 s) equal the W = 512 render's byte for byte
- *      (Gate B's centre rule).  DISPLAY leaves out two GS pixels at each
- *      end of the 512 columns: the reduction crops its picture 2 pixels
- *      from the frame's edge and its bilinear reads one pixel past, which
- *      at W = 512 is the frame's edge and at a wider W is picture.
- *      Passes after W2-SPACES (the space rewrite: no squeeze, no wideX) and
- *      W2-VU (the drop rule).
- *   e  every W > 512, Enhanced: no step of SCENE across either old band edge
- *      (the column pair at (W/2 -+ 256) s) is larger than the 99th
- *      percentile (+1 LSB for rounding) of the horizontal gradient of its
- *      row within 16 GS pixels of the edge, per channel.  Passes after
- *      W2-SPACES.
+ * The cases:
+ *   c  every W, every preset (Original 1x, Enhanced 1x and 2x): SCENE and
+ *      DISPLAY columns [(W/2 - 256) s, +512 s) equal the W = 512 render's
+ *      byte for byte (Gate B's centre rule).  DISPLAY leaves out two GS
+ *      pixels at each end of the 512 columns: the reduction crops its
+ *      picture 2 pixels from the frame's edge and its bilinear reads one
+ *      pixel past, which at W = 512 is the frame's edge and at a wider W is
+ *      picture.  Exact since EXACT-RASTER (v0.6.1): before it the GPU
+ *      clipped a triangle reaching past the target at the viewport (the
+ *      target, whose edge is the band's at W 512), which moved its edges,
+ *      and interpolated the colours from the pixel's place in the target
+ *      (rd_replay.c s_vpExact, vu_common.hlsli vu_attr_planes).
+ *   n  every W < 2560, every preset: SCENE equals the W = 2560 render's
+ *      centre W s columns byte for byte, DISPLAY too but for two GS pixels
+ *      at the narrower frame's edges (the reduction's crop): the sides
+ *      continue exactly, a wider frame only adds columns.
+ *   e  every W > 512, every preset: no step of SCENE across either old
+ *      band edge (the column pair at (W/2 -+ 256) s) is larger than the
+ *      99th percentile (+1 LSB for rounding) of the horizontal gradient of
+ *      its row within 16 GS pixels of the edge, nor than the vertical
+ *      steps beside it (a triangle's own edge crossing the column there),
+ *      per channel; on the frame without the UI sprite (s_noUi: a UI item
+ *      is the 4:3 picture's, its edge is the band's by design).
+ *   p  corners and edges on pixel boundaries and pixel centres
+ *      (checkBoundaryCorners): every W, every preset, the 4:3 columns of
+ *      SCENE equal the W = 512 render's byte for byte.  Failed before
+ *      EXACT-RASTER at every wider W, 2048 included (the two triangles
+ *      across the band edges: their pixel-centre ties on the edge the GPU
+ *      clipped at the W 512 target's edge went the other way).
  *   h  W = 512, Original 1x: the hash of SCENE and of DISPLAY equal
  *      kExpect (Gate A in miniature: the Original picture at 4:3 does not
  *      change).  Runs always; kExpect is zero until the first run's printed
@@ -58,11 +73,11 @@
  *      takes a nearest texel, at W 512 and 688) reads the GS's texel at
  *      every pixel of the 4:3 columns.  Runs always.
  *   The W = 512 renders also have to show the frame (not the clear colour).
- * The wide cases (c, e) run only with ICO_NATIVE_GATE=1 in the environment;
- * without it the test checks W = 512 and exits 77 (skipped), so the ctest is
- * green until W2 and becomes the gate once the variable is set in the ctest.
+ * Every case runs on every run (the ICO_NATIVE_GATE switch is gone: the
+ * centre rule holds since EXACT-RASTER; the whole test takes well under a
+ * minute on lavapipe).
  *
- * Exit 0 all, 1 a mismatch, 77 without a Vulkan device or without the gate. */
+ * Exit 0 all, 1 a mismatch, 77 without a Vulkan device. */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -246,6 +261,9 @@ static void spriteAbs(int x0, int y0, int x1, int y1, const uint8_t c[4], RdSpac
 
 static int s_grain;
 
+/* 1: drawFrame leaves out the UI sprite (the continuity case e) */
+static int s_noUi;
+
 /* checkNearestTies' case: the texture (kind), the filters or TEX1, the
  * level the pixels read */
 typedef struct TieCase {
@@ -366,7 +384,9 @@ static void drawFrame(int W, RdTex tex, const RdMesh *meshes)
     rd_gouraud(0);
     rd_sampler(RD_FILTER_NEAREST, RD_FILTER_NEAREST, RD_WRAP_CLAMP, RD_WRAP_CLAMP);
     rd_texture(tex, RD_TEXFN_MODULATE, RD_TCC_RGBA);
-    spriteAbs(bl, top, br, bot, grey, RD_SPACE_UI, 8, 8, BAND * 16 + 8, GS_H * 16 + 8);
+    if (!s_noUi) {
+        spriteAbs(bl, top, br, bot, grey, RD_SPACE_UI, 8, 8, BAND * 16 + 8, GS_H * 16 + 8);
+    }
 
     /* the full-frame items: a tint, and the fog stand-in */
     static const uint8_t tint[4] = {30, 60, 120, 0x28}, fog[4] = {0xA0, 0xB0, 0xC0, 0x18};
@@ -566,7 +586,11 @@ static int cmpInt(const void *a, const void *b)
 }
 
 /* no step across the old band edges larger than the 99th percentile (+1) of
- * the row's horizontal gradient within 16 GS pixels of the edge */
+ * the row's horizontal gradient within 16 GS pixels of the edge, nor than
+ * the largest vertical step of the two columns at the edge between this
+ * row and the next or the last (+1): where a triangle's own edge crosses
+ * the column pair the picture steps across it and down it alike, a seam
+ * steps only across */
 static void checkContinuity(const Cfg *cfg, int W, const Img *im)
 {
     const uint32_t f = texelsPerPixel(im, W);
@@ -592,7 +616,18 @@ static void checkContinuity(const Cfg *cfg, int W, const Img *im)
                 qsort(g, (size_t)n, sizeof(int), cmpInt);
                 const int p99 = g[(int)(0.99 * (double)(n - 1))];
                 const int step = abs((int)row[e * 4 + c] - (int)row[(e - 1) * 4 + c]);
-                if (step > p99 + 1) {
+                int vert = 0;
+                for (int dy = -1; dy <= 1; dy += 2) {
+                    if ((int)y + dy < 0 || (int)y + dy >= (int)im->h) {
+                        continue;
+                    }
+                    const uint8_t *nb = &im->px[(size_t)((int)y + dy) * im->w * 4];
+                    for (int x = e - 1; x <= e; x++) {
+                        const int v = abs((int)row[x * 4 + c] - (int)nb[x * 4 + c]);
+                        vert = v > vert ? v : vert;
+                    }
+                }
+                if (step > p99 + 1 && step > vert + 1) {
                     bad++;
                     worst = step > worst ? step : worst;
                 }
@@ -603,6 +638,39 @@ static void checkContinuity(const Cfg *cfg, int W, const Img *im)
               "percentile (worst %d)",
               cfg->name, W, bad, side ? "right" : "left", worst);
     }
+}
+
+/* The sides continue exactly (case n): the columns of the W render are the
+ * centre W s columns of the wide render's (Wide), byte for byte; guard GS
+ * pixels at each end of the W frame left out */
+static void compareNested(const char *what, const Cfg *cfg, int W, const Img *a, int Wide,
+                          const Img *wide, int guard)
+{
+    const uint32_t f = texelsPerPixel(a, W), fw = texelsPerPixel(wide, Wide);
+    if (f == 0 || f != fw || a->h != wide->h) {
+        CHECK(0, "%s, %s, W %d in %d: sizes %ux%u (W %d: %ux%u)", cfg->name, what, W, Wide, a->w,
+              a->h, Wide, wide->w, wide->h);
+        return;
+    }
+    const uint32_t x0 = (uint32_t)(Wide / 2 - W / 2) * f;
+    size_t bad = 0;
+    int shown = 0;
+    for (uint32_t y = 0; y < a->h; y++) {
+        for (uint32_t x = (uint32_t)guard * f; x < (uint32_t)(W - guard) * f; x++) {
+            const uint8_t *pa = &a->px[((size_t)y * a->w + x) * 4];
+            const uint8_t *pw = &wide->px[((size_t)y * wide->w + x0 + x) * 4];
+            if (memcmp(pa, pw, 4) != 0) {
+                if (shown++ < 4) {
+                    printf("  %s %s W %d (%u,%u): got %u %u %u %u, W %d has %u %u %u %u\n",
+                           cfg->name, what, W, x, y, pa[0], pa[1], pa[2], pa[3], Wide, pw[0], pw[1],
+                           pw[2], pw[3]);
+                }
+                bad++;
+            }
+        }
+    }
+    CHECK(bad == 0, "%s, %s, W %d: %zu pixels differ from the W %d render's same columns",
+          cfg->name, what, W, bad, Wide);
 }
 
 /* The film grain spans the native frame (D12, issue 75): the 512 columns of
@@ -633,31 +701,20 @@ static void checkFilmGrain(void)
             continue;
         }
         const uint32_t f = texelsPerPixel(&g.scene, W);
-        /* The centre columns carry the same grain at every width wherever
-           the frame under it is the same: the triangles' own edges and
-           clipping differ with the width (the Enhanced centre rule fails
-           on the frame without grain too), so the pixels whose frame
-           without grain differs from the W 512 one are left out, and most
-           of the centre must remain compared */
+        /* The centre columns carry the same grain at every width, byte for
+           byte (the frame under it is the same since EXACT-RASTER) */
         {
-            size_t bad = 0, cmp = 0, all = 0;
+            size_t bad = 0;
             const size_t x0 = (size_t)(W / 2 - BAND / 2) * f;
             for (uint32_t y = 0; f == 1 && y < g.scene.h; y++) {
                 for (size_t x = 0; x < (size_t)BAND; x++) {
                     const size_t o = ((size_t)y * g.scene.w + x0 + x) * 4;
                     const size_t r = ((size_t)y * ref.scene.w + x) * 4;
-                    all++;
-                    if (memcmp(&n.scene.px[o], &refNo.scene.px[r], 4) != 0) {
-                        continue;
-                    }
-                    cmp++;
                     bad += memcmp(&g.scene.px[o], &ref.scene.px[r], 4) != 0;
                 }
             }
-            CHECK(f == 1 && cmp * 10 > all * 8 && bad == 0,
-                  "film grain, W %d: %zu of %zu centre pixels (frame without grain equal) "
-                  "differ from the W 512 render; %zu pixels compared",
-                  W, bad, all, cmp);
+            CHECK(f == 1 && bad == 0,
+                  "film grain, W %d: %zu centre pixels differ from the W 512 render", W, bad);
         }
         size_t differ = 0, total = 0;
         for (uint32_t y = 0; f && y < g.scene.h; y++) {
@@ -1088,10 +1145,143 @@ static void checkNearestTies(void)
     }
 }
 
+/* ------------------------------------- corners on pixel boundaries (p) */
+
+/* Code-32 triangles inside the 4:3 band (identity matrix of triDraw: GS
+ * pixels as given), one flat colour each: corners on pixel centres (GS
+ * integers) with edges through a run of pixel centres (slopes 1, 1/4, 0
+ * and vertical), corners on pixel corners (GS x.5: the 12.4 value 8) with
+ * edges along pixel boundaries, and a mix.  Every pixel centre on an edge
+ * is a tie the GPU's fill rule decides, so a corner moved by the least
+ * rounding changes the coverage. */
+static const Tri kCorners[] = {
+    {"centres, slope 1",
+     32,
+     {{1900, 1900, 1000000, 1}, {2000, 2000, 1000000, 1}, {1900, 2100, 1000000, 1}},
+     {{220, 60, 60}, {220, 60, 60}, {220, 60, 60}}},
+    {"pixel corners, edges on boundaries",
+     32,
+     {{2000.5f, 1900.5f, 1000000, 1},
+      {2100.5f, 1900.5f, 1000000, 1},
+      {2000.5f, 2000.5f, 1000000, 1}},
+     {{60, 220, 60}, {60, 220, 60}, {60, 220, 60}}},
+    {"centres, slope 1/4",
+     32,
+     {{2150, 1950, 1000000, 1}, {2250, 1975, 1000000, 1}, {2200, 2100, 1000000, 1}},
+     {{60, 60, 220}, {60, 60, 220}, {60, 60, 220}}},
+    {"mixed",
+     32,
+     {{1950, 2150, 1000000, 1}, {2150.5f, 2180, 1000000, 1}, {2050, 2250.5f, 1000000, 1}},
+     {{220, 220, 60}, {220, 220, 60}, {220, 220, 60}}},
+    {"left half of the band, corners at its edge",
+     32,
+     {{1792.5f, 1830, 1000000, 1}, {1880, 1830, 1000000, 1}, {1792.5f, 1880.5f, 1000000, 1}},
+     {{220, 60, 220}, {220, 60, 220}, {220, 60, 220}}},
+    /* a corner on a pixel corner inside the band, the others beside the
+     * 4:3 frame (beside the target at W 512, inside it at a wider W): the
+     * slope 1/3 edge from the corner runs through every third pixel centre
+     * (1899 - 3k, 2121 + k), (2262 + 3k, 1841 + k) and across the band
+     * edge, where the GPU clipped it at the target's edge at W 512 only */
+    {"across the left band edge",
+     32,
+     {{1900.5f, 2120.5f, 1000000, 1},
+      {1600.5f, 2220.5f, 1000000, 1},
+      {1600.5f, 2120.5f, 1000000, 1}},
+     {{60, 220, 220}, {60, 220, 220}, {60, 220, 220}}},
+    {"across the right band edge",
+     32,
+     {{2260.5f, 1840.5f, 1000000, 1},
+      {2460.5f, 1840.5f, 1000000, 1},
+      {2410.5f, 1890.5f, 1000000, 1}},
+     {{240, 160, 60}, {240, 160, 60}, {240, 160, 60}}},
+};
+#define NCORNERS ((int)(sizeof(kCorners) / sizeof(kCorners[0])))
+
+/* SCENE of a frame at native width W under cfg holding kCorners, flat */
+static int renderCorners(const Cfg *cfg, int W, Img *scene)
+{
+    memset(scene, 0, sizeof(*scene));
+    RdSettings st;
+    memset(&st, 0, sizeof(st));
+    st.preset = cfg->preset;
+    st.outputWidth = 640;
+    st.outputHeight = 480;
+    st.aspect = W == BAND ? 4.0f / 3.0f : (float)W / 384.0f;
+    st.sceneScale = cfg->scale;
+    if (!rd_init(BAND, GS_H, &st, NULL)) {
+        return R_NO_DEVICE;
+    }
+    if (W != BAND) {
+        rd_reset_scene((uint32_t)W, GS_H);
+    }
+    RdMesh meshes[NCORNERS];
+    for (int i = 0; i < NCORNERS; i++) {
+        meshes[i] = triMesh(&kCorners[i]);
+    }
+    rd_begin_frame();
+    RdFrameHead h;
+    memset(&h, 0, sizeof(h));
+    memcpy(h.rgba, kBg, 4);
+    h.gsW = (uint32_t)W;
+    h.gsH = GS_H;
+    h.clear = 1;
+    rd_frame_head(&h);
+    rd_select_list(0);
+    rd_set_target(rd_target(RD_TARGET_SCENE), rd_target(RD_TARGET_SCENE), (uint32_t)W, GS_H, 1);
+    rd_test_gs(RD_TEST_Z_ALWAYS);
+    rd_z_write(0);
+    rd_blend(RD_BLEND_LERP_AS, 0x80, 0);
+    rd_abe(0);
+    rd_pabe(0);
+    rd_fba(0);
+    rd_gouraud(0);
+    rd_texture_off();
+    for (int i = 0; i < NCORNERS; i++) {
+        triDraw(meshes[i], &kCorners[i], i);
+    }
+    rd_end_frame(0);
+    const bool ok = readImg(RD_TARGET_SCENE, scene);
+    for (int i = 0; i < NCORNERS; i++) {
+        rd_destroy_vu_mesh(meshes[i]);
+    }
+    const uint32_t verr = rhi_vk_validation_error_count();
+    CHECK(verr == 0, "corners, %s, W %d: %u validation errors", cfg->name, W, verr);
+    rd_shutdown();
+    return ok ? R_OK : R_FAIL;
+}
+
+/* Case p: the triangles' coverage in the 4:3 columns is the W = 512 one at
+ * every width, in every preset */
+static void checkBoundaryCorners(void)
+{
+    for (int c = 0; c < NCFGS; c++) {
+        Img ref;
+        if (renderCorners(&kCfgs[c], BAND, &ref) != R_OK) {
+            CHECK(0, "corners, %s: the W 512 frame could not be rendered", kCfgs[c].name);
+            continue;
+        }
+        static const int at[NCORNERS][2] = {{1910, 1950}, {2030, 1930}, {2200, 2000}, {2050, 2190},
+                                            {1800, 1835}, {1800, 2140}, {2290, 1845}};
+        for (int t = 0; t < NCORNERS; t++) {
+            CHECK(drawnAt(&ref, BAND, at[t][0], at[t][1]), "corners, %s: \"%s\" is drawn at W 512",
+                  kCfgs[c].name, kCorners[t].what);
+        }
+        for (int i = 1; i < NWIDTHS; i++) {
+            Img im;
+            if (renderCorners(&kCfgs[c], kWidths[i], &im) != R_OK) {
+                CHECK(0, "corners, %s, W %d: the frame could not be rendered", kCfgs[c].name,
+                      kWidths[i]);
+                continue;
+            }
+            compareCentre("corners SCENE", &kCfgs[c], kWidths[i], &im, &ref, 0);
+            free(im.px);
+        }
+        free(ref.px);
+    }
+}
+
 int main(void)
 {
-    const char *gateEnv = getenv("ICO_NATIVE_GATE");
-    const int gate = gateEnv && strcmp(gateEnv, "1") == 0;
     rd__set_not_implemented_fatal(true);
     static Render ref[NCFGS];
 
@@ -1128,27 +1318,53 @@ int main(void)
     checkStripRule();
     checkGrainTexels();
     checkNearestTies();
-    if (gate) {
-        /* the wide frames, Enhanced only (Original is the 4:3 picture) */
-        for (int c = 1; c < NCFGS; c++) {
-            if (!ref[c].scene.px) {
+    checkBoundaryCorners();
+    /* the wide frames, every preset (Original at a wide aspect is the 4:3
+       picture with the sides): the centre rule against W 512 (c), the
+       nesting in the widest (n), the band edges (e) */
+    const int wideW = kWidths[NWIDTHS - 1];
+    for (int c = 0; c < NCFGS; c++) {
+        if (!ref[c].scene.px) {
+            continue;
+        }
+        Render wide;
+        if (renderAt(&kCfgs[c], wideW, &wide) != R_OK) {
+            CHECK(0, "%s, W %d: the frame could not be rendered", kCfgs[c].name, wideW);
+            continue;
+        }
+        compareNested("SCENE", &kCfgs[c], BAND, &ref[c].scene, wideW, &wide.scene, 0);
+        compareNested("DISPLAY", &kCfgs[c], BAND, &ref[c].display, wideW, &wide.display, 2);
+        for (int i = 1; i < NWIDTHS; i++) {
+            const int W = kWidths[i];
+            Render r;
+            if (W == wideW) {
+                r = wide;
+            } else if (renderAt(&kCfgs[c], W, &r) != R_OK) {
+                CHECK(0, "%s, W %d: the frame could not be rendered", kCfgs[c].name, W);
                 continue;
             }
-            for (int i = 1; i < NWIDTHS; i++) {
-                Render r;
-                const int st = renderAt(&kCfgs[c], kWidths[i], &r);
-                if (st != R_OK) {
-                    CHECK(0, "%s, W %d: the frame could not be rendered", kCfgs[c].name,
-                          kWidths[i]);
-                    continue;
-                }
-                compareCentre("SCENE", &kCfgs[c], kWidths[i], &r.scene, &ref[c].scene, 0);
-                compareCentre("DISPLAY", &kCfgs[c], kWidths[i], &r.display, &ref[c].display, 2);
-                checkContinuity(&kCfgs[c], kWidths[i], &r.scene);
-                printf("  %s, W %d done\n", kCfgs[c].name, kWidths[i]);
+            compareCentre("SCENE", &kCfgs[c], W, &r.scene, &ref[c].scene, 0);
+            compareCentre("DISPLAY", &kCfgs[c], W, &r.display, &ref[c].display, 2);
+            if (W != wideW) {
+                compareNested("SCENE", &kCfgs[c], W, &r.scene, wideW, &wide.scene, 0);
+                compareNested("DISPLAY", &kCfgs[c], W, &r.display, wideW, &wide.display, 2);
                 freeRender(&r);
             }
+            /* the band edges, on the frame without the 4:3 UI sprite */
+            Render nu;
+            s_noUi = 1;
+            const int st = renderAt(&kCfgs[c], W, &nu);
+            s_noUi = 0;
+            if (st != R_OK) {
+                CHECK(0, "%s, W %d: the frame without the UI could not be rendered", kCfgs[c].name,
+                      W);
+                continue;
+            }
+            checkContinuity(&kCfgs[c], W, &nu.scene);
+            freeRender(&nu);
+            printf("  %s, W %d done\n", kCfgs[c].name, W);
         }
+        freeRender(&wide);
     }
     for (int c = 0; c < NCFGS; c++) {
         freeRender(&ref[c]);
@@ -1156,10 +1372,6 @@ int main(void)
     if (failures) {
         printf("rd_native_test: %d failures\n", failures);
         return 1;
-    }
-    if (!gate) {
-        printf("SKIP rd_native_test: W 512 ok; the wide cases need ICO_NATIVE_GATE=1\n");
-        return 77;
     }
     printf("rd_native_test: ok\n");
     return 0;

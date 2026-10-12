@@ -112,10 +112,20 @@ VuVSOut vu_skin_main(uint vid, uint variant)
     // the index marks: VU_INDEX_JOINED (rd_mesh.c markJoinedStrips)
     uint kick = (vid & VU_INDEX_MASK) >> 2;
     uint corner = vid & 3u;
-    VuVtx a = vu_skin_vertex(kick - 2u, variant, false);
-    VuVtx b = vu_skin_vertex(kick - 1u, variant, false);
-    VuVtx c = vu_skin_vertex(kick, variant, false);
-    VuVtx me = vu_skin_vertex(kick - 2u + corner, variant, true);
+    // every corner's attributes under the exact viewport (the attribute
+    // planes, vu_common.hlsli vu_attr_planes), else only this corner's
+    bool full = g_vp.x != 0.0;
+    VuVtx a = vu_skin_vertex(kick - 2u, variant, full);
+    VuVtx b = vu_skin_vertex(kick - 1u, variant, full);
+    VuVtx c = vu_skin_vertex(kick, variant, full);
+    VuVtx me = a;
+    if (!full) {
+        me = vu_skin_vertex(kick - 2u + corner, variant, true);
+    } else if (corner == 1u) {
+        me = b;
+    } else if (corner == 2u) {
+        me = c;
+    }
     uint rule = vu_region_rule(a, b, c);
     if (rule == VU_RULE_STRIP) {
         // a joined strip is not a card; a free-standing one is unless a

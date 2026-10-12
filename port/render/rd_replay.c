@@ -611,6 +611,66 @@ RdUniform rd__frame_group_z(uint32_t targetW, uint32_t targetH, float originX, f
  * texel edges instead of texel centres */
 static bool s_frameNoHalf;
 
+/* The exact viewport (EXACT-RASTER, v0.6.1).  With the viewport the target
+ * itself, the 4:3 columns of a frame changed with its width (rd_native_test
+ * measured up to 160 pixels at 1x, 600 at 2x):
+ *  - the GPU clips a triangle at the viewport (the clip volume), and the
+ *    corners it makes there are float results off the GS's 1/16 grid, so
+ *    a triangle reaching past the target had its edges inside it moved by
+ *    a rounding, and a pixel centre on such an edge (a tie the fill rule
+ *    decides) went the other way; the target's edge is at another GS
+ *    column at every width (at W 512 it is the 4:3 band's own edge);
+ *  - the positions went to clip space through 1 / the target's size and
+ *    back through the GPU's multiply by half of it, exact only at a power
+ *    of two (the GPU's sub-pixel snap absorbs that for a corner on the 1/16
+ *    grid, not for a corner the GPU clipped at the eye);
+ *  - the colours and STs the GPU interpolates depend on the pixel's place
+ *    in the target (vu_common.hlsli vu_attr_planes, the VU programs' fix).
+ * Every pass the replay records instead has one viewport size, the largest
+ * power of two the GPU takes (vpExtent; it reaches far past the target and
+ * the scissor, always set within the target, bounds the drawing), centred
+ * on the target, and FrameCB maps positions to it (rd__frame_group_ex,
+ * common.hlsli gs_px_to_ndc): offset from the target's centre, times the
+ * scale, plus the half texel, times 2 / the size, then the GPU's multiply
+ * by half the size: every step exact for a GS position at an integer
+ * scale, and the same clip-space numbers at every width (a frame-wide
+ * target's centre is GS 2048), so the GPU clips the same corners the same
+ * way whatever the width (and almost never at the sides).
+ * On while replayFrame records its lists; the present, the films and the
+ * camera probe keep the plain mapping (FrameCB vp 0). */
+static bool s_vpExact;
+
+/* The exact viewport's size for a target n texels across: the largest
+ * power of two the GPU's viewport takes (maxRenderTargetSize is at most its
+ * viewport limit; 16384 at most, D3D12's viewport bounds), the same for
+ * every target, so the clip-space positions, and the GPU's clipping of a
+ * triangle that reaches past the viewport, are the same at every frame
+ * width; n itself where that is smaller than n */
+static uint32_t vpExtent(uint32_t n)
+{
+    const uint32_t lim = g_rd.hasDevice ? rhi_limits()->maxRenderTargetSize : 16384u;
+    uint32_t p = 16384u;
+    while (p > lim) {
+        p >>= 1;
+    }
+    return p >= n ? p : n;
+}
+
+/* a replay pass's viewport for a target w x h texels: the exact one while
+ * replayFrame records, else the target */
+static void setViewport(uint32_t w, uint32_t h)
+{
+    RhiViewport vp = {0.0f, 0.0f, (float)w, (float)h, 0.0f, 1.0f};
+    if (s_vpExact) {
+        const uint32_t pw = vpExtent(w), ph = vpExtent(h);
+        vp.x = ((float)w - (float)pw) * 0.5f;
+        vp.y = ((float)h - (float)ph) * 0.5f;
+        vp.w = (float)pw;
+        vp.h = (float)ph;
+    }
+    rhi_cmd_set_viewport(s_cl, &vp);
+}
+
 /* the camera's picture of the frame group being made (Replay.picture), and
  * the height of the frame it is drawn on (0: the native height) */
 static uint32_t s_framePicture, s_framePictureFrameH;
@@ -670,6 +730,22 @@ RdUniform rd__frame_group_ex(uint32_t targetW, uint32_t targetH, float originX, 
                   : 0.0f;
     cb.misc[0] = (float)g_rd.replayCounter;
     cb.misc[1] = (float)g_rd.settings.preset;
+    if (s_vpExact && targetW && targetH) {
+        /* the viewport setViewport gives the target: its texture size is
+         * rd_core.c rd__target_scale_of's (scaled), the target's texels per
+         * GS pixel that over the GS size (the scale itself at an integer
+         * scale) */
+        const uint32_t tw = scaleX == 1.0f ? targetW : (uint32_t)((float)targetW * scaleX + 0.5f);
+        const uint32_t th = scaleY == 1.0f ? targetH : (uint32_t)((float)targetH * scaleY + 0.5f);
+        const uint32_t pw = vpExtent(tw ? tw : 1), ph = vpExtent(th ? th : 1);
+        cb.vp[0] = 2.0f / (float)pw;
+        cb.vp[1] = 2.0f / (float)ph;
+        cb.vp[2] = (float)tw / (float)targetW;
+        cb.vp[3] = (float)th / (float)targetH;
+        cb.frame[3] = s_frameNoHalf ? 0.0f : 0.5f;
+        cb.misc[2] = (float)tw / (float)pw;
+        cb.misc[3] = (float)th / (float)ph;
+    }
     return uniformGroup(g_rd.layoutFrame, 0, &cb, sizeof(cb));
 }
 
@@ -1088,8 +1164,7 @@ static void beginPass(Replay *r, RdTargetRec *c, RdTargetRec *d, uint32_t cid, u
     p.width = c->tw;
     p.height = c->th;
     rhi_cmd_begin_render_pass(s_cl, &p);
-    RhiViewport vp = {0.0f, 0.0f, (float)c->tw, (float)c->th, 0.0f, 1.0f};
-    rhi_cmd_set_viewport(s_cl, &vp);
+    setViewport(c->tw, c->th);
     r->passOpen = 1;
     r->passColor = cid;
     r->passDepth = did;
@@ -1286,8 +1361,7 @@ static void msaaUpsample(RdTargetRec *ts, int depth)
     p.width = s_ms.w;
     p.height = s_ms.h;
     rhi_cmd_begin_render_pass(s_cl, &p);
-    const RhiViewport vp = {0.0f, 0.0f, (float)s_ms.w, (float)s_ms.h, 0.0f, 1.0f};
-    rhi_cmd_set_viewport(s_cl, &vp);
+    setViewport(s_ms.w, s_ms.h);
     g_rd.passSamples = (uint8_t)s_ms.samples;
     if (!depth) {
         msaaFullscreen(RD_FS_BLIT, RHI_FMT_RGBA8_UNORM, ts->color, RHI_ASPECT_COLOR, s_ms.w,
@@ -1358,8 +1432,7 @@ static void msaaEnd(struct Replay *r)
         p.width = ts->tw;
         p.height = ts->th;
         rhi_cmd_begin_render_pass(s_cl, &p);
-        const RhiViewport vp = {0.0f, 0.0f, (float)ts->tw, (float)ts->th, 0.0f, 1.0f};
-        rhi_cmd_set_viewport(s_cl, &vp);
+        setViewport(ts->tw, ts->th);
         msaaFullscreen(RD_FS_DEPTH_RESOLVE, RHI_FMT_UNKNOWN, s_ms.depth, RHI_ASPECT_DEPTH, ts->tw,
                        ts->th);
         rhi_cmd_end_render_pass(s_cl);
@@ -2031,8 +2104,7 @@ static RhiTexture dateSnapshot(Replay *r, RdTargetRec *tc, uint32_t tcId, const 
     p.width = sn->tw;
     p.height = sn->th;
     rhi_cmd_begin_render_pass(s_cl, &p);
-    RhiViewport vp = {0.0f, 0.0f, (float)w, (float)h, 0.0f, 1.0f};
-    rhi_cmd_set_viewport(s_cl, &vp);
+    setViewport(w, h);
     /* the same full-target triangle and viewport, cut to the area */
     rhi_cmd_set_scissor(s_cl, &take);
     RdPipeKeyInt k = rd__post_key(RD_VS_BLIT, RD_FS_DATE_SNAP, RHI_FMT_R8_UNORM);
@@ -3699,8 +3771,7 @@ static void doScreenWrap(Replay *r, const RdFrame *f, const RdCmd *c)
     p.width = tc->tw;
     p.height = tc->th;
     rhi_cmd_begin_render_pass(s_cl, &p);
-    const RhiViewport vp = {0.0f, 0.0f, (float)tc->tw, (float)tc->th, 0.0f, 1.0f};
-    rhi_cmd_set_viewport(s_cl, &vp);
+    setViewport(tc->tw, tc->th);
     rhi_cmd_set_scissor(s_cl, &sc);
     float ox = 2048.0f - (float)(r->st.gsW >> 1);
     float oy = 2048.0f - (float)(r->st.gsH >> 1);
@@ -4185,8 +4256,7 @@ static void doExact(Replay *r, const RdCmd *c)
     p.width = w;
     p.height = h;
     rhi_cmd_begin_render_pass(s_cl, &p);
-    RhiViewport vp = {0.0f, 0.0f, (float)w, (float)h, 0.0f, 1.0f};
-    rhi_cmd_set_viewport(s_cl, &vp);
+    setViewport(w, h);
     rhi_cmd_set_scissor(s_cl, &all);
     RdPipeKeyInt k = rd__post_key(RD_VS_BLEND_INT, RD_FS_BLEND_INT, RHI_FMT_RGBA8_UINT);
     RhiPipeline pipe = rd__get_pipeline(&k);
@@ -4443,8 +4513,7 @@ static void shadowReduce(Replay *r, RdTargetRec *tc)
     p.width = tc->w;
     p.height = tc->h;
     rhi_cmd_begin_render_pass(s_cl, &p);
-    RhiViewport vp = {0.0f, 0.0f, (float)tc->w, (float)tc->h, 0.0f, 1.0f};
-    rhi_cmd_set_viewport(s_cl, &vp);
+    setViewport(tc->w, tc->h);
     const RhiRect all = {0, 0, tc->w, tc->h};
     rhi_cmd_set_scissor(s_cl, &all);
     IcoDrawCB cb;
@@ -5723,6 +5792,7 @@ static bool replayFrame(const RdFrame *f, int keep, bool present)
     if (!s_cl.id) {
         return false;
     }
+    s_vpExact = true; /* the lists' passes: the exact viewport (setViewport) */
     rd__perf_stamp(s_cl, RD_PERF_TS_BEGIN);
     /* no shadow window from another replay (clearNewTargets reads it) */
     memset(&s_stencil, 0, sizeof(s_stencil));
@@ -5822,6 +5892,7 @@ static bool replayFrame(const RdFrame *f, int keep, bool present)
     msaaEnd(&r); /* an epoch still open: SCENE resolved before anything reads it */
     endPass(&r);
     s_ms.r = NULL;
+    s_vpExact = false; /* the present sets its own viewports */
     if (doPresent) {
         rd__present_record(s_cl);
         rd__perf_stamp(s_cl, RD_PERF_TS_PRESENT);

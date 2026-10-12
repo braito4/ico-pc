@@ -30,17 +30,23 @@ typedef struct IcoFrameCB {
      * its half-width and half-height in GS pixels about (2048, 2048): 256 by
      * half the native height for the frame's camera, a reflection camera's
      * own (RdCamera.pictureW/H); the VU programs' rule for a triangle the
-     * region test drops reads them (vu_common.hlsli vu_picture_half).  The
-     * rest, and frameReserved, reserved (0).  No position is transformed. */
+     * region test drops reads them (vu_common.hlsli vu_picture_half).
+     * frame[3] the exact viewport's half texel (0.5, or 0 for the MSAA
+     * epoch's expanded sprites).  No position is transformed.
+     * vp: the exact viewport (common.hlsli g_vp, gs_px_to_ndc): 2 / its
+     * width and height in texels (a power of two centred on the target),
+     * the target's texels per GS pixel; all 0 when the viewport is the
+     * target (the plain mapping). */
     float frame[4];
-    float frameReserved[4];
+    float vp[4];
 
     /* x = 1 / 2^24 (PSMZ24 scale); yz the bound target's texels per GS
      * pixel (1 in Original); w = 1: the VU programs output unquantised X, Y
      * (only the developer switch ICO_RD_VU_OFFGRID; Enhanced, a scaled
      * target) */
     float z[4];
-    float misc[4]; /* x frame counter, y preset */
+    float misc[4]; /* x frame counter, y preset, zw the target's share of the exact
+                    * viewport (common.hlsli fullscreen_triangle; 0: all of it) */
 } IcoFrameCB;
 
 /* DrawCB: group 1, slot 1 (register b1, space1). */
@@ -221,7 +227,7 @@ _Static_assert(offsetof(IcoFrameCB, origin) == 240, "origin");
 
 _Static_assert(offsetof(IcoFrameCB, frame) == 256, "frame");
 
-_Static_assert(offsetof(IcoFrameCB, frameReserved) == 272, "frameReserved");
+_Static_assert(offsetof(IcoFrameCB, vp) == 272, "vp");
 
 _Static_assert(offsetof(IcoFrameCB, z) == 288, "z");
 

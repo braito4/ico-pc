@@ -169,9 +169,9 @@ target_link_libraries(rd_pixel_test PRIVATE ico_render ico_sheet_ref)
 
 # rd_native_test: one synthetic game frame (VU triangles, UI and full-frame
 # sprites, the DISPLAY reduction) at native widths 512..2560: the centre
-# columns equal the 512 render's and no step at the old band edges (Gate B).
-# The wide cases run with ICO_NATIVE_GATE=1 (the gate once W2 has landed);
-# without it only W = 512 is checked and the test exits 77.
+# columns equal the 512 render's, the sides continue exactly (a narrower
+# frame is the widest one's centre) and no step at the old band edges
+# (Gate B); corners on pixel boundaries cover the same pixels at every width.
 add_executable(rd_native_test test/rd_native_test.c)
 target_include_directories(rd_native_test PRIVATE "${CMAKE_SOURCE_DIR}/port/shaders"
                            "${CMAKE_SOURCE_DIR}/port/rhi")
