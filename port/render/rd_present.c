@@ -1204,7 +1204,10 @@ static void textCollect(const RdFrame *f, int keep)
     s_text.f = NULL;
 }
 
-void rd__overlay_collect(const RdFrame *f, int keep)
+/* rd__overlay_collect for a game frame (filmBox NULL) or for a film's
+ * present (rd__overlay_collect_film: the film's 4:3 box on the output, no
+ * CRT grid, no deferred text) */
+static void overlayCollect(const RdFrame *f, int keep, const RhiRect *filmBox)
 {
     overlayForget();
     s_ov.grid = 0;
@@ -1221,13 +1224,17 @@ void rd__overlay_collect(const RdFrame *f, int keep)
      * the old size for that one frame and follows from the next */
     const RdPresentPreset *pr = &s_present;
     RhiRect box;
-    outputBox(w, h, &box);
+    if (filmBox) {
+        box = *filmBox;
+    } else {
+        outputBox(w, h, &box);
+    }
     const RhiRect outBox = box;
     /* under the CRT filter the overlay is part of the
      * picture: its context is the filter's source grid at the frame's
      * lines (the 1x frame the game's own UI is drawn in), the box all of
      * it, and rd__crt_record draws the prims into that grid */
-    const bool crt = rd__crt_on() && !s_blank;
+    const bool crt = rd__crt_on() && !s_blank && !filmBox;
     if (crt) {
         uint32_t vw, vh;
         rd__crt_grid(&vw, &vh);
@@ -1245,7 +1252,8 @@ void rd__overlay_collect(const RdFrame *f, int keep)
     /* the deferred text first, so the overlay draws above it; none under
      * the CRT filter (the rows draw as quads into the scene, as in the
      * Original preset, and go through the filter) */
-    if (s_ov.textFn && f && g_rd.settings.preset == RD_PRESET_ENHANCED && !crt && !s_blank) {
+    if (s_ov.textFn && f && !filmBox && g_rd.settings.preset == RD_PRESET_ENHANCED && !crt &&
+        !s_blank) {
         g_rd.deferText = true;
         textCollect(f, keep);
     }
@@ -1272,6 +1280,16 @@ void rd__overlay_collect(const RdFrame *f, int keep)
         s_ov.topFn(t, s_ov.topUser);
         s_ov.inside = 0;
     }
+}
+
+void rd__overlay_collect(const RdFrame *f, int keep)
+{
+    overlayCollect(f, keep, NULL);
+}
+
+void rd__overlay_collect_film(const RhiRect *box)
+{
+    overlayCollect(NULL, 0, box);
 }
 
 uint64_t rd__overlay_ring_bytes(void)
@@ -1407,6 +1425,18 @@ static void overlayRecord(RhiCommandList cl, RhiTexture out, const RhiRect *box,
         drawBatches(cl, out, s_outFormat, s_outW, s_outH, &s_ov.topCtx, s_ov.topFirst, s_ov.bCount,
                     inPass);
     }
+    overlayForget();
+    s_ov.grid = 0;
+}
+
+/* the film's overlay, in a pass of its own on out (RENDER_TARGET, fmt,
+ * w x h): the touch controls over the HUD and the popups, as overlayRecord
+ * stacks them on a game frame */
+void rd__overlay_film_record(RhiCommandList cl, RhiTexture out, RhiFormat fmt, uint32_t w,
+                             uint32_t h)
+{
+    drawBatches(cl, out, fmt, w, h, &s_ov.topCtx, s_ov.topFirst, s_ov.bCount, false);
+    drawBatches(cl, out, fmt, w, h, &s_ov.ctx, s_ov.textBatches, s_ov.topFirst, false);
     overlayForget();
     s_ov.grid = 0;
 }

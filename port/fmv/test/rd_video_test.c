@@ -31,6 +31,9 @@
  *            alternate, each field deinterlaced is the bar of that field's
  *            instant over the whole height, no row alternation; afterwards
  *            rd_video_frame shows the ramp exactly again
+ *   overlay  the presentation overlay's two layers (the touch controls, the
+ *            popups) are drawn over the film's picture, in its 4:3 box, and
+ *            not drawn when none is registered
  *
  * Exit 77 without a device.
  */
@@ -511,6 +514,83 @@ static void testMovieBox(void)
     g_rd.frameAspect = fa;
 }
 
+/* The film's present draws the overlay (Android's touch controls and the
+ * popups were missing during a movie, so Auto mode never came back on a
+ * tap): both layers' rectangles are on the output, laid out in the film's
+ * 4:3 box. */
+typedef struct FilmOv {
+    int calls;
+    RdRect box;
+    int at; /* the rectangle's corner, output pixels (4 across) */
+    uint8_t rgba[4];
+} FilmOv;
+
+static void filmOverlay(const RdOverlayCtx *ctx, void *user)
+{
+    FilmOv *o = user;
+    RdScreenVtx v[2];
+    memset(v, 0, sizeof(v));
+    o->calls++;
+    o->box = ctx->box;
+    v[0].x = o->at * 16;
+    v[0].y = o->at * 16;
+    v[1].x = (o->at + 4) * 16;
+    v[1].y = (o->at + 4) * 16;
+    v[0].q = v[1].q = 1.0f;
+    memcpy(v[0].rgba, o->rgba, 4);
+    memcpy(v[1].rgba, o->rgba, 4);
+    rd_overlay_prims(RD_PRIM_SPRITES, v, 2, (RdTex){0}, RD_BLEND_LERP_AS);
+}
+
+static void testOverlay(void)
+{
+    enum { W = 32, H = 24 };
+
+    static uint8_t y[W * H], u[(W / 2) * (H / 2)], v[(W / 2) * (H / 2)];
+    const uint32_t pitch[3] = {W, W / 2, W / 2};
+    const uint8_t black[4] = {0, 0, 0, 0x80};
+    FilmOv mainL = {0, {0, 0, 0, 0}, 2, {255, 0, 0, 128}};
+    FilmOv topL = {0, {0, 0, 0, 0}, 8, {0, 255, 0, 128}};
+    RhiRect want;
+
+    memset(y, 81, sizeof(y));
+    memset(u, 90, sizeof(u));
+    memset(v, 240, sizeof(v));
+    rd_video_set_display(64, 48);
+    rd__ui_box(OW, OH, &want);
+    rd_set_present_overlay(filmOverlay, &mainL);
+    rd_set_present_overlay_top(filmOverlay, &topL);
+    CHECK(rd_video_clear(black) == 0, "overlay: clear");
+    CHECK(mainL.calls == 1 && topL.calls == 1, "overlay: a clear frame calls both layers (%d, %d)",
+          mainL.calls, topL.calls);
+    CHECK(rd_video_frame(y, u, v, pitch, W, H) == 0, "overlay: frame");
+    CHECK(mainL.calls == 2 && topL.calls == 2, "overlay: a film frame calls both layers (%d, %d)",
+          mainL.calls, topL.calls);
+    CHECK(mainL.box.x == want.x && mainL.box.y == want.y && mainL.box.w == want.w &&
+              mainL.box.h == want.h,
+          "overlay: the layer's box is the film's 4:3 box (%d,%d %ux%u)", mainL.box.x, mainL.box.y,
+          mainL.box.w, mainL.box.h);
+    if (readOut() == 0) {
+        /* both rectangles are in the bars around the 32 x 24 picture */
+        const uint8_t *a = s_out + (4 * OW + 4) * 4;
+        const uint8_t *b = s_out + (10 * OW + 10) * 4;
+        const uint8_t *c = s_out + (44 * OW + 56) * 4;
+        CHECK(a[0] > 0 && a[1] == 0, "overlay: the main layer's rectangle (%u %u %u)", a[0], a[1],
+              a[2]);
+        CHECK(b[1] > 0 && b[0] == 0, "overlay: the top layer's rectangle (%u %u %u)", b[0], b[1],
+              b[2]);
+        CHECK((c[0] | c[1] | c[2]) == 0, "overlay: the bars are black elsewhere (%u %u %u)", c[0],
+              c[1], c[2]);
+    }
+    rd_set_present_overlay(NULL, NULL);
+    rd_set_present_overlay_top(NULL, NULL);
+    CHECK(rd_video_frame(y, u, v, pitch, W, H) == 0, "overlay: frame without it");
+    if (readOut() == 0) {
+        const uint8_t *a = s_out + (4 * OW + 4) * 4;
+        CHECK((a[0] | a[1] | a[2]) == 0, "overlay: none registered, none drawn");
+    }
+}
+
 int main(void)
 {
     RdSettings s;
@@ -531,6 +611,7 @@ int main(void)
     testCrt();
     testFit();
     testField();
+    testOverlay();
     rd_video_shutdown();
     const uint32_t verr = rhi_vk_validation_error_count();
     CHECK(verr == 0, "%u validation errors", verr);

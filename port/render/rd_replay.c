@@ -5156,6 +5156,13 @@ static uint64_t estimateRing(const RdFrame *f, int keep)
             }
         }
     }
+    return total + rd__texture_ring_bytes();
+}
+
+uint64_t rd__texture_ring_bytes(void)
+{
+    const uint64_t pitchA = rhi_limits()->copyRowPitchAlign;
+    uint64_t total = 0;
     const bool walk = g_rd.texDirtyCount != 0 || g_rd.texLevelsFilter != (int)g_rd.filterUpgrade;
     for (uint32_t i = 0; walk && i < RD_MAX_TEXTURES; i++) {
         const RdTexRec *t = &g_rd.textures[i];
@@ -5474,6 +5481,14 @@ static void uploadTextures(void)
  * ring and one buffer copy each, all before the first pass.  The
  * interpolation's scratch meshes (transient) and a mesh the arena has no
  * room for stay on the ring path in doVu. */
+void rd__upload_textures(RhiCommandList cl)
+{
+    const RhiCommandList prev = s_cl;
+    s_cl = cl;
+    uploadTextures();
+    s_cl = prev;
+}
+
 static void uploadMeshes(const RdFrame *f, int keep)
 {
     const uint64_t ua = rhi_limits()->uniformAlign;

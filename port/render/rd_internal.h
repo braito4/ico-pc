@@ -1629,6 +1629,19 @@ typedef struct RdUniform {
  * g_rd.deferText for the replay (doScreen then skips the items' quads); the
  * items' prims are drawn before the overlay's, each batch in its region. */
 void rd__overlay_collect(const RdFrame *f, int keep);
+/* The same for a film's present (rd_video.c): the film's box on the output
+ * (box43) is the picture's box, no CRT grid, no deferred text.
+ * rd__overlay_film_record draws what it collected in a pass of its own on out
+ * (RENDER_TARGET, fmt, w x h) after the picture, the touch controls over the
+ * HUD and the popups; rd__overlay_ring_bytes is the ring it takes. */
+void rd__overlay_collect_film(const RhiRect *box);
+void rd__overlay_film_record(RhiCommandList cl, RhiTexture out, RhiFormat fmt, uint32_t w,
+                             uint32_t h);
+/* The dirty textures the next upload walk takes from the ring (the tail of
+ * the replay's estimate) and the walk itself, into cl, for the films'
+ * overlay: the touch controls' and the popups' textures. */
+uint64_t rd__texture_ring_bytes(void);
+void rd__upload_textures(RhiCommandList cl);
 /* With the CRT filter on, rd__overlay_collect gives the overlay a context
  * of the filter's source grid (rd__crt_grid's vw x the frame's lines, the
  * box the whole of it, the frame's 1x scale) and collects no deferred text;

@@ -135,6 +135,26 @@ if(ICO_RUN_TESTS)
     add_test(NAME ios_chain COMMAND ios_chain_test)
 endif()
 
+# The pad as a movie's skip poll sees it (main.c movie_abort_check): the game's
+# keyInput.c, pad.c and shockdriver.c over the thread and message layers and
+# port/input's libpad and bindings, on the scheduler, a thread spinning to the
+# vsync and polling, fed a gamepad Start and a key bound to Start.
+add_executable(movie_pad_test test/movie_pad_test.c host_config.c
+    "${CMAKE_SOURCE_DIR}/ico2/fumi/ios/thread.c"
+    "${CMAKE_SOURCE_DIR}/ico2/fumi/ios/message.c"
+    "${CMAKE_SOURCE_DIR}/ico2/fumi/ios/memory.c"
+    "${CMAKE_SOURCE_DIR}/ico2/fumi/ios/pad.c"
+    "${CMAKE_SOURCE_DIR}/ico2/fumi/ios/shockdriver.c"
+    "${CMAKE_SOURCE_DIR}/ico2/sugipon/src/keyInput.c")
+target_include_directories(movie_pad_test PRIVATE ${_ico_fumi_incs})
+target_compile_definitions(movie_pad_test PRIVATE ${ICO_GAME_DEFINITIONS})
+target_compile_options(movie_pad_test PRIVATE ${ICO_SEMANTIC_OPTIONS} ${ICO_GAME_LAYOUT_OPTIONS}
+                       ${ICO_GAME_WARNINGS})
+target_link_libraries(movie_pad_test PRIVATE ico_port_null ico_platform)
+if(ICO_RUN_TESTS)
+    add_test(NAME movie_pad COMMAND movie_pad_test)
+endif()
+
 # The window mode requests' readback (window_video.c) on SDL's
 # offscreen video driver. SDL3 is found by port/rhi, configured after this
 # directory, so the test is defined once the top level is done; exit 77

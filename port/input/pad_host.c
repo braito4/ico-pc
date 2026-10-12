@@ -42,6 +42,7 @@
  * that asks (the buffer then has id 0x79 and the 12 pressure bytes).
  */
 #include <libpad.h>
+#include <stdio.h>
 #include <string.h>
 #include "input.h"
 #include "input_record.h"
@@ -80,6 +81,32 @@ void ico_input_set_live(int on)
 void ico_input_set_vpad(const IcoVirtualPad *v)
 {
     s_vpad = *v;
+}
+
+static unsigned int s_start_sources;
+
+void ico_input_set_start_sources(unsigned int mask)
+{
+    s_start_sources = mask;
+}
+
+const char *ico_input_start_source(void)
+{
+    static const char *const names[] = {"gamepad", "keyboard", "mouse", "escape", "touch"};
+    static char buf[48];
+    size_t n = 0;
+    unsigned int i;
+
+    if (ico_pad_script_active()) {
+        return "pad script";
+    }
+    buf[0] = '\0';
+    for (i = 0; i < 5; i++) {
+        if (s_start_sources & (1u << i)) {
+            n += (size_t)snprintf(buf + n, sizeof(buf) - n, "%s%s", n != 0 ? "+" : "", names[i]);
+        }
+    }
+    return n != 0 ? buf : "none";
 }
 
 /* stick fix and mirror live in port/game/options.c */

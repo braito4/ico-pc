@@ -677,8 +677,9 @@ RdBlendExact rd_blend_exact(void);
  *                       the replay tool's --present), before the frame's
  *                       replay, so the textures fn creates or updates
  *                       (rd_create_texture_r8, rd_update_texture_rect: the
- *                       font atlases) are uploaded with the frame.  Not for
- *                       the movie picture (rd_video.c).  The registration
+ *                       font atlases) are uploaded with the frame.  Also at
+ *                       the movie picture's presents (rd_video.c), laid out
+ *                       in the picture's 4:3 box.  The registration
  *                       survives rd_shutdown / rd_init
  * rd_overlay_prims       valid only inside fn (ignored elsewhere): prims in
  *                       12.4 fixed-point OUTPUT pixels, origin at the

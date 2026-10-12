@@ -998,7 +998,9 @@ static void set_capture(int mode)
 static void pointer_visibility(void)
 {
     /* a movie stops the game's Main loop (and the pointer's tick) before
-       the menus: the left button is Cross again (it skips the movie) */
+       the menus: the left button keeps its binding (Cross) and Cross does
+       nothing in a movie; only Start skips one, on every input (a gamepad,
+       a key bound to Start, touch START; main.c movie_abort_check) */
     if (mpegPlay != 0) {
         ico_pointer_set_menu(0);
     }

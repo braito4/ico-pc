@@ -1286,6 +1286,45 @@ static void test_gamepad_drop(void)
           ico_touch_mode_opacity(&t, ICO_TOUCH_MODE_AUTO, 0, 6 * S) > 0.99f);
 }
 
+/* The state the presenter draws from during a movie.  The game's Main loop
+   stops for a movie, but the device layer (input_sdl.c) keeps stepping the
+   touch mapper every loop, so a tap on a faded overlay in Auto brings the
+   buttons back (the opacity the film's present draws at, rd_video.c) and a
+   tap on the Start disc is the START bit the movie poll reads
+   (main.c movie_abort_check).  The drawing half is rd_video_test's overlay
+   case. */
+static void test_movie_state(void)
+{
+    IcoTouchLayout l = ico_touch_layout(1920, 1080, no_insets(), ICO_TOUCH_MEDIUM);
+    IcoTouchState t;
+    IcoVirtualPad v;
+    float x, y;
+    uint64_t now = 10 * S;
+
+    g_l = &l;
+    memset(&t, 0, sizeof(t));
+    ico_touch_reset(&t, now);
+    /* a minute into a movie nobody touched: faded away */
+    now += 60 * S;
+    memset(&v, 0, sizeof(v));
+    CHECK(ico_touch_update(&t, &l, ICO_TOUCH_MODE_AUTO, 0, &v, now) == 1 && v.buttons == 0);
+    CHECK(ico_touch_mode_opacity(&t, ICO_TOUCH_MODE_AUTO, 0, now) == 0.0f);
+    /* a tap on Start: the bit and the buttons fading back in at once */
+    centre_of(&l, ICO_TOUCH_B_START, &x, &y);
+    ev(&t, 1, x, y, ICO_TOUCH_DOWN, now);
+    memset(&v, 0, sizeof(v));
+    CHECK(ico_touch_update(&t, &l, ICO_TOUCH_MODE_AUTO, 0, &v, now) == 1 &&
+          v.buttons == ICO_PAD_START);
+    CHECK(ico_touch_mode_opacity(&t, ICO_TOUCH_MODE_AUTO, 0, now + 300 * MS) == 1.0f);
+    CHECK(ico_touch_draw_info(&t, &l).pressed == (1u << ICO_TOUCH_B_START));
+    ev(&t, 1, x, y, ICO_TOUCH_UP, now + 100 * MS);
+    memset(&v, 0, sizeof(v));
+    CHECK(ico_touch_update(&t, &l, ICO_TOUCH_MODE_AUTO, 0, &v, now + 100 * MS) == 1);
+    /* still shown 4 s later, gone after the 5 s */
+    CHECK(ico_touch_mode_opacity(&t, ICO_TOUCH_MODE_AUTO, 0, now + 4 * S) == 1.0f);
+    CHECK(ico_touch_mode_opacity(&t, ICO_TOUCH_MODE_AUTO, 0, now + 6 * S) == 0.0f);
+}
+
 int main(void)
 {
     test_layouts();
@@ -1298,6 +1337,7 @@ int main(void)
     test_merged_frame();
     test_stick_every_direction();
     test_gamepad_drop();
+    test_movie_state();
     if (failures != 0) {
         fprintf(stderr, "touch_test: %d failure(s)\n", failures);
         return 1;

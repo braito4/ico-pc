@@ -37,6 +37,9 @@ A few more keys on a PC:
   menus, like Triangle. It does not close the game: to quit, choose
   **End Game** in the pause menu, then **Quit to desktop** on the title
   screen, or close the window.
+- **Start** skips a movie, on every input: the gamepad's Start button,
+  the key you gave to Start (Enter at first) or the Start button on the
+  touch screen. No other button skips one.
 - **Alt+Enter** switches between a window and the whole screen (the
   Borderless or Fullscreen choice you made under Window mode).
 - **F12** saves a picture of the current moment, and a zip file to attach
