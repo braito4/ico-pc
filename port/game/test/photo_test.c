@@ -32,6 +32,8 @@
  *   step      at stick_speed 10, a tick moves the eye 250 and turns the view
  *             25 degrees at most (the renderer blends below 300 and 30);
  *             Select still jumps
+ *   steep     (issue 69) entered pitched 60 degrees down: the right stick yaws
+ *             about the world's up (level horizon); L1 rolls once released
  *   mouse     (issue 17) ico_photo_mouse_look: the free camera's yaw grows by the
  *             degrees given, its pitch stops at 85 degrees, a big move
  *             turns 25 degrees a tick at most; the orbit camera's yaw and
@@ -534,6 +536,48 @@ int main(int argc, char **argv)
         CHECK(now.dolly == was.dolly && now.pan == was.pan && now.fyaw == was.fyaw &&
                   now.fpitch == was.fpitch,
               "mouse: orbit leaves the dolly, the pan and the free camera");
+        ico_photo_exit();
+    }
+
+    /* issue 69: entered from a camera pitched 60 degrees down, the right
+       stick's X turns the yaw only (the camera's right keeps a zero world-Y
+       component, the horizon level); L1 rolls, but only once the shoulder
+       was released after enter */
+    {
+        writeConfig(path, "version = 1\n[photo]\nstick_speed = 1.0\n");
+        RdCamera steep;
+        gameCamera(&steep);
+        const float c60 = 0.5f, s60 = 0.8660254f;
+        /* rows: right (1, 0, 0), down (0, c, -s), forward (0, s, c) */
+        steep.view[5] = c60;
+        steep.view[9] = -s60;
+        steep.view[6] = s60;
+        steep.view[10] = c60;
+        steep.view[13] = 0.0f;
+        steep.view[14] = 0.0f;
+        ico_photo_enter();
+        CHECK(ico_photo_set_game(&steep), "steep: kept");
+        p = idle();
+        p.ana[0] = 255;
+        ticks(&p, 10, &out, &steep);
+        ico_photo_get(&st);
+        CHECK(fabsf(st.fyaw) > 0.5f && st.froll == 0.0f, "steep: the yaw grows (%.4f)",
+              (double)st.fyaw);
+        CHECK(fabsf(out.view[4]) < 1e-4f, "steep: the horizon stays level (right's world Y %.5f)",
+              (double)out.view[4]);
+        /* a shoulder held at enter does nothing until released */
+        p = idle();
+        p.held = ICO_PHOTO_L1;
+        ticks(&p, 10, &out, &steep);
+        ico_photo_get(&st);
+        CHECK(st.froll == 0.0f, "steep: L1 held since enter does not roll (%.4f)",
+              (double)st.froll);
+        p = idle();
+        ticks(&p, 1, &out, &steep);
+        p.held = ICO_PHOTO_L1;
+        ticks(&p, 10, &out, &steep);
+        ico_photo_get(&st);
+        CHECK(st.froll < -0.1f, "steep: L1 rolls after a release (%.4f)", (double)st.froll);
         ico_photo_exit();
     }
 

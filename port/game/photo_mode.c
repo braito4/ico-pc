@@ -110,6 +110,7 @@ static struct {
     float fovGame; /* the game camera's vertical field of view at the last ico_photo_camera */
     Basis b;       /* and its basis */
     int haveBasis;
+    int rollArmed;  /* no shoulder held since enter: L1 and R1 roll only after a release */
     int fixedBasis; /* the basis and fovGame from ico_photo_set_game, for the session */
     int haveSubject;
     float subject[3];
@@ -180,6 +181,7 @@ void ico_photo_enter(void)
     s.st.zoom = 1.0f;
     s.capturePending = 0;
     s.fixedBasis = 0;
+    s.rollArmed = 0;
     fprintf(stderr, "photo: enter (stick_speed %.2f, invert_y %d, hide_ui %d, png_dir \"%s\")\n",
             (double)s.speed, s.invertY, s.hideUi, s.pngDir);
 }
@@ -458,11 +460,16 @@ int ico_photo_update(const IcoPhotoPad *pad)
     }
     /* the lens: roll and zoom, at stick_speed's rate in both cameras */
     float *roll = freeCam ? &st->froll : &st->roll;
-    if (pad->held & ICO_PHOTO_L1) {
-        *roll -= ROLL_RATE * k * dt;
+    if (!(pad->held & (ICO_PHOTO_L1 | ICO_PHOTO_R1))) {
+        s.rollArmed = 1;
     }
-    if (pad->held & ICO_PHOTO_R1) {
-        *roll += ROLL_RATE * k * dt;
+    if (s.rollArmed) {
+        if (pad->held & ICO_PHOTO_L1) {
+            *roll -= ROLL_RATE * k * dt;
+        }
+        if (pad->held & ICO_PHOTO_R1) {
+            *roll += ROLL_RATE * k * dt;
+        }
     }
     /* the step within STEP_MOVE and STEP_TURN (before the roll's wrap, so
        the step is the one taken) */
@@ -553,17 +560,10 @@ static void keepBasis(const RdCamera *game, V3 r0, V3 y0, V3 f0)
     /* the eye: -R^T t (rows of a rotation; the view is one to 1e-4) */
     const V3 t = v3(v[12], v[13], v[14]);
     b->eye0 = scale(add(add(scale(r0, t.x), scale(y0, t.y)), scale(f0, t.z)), -1.0f);
-    /* the world's vertical: the axis nearest the picture's up (view -y when
-       the projection puts +y down the screen, as the GS does) */
-    const V3 upv = game->proj[5] >= 0.0f ? scale(unit(y0), -1.0f) : unit(y0);
-    V3 w = v3(0.0f, 0.0f, 0.0f);
-    if (fabsf(upv.x) >= fabsf(upv.y) && fabsf(upv.x) >= fabsf(upv.z)) {
-        w.x = upv.x >= 0.0f ? 1.0f : -1.0f;
-    } else if (fabsf(upv.y) >= fabsf(upv.z)) {
-        w.y = upv.y >= 0.0f ? 1.0f : -1.0f;
-    } else {
-        w.z = upv.z >= 0.0f ? 1.0f : -1.0f;
-    }
+    /* the world's vertical: the game's up (-y, as the default basis), never
+       the picture's: a camera pitched or rolled past 45 degrees would make
+       a horizontal axis the vertical and the yaw a roll */
+    const V3 w = v3(0.0f, -1.0f, 0.0f);
     b->w = w;
     b->e0 = asinf(fmaxf(-1.0f, fminf(1.0f, dot(b->fn0, w))));
     b->pUp = dot(turn(b->fn0, b->rn, 0.01f), w) > dot(b->fn0, w) ? 1.0f : -1.0f;
