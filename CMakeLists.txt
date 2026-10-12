@@ -1,5 +1,5 @@
-# The port's host build: compiles the game for Linux, Windows and Android (libmain.so) hosts. Presets
-# are in CMakePresets.json; docs/BUILDING.md describes them. (The PS2 ELF build
+# The port's host build: compiles the game for Linux, Windows, Android (libmain.so), iOS and macOS
+# hosts. Presets are in CMakePresets.json; docs/BUILDING.md describes them. (The PS2 ELF build
 # is the decompilation's, not this repository's.)
 cmake_minimum_required(VERSION 3.25)
 
@@ -14,6 +14,9 @@ if(CMAKE_C_COMPILER_LAUNCHER AND NOT EXISTS "${CMAKE_C_COMPILER_LAUNCHER}"
 endif()
 
 project(ico_pc LANGUAGES C)
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    add_compile_definitions(ICO_IOS=1)
+endif()
 
 include(cmake/IcoFlags.cmake)
 include(cmake/IcoSources.cmake)
@@ -187,6 +190,21 @@ if(ICO_LINK_EXE)
     # directory, ico-pc.ini, the ISO check, the log and the Windows dialogs.
     set(_ico_pc_sources port/platform/main_host.c port/platform/trace_host.c
                         port/platform/host_config.c)
+    # The package label (tools/package_win.sh, package_macos.sh and
+    # package_ios.sh pass -DICO_VERSION_LABEL=<label>): the version numbers
+    # x.y.z of a label that starts with [v]x.y.z, 0.0.0 otherwise (a
+    # development build). The Windows version information and the Apple
+    # bundles' Info.plist carry them.
+    set(ICO_VERSION_LABEL "" CACHE STRING "Package label for the program's version information")
+    # x.y.z.N: N is the release candidate's number (v0.7.0-rc2 -> 0.7.0.2), 0
+    # for the final; 0.0.0.0 for a development build (cmake/IcoVersion.cmake)
+    include(cmake/IcoVersion.cmake)
+    ico_version_from_label("${ICO_VERSION_LABEL}" ICO_VER_NUMERIC ICO_VER_TEXT)
+    if(ICO_VER_TEXT MATCHES "^([0-9]+\\.[0-9]+\\.[0-9]+)\\.")
+        set(ICO_VER_XYZ "${CMAKE_MATCH_1}")
+    else()
+        set(ICO_VER_XYZ "0.0.0")
+    endif()
     if(ANDROID)
         # Android: the program is libmain.so, which SDL's Java side
         # (SDLActivity, android/) loads after libSDL3.so; it calls SDL_main
@@ -205,6 +223,24 @@ if(ICO_LINK_EXE)
         set_target_properties(ico_pc PROPERTIES OUTPUT_NAME main)
         target_compile_definitions(ico_pc PRIVATE ICO_HOST_FORCE_PORTABLE=1)
         target_include_directories(ico_pc PRIVATE port/platform/android)
+    elseif(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+        # iOS: ICO_IOS comes from the top (every library sees it)
+        add_executable(ico_pc MACOSX_BUNDLE ${_ico_pc_sources} port/platform/ios/main_ios.c)
+        target_compile_definitions(ico_pc PRIVATE ICO_HOST_FORCE_PORTABLE=1)
+        set_target_properties(ico_pc PROPERTIES
+            OUTPUT_NAME ICO
+            MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/port/platform/ios/Info.plist.in"
+            MACOSX_BUNDLE_SHORT_VERSION_STRING "${ICO_VER_XYZ}"
+            MACOSX_BUNDLE_BUNDLE_VERSION "${ICO_VER_XYZ}"
+            XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED NO
+            XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED NO)
+    elseif(APPLE)
+        add_executable(ico_pc MACOSX_BUNDLE ${_ico_pc_sources})
+        set_target_properties(ico_pc PROPERTIES
+            OUTPUT_NAME ICO
+            MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/port/platform/macos/Info.plist.in"
+            MACOSX_BUNDLE_SHORT_VERSION_STRING "${ICO_VER_XYZ}"
+            MACOSX_BUNDLE_BUNDLE_VERSION "${ICO_VER_XYZ}")
     else()
         add_executable(ico_pc ${_ico_pc_sources})
     endif()
@@ -236,14 +272,8 @@ if(ICO_LINK_EXE)
         # compiled by the toolchain's windres.
         enable_language(RC)
         # The version information (port/platform/win/ico_pc.rc): the package
-        # label (tools/package_win.sh passes -DICO_VERSION_LABEL=<label>), as
-        # text and as the numbers x.y.z.N of a label that starts with
-        # [v]x.y.z: N is the release candidate's number for a label such as
-        # v0.6.2-rc3 (0.6.2.3), 0 for the final (0.6.2.0); 0.0.0.0 and "dev"
-        # otherwise (a development build).
-        set(ICO_VERSION_LABEL "" CACHE STRING "Package label for the Windows version information")
-        include(cmake/IcoVersion.cmake)
-        ico_version_from_label("${ICO_VERSION_LABEL}" ICO_VER_NUMERIC ICO_VER_TEXT)
+        # label above, as text and as the numbers x.y.z.N (0.0.0.0 and "dev"
+        # for a development build).
         configure_file(port/platform/win/ico_version.h.in
                        "${CMAKE_BINARY_DIR}/generated/ico_version.h" @ONLY)
         target_sources(ico_pc PRIVATE port/platform/win/ico_pc.rc)
@@ -344,15 +374,15 @@ add_subdirectory(port/ui) # runtime text, layout extension, popups, the menus
 
 # --- The window build: ico_pc on port/render --------------------------------
 if(TARGET ico_pc AND NOT ICO_HEADLESS)
-    if(NOT TARGET ico_render OR NOT TARGET SDL3::SDL3-shared)
+    if(NOT TARGET ico_render OR NOT TARGET SDL3::SDL3)
         message(FATAL_ERROR "The window build of ico_pc needs port/render (DXC, Vulkan-Headers, "
                             "volk) and SDL3 for this target: run tools/fetch_deps.sh, or "
                             "configure with -DICO_HEADLESS=ON")
     endif()
     target_sources(ico_pc PRIVATE port/platform/window_host.c port/platform/window_video.c
                                   port/platform/dump_zip.c)
-    target_link_libraries(ico_pc PRIVATE ico_render ico_miniz SDL3::SDL3-shared)
-    if(NOT ANDROID)
+    target_link_libraries(ico_pc PRIVATE ico_render ico_miniz SDL3::SDL3)
+    if(NOT ANDROID AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
         # Extras > Add to Steam: desktop only (Windows, Linux, Steam Deck)
         target_sources(ico_pc PRIVATE port/platform/steam_shortcut.c)
         if(WIN32)

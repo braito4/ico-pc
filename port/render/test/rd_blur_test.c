@@ -37,6 +37,10 @@
  *      present and as a later one: both draw the same SCENE and leave the
  *      same FEED128 (the later present of the cut drew black before
  *      FEED_HELD).
+ *   f  a sprite at ALPHA LERP FIX 128 (Cs exactly), which the replay draws
+ *      without ABE and without its snapshot: each frame replayed with the
+ *      skip on and off, SCENE the model's both ways, one copy fewer only
+ *      where the skip applies (not under DATE or AFAIL RGB_ONLY, nor FIX 127).
  *   n  (issue 28) the motion blur with the aura's glow and a tint
  *      of 0x98 over a still picture, each tick presented 1, 2, 4 and 10
  *      times (30 Hz ticks at 30, 60, 120, 300 presents a second): every
@@ -1901,6 +1905,130 @@ static void checkCutPresents(void)
            worst, black);
 }
 
+/* =================================== (f) FIX 128 without its snapshot */
+
+/* rd_replay.c draws a staticBlur sprite whose blend is ALPHA LERP FIX at
+ * FIX 128 without ABE, since ((Cs - Cd) * 128 >> 7) + Cd is Cs, and so takes
+ * no snapshot of its target (an untextured one over the whole target
+ * becomes a clear, blurSpriteClears). Each case draws a noise picture into
+ * SCENE and one sprite over it, then replays the frame with the skip on and
+ * off (rd__set_blur_fix128_skip): SCENE is the CPU model's both ways, so the
+ * same bytes, and the replay records one copy fewer with the skip on where
+ * it applies (FIX 128, textured or not) and the same copies where it must
+ * not (FIX 128 under DATE or AFAIL RGB_ONLY, which read the destination,
+ * and FIX 127). */
+static RdTex s_fixTex;
+
+static int s_fixTexMade;
+
+static void fixSprite(int textured, uint8_t fix, uint64_t test)
+{
+    rd_set_target(rd_target(RD_TARGET_SCENE), rd_target(RD_TARGET_SCENE), W, H, 0);
+    rd_test_gs(test);
+    rd_z_write(0);
+    rd_color_mask(0);
+    rd_abe(1);
+    rd_pabe(0);
+    rd_fba(0);
+    rd_blend_func(RD_BLEND_LERP_FIX, fix);
+    rd_sampler_filter(RD_FILTER_NEAREST, RD_FILTER_NEAREST);
+    rd_sampler_wrap(RD_WRAP_CLAMP, RD_WRAP_CLAMP);
+    if (textured) {
+        rd_texture(s_fixTex, RD_TEXFN_MODULATE, RD_TCC_RGBA);
+    } else {
+        rd_texture_off();
+    }
+    rd_gouraud(0);
+    RdPostParams p;
+    memset(&p, 0, sizeof(p));
+    p.rect[0] = (float)(0x8000 - W / 2 * 16);
+    p.rect[1] = (float)(0x8000 - H / 2 * 16);
+    p.rect[2] = (float)(0x8000 + W / 2 * 16);
+    p.rect[3] = (float)(0x8000 + H / 2 * 16);
+    p.uv[2] = (float)(W * 16);
+    p.uv[3] = (float)(H * 16);
+    p.rgba[0] = textured ? 0x80 : 0x30;
+    p.rgba[1] = textured ? 0x80 : 0xC8;
+    p.rgba[2] = textured ? 0x80 : 0x71;
+    p.rgba[3] = textured ? 0x80 : 0x50;
+    p.scalar[0] = p.scalar[1] = 512.0f;
+    p.scalar[2] = 1.0f;
+    rd_post(RD_POST_FLARE, &p);
+}
+
+/* the frame replayed once with the skip on or off: SCENE into out, and the
+ * copies the replay recorded */
+static uint64_t fixReplay(const char *what, const RdFrame *f, int skip, uint8_t *out)
+{
+    RhiStats a, b;
+    uint32_t w = 0, h = 0;
+    rd__set_blur_fix128_skip(skip != 0);
+    rhi_wait_idle();
+    rhi_get_stats(&a);
+    CHECK(rd__replay_frame(f, 0, false), "%s: replay with the skip %s", what, skip ? "on" : "off");
+    rhi_wait_idle();
+    rhi_get_stats(&b);
+    CHECK(rd__read_target(rd_target(RD_TARGET_SCENE), out, (size_t)W * H * 4, &w, &h) && w == W &&
+              h == H,
+          "%s: read SCENE", what);
+    return b.copies - a.copies;
+}
+
+static void checkFix128Skip(void)
+{
+    static uint8_t on[W * H * 4], off[W * H * 4];
+    /* ZTE, ZTST ALWAYS; DATE (DATM 0); ATE, ATST GEQUAL, AREF 0x40, AFAIL RGB_ONLY */
+    const uint64_t z = 0x30000, date = 1u << 14, rgbOnly = 1 | (5 << 1) | (0x40 << 4) | (3 << 12);
+
+    static const struct {
+        const char *name;
+        int textured, skip;
+        uint8_t fix;
+        uint64_t test;
+    } kC[] = {{"FIX 128", 1, 1, 128, 0},
+              {"FIX 128 untextured (a clear)", 0, 1, 128, 0},
+              {"FIX 128 under DATE", 1, 0, 128, 1},
+              {"FIX 128 with AFAIL RGB_ONLY", 1, 0, 128, 2},
+              {"FIX 127", 1, 0, 127, 0}};
+
+    makeImage(7, 1);
+    rd_update_texture(s_imgTex, s_img);
+    makeImage(8, 1);
+    if (!s_fixTexMade) {
+        s_fixTex = rd_create_texture(W, H, s_img, RD_TEXA_80_80, "rd_blur_test fix128");
+        s_fixTexMade = 1;
+    } else {
+        rd_update_texture(s_fixTex, s_img);
+    }
+    for (size_t k = 0; k < sizeof(kC) / sizeof(kC[0]); k++) {
+        char what[80];
+        snprintf(what, sizeof(what), "(f) %s", kC[k].name);
+        clearAll();
+        putImage(rd_target(RD_TARGET_SCENE), rd_target(RD_TARGET_SCENE), W, H, 0, H, 0, 0);
+        fixSprite(kC[k].textured, kC[k].fix,
+                  z | (kC[k].test == 1 ? date : 0) | (kC[k].test == 2 ? rgbOnly : 0));
+        runFrame(what, 1);
+        const RdFrame *f = rd__last_frame();
+        const uint64_t cOn = fixReplay(what, f, 1, on);
+        const uint64_t cOff = fixReplay(what, f, 0, off);
+        const uint8_t *model = s_cpu[RD_TARGET_SCENE].c;
+        int dOn = 0, dOff = 0, dBoth = 0;
+        for (size_t i = 0; i < sizeof(on); i++) {
+            dOn += on[i] != model[i];
+            dOff += off[i] != model[i];
+            dBoth += on[i] != off[i];
+        }
+        printf("  %s: %llu copies with the skip, %llu without; SCENE bytes differing: %d on, %d "
+               "off from the model, %d between\n",
+               what, (unsigned long long)cOn, (unsigned long long)cOff, dOn, dOff, dBoth);
+        CHECK(dOn == 0 && dOff == 0 && dBoth == 0, "%s: SCENE the model's both ways", what);
+        CHECK(kC[k].skip ? cOff == cOn + 1 : cOff == cOn, "%s: %s (copies %llu on, %llu off)", what,
+              kC[k].skip ? "the skip takes no snapshot" : "the snapshot is kept",
+              (unsigned long long)cOn, (unsigned long long)cOff);
+    }
+    rd__set_blur_fix128_skip(true);
+}
+
 /* ========== (n) the motion blur presented many times a tick (issue 28)
  *
  * The motion blur at FIX 32 (the old frame keeps a quarter a tick)
@@ -2985,6 +3113,7 @@ static const IcoShardCase k_cases[] = {
     {"aura", 81},
     {"cut_presents", 1},
     {"motion_blur_presents", 40},
+    {"fix128_skip", 1},
     {"queen_mirage", 10},
     {"queen_presents", 1},
     {"motion_blur_presents_scaled", 41},
@@ -3096,6 +3225,9 @@ int main(int argc, char **argv)
     }
     if (ico_shard_take("motion_blur_presents")) {
         checkMotionBlurPresents(); /* issue 28 */
+    }
+    if (ico_shard_take("fix128_skip")) {
+        checkFix128Skip();
     }
 
     /* the pipelines the cases above created (this shard's) are all in the

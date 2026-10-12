@@ -105,7 +105,9 @@ void ico_host_set_portable(int setting);
 int ico_host_portable_value(const char *v);
 /* 1 when ico_host_pref_dir is the portable folder. */
 int ico_host_pref_is_portable(void);
-/* The ico-pc.ini beside the executable: the override layer. */
+/* The ico-pc.ini override layer: beside the executable normally, in the
+   per-user folder for a macOS app bundle. -1 only when the path does not
+   fit in size (a folder lookup that fails gives "./ico-pc.ini"). */
 int ico_host_ini_path(char *out, size_t size);
 /* ico_ini_load without the layering below: the file's own keys only. */
 int ico_ini_load_file(IcoIni *ini, const char *path);

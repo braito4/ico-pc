@@ -185,8 +185,8 @@ void GetSlerpQuaternionNoRegularize(void *out, void *qa, void *qb, float t)
         return;
     }
     inv = 1.0f / s;
-    sa = GetTableSin((short)((float)ang * t)) * inv;
-    sb = GetTableSin((short)((float)ang * (1.0f - t))) * inv;
+    sa = GetTableSin((short)(int)((float)ang * t)) * inv;
+    sb = GetTableSin((short)(int)((float)ang * (1.0f - t))) * inv;
     _ScaleVector(out, qa, sa);
     _ScaleVector(tq, tmp, sb);
     _AddVector(out, out, tq);
