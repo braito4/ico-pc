@@ -145,15 +145,13 @@ static float zeroVelocity[4] = {0.0f, 0.0f, 0.0f, 0.0f}; /* derived name */
 /* The offset a dropped item is placed at, below the holder's hand. */
 static float itemDropOfs[4] = {0.0f, -50.0f, 0.0f, 1.0f}; /* derived name */
 
-/* The clip avoidInsideOfWall runs from the holder to the item, a ClipWork's
-   192 bytes with the radius 20 at 0x70.  The ROM places it 8-aligned in
-   .data, so it is not the 16-aligned ClipWork itself. */
-static float itemWork[12][4] = {
-    {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f},  {0.0f, 0.0f, 0.0f, 0.0f},
-    {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f},  {0.0f, 0.0f, 0.0f, 0.0f},
-    {0.0f, 0.0f, 0.0f, 0.0f}, {20.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f},
-    {0.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f, 0.0f},  {0.0f, 0.0f, 0.0f, 0.0f},
-}; /* derived name */
+/* The clip avoidInsideOfWall runs from the holder to the item, a ClipWork
+   with the radius 20.  The ROM keeps it as 192 bytes (itemWork[12][4], the
+   EE ClipWork's size) placed 8-aligned in .data; PC port: the host ClipWork
+   is 240 bytes (8-byte pointers in its WallCfg members), so the clip is a
+   ClipWork itself and the calls cannot write past it onto the statics that
+   follow (itemDropOfs and lodManager's tables). */
+static ClipWork itemClip = {.radius = 20.0f}; /* derived name */
 
 /* Where a carried item sits relative to the focus node, the boy's hand and
    every other carrier's. */
@@ -166,7 +164,7 @@ static void avoidInsideOfWall(void *self, GObj *arg)
     ClipWork *p;
     if (arg == 0)
         return;
-    p = (ClipWork *)itemWork;
+    p = &itemClip;
     GetRootPosition(p->pt[0], arg);
     GetRootPosition(p->pt[1], self);
     ClipWall(p);

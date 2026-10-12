@@ -23,6 +23,11 @@ static const char *const expected[] = {
     "yuv_ps",          "yuv_vs",
 };
 
+/* the screen-prim triangles with their colour and STQ planes
+ * (EXACT-RASTER, v0.6.1: rd_screen_planes.c, sprite.hlsl) */
+static const char *const expectedPlanes[] = {"sprite_plane_ui_vs", "sprite_plane_world_vs",
+                                             "sprite_stq_plane_ui_vs", "sprite_stq_plane_world_vs"};
+
 /* the anti-aliasing's (rd_present.c, rd_replay.c's MSAA epoch) */
 static const char *const expectedAa[] = {"aa_reduce_ps", "depth_resolve_ps", "depth_upsample_ps"};
 
@@ -137,6 +142,13 @@ int main(void)
             failures++;
         }
     }
+    const size_t nPlanes = sizeof(expectedPlanes) / sizeof(expectedPlanes[0]);
+    for (size_t i = 0; i < nPlanes; i++) {
+        if (!ico_find_shader(expectedPlanes[i])) {
+            printf("FAIL %s: not in the table\n", expectedPlanes[i]);
+            failures++;
+        }
+    }
     const size_t nDst = sizeof(expectedDst) / sizeof(expectedDst[0]);
     for (size_t i = 0; i < nDst; i++) {
         if (!ico_find_shader(expectedDst[i])) {
@@ -145,9 +157,9 @@ int main(void)
         }
     }
     if (g_icoShaderCount !=
-        sizeof(expected) / sizeof(expected[0]) + nAa + nNoDual + nVariants + nDst) {
+        sizeof(expected) / sizeof(expected[0]) + nAa + nNoDual + nVariants + nDst + nPlanes) {
         printf("FAIL table has %u entries, expected %zu\n", g_icoShaderCount,
-               sizeof(expected) / sizeof(expected[0]) + nAa + nNoDual + nVariants + nDst);
+               sizeof(expected) / sizeof(expected[0]) + nAa + nNoDual + nVariants + nDst + nPlanes);
         failures++;
     }
     printf("shaders_table_test: %s\n", failures ? "FAILED" : "ok");

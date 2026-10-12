@@ -16,6 +16,11 @@
  *                                 Ico and Yorda straight back through the
  *                                 door they came in by (door_grace.h)
  *   [gameplay] mirror      false  mirrored play (negated stick X, swapped pan)
+ *   [gameplay] natural_chains
+ *                          false  a chain let down for the player keeps its
+ *                                 links' size and shows more of itself as it
+ *                                 comes down (port/render/rd_chain.h); draw
+ *                                 only, so no pad-recording key
  *   [gameplay] developer_mode
  *                          false  the development build's debug menu and
  *                                 debug options
@@ -27,7 +32,8 @@
  *
  * Game code (ico2/) reads ico_opt_yorda_safe() and ico_opt_developer_mode()
  * under #ifdef ICO_HOST only; door_fix is read by door_grace.c, which the
- * game's exit check calls.
+ * game's exit check calls; natural_chains by seki/src/BgAnimation.c under
+ * #ifdef ICO_RD (the window build).
  */
 #ifndef ICO_PORT_GAME_OPTIONS_H
 #define ICO_PORT_GAME_OPTIONS_H
@@ -51,6 +57,9 @@ void ico_opt_set_yorda_safe(int on);
 /* [gameplay] door_fix (default false): the doorway fix of door_grace.h */
 int ico_opt_door_fix(void);
 void ico_opt_set_door_fix(int on);
+/* [gameplay] natural_chains (default false): Natural chains (rd_chain.h) */
+int ico_opt_natural_chains(void);
+void ico_opt_set_natural_chains(int on);
 /* Mirror mode: ico_input negates the stick X (ico_input_mirror), the audio
    host swaps the pan (ico_audio_pan_mirror), the renderer flips the picture
    (rd.h rd_set_mirror, through the listener below).

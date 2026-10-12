@@ -2021,6 +2021,108 @@ static void checkWide169(void)
     rd_shutdown();
 }
 
+/* Issue 73: a scene whose texel density is the box's is presented one texel
+ * an output pixel.  A window-sized scene (Enhanced, scale 0) at aspect
+ * `aspect` in outW x outH; GS column c of the frame is one flat colour of its
+ * own, in rows 160..352 (the centre row's neighbourhood).  The presented
+ * picture's centre row must equal the DISPLAY row's texels srcX .. srcX + outW
+ * byte for byte (no half-texel blend: u0 = floor(crop + 1/2), snapWindow);
+ * wantScene is the scene's width (the native width over the exact width
+ * of the box: 1935 at 1920 across 16:9) and srcX the first texel shown. */
+static void checkOneToOne(const char *name, float aspect, uint32_t outW, uint32_t outH,
+                          uint32_t wantScene, uint32_t srcX)
+{
+    RdSettings s = originalSettings();
+    s.preset = RD_PRESET_ENHANCED;
+    s.aspect = aspect;
+    s.sceneScale = 0.0f;
+    s.outputWidth = outW;
+    s.outputHeight = outH;
+    const uint32_t FW = (uint32_t)ico_frame_width_for(aspect);
+    if (!rd_init(FW, 512, &s, NULL)) {
+        return;
+    }
+    static const uint8_t black[4] = {0, 0, 0, 0x80};
+    rd_begin_frame();
+    rd_select_list(0);
+    rd_clear_target(rd_target(RD_TARGET_SCENE), black, 1, 0);
+    rd_set_target(rd_target(RD_TARGET_SCENE), rd_target(RD_TARGET_SCENE), FW, 512, 1);
+    opaque2D();
+    rd_texture_off();
+    {
+        RdScreenVtx *v = (RdScreenVtx *)malloc(sizeof(RdScreenVtx) * 2u * FW);
+        const int32_t o = (2048 - 256) * 16;
+        for (uint32_t c = 0; v && c < FW; c++) {
+            const uint32_t hh = hash(c * 2654435761u + 12345u);
+            const uint8_t col[4] = {(uint8_t)hh, (uint8_t)(hh >> 8), (uint8_t)(hh >> 16), 0x80};
+            const int32_t x0 = (2048 - (int32_t)FW / 2 + (int32_t)c) * 16;
+            v[2 * c] = vtx(x0, o + 160 * 16, 0, col, 0.0f, 0.0f);
+            v[2 * c + 1] = vtx(x0 + 16, o + 352 * 16, 0, col, 0.0f, 0.0f);
+        }
+        if (v) {
+            rd_screen_prims(RD_PRIM_SPRITES, v, 2u * FW, RD_SPACE_FULLFRAME, 1, 0);
+        }
+        /* the reduction pass writes SCENE into DISPLAY, which is what the
+           presenter shows (as checkWide169 gets content there) */
+        rd_select_list(12);
+        RdPostParams pp;
+        memset(&pp, 0, sizeof(pp));
+        pp.rgba[0] = pp.rgba[1] = pp.rgba[2] = 128;
+        rd_post(RD_POST_REDUCTION, &pp);
+        rd_end_frame(0);
+        free(v);
+    }
+    uint32_t sw = 0, sh = 0, dw = 0, dh = 0, ow = 0, oh = 0;
+    const size_t cap = (size_t)8192 * 4096 * 4;
+    uint8_t *scene = (uint8_t *)malloc(cap);
+    uint8_t *disp = (uint8_t *)malloc(cap);
+    uint8_t *out = (uint8_t *)malloc((size_t)outW * outH * 4);
+    if (scene && disp && out && rd__read_target(rd_target(RD_TARGET_SCENE), scene, cap, &sw, &sh) &&
+        rd__read_target(rd_target(RD_TARGET_DISPLAY), disp, cap, &dw, &dh) &&
+        rd__read_present(out, (size_t)outW * outH * 4, &ow, &oh) && ow == outW && oh == outH) {
+        CHECK(sw == wantScene && dw == wantScene, "%s: SCENE and DISPLAY are %u wide (%u, %u)",
+              name, wantScene, sw, dw);
+        RhiRect bx;
+        rd__present_box(outW, outH, aspect, &bx);
+        /* the box's centre row; DISPLAY is the half-height or the full-height
+           picture of the box (the bands are flat down their rows, so either
+           maps the centre to dh / 2) */
+        const uint32_t y = (uint32_t)bx.y + bx.h / 2;
+        const uint32_t dy = dh / 2;
+        uint32_t bad = 0, first = 0;
+        for (uint32_t x = 0; x < outW && srcX + x < dw; x++) {
+            const uint8_t *a = &out[((size_t)y * outW + x) * 4];
+            const uint8_t *b = &disp[((size_t)dy * dw + srcX + x) * 4];
+            if (a[0] != b[0] || a[1] != b[1] || a[2] != b[2]) {
+                if (!bad++) {
+                    first = x;
+                }
+            }
+        }
+        CHECK(bad == 0,
+              "%s: the presented centre row is DISPLAY texels %u..%u byte for byte (%u columns "
+              "differ, the first %u)",
+              name, srcX, srcX + outW, bad, first);
+    } else {
+        CHECK(0, "%s: readback", name);
+    }
+    free(disp);
+    free(scene);
+    free(out);
+    rd_shutdown();
+}
+
+static void checkPresent1to1(void)
+{
+    /* the native width 688 over the exact 682.67: a scene of 1935 across the
+     * 1920 box, crop 7.5 per side, shown from texel 8 */
+    checkOneToOne("1to1 1920x1080 16:9", 16.0f / 9.0f, 1920, 1080, 1935, 8);
+    /* the same at 4K: the crop is 15 whole texels */
+    checkOneToOne("1to1 3840x2160 16:9", 16.0f / 9.0f, 3840, 2160, 3870, 15);
+    /* 48:9: the native 2048 is the exact width, no crop */
+    checkOneToOne("1to1 3840x2160 48:9", 48.0f / 9.0f, 3840, 2160, 3840, 0);
+}
+
 /* Full pixel: SCENE red through the reduction pass (which leaves its border
  * black), presented into w x h.  The box's edge columns and rows are red
  * with the option on, the reduction drawing the whole frame, and, with it
@@ -3708,6 +3810,7 @@ int main(int argc, char **argv)
     checkSsaa();
     checkSceneLimit();
     checkWide169();
+    checkPresent1to1();
     checkPresentInfo();
     checkFullPixel();
     checkFullPixelSquare();

@@ -127,10 +127,9 @@ int vu1ref_static_kicks(const float *stw, const int *batchFirst, int count, int 
     return n;
 }
 
-int vu1ref_region_draw(int preset, int freeCamera, int insideA, int insideB, int insideC, int hide,
-                       int reaches)
+int vu1ref_region_draw(int extended, int freeCamera, int insideA, int insideB, int insideC,
+                       int hide, int reaches, int front, int joined, int stripPasses)
 {
-    (void)preset; /* one camera: the same rule in both presets */
     /* vu_content_hidden */
     if (hide) {
         return VU1REF_DRAW_NONE;
@@ -138,23 +137,54 @@ int vu1ref_region_draw(int preset, int freeCamera, int insideA, int insideB, int
     if (insideA && insideB && insideC) {
         return VU1REF_DRAW_EXACT;
     }
-    /* vu_triangle_out: the free camera, then vu_cut_reaches_picture */
-    if (freeCamera) {
+    /* vu_region_rule: the free camera, then vu_cut_reaches_picture */
+    if (freeCamera || !reaches) {
         return VU1REF_DRAW_CLIPPED;
     }
-    return reaches ? VU1REF_DRAW_NONE : VU1REF_DRAW_CLIPPED;
+    /* VU_RULE_STRIP: not a card */
+    if (extended && front && (joined || stripPasses)) {
+        return VU1REF_DRAW_CLIPPED;
+    }
+    return VU1REF_DRAW_NONE;
 }
 
-int vu1ref_particle_draw(int preset, int freeCamera, int drawn, int shown, int reaches)
+/* whether static kick k (vertices k-2..k) is drawn: vu1ref_static_kicks */
+static int staticKick(const float *stw, const int *batchFirst, int k)
 {
-    (void)preset;
+    return k - batchFirst[k] >= 2 && (!stw || (stw[k] >= 1.0f && stw[k - 1] >= 1.0f));
+}
+
+int vu1ref_strip_passes(const VuGsVertex *v, const float *stw, const int *batchFirst, int count,
+                        int k)
+{
+    if (k < 0 || k >= count || !staticKick(stw, batchFirst, k)) {
+        return 0;
+    }
+    /* the run of consecutive static kicks around k */
+    int lo = k, hi = k;
+    while (lo - 1 >= 0 && staticKick(stw, batchFirst, lo - 1)) {
+        lo--;
+    }
+    while (hi + 1 < count && staticKick(stw, batchFirst, hi + 1)) {
+        hi++;
+    }
+    for (int j = lo; j <= hi; j++) {
+        if (v[j - 2].inside && v[j - 1].inside && v[j].inside) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int vu1ref_particle_draw(int extended, int freeCamera, int drawn, int shown, int reaches)
+{
     if (!shown) {
         return VU1REF_DRAW_NONE;
     }
     if (drawn) {
         return VU1REF_DRAW_EXACT;
     }
-    if (freeCamera) {
+    if (freeCamera || extended) {
         return VU1REF_DRAW_CLIPPED;
     }
     return reaches ? VU1REF_DRAW_NONE : VU1REF_DRAW_CLIPPED;

@@ -393,9 +393,20 @@ static int presentVideo(const RdVideoPicture *pics, uint32_t w, uint32_t h, uint
     }
     const bool isField = pics != NULL && (fieldFlags & YUV_FIELD) != 0;
     const uint32_t npics = isField ? 3u : 1u;
-    /* the ring for the CRT pass's uniforms (and the slot kept in step with
-       the replays' either way) */
-    if (!rd__begin_own_frame(64u * 1024u)) {
+    /* the touch controls and the popups over the picture (Android's Auto
+       mode comes back on a tap during a movie, and the Start disc is on
+       it), collected as a game frame's present does, before the ring is
+       sized: the picture's 4:3 box on the output is their box */
+    {
+        RhiRect filmBox;
+        box43(g_rd.settings.outputWidth, g_rd.settings.outputHeight, &filmBox);
+        rd__overlay_collect_film(&filmBox);
+    }
+    const bool overlay = rd__overlay_ring_bytes() != 0;
+    /* the ring for the CRT pass's uniforms and the overlay (and the slot kept
+       in step with the replays' either way) */
+    if (!rd__begin_own_frame(64u * 1024u + rd__overlay_ring_bytes() +
+                             (overlay ? rd__texture_ring_bytes() : 0))) {
         return -1;
     }
     const int slot = (int)rhi_frame_slot();
@@ -504,6 +515,9 @@ static int presentVideo(const RdVideoPicture *pics, uint32_t w, uint32_t h, uint
         }
     }
     const RhiTexture src = isField ? s_v.fieldTex : s_v.planes;
+    if (overlay) {
+        rd__upload_textures(cl); /* the overlay's textures, before its passes */
+    }
     RhiRect box;
     box43(out.w, out.h, &box);
     rd__note_present_box(out.w, out.h, &box); /* for the tests */
@@ -535,6 +549,10 @@ static int presentVideo(const RdVideoPicture *pics, uint32_t w, uint32_t h, uint
         rd__transition(cl, out.tex, out.state, RHI_STATE_RENDER_TARGET);
         drawPicture(cl, out.tex, out.fmt, out.w, out.h, &box, picture, w, h, mirror, src, buf,
                     cbOff, dcOff);
+    }
+    if (overlay) {
+        rd__transition(cl, out.tex, out.state, RHI_STATE_RENDER_TARGET);
+        rd__overlay_film_record(cl, out.tex, out.fmt, out.w, out.h);
     }
     if (out.window) {
         rd__transition(cl, out.tex, out.state, RHI_STATE_PRESENT);

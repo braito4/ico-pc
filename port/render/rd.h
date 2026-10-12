@@ -577,6 +577,16 @@ void rd_camera_cut(void);
  * artists placed: RdCamera.freeCamera.  Outside an open frame it applies to
  * the next one. */
 void rd_free_camera(void);
+/* PC port (v0.6.1, VIS-RULES): the game's box cull dropped a model's whole
+ * object (rule 2, RegistPacket.c's object box) or one of its parts (rule 3,
+ * the part's box) in the frame being recorded; views is how many cameras
+ * the cull tested (gsb_HostCullViewsUsed: 1 the tick's alone, 2 or 3 the
+ * blend span's, item 5).  The frame keeps the first RD_CULL_DROPS_MAX with
+ * the count of all; F12 (rd_dump_on_demand) writes them to the log as one
+ * line, so a report's log names the rule that dropped each part.  Nothing
+ * outside an open frame. */
+#define RD_CULL_DROPS_MAX 48
+void rd_note_cull_drop(const char *model, int part, int rule, int views);
 
 /* What the last present showed (rd_present's, or with interpolation off
  * rd_end_frame's one present of the frame), for the window's start-up log: the
@@ -677,8 +687,9 @@ RdBlendExact rd_blend_exact(void);
  *                       the replay tool's --present), before the frame's
  *                       replay, so the textures fn creates or updates
  *                       (rd_create_texture_r8, rd_update_texture_rect: the
- *                       font atlases) are uploaded with the frame.  Not for
- *                       the movie picture (rd_video.c).  The registration
+ *                       font atlases) are uploaded with the frame.  Also at
+ *                       the movie picture's presents (rd_video.c), laid out
+ *                       in the picture's 4:3 box.  The registration
  *                       survives rd_shutdown / rd_init
  * rd_overlay_prims       valid only inside fn (ignored elsewhere): prims in
  *                       12.4 fixed-point OUTPUT pixels, origin at the

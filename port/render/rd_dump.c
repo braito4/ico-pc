@@ -56,6 +56,9 @@
  *   (RDC_GRID's b[5], f[0] and f[1], rd.h rd_grid_screen_st: 0 in the dumps
  *   from before them, whose pool grids blend their STs as they always did;
  *   the version is unchanged)
+ *   (RDC_MESH's b[5] and f[0], a clip plane in the model's space (rd_chain.h,
+ *   Natural chains): 0 in the dumps from before them, drawn whole as they
+ *   were; the version is unchanged)
  *   (the VU draws' b[3] and b[6], RdCamera.pictureW/H of a reflection
  *   camera, rd_mesh.c pushVu: 0 in the dumps from before them, which
  *   replay with the full screen's picture as they did; the version is
@@ -736,9 +739,47 @@ bool rd__load_frame(const char *path, RdFrame *out)
  * when everything asked for was written. */
 bool rd_dump_on_demand(const char *dumpPath, const char *pngPath);
 
+/* PC port (v0.6.1, VIS-RULES): the dumped frame's box cull drops as one
+ * log line (rd_note_cull_drop): each as model:part, the rule (2 the
+ * object's box, 3 the part's) and, when the cull tested the blend span's
+ * cameras (item 5), "/5" with their count; "none" when nothing was
+ * dropped.  A part is -1 for a whole object (rule 2). */
+static void logCullDrops(const RdFrame *f)
+{
+    char line[2048];
+    size_t at = 0;
+    const uint32_t n = f->cullDropCount < RD_CULL_DROPS_MAX ? f->cullDropCount : RD_CULL_DROPS_MAX;
+    line[0] = 0;
+    for (uint32_t i = 0; i < n && at < sizeof(line); i++) {
+        const RdCullDrop *d = &f->cullDrops[i];
+        int k;
+        if (d->views > 1) {
+            k = snprintf(line + at, sizeof(line) - at, " %s:%d rule %u/5 (%u cameras)", d->model,
+                         d->part, d->rule, d->views);
+        } else {
+            k = snprintf(line + at, sizeof(line) - at, " %s:%d rule %u", d->model, d->part,
+                         d->rule);
+        }
+        if (k < 0) {
+            break;
+        }
+        at += (size_t)k;
+    }
+    if (f->cullDropCount == 0) {
+        rd__log("dump: frame %u: the box cull dropped none", f->number);
+    } else {
+        rd__log("dump: frame %u: the box cull dropped %u%s:%s", f->number, f->cullDropCount,
+                f->cullDropCount > n ? " (the first listed)" : "", line);
+    }
+}
+
 bool rd_dump_on_demand(const char *dumpPath, const char *pngPath)
 {
     bool ok = true;
+    const RdFrame *last = rd__last_frame();
+    if (last) {
+        logCullDrops(last);
+    }
     if (dumpPath) {
         ok = rd_dump_frame(dumpPath);
     }

@@ -264,11 +264,12 @@ uint32_t rd__dst_target_usage(RhiFormat fmt, uint8_t *dstUsage)
 }
 
 /* the fragment may be discarded after the depth test: the alpha test
- * (ate in modeZ), DATE, the fog's own depth test in the shader */
+ * (ate in modeZ), DATE, a VU draw's clip plane (rd_chain.h), the fog's own
+ * depth test in the shader */
 static bool passDiscards(const RdDrawPass *p)
 {
-    return (p->modeZ & (1u << 8)) != 0 || (p->flags & ICO_DF_DATE) != 0 || p->key.fs == RD_FS_FOG ||
-           p->key.fs == RD_FS_FOG_BUFFER;
+    return (p->modeZ & (1u << 8)) != 0 || (p->flags & (ICO_DF_DATE | ICO_DF_PLANE)) != 0 ||
+           p->key.fs == RD_FS_FOG || p->key.fs == RD_FS_FOG_BUFFER;
 }
 
 /* the flags that only the fixed-function paths read */

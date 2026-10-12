@@ -252,6 +252,13 @@ typedef struct RdCmdList {
  * next is recorded (rd_interp.c). */
 #define RD_FRAME_RING 3
 
+/* one of the game's box cull drops (rd_note_cull_drop) */
+typedef struct RdCullDrop {
+    char model[32];
+    int16_t part;
+    uint8_t rule, views;
+} RdCullDrop;
+
 typedef struct RdFrame {
     RdCmdList lists[RD_LIST_COUNT];
     uint8_t *payload;
@@ -292,6 +299,10 @@ typedef struct RdFrame {
     /* not dumped: RDC_OVERLAY_TEXT items recorded so far (the
      * post passes record their ops only after one) */
     uint32_t textItems;
+    /* not dumped: the game's box cull's drops this tick (rd_note_cull_drop),
+     * the first RD_CULL_DROPS_MAX of cullDropCount */
+    uint32_t cullDropCount;
+    RdCullDrop cullDrops[RD_CULL_DROPS_MAX];
 } RdFrame;
 
 void rd__frame_reset(RdFrame *f);
@@ -752,6 +763,12 @@ typedef enum RdVsId {
     RD_VS_SPRITE_STQ_WORLD,
     RD_VS_CRT, /* crt_vs (the CRT filter), the fullscreen triangle with 0..1 across the
                   viewport */
+    /* IcoSpritePlaneVertex, screen-prim triangles with their planes
+     * (rd_screen_planes.c): sprite_plane_*_vs, sprite_stq_plane_*_vs */
+    RD_VS_SPRITE_PLANE_UI,
+    RD_VS_SPRITE_PLANE_WORLD,
+    RD_VS_SPRITE_STQ_PLANE_UI,
+    RD_VS_SPRITE_STQ_PLANE_WORLD,
     RD_VS_COUNT
 } RdVsId;
 
@@ -905,6 +922,17 @@ const char *rd__blend_exact_name(int mode);
 /* Turns a planned pass of a command whose prims carry Q != 1
  * into the STQ shaders (IcoSpriteStqVertex); 0 when the pass keeps its own. */
 int rd__stq_pass(RdDrawPass *dp);
+
+/* EXACT-RASTER (v0.6.1), rd_screen_planes.c.  rd__plane_pass: converts a
+ * planned screen pass of sprite_ps, sprite_texa_ps or sprite_stq_ps to the
+ * vertex shader of its kind that reads the triangles' planes; returns
+ * whether it did (the other fragment entries keep theirs).
+ * rd__screen_planes: the triangle list vb (n vertices, stride
+ * sizeof(IcoSpriteVertex) or sizeof(IcoSpriteStqVertex)) with each
+ * triangle's colour and STQ planes per GS pixel, in a buffer of the file's
+ * kept until the next call; NULL when it cannot be had. */
+int rd__plane_pass(RdDrawPass *dp);
+const struct IcoSpritePlaneVertex *rd__screen_planes(const void *vb, uint32_t stride, uint32_t n);
 /* Whether a draw under this state samples a PSMCT24 or
  * PSMCT16 texture (or one with a 24- or 16-bit CLUT: RdTexRec.src not
  * RGBA32) under a TEXA with AEM through a linear MAG or MIN filter, the
@@ -934,7 +962,7 @@ uint32_t rd__enumerate_reachable(RdPipeKeyInt *out, uint32_t max);
  * set's size however small out is.  Every rd__enumerate_reachable* family
  * adds its keys through it. */
 uint32_t rd__add_pipe_key(RdPipeKeyInt *out, uint32_t max, uint32_t n, const RdPipeKeyInt *k);
-/* The screen and post families alone (rd_state_test holds them under 250,
+/* The screen and post families alone (rd_state_test holds them under 400,
  * and the whole set under RD_PIPELINE_REACHABLE_MAX). */
 uint32_t rd__enumerate_reachable_screen(RdPipeKeyInt *out, uint32_t max);
 /* The VU program families (rd_mesh.c): each VU vertex shader
@@ -1629,6 +1657,19 @@ typedef struct RdUniform {
  * g_rd.deferText for the replay (doScreen then skips the items' quads); the
  * items' prims are drawn before the overlay's, each batch in its region. */
 void rd__overlay_collect(const RdFrame *f, int keep);
+/* The same for a film's present (rd_video.c): the film's box on the output
+ * (box43) is the picture's box, no CRT grid, no deferred text.
+ * rd__overlay_film_record draws what it collected in a pass of its own on out
+ * (RENDER_TARGET, fmt, w x h) after the picture, the touch controls over the
+ * HUD and the popups; rd__overlay_ring_bytes is the ring it takes. */
+void rd__overlay_collect_film(const RhiRect *box);
+void rd__overlay_film_record(RhiCommandList cl, RhiTexture out, RhiFormat fmt, uint32_t w,
+                             uint32_t h);
+/* The dirty textures the next upload walk takes from the ring (the tail of
+ * the replay's estimate) and the walk itself, into cl, for the films'
+ * overlay: the touch controls' and the popups' textures. */
+uint64_t rd__texture_ring_bytes(void);
+void rd__upload_textures(RhiCommandList cl);
 /* With the CRT filter on, rd__overlay_collect gives the overlay a context
  * of the filter's source grid (rd__crt_grid's vw x the frame's lines, the
  * box the whole of it, the frame's 1x scale) and collects no deferred text;

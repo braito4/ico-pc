@@ -277,6 +277,7 @@ void rd__frame_reset(RdFrame *f)
     f->freeCamera = 0;
     f->fade = 0;
     f->textItems = 0;
+    f->cullDropCount = 0;
     f->closed = 0;
     f->keep = 0;
     f->number = 0;
@@ -1787,6 +1788,22 @@ void rd_free_camera(void)
     } else {
         g_rd.freeCameraPending = 1;
     }
+}
+
+void rd_note_cull_drop(const char *model, int part, int rule, int views)
+{
+    RdFrame *f = rd__rec_frame();
+    if (!f) {
+        return;
+    }
+    if (f->cullDropCount < RD_CULL_DROPS_MAX) {
+        RdCullDrop *d = &f->cullDrops[f->cullDropCount];
+        snprintf(d->model, sizeof(d->model), "%s", model ? model : "?");
+        d->part = (int16_t)part;
+        d->rule = (uint8_t)rule;
+        d->views = (uint8_t)views;
+    }
+    f->cullDropCount++;
 }
 
 uint32_t rd_frame_number(void)

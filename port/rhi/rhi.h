@@ -77,7 +77,7 @@ typedef struct {
 #define RHI_MAX_COLOR_TARGETS                                                                      \
     2 /* colour + dual-source helper never needs more than one target; 2 for puddle/pool copies */
 #define RHI_MAX_BIND_SLOTS 8
-#define RHI_MAX_VERTEX_ATTRS 8
+#define RHI_MAX_VERTEX_ATTRS 16 /* the screen-prim planes' vertex has 11 (rd_pipeline.c) */
 #define RHI_FRAMES_IN_FLIGHT 2
 
 /* ------------------------------------------------------------- formats */

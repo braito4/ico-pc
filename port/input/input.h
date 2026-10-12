@@ -293,6 +293,21 @@ int ico_bindings_assign(IcoBindings *b, int target, int kind, int code);
    ICO_PAD_* bit; 0 for a stick half-axis. The menus' per-source rule uses it
    (IcoVirtualPad menu_buttons). */
 unsigned int ico_bindings_gp_default_target(int src);
+
+/* Which sources hold Start in this snapshot (ICO_START_* bits), for the log
+   line the movie player writes when Start skips a movie. */
+#define ICO_START_GAMEPAD 1u
+#define ICO_START_KEYBOARD 2u
+#define ICO_START_MOUSE 4u
+#define ICO_START_ESCAPE 8u
+#define ICO_START_TOUCH 16u
+unsigned int ico_bindings_start_sources(const IcoBindings *b, const IcoInputRaw *raw);
+/* The sources of the last live snapshot (input_sdl.c sets it every vsync) and
+   their names ("gamepad", "keyboard+touch", "none"; "pad script" while a
+   script drives the pad). The name is valid until the next call. */
+void ico_input_set_start_sources(unsigned int mask);
+const char *ico_input_start_source(void);
+
 /* Clear every device's sources of target. */
 void ico_bindings_clear(IcoBindings *b, int target);
 /* A device's row of target as config text: "Space", "Tab, Backquote",

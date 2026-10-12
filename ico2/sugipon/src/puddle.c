@@ -190,6 +190,8 @@ static void puddleHostCamera(int push)
    back over the frame: its UV x about the block's centre at the frame's
    width, so a reflection is not stretched on a wide frame.  The block's
    VRAM address is the PS2's (ADDRESS). */
+/* VIS-RULES item 18 (v0.6.1): checked, not narrower than the frame's share
+   (rd_water_test "frame W" at 1376, 2048 and 2560) */
 static int puddleBlockW(void) /* port name */
 {
     return ico_frame_x(&gsFrame, 0x100);

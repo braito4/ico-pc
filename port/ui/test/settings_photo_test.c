@@ -474,7 +474,7 @@ static void testPhotoPanel(void)
     /* the pad: the game's pictures where its sheets have one, the names of
        the rest */
     ui__photo_hud_build(&set, 1, 0, "t", "f");
-    CHECK(set.n == 13, "the free camera's panel: 13 items (%d)", set.n);
+    CHECK(set.n == 14, "the free camera's panel: 14 items (%d)", set.n);
 
     static const struct {
         int item, glyph0, glyph1;
@@ -491,6 +491,7 @@ static void testPhotoPanel(void)
         {9, LT_GLYPH_CROSS, -1, NULL, NULL},
         {10, LT_GLYPH_SQUARE, -1, NULL, NULL},
         {11, LT_GLYPH_TRIANGLE, -1, NULL, NULL},
+        {12, -1, -1, "Right", NULL},
     };
 
     for (size_t i = 0; i < sizeof(kPad) / sizeof(kPad[0]); i++) {

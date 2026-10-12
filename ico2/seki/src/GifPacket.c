@@ -34,6 +34,27 @@ int gif_HostFrameWidth(void)
     return gifHostFrameW;
 }
 
+/* PC port (VIS-WINDOW, v0.6.1): the picture is not the PS2's out of the
+   box, the Original preset on the 4:3 frame at 1x (the user's ruling,
+   2026-10-12: out of the box the PS2's behaviour stays; any other state
+   draws what a game made for that picture would draw).  GsBase.c's frame
+   latch sets it from the video options (ico_video_original: Enhanced or a
+   custom row); a frame wider than 4:3 is never out of the box.  The CPU
+   strips' rule (gifHostBeside) and the particles' window gate
+   (particleEffect.c) read it; the VU programs' form is rd_replay.c
+   vuExtended. */
+static int gifHostExtendedSet;
+
+void gif_HostSetExtended(int on)
+{
+    gifHostExtendedSet = on != 0;
+}
+
+int gif_HostExtended(void)
+{
+    return gifHostExtendedSet || gifHostFrameW > ICO_FRAME_BASE_W;
+}
+
 /* PC port (v0.6.0, W3-UI): the GIF_SP_FULL scope.  The 2D layer is a centred
    4:3 box (the 640 grid x ScreenWidth / 640 = 512 pixels about the frame's
    centre); an item that covers the whole frame (a backdrop, a bar spanning
@@ -552,6 +573,9 @@ static int stripIndex = 0; /* derived name */
    at every native width the frame (2048 -+ W / 2 pixels, at most 768 ..
    3328) lies inside it.  The triangles it drops that the port draws on a
    wide frame are gifHostBeside's. */
+/* VIS-RULES item 9 (v0.6.1), kept: an in-view CPU strip is dropped only
+   where the PS2 dropped it (a vertex past the GS's range, the triangle
+   reaching the picture); beside the picture gifHostBeside draws it */
 static inline int isInScreen(volatile int *p) /* derived name */
 {
     if (p[2] < 0)
@@ -591,7 +615,17 @@ static inline int isInScreen(volatile int *p) /* derived name */
    picture: a triangle wholly beside it draws no pixel, and the rule is not
    applied at all (gifHostFrameW 512), so every packet is the PS2's, byte
    for byte.  The two-vertex lines (poly-flat.c do_DrawLine) drop a line
-   with an end failing _IsInScreen in the caller, as the PS2. */
+   with an end failing _IsInScreen in the caller, as the PS2.
+   VIS-WINDOW (v0.6.1): outside the out-of-the-box state (gif_HostExtended:
+   Enhanced, wider than 4:3, scaled up) a triangle with a failing vertex
+   and its three Z values in range that reaches the picture is drawn too,
+   clipped by the GPU (its vertices past 16 bits through XYZ2_HI), unless
+   its strip is a card: none of the strip's triangles has all three
+   vertices passing isInScreen (gifStripPass; a strip call, or a
+   gif_DrawPolyF4 quad, is one free-standing strip: the CPU paths draw no
+   two strips that share corners as one model).  The VU programs' rule
+   is the same (vu_common.hlsli vu_region_rule).  Out of the box nothing
+   changes. */
 #define GIF_PICTURE_X0 0x7000 /* port: GS X 1792, the picture's left edge */
 #define GIF_PICTURE_X1 0x9000 /* port: GS X 2304, its right edge */
 
@@ -605,12 +639,21 @@ static inline int gifHostZIn(volatile int *p)
    first two vertices' Z compares were za and zb, is drawn under the rule
    above although a vertex failed isInScreen: a wide frame, every Z in
    range, the x extent wholly beside the picture */
+/* PC port (VIS-WINDOW): the strip being drawn has a triangle whose three
+   vertices pass isInScreen (set by each strip function before its loop
+   outside the out-of-the-box state, else 0; back to 0 after it) */
+static int gifStripPass;
+
 static inline int gifHostBeside(int xa, int za, int xb, int zb, volatile int *c)
 {
     int lo;
     int hi;
 
-    if (gifHostFrameW <= ICO_FRAME_BASE_W || !za || !zb || !gifHostZIn(c))
+    if (!za || !zb || !gifHostZIn(c))
+        return 0;
+    if (gifStripPass && gif_HostExtended())
+        return 1; /* VIS-WINDOW: not a card, drawn clipped wherever it lies */
+    if (gifHostFrameW <= ICO_FRAME_BASE_W)
         return 0;
     lo = xa < xb ? xa : xb;
     hi = xa < xb ? xb : xa;
@@ -641,7 +684,7 @@ static inline int gifStripKick(int t, volatile int *q)
    gifInScreenXyz, as a later triangle may kick it */
 static inline long long gifStripXyz(int t, volatile int *q)
 {
-    if (t || gifHostFrameW > ICO_FRAME_BASE_W)
+    if (t || gif_HostExtended())
         return gifInScreenXyz(q[0], q[1], (long long)q[2]);
     return GIF_XY0(q[0], q[1], (long long)q[2]);
 }
@@ -671,6 +714,37 @@ static inline void rotTransPers(volatile int *dst, void *src) /* derived name */
     dst[0] = ps2_ftoi4(v[0] * q);
     dst[1] = ps2_ftoi4(v[1] * q);
     dst[2] = ps2_ftoi4(v[2] * q);
+}
+
+/* PC port (VIS-WINDOW): gifStripPass for a strip of n vertices, src every
+   16 bytes (the 3D strips, projected as their loops project them) or
+   projected already, every 4 ints (the 2D strips): whether a triangle has
+   three vertices passing isInScreen, the strip's own kicks on the PS2.  0
+   out of the box, where the rule is not applied (nothing is projected) */
+static int gifStripPasses(char *src, int *v, int n)
+{
+    int a = 0;
+    int b = 0;
+    int i;
+
+    if (!gif_HostExtended())
+        return 0;
+    for (i = 0; i < n; i++) {
+        volatile int q[4];
+        int t;
+
+        if (src) {
+            rotTransPers(q, src + i * 16);
+            t = isInScreen(q);
+        } else {
+            t = isInScreen(v + i * 4);
+        }
+        if (a && b && t)
+            return 1;
+        a = b;
+        b = t;
+    }
+    return 0;
 }
 
 /* One vertex through the VU0 pipeline into a caller-supplied projected-vertex
@@ -709,22 +783,26 @@ void gif_DrawPolyF4(void *p0, void *p1, void *p2, void *p3, int r, int g, int b,
 beside:
     /* PC port: the PS2 drops the whole quad.  It is the strip 0 1 2,
        1 2 3: on a wide frame each of the two that lies wholly beside the
-       camera's picture is drawn (gifHostBeside; a triangle of the quad
-       reaching the picture stays dropped with it, as the PS2 shows it),
-       the other kept out by an XYZ3.  Nothing at 4:3, where the PS2
-       returned with nothing sent */
+       camera's picture is drawn (gifHostBeside), the other kept out by an
+       XYZ3; outside the out-of-the-box state (gif_HostExtended) both are
+       drawn when either passes (VIS-WINDOW: the quad is not a card).
+       Nothing out of the box, where the PS2 returned with nothing sent */
     {
         int k2;
         int k3;
 
-        if (gifHostFrameW <= ICO_FRAME_BASE_W)
+        if (!gif_HostExtended())
             return;
         rotTransPers(q[0], p0);
         rotTransPers(q[1], p1);
         rotTransPers(q[2], p2);
         rotTransPers(q[3], p3);
+        /* VIS-WINDOW: the quad is a card when neither triangle passes */
+        gifStripPass =
+            isInScreen(q[1]) && isInScreen(q[2]) && (isInScreen(q[0]) || isInScreen(q[3]));
         k2 = gifHostBeside(q[0][0], gifHostZIn(q[0]), q[1][0], gifHostZIn(q[1]), q[2]);
         k3 = gifHostBeside(q[1][0], gifHostZIn(q[1]), q[2][0], gifHostZIn(q[2]), q[3]);
+        gifStripPass = 0;
         if (!k2 && !k3)
             return;
         for (i = 0; i < 4; i++) {
@@ -746,6 +824,7 @@ void gif_DrawStripF(void *v, GifColor col, int n, int prim)
     stripZIn[0] = stripZIn[1] = 0; /* PC port */
     setGsReg(0x00, ((long long)prim << 6) | 0x104);
     stripIndex = 0;
+    gifStripPass = gifStripPasses(p, 0, n); /* PC port: VIS-WINDOW */
     setGsReg(0x01, GIF_COLOR(&col) | (0xFE00LL << 46));
     for (i = 0; i < n; i++, p += 16) {
         volatile int q[4];
@@ -757,6 +836,7 @@ void gif_DrawStripF(void *v, GifColor col, int n, int prim)
         setGsReg(gifStripKick(t, q) ? 0x05 : 0x0D, gifStripXyz(t, q));
         gifStripPush(t, q);
     }
+    gifStripPass = 0; /* PC port */
 }
 
 void gif_DrawStripFST(void *v, void *uv, GifColor col, int n, int prim)
@@ -770,6 +850,7 @@ void gif_DrawStripFST(void *v, void *uv, GifColor col, int n, int prim)
     stripZIn[0] = stripZIn[1] = 0; /* PC port */
     setGsReg(0x00, ((long long)prim << 6) | 0x94);
     stripIndex = 0;
+    gifStripPass = gifStripPasses(p, 0, n); /* PC port: VIS-WINDOW */
     setGsReg(0x01, GIF_COLOR(&col) | (0xFE00LL << 46));
     for (i = 0; i < n; i++, p += 16, s += 4) {
         volatile int q[4];
@@ -782,6 +863,7 @@ void gif_DrawStripFST(void *v, void *uv, GifColor col, int n, int prim)
         setGsReg(gifStripKick(t, q) ? 0x05 : 0x0D, gifStripXyz(t, q));
         gifStripPush(t, q);
     }
+    gifStripPass = 0; /* PC port */
 }
 
 void gif_DrawStripG(void *v, void *col, int n, int prim)
@@ -795,6 +877,7 @@ void gif_DrawStripG(void *v, void *col, int n, int prim)
     stripZIn[0] = stripZIn[1] = 0; /* PC port */
     setGsReg(0x00, ((long long)prim << 6) | 0x10C);
     stripIndex = 0;
+    gifStripPass = gifStripPasses(p, 0, n); /* PC port: VIS-WINDOW */
     for (i = 0; i < n; i++, c += 4, p += 16) {
         volatile int q[4];
         int t;
@@ -806,6 +889,7 @@ void gif_DrawStripG(void *v, void *col, int n, int prim)
         setGsReg(gifStripKick(t, q) ? 0x05 : 0x0D, gifStripXyz(t, q));
         gifStripPush(t, q);
     }
+    gifStripPass = 0; /* PC port */
 }
 
 void gif_Draw2DStripG(int *v, GifColor *col, int n, int prim)
@@ -817,6 +901,7 @@ void gif_Draw2DStripG(int *v, GifColor *col, int n, int prim)
     stripZIn[0] = stripZIn[1] = 0; /* PC port */
     setGsReg(0x00, ((long long)prim << 6) | 0x10C);
     stripIndex = 0;
+    gifStripPass = gifStripPasses(0, v, n); /* PC port: VIS-WINDOW */
     for (i = 0; i < n; i++, col++, v += 4) {
         int c;
 
@@ -826,6 +911,7 @@ void gif_Draw2DStripG(int *v, GifColor *col, int n, int prim)
         setGsReg(gifStripKick(c, v) ? 0x05 : 0x0D, gifStripXyz(c, v));
         gifStripPush(c, v);
     }
+    gifStripPass = 0; /* PC port */
 }
 
 void gif_Draw2DUVStripG(int *v, int *uv, unsigned char *col, int n, int prim)
@@ -837,6 +923,7 @@ void gif_Draw2DUVStripG(int *v, int *uv, unsigned char *col, int n, int prim)
     stripZIn[0] = stripZIn[1] = 0; /* PC port */
     setGsReg(0x00, ((long long)prim << 6) | 0x11C);
     stripIndex = 0;
+    gifStripPass = gifStripPasses(0, v, n); /* PC port: VIS-WINDOW */
     for (i = 0; i < n; i++, col += 4, v += 4, uv += 4) {
         int c;
 
@@ -847,6 +934,7 @@ void gif_Draw2DUVStripG(int *v, int *uv, unsigned char *col, int n, int prim)
         setGsReg(gifStripKick(c, v) ? 0x05 : 0x0D, gifStripXyz(c, v));
         gifStripPush(c, v);
     }
+    gifStripPass = 0; /* PC port */
 }
 
 void gif_Init(void)

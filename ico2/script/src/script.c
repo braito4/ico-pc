@@ -908,6 +908,12 @@ void scpSubAdpcmPlay(GObj *volatile self)
                 AdpcmReq *p = &tbl[i];
 
                 while (AdpcmFreeAreaGet() == 0) {
+                    /* PC port (issue 67): a stream already fading out gives
+                       its slot up now; the PS2's path below runs only when
+                       none is fading */
+                    if (AdpcmFadingCloseNow() != 0) {
+                        continue;
+                    }
                     /* could not open: ADPCM is full */
                     debug_StdPrintfDummy("ADPCM一杯で開けませんでした。\n");
                     if (AdpcmNotUseIopAreaFree() != 0) {
@@ -926,6 +932,7 @@ void scpSubAdpcmPlay(GObj *volatile self)
                         /* the battle music is not playing, so to keep the program running stop every tune and request instead */
                         debug_StdPrintfDummy(
                             "戦闘曲なっていないので,プログラムを止めないために\n全部曲を止めて,変わりにリクエストします。\n");
+                        AdpcmLogFull(); /* PC port (issue 67) */
                         AdpcmFadeCloseAll(0x3FFF);
                         _ACTWait(1);
                     }

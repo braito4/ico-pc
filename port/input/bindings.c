@@ -586,6 +586,23 @@ static int gp_down(const IcoInputRaw *raw, const unsigned char *row)
     return 0;
 }
 
+unsigned int ico_bindings_start_sources(const IcoBindings *b, const IcoInputRaw *raw)
+{
+    unsigned int m = 0;
+
+    if (b->gamepad &&
+        (gp_down(raw, b->gp[ICO_T_START]) || (gp_menu_word(raw, b) & ICO_PAD_START) != 0)) {
+        m |= ICO_START_GAMEPAD;
+    }
+    if (b->keyboard && key_down(raw, b->kb[ICO_T_START])) {
+        m |= ICO_START_KEYBOARD;
+    }
+    if (b->mouse_on && mouse_down(raw, b->mouse[ICO_T_START])) {
+        m |= ICO_START_MOUSE;
+    }
+    return m;
+}
+
 static void unit_clamp(float *x, float *y)
 {
     float len2 = *x * *x + *y * *y;

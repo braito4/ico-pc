@@ -416,9 +416,11 @@ const char *const ui_strings_de[UI_STR_COUNT] = {
     [UI_STR_PHOTO_ACT_SAVE] = "Bild speichern",
     [UI_STR_PHOTO_ACT_HIDE] = "Anzeige ausblenden (wird gemerkt)",
     [UI_STR_PHOTO_ACT_BACK] = "zurück",
+    [UI_STR_PHOTO_ACT_FILM] = "Film-Effekt (wird gemerkt)",
     [UI_STR_PHOTO_MOUSE_PREFIX] = "Maus",
     [UI_STR_PHOTO_UP] = "Oben",
     [UI_STR_PHOTO_DOWN] = "Unten",
+    [UI_STR_PHOTO_RIGHT] = "Rechts",
     [UI_STR_SECTION_CHARACTERS] = "Charakteranpassung",
     [UI_STR_CHAR_ICO_SKIN] = "Ico: Haut",
     [UI_STR_CHAR_ICO_PONCHO_NAVY] = "Ico: Poncho, marine",
@@ -497,6 +499,9 @@ const char *const ui_strings_de[UI_STR_COUNT] = {
     [UI_STR_OPT_DOOR_FIX] = "Tür am Ost-Reflektor",
     [UI_STR_OPT_DOOR_FIX_NOTE] =
         "Hand in Hand kommen Ico und Yorda nicht mehr sofort wieder aus einer Tür heraus.",
+    [UI_STR_OPT_NATURAL_CHAINS] = "Natürliche Ketten",
+    [UI_STR_OPT_NATURAL_CHAINS_NOTE] =
+        "Eine Kette, die für Ico herabgelassen wird, behält auf dem ganzen Weg die richtige Gliedergröße.",
     [UI_STR_OPT_AA] = "Kantenglättung",
     [UI_STR_OPT_AA_NOTE] =
         "Glättet gezackte Kanten. Supersampling zeichnet das Bild größer und verkleinert es; MSAA glättet die Kanten von Formen.",
@@ -506,4 +511,18 @@ const char *const ui_strings_de[UI_STR_COUNT] = {
     [UI_STR_AA_MSAA2] = "MSAA 2x",
     [UI_STR_AA_MSAA4] = "MSAA 4x",
     [UI_STR_AA_MSAA8] = "MSAA 8x",
+    [UI_STR_EXTRAS_STEAM] = "Zu Steam hinzufügen",
+    [UI_STR_STEAM_ADDED] = "Zu Steam hinzugefügt",
+    [UI_STR_STEAM_ADDED_BODY] = "Steam starten und ICO\nin der Bibliothek suchen.",
+    [UI_STR_STEAM_EXISTS] = "Schon in der Steam-Bibliothek",
+    [UI_STR_STEAM_RUNNING] = "Zuerst Steam beenden",
+    [UI_STR_STEAM_RUNNING_BODY] =
+        "Dann noch einmal versuchen. Auf dem\nSteam Deck den Desktop-Modus nutzen.",
+    [UI_STR_STEAM_NOT_FOUND] = "Steam wurde nicht gefunden",
+    [UI_STR_STEAM_NOT_FOUND_BODY] = "Zuerst Steam installieren.",
+    [UI_STR_STEAM_NO_USER] = "Kein Steam-Konto gefunden",
+    [UI_STR_STEAM_NO_USER_BODY] = "Einmal in Steam anmelden,\ndann noch einmal versuchen.",
+    [UI_STR_STEAM_FAILED] = "Hinzufügen zu Steam fehlgeschlagen",
+    [UI_STR_STEAM_FAILED_BODY] =
+        "Die Verknüpfungsliste ließ sich nicht ändern.\nDie README zeigt das Hinzufügen von Hand.",
 };

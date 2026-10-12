@@ -411,9 +411,11 @@ const char *const ui_strings_en[UI_STR_COUNT] = {
     [UI_STR_PHOTO_ACT_SAVE] = "save a picture",
     [UI_STR_PHOTO_ACT_HIDE] = "hide this panel (remembered)",
     [UI_STR_PHOTO_ACT_BACK] = "back",
+    [UI_STR_PHOTO_ACT_FILM] = "film effect (remembered)",
     [UI_STR_PHOTO_MOUSE_PREFIX] = "Mouse",
     [UI_STR_PHOTO_UP] = "Up",
     [UI_STR_PHOTO_DOWN] = "Down",
+    [UI_STR_PHOTO_RIGHT] = "Right",
     [UI_STR_SECTION_CHARACTERS] = "Character Customization",
     [UI_STR_CHAR_ICO_SKIN] = "Ico: Skin",
     [UI_STR_CHAR_ICO_PONCHO_NAVY] = "Ico: Poncho, navy",
@@ -492,6 +494,9 @@ const char *const ui_strings_en[UI_STR_COUNT] = {
     [UI_STR_OPT_DOOR_FIX] = "East Reflector door fix",
     [UI_STR_OPT_DOOR_FIX_NOTE] =
         "Holding hands, Ico and Yorda no longer come straight back out of a doorway.",
+    [UI_STR_OPT_NATURAL_CHAINS] = "Natural chains",
+    [UI_STR_OPT_NATURAL_CHAINS_NOTE] =
+        "A chain that comes down for Ico keeps its links the right size the whole way down.",
     [UI_STR_OPT_AA] = "Anti-aliasing",
     [UI_STR_OPT_AA_NOTE] =
         "Smooths jagged edges. Supersampling draws the picture larger and shrinks it; MSAA smooths the edges of shapes.",
@@ -501,4 +506,17 @@ const char *const ui_strings_en[UI_STR_COUNT] = {
     [UI_STR_AA_MSAA2] = "MSAA 2x",
     [UI_STR_AA_MSAA4] = "MSAA 4x",
     [UI_STR_AA_MSAA8] = "MSAA 8x",
+    [UI_STR_EXTRAS_STEAM] = "Add to Steam",
+    [UI_STR_STEAM_ADDED] = "Added to Steam",
+    [UI_STR_STEAM_ADDED_BODY] = "Start Steam and look for ICO\nin your library.",
+    [UI_STR_STEAM_EXISTS] = "Already in your Steam library",
+    [UI_STR_STEAM_RUNNING] = "Close Steam first",
+    [UI_STR_STEAM_RUNNING_BODY] = "Then try again. On Steam Deck,\nuse Desktop mode.",
+    [UI_STR_STEAM_NOT_FOUND] = "Steam was not found",
+    [UI_STR_STEAM_NOT_FOUND_BODY] = "Install Steam first.",
+    [UI_STR_STEAM_NO_USER] = "No Steam account found",
+    [UI_STR_STEAM_NO_USER_BODY] = "Sign in to Steam once,\nthen try again.",
+    [UI_STR_STEAM_FAILED] = "Could not add to Steam",
+    [UI_STR_STEAM_FAILED_BODY] =
+        "The shortcut list could not be changed.\nThe README shows how to add it by hand.",
 };

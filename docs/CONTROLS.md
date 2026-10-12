@@ -37,6 +37,9 @@ A few more keys on a PC:
   menus, like Triangle. It does not close the game: to quit, choose
   **End Game** in the pause menu, then **Quit to desktop** on the title
   screen, or close the window.
+- **Start** skips a movie, on every input: the gamepad's Start button,
+  the key you gave to Start (Enter at first) or the Start button on the
+  touch screen. No other button skips one.
 - **Alt+Enter** switches between a window and the whole screen (the
   Borderless or Fullscreen choice you made under Window mode).
 - **F12** saves a picture of the current moment, and a zip file to attach
@@ -162,6 +165,7 @@ The camera starts as a free camera. You fly it around like a drone:
 | Put the camera back where it started | Select |
 | Save a picture | Cross, or click the left mouse button |
 | Hide or show the help panel | Square |
+| Film effect: Off, 1, 2, 3, 4, Off | Right on the D-pad (keyboard Right arrow) |
 | Leave photo mode | Triangle, Circle or Start, or click the right mouse button |
 
 Press **L3** (press the left stick in, or keyboard V) to switch to the
@@ -177,11 +181,18 @@ camera you are using.
 The help panel at the bottom tells you which camera you are using and its
 speed, and shows each button beside what it does: the game's own button
 pictures, and the names of the buttons it has no picture for (the sticks,
-L3, R3, Up, Down and Select). If you play on the keyboard, it shows the
+L3, R3, Up, Down, Right and Select). If you play on the keyboard, it shows the
 names of your keys instead, like [Space] (the panel changes as soon as
 you press a key or a mouse button). When you hide
 it with Square, the game remembers, and photo mode opens with the panel
 hidden next time too. Press Square again to show it.
+
+The Film effect is a filter here: each press of Right goes to the next
+look, from Off through 1 to 4 and back to Off, and a small note says which
+one you have. It works whether or not you have finished the game, and it
+does not change the Film effect row in Options. The game remembers your
+choice for the next time you open photo mode, and your saved pictures
+include the effect.
 
 If you move the camera quickly into another room, you may see parts the
 game had not prepared yet.

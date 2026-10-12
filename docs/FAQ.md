@@ -98,6 +98,13 @@ one after the other and fills in the missing lines of each, so moving
 edges stay smooth and still parts keep their full detail.
 (Reported in [issue 41](https://github.com/nathanialf/ico-pc/issues/41).)
 
+## How do I start the game from Steam?
+
+Close Steam, start the game, and choose Options > Extras > Add to Steam on the title screen.
+The game then shows in your Steam library, and on a Steam Deck in Game
+Mode. If Steam is open, the game tells you to close it first.
+[Details](OPTIONS.md#extras) and [Steam Deck tips](TROUBLESHOOTING.md#steam-deck).
+
 ## Where are my saves?
 
 In a folder the game makes in your user folder, not beside the program.

@@ -668,6 +668,157 @@ static void markContentHidden(RdMeshRec *m)
     }
 }
 
+/* ------------------------------------------------ joined strips
+ *
+ * VIS-WINDOW (v0.6.1), the region rule's card test (vu_common.hlsli
+ * vu_region_rule): out of the box a triangle the region test drops is not
+ * drawn where it reaches the camera's picture, as on the PS2; in any other
+ * state (Enhanced, wider than 4:3, scaled up) it is drawn, clipped, unless
+ * it belongs to a card: a free-standing strip none of whose triangles
+ * passes the test.  A strip is joined when one of its vertex positions (the
+ * float bits of x, y, z) is a vertex position of another strip of the mesh
+ * that is not its double-sided copy (a strip of a different shape: the
+ * sorted list of positions differs); else it is free-standing.  The
+ * opening's tree card (st26a_near) is a free-standing strip, one of twelve
+ * free-standing quads of its draw; a wall's or a plank's strip shares its
+ * edges with the rest of the surface (the old bridge's plank faces at
+ * 48:9, st08a_p4, issue 29), and is drawn.  Every triangle of a joined
+ * strip carries ICO_VU_INDEX_JOINED in the list the device draws.  A strip
+ * starts at a vertex whose ST.w is below 1 (the strip flag; ST is the
+ * second-last quadword) or at its batch's first vertex, as the static kicks
+ * see it (batchIndices).  The prelit, lit and skinned layouts, whose first
+ * quadword is the model-space position; a morph (rd_update_vu_mesh) keeps
+ * the marks of the creation stream. */
+
+typedef struct JoinPos {
+    uint32_t bits[3];
+} JoinPos;
+
+static int joinPosCmp(const void *a, const void *b)
+{
+    return memcmp(a, b, sizeof(JoinPos));
+}
+
+static void markJoinedStrips(RdMeshRec *m)
+{
+    const uint32_t nv = m->vertexCount, nt = m->indexCount / 3, qpv = m->qwPerVertex;
+    if (nt == 0 || nv < 3 || nv >= ICO_VU_INDEX_KICK_LIMIT ||
+        (qpv != RD_VU_QW_PRELIT && qpv != RD_VU_QW_LIT && qpv != RD_VU_QW_SKIN)) {
+        return;
+    }
+    uint32_t cap = 16;
+    while (cap < nv * 2u && cap < (1u << 28)) {
+        cap <<= 1;
+    }
+
+    typedef struct Slot {
+        float key[3];
+        uint32_t first, other; /* the first strip at the position, the first of another shape;
+                                  UINT32_MAX: none */
+    } Slot;
+
+    uint32_t *stripOf = calloc(nv, sizeof(uint32_t));
+    uint32_t *stripAt = malloc(((size_t)nv + 1) * sizeof(uint32_t)); /* first vertex */
+    JoinPos *sorted = malloc((size_t)nv * sizeof(JoinPos)); /* each strip's positions, sorted */
+    Slot *slot = malloc((size_t)cap * sizeof(Slot));
+    uint8_t *joined = NULL;
+    if (!stripOf || !stripAt || !sorted || !slot) {
+        goto done;
+    }
+    /* the strips: runs of consecutive vertices, in stream order */
+    uint32_t strips = 0, covered = 0;
+    for (uint32_t b = 0; b < m->batchCount; b++) {
+        const uint32_t first = m->batches[b].firstVertex;
+        const uint32_t end = first + m->batches[b].vertexCount;
+        if (first != covered || end > nv) {
+            goto done; /* not one run of the stream: no marks */
+        }
+        for (uint32_t v = first; v < end; v++) {
+            if (v == first || m->stream[(size_t)v * qpv + qpv - 2u][3] < 1.0f) {
+                stripAt[strips++] = v;
+            }
+            stripOf[v] = strips - 1u;
+            memcpy(sorted[v].bits, m->stream[(size_t)v * qpv], sizeof(sorted[v].bits));
+        }
+        covered = end;
+    }
+    if (covered != nv || strips == 0) {
+        goto done;
+    }
+    stripAt[strips] = nv;
+    for (uint32_t i = 0; i < strips; i++) {
+        qsort(&sorted[stripAt[i]], stripAt[i + 1] - stripAt[i], sizeof(JoinPos), joinPosCmp);
+    }
+    joined = calloc(strips, 1);
+    if (!joined) {
+        goto done;
+    }
+    for (uint32_t i = 0; i < cap; i++) {
+        slot[i].first = slot[i].other = UINT32_MAX;
+    }
+#define JOIN_SAME(a, b)                                                                            \
+    ((a) == (b) || (stripAt[(a) + 1] - stripAt[a] == stripAt[(b) + 1] - stripAt[b] &&              \
+                    memcmp(&sorted[stripAt[a]], &sorted[stripAt[b]],                               \
+                           (size_t)(stripAt[(a) + 1] - stripAt[a]) * sizeof(JoinPos)) == 0))
+    /* pass 1: per position, the first strip and the first of another shape */
+    for (uint32_t v = 0; v < nv; v++) {
+        const float *pos = m->stream[(size_t)v * qpv];
+        uint32_t h = ovlHash(pos) & (cap - 1);
+        while (slot[h].first != UINT32_MAX && memcmp(slot[h].key, pos, sizeof(slot[h].key)) != 0) {
+            h = (h + 1) & (cap - 1);
+        }
+        const uint32_t x = stripOf[v];
+        if (slot[h].first == UINT32_MAX) {
+            memcpy(slot[h].key, pos, sizeof(slot[h].key));
+            slot[h].first = x;
+        } else if (slot[h].other == UINT32_MAX && !JOIN_SAME(slot[h].first, x)) {
+            slot[h].other = x;
+        }
+    }
+    /* pass 2: a strip is joined when a strip of another shape shares one
+     * of its positions */
+    bool any = false;
+    for (uint32_t v = 0; v < nv; v++) {
+        const float *pos = m->stream[(size_t)v * qpv];
+        uint32_t h = ovlHash(pos) & (cap - 1);
+        while (memcmp(slot[h].key, pos, sizeof(slot[h].key)) != 0) {
+            h = (h + 1) & (cap - 1);
+        }
+        const uint32_t x = stripOf[v];
+        if (!JOIN_SAME(slot[h].first, x) ||
+            (slot[h].other != UINT32_MAX && !JOIN_SAME(slot[h].other, x))) {
+            joined[x] = 1;
+            any = true;
+        }
+    }
+#undef JOIN_SAME
+    if (!any) {
+        goto done;
+    }
+    for (uint32_t t = 0; t < nt; t++) {
+        const uint32_t kick = (m->index[t * 3] & ICO_VU_INDEX_MASK) / 4u;
+        if (kick < 2 || kick >= nv || !joined[stripOf[kick]]) {
+            continue;
+        }
+        if (!m->drawIndex) {
+            m->drawIndex = malloc((size_t)m->indexCount * 4);
+            if (!m->drawIndex) {
+                goto done;
+            }
+            memcpy(m->drawIndex, m->index, (size_t)m->indexCount * 4);
+        }
+        for (int c = 0; c < 3; c++) {
+            m->drawIndex[t * 3 + (uint32_t)c] |= ICO_VU_INDEX_JOINED;
+        }
+    }
+done:
+    free(stripOf);
+    free(stripAt);
+    free(sorted);
+    free(slot);
+    free(joined);
+}
+
 bool rd__vu_mesh_copy_draw_index(RdMeshRec *dst, const RdMeshRec *src)
 {
     free(dst->drawIndex);
@@ -717,6 +868,7 @@ uint32_t rd__vu_mesh_create_raw(const float (*stream)[4], uint32_t vertexCount,
     snprintf(m->name, sizeof(m->name), "%s", name ? name : "vu mesh");
     markLaterOverlaps(m); /* issue 25 */
     markContentHidden(m);
+    markJoinedStrips(m); /* VIS-WINDOW */
     return id;
 }
 
@@ -1417,6 +1569,12 @@ void rd_draw_vu_mesh(RdMesh mesh, const RdVuDraw *d, RdKey key)
         /* b[4]: RD_VU_VIEW_*, how the model matrices follow the camera
          * (rd_interp.c's re-base); 0 in older dumps */
         c->b[4] = d->bones ? 0 : d->view;
+        /* b[5], f[0]: the clip plane (RdVuDraw.plane, planeOffset), 0 for
+         * none and in older dumps; rd_replay.c gives it to VuCB vu_batch.zw */
+        if (!d->bones && d->plane != 0) {
+            c->b[5] = d->plane;
+            c->f[0] = d->planeOffset;
+        }
     }
 }
 

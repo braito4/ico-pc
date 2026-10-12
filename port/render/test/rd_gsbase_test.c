@@ -1594,6 +1594,65 @@ static void checkFilmNoise(void)
     compareScene("film noise", noiseRef, NULL, 1);
 }
 
+static int plainRef(int x, int y, int k, void *user)
+{
+    (void)user;
+    return scenePx(x, y, k);
+}
+
+/* photo mode's own Film effect: with the game not cleared and its Options
+   row off, photo mode set to 1 (Right) draws the grain of mode 1; photo
+   mode on with the effect off draws none even in a cleared game with the
+   row on; and leaving photo mode gives the game's own setting back */
+static void checkFilmNoisePhoto(void)
+{
+    GlobalStageSetting.targetCol[0][0] = GlobalStageSetting.targetCol[0][1] =
+        GlobalStageSetting.targetCol[0][2] = 128;
+    GlobalStageSetting.targetCol[0][3] = 64;
+    GlobalStageSetting.grainScale = 4.0f;
+    gFlagGameClear = 0;
+    optionScreenMode = 0;
+    ico_photo_enter();
+    CHECK(ico_photo_film() == 0, "photo film: off at enter (%d)", ico_photo_film());
+    drawScene(s_tex, RD_FILTER_LINEAR);
+    dl_SetDLPriority(11);
+    tick();
+    compareScene("photo film off, game not cleared: no grain", plainRef, NULL, 1);
+    IcoPhotoPad right = photoPad(0);
+    right.pressed = ICO_PHOTO_RIGHT;
+    ico_photo_update(&right);
+    CHECK(ico_photo_film() == 1, "photo film: Right gives mode 1 (%d)", ico_photo_film());
+    drawScene(s_tex, RD_FILTER_LINEAR);
+    dl_SetDLPriority(11);
+    tick();
+    compareScene("photo film 1, game not cleared: the grain", noiseRef, NULL, 1);
+    ico_photo_exit();
+    drawScene(s_tex, RD_FILTER_LINEAR);
+    dl_SetDLPriority(11);
+    tick();
+    compareScene("photo mode left, game not cleared: no grain", plainRef, NULL, 1);
+    /* cleared, the Options row on, photo mode open and its effect off */
+    gFlagGameClear = 1;
+    optionScreenMode = 1;
+    ico_photo_enter();
+    for (int i = 0; i < ICO_PHOTO_FILM_MODES && ico_photo_film() != 0; i++) {
+        ico_photo_update(&right);
+    }
+    CHECK(ico_photo_film() == 0, "photo film: cycled to off (%d)", ico_photo_film());
+    drawScene(s_tex, RD_FILTER_LINEAR);
+    dl_SetDLPriority(11);
+    tick();
+    compareScene("photo film off, game cleared with the row on: no grain", plainRef, NULL, 1);
+    ico_photo_exit();
+    drawScene(s_tex, RD_FILTER_LINEAR);
+    dl_SetDLPriority(11);
+    tick();
+    compareScene("photo mode left, game cleared with the row on: the game's grain", noiseRef, NULL,
+                 1);
+    gFlagGameClear = 0;
+    optionScreenMode = 0;
+}
+
 /* ---- letterbox */
 
 static int s_bandLevel;
@@ -2103,6 +2162,140 @@ static void checkStripWindow(void)
     tick();
 }
 
+/* VIS-WINDOW (v0.6.1): outside the out-of-the-box state
+   (gif_HostExtended: a frame wider than 4:3, or 4:3 with the extended
+   state set as GsBase.c's latch sets it for any preset but Original) a
+   strip triangle with a failing vertex and its Z in range that reaches the
+   picture is drawn when its strip has a passing triangle (not a card); a
+   strip none of whose triangles pass (a card) stays dropped, and a
+   triangle with a vertex behind the eye too.  gif_DrawPolyF4's quad is one
+   strip of two.  Out of the box both stay the PS2's (one triangle, no
+   quad).  One gif_Draw2DStripG of n vertices; returns the triangles, the
+   last kicked one's vertices in out. */
+extern float ico_current_matrix[4][4]; /* port/math: rotTransPers's matrix */
+
+static int stripCaseN(int fw, int ext, const int (*px)[3], int n, RdScreenVtx out[3])
+{
+    int v[8][4];
+    GifColor col[8];
+    int tris = 0;
+
+    tick();
+    gsFrame.w = fw;
+    gsFrame.fbw = (fw + 63) / 64;
+    gif_HostSetFrameWidth(fw);
+    gif_HostSetExtended(ext);
+    for (int i = 0; i < n; i++) {
+        v[i][0] = px[i][0] * 16;
+        v[i][1] = px[i][1] * 16;
+        v[i][2] = px[i][2];
+        v[i][3] = 0;
+        col[i].r = col[i].g = col[i].b = 0x80;
+        col[i].a = 0x80;
+    }
+    gif_StartPacketPri(DEC_LIST);
+    gif_SetDrawEnviroment(0x800, 0, (unsigned int)fw, 448, 1, 0);
+    if (n == 4 && px[0][2] == -1) {
+        /* gif_DrawPolyF4: the identity matrix, so a point (x, y, z, 1) is
+           projected to 16 x, 16 y, 16 z */
+        float p[4][4];
+        memset(ico_current_matrix, 0, sizeof(ico_current_matrix));
+        for (int i = 0; i < 4; i++) {
+            ico_current_matrix[i][i] = 1.0f;
+            p[i][0] = (float)px[i][0];
+            p[i][1] = (float)px[i][1];
+            p[i][2] = 4096.0f;
+            p[i][3] = 1.0f;
+        }
+        gif_DrawPolyF4(p[0], p[1], p[2], p[3], 0x80, 0x80, 0x80, 0x80, 0);
+    } else {
+        gif_Draw2DStripG(&v[0][0], col, n, 0);
+    }
+    gif_EndPacket();
+    gif_HostSetExtended(0);
+    tick();
+    const RdFrame *f = rd__last_frame();
+    if (!f) {
+        return -1;
+    }
+    const RdCmdList *l = &f->lists[DEC_LIST];
+    for (uint32_t i = 0; i < l->count; i++) {
+        const RdCmd *c = &l->cmds[i];
+        if (c->type == RDC_SCREEN && c->b[0] == RD_PRIM_TRIANGLES) {
+            const RdScreenVtx *sv = (const RdScreenVtx *)(f->payload + c->u[0]);
+            if (c->u[1] >= 3) {
+                memcpy(out, sv + c->u[1] - 3, 3 * sizeof(*sv));
+            }
+            tris += (int)(c->u[1] / 3);
+        }
+    }
+    return tris;
+}
+
+static void checkStripCards(void)
+{
+    static const struct {
+        int fw, ext;
+    } kStates[] = {{512, 0}, {512, 1}, {688, 0}, {2560, 0}};
+
+    /* a wall: triangle 2 passes, triangle 3 has a vertex at x 4200 (67200
+       > 0xFFF0) and reaches the picture */
+    static const int wall[4][3] = {{2000, 2000, 0x100000},
+                                   {2100, 2000, 0x100000},
+                                   {2050, 2100, 0x100000},
+                                   {4200, 2100, 0x100000}};
+    /* a card: both triangles have a vertex past 0xFFF0 */
+    static const int card[4][3] = {{2000, 2000, 0x100000},
+                                   {2100, 2000, 0x100000},
+                                   {4200, 2050, 0x100000},
+                                   {4300, 2100, 0x100000}};
+    /* the wall with that vertex behind the eye (Z negative) */
+    static const int eye[4][3] = {
+        {2000, 2000, 0x100000}, {2100, 2000, 0x100000}, {2050, 2100, 0x100000}, {4200, 2100, -16}};
+    /* gif_DrawPolyF4 (z -1 picks it): the wall's quad and the card's */
+    static const int quad[4][3] = {
+        {2000, 2000, -1}, {2100, 2000, -1}, {2050, 2100, -1}, {4200, 2100, -1}};
+    static const int quadCard[4][3] = {
+        {2000, 2000, -1}, {2100, 2000, -1}, {4200, 2050, -1}, {4300, 2100, -1}};
+
+    for (unsigned int i = 0; i < sizeof(kStates) / sizeof(kStates[0]); i++) {
+        const int fw = kStates[i].fw, ext = kStates[i].ext;
+        const int box = fw == ICO_FRAME_BASE_W && !ext; /* out of the box */
+        RdScreenVtx t[3];
+        int n = stripCaseN(fw, ext, wall, 4, t);
+        if (box) {
+            CHECK(n == 1,
+                  "strip cards %d/%d: out of the box the wall's failing triangle is "
+                  "dropped as the PS2 drops it (%d)",
+                  fw, ext, n);
+        } else {
+            CHECK(n == 2 && t[2].x == 67200,
+                  "strip cards %d/%d: the wall's triangle reaching the picture with a vertex past "
+                  "0xFFF0 is drawn, its far vertex at x %d (want 67200; %d triangles)",
+                  fw, ext, n > 0 ? t[2].x : -1, n);
+        }
+        n = stripCaseN(fw, ext, card, 4, t);
+        CHECK(n == 0, "strip cards %d/%d: a strip none of whose triangles pass is dropped (%d)", fw,
+              ext, n);
+        n = stripCaseN(fw, ext, eye, 4, t);
+        CHECK(n == 1,
+              "strip cards %d/%d: the triangle with a vertex behind the eye is dropped (%d)", fw,
+              ext, n);
+        n = stripCaseN(fw, ext, quad, 4, t);
+        CHECK(box ? n == 0 : n == 2,
+              "strip cards %d/%d: gif_DrawPolyF4's quad with one passing triangle: %d triangles "
+              "(want %d)",
+              fw, ext, n, box ? 0 : 2);
+        n = stripCaseN(fw, ext, quadCard, 4, t);
+        CHECK(n == 0, "strip cards %d/%d: gif_DrawPolyF4's quad as a card is dropped (%d)", fw, ext,
+              n);
+    }
+    gsFrame.w = ICO_FRAME_BASE_W;
+    gsFrame.fbw = ICO_FRAME_BASE_W / 64;
+    gif_HostSetFrameWidth(ICO_FRAME_BASE_W);
+    tick();
+}
+
 static void boot(void)
 {
     matrixptr = s_spr;
@@ -2130,6 +2323,7 @@ static void recordingChecks(void)
     checkCull();
     checkDecoder();
     checkStripWindow();
+    checkStripCards();
 }
 
 int main(void)
@@ -2181,6 +2375,7 @@ int main(void)
     checkAa(0, 96, 1);
     checkAa(64, 96, 2);
     checkFilmNoise();
+    checkFilmNoisePhoto();
     checkLetterbox();
     checkPipelines();
     CHECK(rhi_vk_validation_error_count() == 0, "%u validation errors",

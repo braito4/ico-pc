@@ -92,6 +92,12 @@ jobs:
           python3 tools/stack_overread_audit.py --selftest
           python3 tools/stack_overread_audit.py
 
+      # a fixed buffer cast to a struct that is wider on the host (issue 71)
+      - name: No buffer cast to a wider struct in the game sources
+        run: |
+          python3 tools/struct_cast_audit.py --selftest
+          python3 tools/struct_cast_audit.py
+
       # a call that passes fewer arguments than its target reads, an extern
       # that disagrees with its definition (issue 20)
       - name: Calls and declarations agree with the definitions
@@ -263,7 +269,7 @@ jobs:
             -R '^(rd_(pixel|gsbase|present|crt)(_[a-z0-9_]+)?|rd_replay_tool(_list)?)$'
 
       # A pushed release tag (never a pull request): the Linux arm64 package
-      # of the tagged commit, which the maintainer's x86-64 machine cannot
+      # (normal and portable archives) of the tagged commit, which the maintainer's x86-64 machine cannot
       # build, kept as an artifact named after the tag with its SHA-256 and
       # the packaging log (docs/BUILDING.md, "Packages"). The preset names
       # plain gcc; a gcc directory first on PATH makes that the gcc 14 the
@@ -275,8 +281,10 @@ jobs:
           ln -sf "$(command -v "$ICO_CC")" "$RUNNER_TEMP/gcc14/gcc"
           PATH="$RUNNER_TEMP/gcc14:$PATH" tools/package_linux.sh "$GITHUB_REF_NAME"
           cd dist
-          sha256sum "ico-pc-$GITHUB_REF_NAME-linux-arm64.tar.gz" \
-            > "ico-pc-$GITHUB_REF_NAME-linux-arm64.tar.gz.sha256"
+          for n in "ico-pc-$GITHUB_REF_NAME-linux-arm64.tar.gz" \
+              "ico-pc-$GITHUB_REF_NAME-linux-arm64-portable.tar.gz"; do
+            sha256sum "$n" > "$n.sha256"
+          done
 
       - name: Upload the linux-arm64 package (release tags only)
         if: ${{ !cancelled() && github.event_name == 'push' && github.ref_type == 'tag' }}
@@ -286,6 +294,8 @@ jobs:
           path: |
             dist/ico-pc-${{ github.ref_name }}-linux-arm64.tar.gz
             dist/ico-pc-${{ github.ref_name }}-linux-arm64.tar.gz.sha256
+            dist/ico-pc-${{ github.ref_name }}-linux-arm64-portable.tar.gz
+            dist/ico-pc-${{ github.ref_name }}-linux-arm64-portable.tar.gz.sha256
             build-host/pkg-linux-arm64-${{ github.ref_name }}.log
           retention-days: 30
           if-no-files-found: error

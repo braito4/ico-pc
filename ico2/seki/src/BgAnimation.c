@@ -23,6 +23,26 @@
 #include "gamesys.h"
 #include <assert.h>
 
+#ifdef ICO_RD
+
+/* PC port: "Natural chains" (port/render/rd_chain.h, [gameplay]
+   natural_chains): a chain a stage animation lets down keeps its links'
+   size.  bgaHostChain is the listed chain of the animation
+   bga_CalcAnimation computes (NULL for any other), bgaHostNatural whether
+   the option is on for it, bgaHostChainScale its Null's keyed scale along
+   the chain, which the links read after it. */
+#include "rd_chain.h"
+
+extern int ico_opt_natural_chains(void);
+
+static const RdChain *bgaHostChain;
+
+static int bgaHostNatural;
+
+static float bgaHostChainScale;
+
+#endif
+
 /* bgaAnimDefault is the 0x30-byte default record
    bga_InitData block-copies into its mallocseki() allocation (two
    (0,0,0,1.0f) vectors then four words); bgaParticlePos is the (0,0,0,1.0f)
@@ -1681,6 +1701,22 @@ static void bga_CalcObject(BgaDObjEnt *d, float dt, float frame, int cut, int pl
         }
         break;
     case 1:
+#ifdef ICO_RD
+        /* PC port: Natural chains: the listed Null moves its links along the
+           chain instead of scaling them (rd_chain_null) */
+        if (bgaHostChain != 0 && d->num == bgaHostChain->null) {
+            bgaHostChainScale = bgaScale[bgaHostChain->axis];
+            if (bgaHostNatural) {
+                float sc[3];
+                float t[4];
+
+                rd_chain_null(bgaHostChain, bgaScale, sc, t);
+                _ScaleCurrentMatrix(sc[0], sc[1], sc[2]);
+                _TransCurrentMatrix(t);
+                break;
+            }
+        }
+#endif
         _ScaleCurrentMatrix(bgaScale[0], bgaScale[1], bgaScale[2]);
         break;
     case 7:
@@ -1701,6 +1737,20 @@ static void bga_CalcObject(BgaDObjEnt *d, float dt, float frame, int cut, int pl
             }
             BGA_GEOM_WORK(d->u.obj)[d->num].flags.b.billboard = (d->type == 4);
             BGA_GEOM_WORK(d->u.obj)[d->num].flags.b.rotZ = bgaRollZ;
+#ifdef ICO_RD
+            /* PC port: Natural chains: a link of the listed Null gets its
+               clip plane (rd_chain_link), or loses it with the option off */
+            if (bgaHostChain != 0 && d->parent == bgaHostChain->null) {
+                uint8_t code = 0;
+                float off = 0.0f;
+
+                if (bgaHostNatural) {
+                    rd_chain_link(bgaHostChain, bgaHostChainScale, bgaPos[bgaHostChain->axis],
+                                  &code, &off);
+                }
+                rd_chain_note(BGA_OBJ(void *, d->u.obj), d->num, code, off);
+            }
+#endif
         }
         if (cut != 0 && d->type == 2) {
             if (debug_font_flag & 1) {
@@ -1886,6 +1936,11 @@ void bga_CalcAnimation(BgaHeader *p, int loop, int reset)
     }
     MultiQuaternion(GetCurrentQuaternion(), GetCurrentQuaternion(), BGA_ANIM(p)->quat);
 
+#ifdef ICO_RD
+    /* PC port: Natural chains (rd_chain.h): this animation's listed chain */
+    bgaHostChain = rd_chain_find(p->group);
+    bgaHostNatural = bgaHostChain != 0 && ico_opt_natural_chains();
+#endif
     for (i = 0;; i++) {
         f2 = (p->mode == 1);
         f1 = p->cut && f2;
@@ -1902,6 +1957,9 @@ void bga_CalcAnimation(BgaHeader *p, int loop, int reset)
         _PopCurrentMatrix();
         PopQuaternion();
     }
+#ifdef ICO_RD
+    bgaHostChain = 0;
+#endif
 
     bgaFrame = (int)p->frame;
     if (reset) {
@@ -2386,6 +2444,9 @@ inline void bga_InitBGA(void)
 {
     bgaCameraForceOff = 0;
     bgaLightningList = 0;
+#ifdef ICO_RD
+    rd_chain_reset(); /* PC port: Natural chains: a new stage's objects */
+#endif
 }
 
 inline void bga_SetUniqAnimationFlag(int val)

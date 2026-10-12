@@ -598,6 +598,7 @@ void ico_input_escape(int down, const IcoCaptureState *s)
 void ico_input_sdl_update(void)
 {
     IcoVirtualPad v;
+    unsigned int start_src = 0;
 
     if (!s_ready) {
         return;
@@ -626,6 +627,7 @@ void ico_input_sdl_update(void)
             s_raw.mouse[1] = 0;
         }
         ico_bindings_step(&s_bind, &s_raw, &v);
+        start_src = ico_bindings_start_sources(&s_bind, &s_raw);
         s_raw.mouse[1] = left;
     }
     /* Escape (Back on Android): Start or Triangle, outside the bindings */
@@ -634,12 +636,15 @@ void ico_input_sdl_update(void)
 
         v.buttons |= esc;
         v.menu_buttons |= esc;
+        start_src |= (esc & ICO_PAD_START) != 0 ? ICO_START_ESCAPE : 0;
     }
     if (s_touchDevice) {
         touch_step(&v);
         /* a touch look pad stick that won the merge is not the mouse's */
         ico_bindings_mouse_merged(&s_bind, &v);
+        start_src |= (v.menu_buttons & ICO_PAD_START) != 0 && start_src == 0 ? ICO_START_TOUCH : 0;
     }
+    ico_input_set_start_sources(start_src);
     ico_input_set_vpad(&v);
     send_rumble();
 }

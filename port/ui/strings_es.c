@@ -414,9 +414,11 @@ const char *const ui_strings_es[UI_STR_COUNT] = {
     [UI_STR_PHOTO_ACT_SAVE] = "guardar una imagen",
     [UI_STR_PHOTO_ACT_HIDE] = "ocultar este panel (se recuerda)",
     [UI_STR_PHOTO_ACT_BACK] = "volver",
+    [UI_STR_PHOTO_ACT_FILM] = "efecto película (se recuerda)",
     [UI_STR_PHOTO_MOUSE_PREFIX] = "Ratón",
     [UI_STR_PHOTO_UP] = "Arriba",
     [UI_STR_PHOTO_DOWN] = "Abajo",
+    [UI_STR_PHOTO_RIGHT] = "Derecha",
     [UI_STR_SECTION_CHARACTERS] = "Personalización de personajes",
     [UI_STR_CHAR_ICO_SKIN] = "Ico: piel",
     [UI_STR_CHAR_ICO_PONCHO_NAVY] = "Ico: poncho, marino",
@@ -495,6 +497,9 @@ const char *const ui_strings_es[UI_STR_COUNT] = {
     [UI_STR_OPT_DOOR_FIX] = "Puerta del reflector este",
     [UI_STR_OPT_DOOR_FIX_NOTE] =
         "De la mano, Ico y Yorda ya no vuelven a salir enseguida por una puerta.",
+    [UI_STR_OPT_NATURAL_CHAINS] = "Cadenas naturales",
+    [UI_STR_OPT_NATURAL_CHAINS_NOTE] =
+        "Una cadena que baja para Ico conserva sus eslabones del tamaño correcto durante todo el descenso.",
     [UI_STR_OPT_AA] = "Antialiasing",
     [UI_STR_OPT_AA_NOTE] =
         "Suaviza los bordes dentados. El supermuestreo dibuja la imagen más grande y la reduce; el MSAA suaviza los bordes de las formas.",
@@ -504,4 +509,18 @@ const char *const ui_strings_es[UI_STR_COUNT] = {
     [UI_STR_AA_MSAA2] = "MSAA 2x",
     [UI_STR_AA_MSAA4] = "MSAA 4x",
     [UI_STR_AA_MSAA8] = "MSAA 8x",
+    [UI_STR_EXTRAS_STEAM] = "Añadir a Steam",
+    [UI_STR_STEAM_ADDED] = "Añadido a Steam",
+    [UI_STR_STEAM_ADDED_BODY] = "Abrir Steam y buscar ICO\nen la biblioteca.",
+    [UI_STR_STEAM_EXISTS] = "Ya está en la biblioteca de Steam",
+    [UI_STR_STEAM_RUNNING] = "Cerrar Steam primero",
+    [UI_STR_STEAM_RUNNING_BODY] =
+        "Después, volver a intentarlo. En Steam Deck,\nusar el modo Escritorio.",
+    [UI_STR_STEAM_NOT_FOUND] = "No se encontró Steam",
+    [UI_STR_STEAM_NOT_FOUND_BODY] = "Instalar Steam primero.",
+    [UI_STR_STEAM_NO_USER] = "No se encontró ninguna cuenta de Steam",
+    [UI_STR_STEAM_NO_USER_BODY] = "Iniciar sesión en Steam una vez,\ny volver a intentarlo.",
+    [UI_STR_STEAM_FAILED] = "No se pudo añadir a Steam",
+    [UI_STR_STEAM_FAILED_BODY] =
+        "No se pudo cambiar la lista de accesos directos.\nEl README explica cómo añadirlo a mano.",
 };

@@ -460,7 +460,10 @@ hook that runs, in order:
 5. `tools/stack_overread_audit.py`: no game code that relies on the PS2's
    stack layout (the CI table below says what it looks for);
 6. `tools/check_call_types.py`: calls and declarations agree with the
-   definitions, as in CI.
+   definitions, as in CI;
+7. `tools/struct_cast_audit.py`: no fixed buffer in the game sources is cast
+   to a struct that is wider on the host (the CI table below says what it
+   looks for).
 
 `tools/format.sh` formats the tracked C with the tracked `.clang-format` and
 then applies `tools/format_layout.py`'s top-level blank-line layout. With
@@ -520,6 +523,10 @@ the test executables without running them. A test that needs the disc
 (`vfs_disc`, `archive_disc`, `texpack_disc`) or a Vulkan device (the
 `rhi_vk*`, `rd_*`, `shaders_pixel` and `vu1` tests) exits 77 without one,
 and `SKIP_RETURN_CODE 77` makes ctest report it as skipped, which passes.
+New in v0.6.1: `steam_shortcut` (the Add to Steam list writer,
+`port/platform/steam_shortcut.c`), `movie_pad` (START is the only input that
+skips a movie), `adpcm_slots` (the sound stream slots), `coverage_corpus` and
+`coverage_check_selftest` ([below](#coverage-corpus)).
 The disc tests read `ICO_DISC_IMAGE` (default `baserom/Ico_PAL.iso`).
 `texpack_disc` also matches a PCSX2 texture pack's file names against the
 disc's textures when `ICO_TEXPACK_DIR` (default
@@ -559,6 +566,31 @@ and the `*_fixed` ones with `ICO_RD_BLEND=fixed` (the latter also compare
 `rd_present`'s and `rd_crt`'s recorded hashes, which are the fixed-function
 blend's); `ICO_VK_FAKE_NO_DST=1` / `ICO_DX_FAKE_NO_DST=1` report a device
 without them.
+
+A triangle of a VU program that fails the program's region test (a vertex
+outside the GS window 0..4094, or behind the eye) goes through one rule
+(`vu_region_rule` in `port/shaders/vu_common.hlsli`, mirrored on the CPU by
+`vu1ref_region_draw` in `port/render/vu1_ref`, tested by `vu1_test` and
+`rd_native`): one wholly beside the 4:3 picture is drawn, clipped by the
+GPU; one that reaches into the picture is not drawn out of the box (the
+Original preset at 4:3 and 1x: the PS2's picture), and in any other state
+(Enhanced, a wider aspect, a Resolution above 1x) it is drawn, clipped, when
+its three vertices are in front of the eye and it is not part of a card (a
+wall with one vertex past the window, a plank's face). A card is a
+free-standing strip, one that shares no corner with another strip of its
+mesh but its own double-sided copy (`markJoinedStrips` in
+`port/render/rd_mesh.c` marks the others), none of whose triangles passes
+the test, such as the opening's tree card; it stays undrawn, as does a
+triangle with a vertex behind the eye. Photo mode's free camera draws every
+one of them, clipped. The same rule covers every path that drops on the GS
+window: the CPU strips (`gifHostBeside` in `ico2/seki/src/GifPacket.c`,
+where each strip call or `gif_DrawPolyF4` quad is one strip, and the
+extended state comes from `ico_video_original`), the grids (a grid of two
+strips or more is joined: its strips share rows) and the particles (an
+effect, never a card: drawn clipped in any state but out of the box). The
+particle effects' origin gate in `particleEffect.c` stays the PS2's in every
+state: it also gates the effect's update, which draws from the game's
+shared random numbers, so it is game logic.
 
 ## Native frame gates
 
@@ -613,17 +645,33 @@ build-host/tmp/native_frame_ref` and commit `docs/native_frame_baseline.json`
 with the change. The manifest holds hashes only (plus the harness commit, the
 settings, and each dump's name, size and SHA-256).
 
+### Coverage corpus
+
+`tools/coverage_check.py` (ctest `coverage_corpus`) renders every dump of
+`tools/coverage_corpus.txt` (machine-local paths) at its own aspect with
+`--enhanced --present 1376x896`, once with `--aa off` and once with `--aa msaa4`
+(plus the interpolated frame for a dump with `interp=T:PREV`), and compares each
+with the previous run: a mesh drawn fewer times than before fails, and so does a
+picture whose changed pixels (per-channel difference above `tol`) exceed the
+dump's `pixels` percentage. The previous run's pictures and draw counts are in
+`tools/.coverage/` (`ICO_COVERAGE_DIR`); a passing dump rolls forward, a failing
+one keeps its old baseline. It skips (77) without the tool, Pillow or dumps.
+After a build, seed or re-seed the baseline with
+`python3 -I tools/coverage_check.py seed --tool build-host/linux-x64/port/render/rd_replay_tool`.
+`coverage_check_selftest` runs the logic on a fake tool.
+
 ## Frame captures (F12)
 
 F12 in the running game saves the frame on the screen, for a bug report or
-for renderer work. Two files go in `dumps/` under the user folder
+for renderer work. Three files go in `dumps/` under the user folder
 (`<pref>/dumps`; [where that is](PORTABLE_MODE.md#where-your-saves-are)),
 named `frame-<yyyymmdd-hhmmss>-v<N>`, where `<N>` is the count of vertical
 syncs since start:
 
 | file | holds |
 | --- | --- |
-| `.png` | the picture on the screen at that moment (optional for a report; large at a high Resolution, so it stays a loose file) |
+| `.png` | the whole frame the game drew at that moment (optional for a report; large at a high Resolution, so it stays a loose file). At 16:9 it is a little wider than the window's picture; `tools/native_frame_check.py` reads this one |
+| `-present.png` | named `frame-<yyyymmdd-hhmmss>-present.png` (no `-v<N>`): the picture as the window showed it, the same pixels, without the port's own popups |
 | `.zip` | the `.rddump` (`port/render/rd_dump.c`, format version 10, `RD_DUMP_VERSION`) and a copy of `logs/ico-pc.log`, for a GitHub issue, which refuses `.rddump` files. With no log file (the program started with `--console`) it holds the dump alone |
 
 The game writes the `.rddump` first, zips it, and deletes the loose file once
@@ -734,6 +782,7 @@ more preset; `linux-arm64` and `android` are described after the table.
 | `tools/format.sh --check` | clang-format over the tracked C |
 | `tools/strip_host_gates.py --check` | no `ICO_HOST` conditional in `ico2/` or `sce/` |
 | `tools/stack_overread_audit.py` (`--selftest`, then the tree) | no game code in `ico2/` that relies on the PS2's stack layout: a matrix or vector call that reads or writes past the local it is given, or a local that is only written; checked exceptions are in `tools/stack_overread_allow.txt` |
+| `tools/struct_cast_audit.py` (`--selftest`, then the tree) | no fixed array, buffer or smaller record in `ico2/` cast to a struct whose host size is larger (records holding pointers are wider on the host than the EE's 4-byte pointers: `ClipWork` is 0xF0 bytes, not 0xC0), sized by compiling the file with the host compiler; checked exceptions are in `tools/struct_cast_allow.txt` |
 | `tools/check_call_types.py` | no call through a function-pointer cast that passes fewer arguments than the function it reaches reads, and no `extern` in an `ico2/` `.c` file that differs from its definition in parameter count, integer width or return width; checked exceptions are in `tools/check_call_types_allow.txt` |
 | `gen_data_desc.py`, `gen_layout_asserts.py`, `gen_sources.py` with `--check` | the generated files are fresh |
 | `linux-x64` headless | configure with `-DICO_LINK_EXE=ON`, build, `ctest` |
@@ -785,10 +834,21 @@ Run the same steps locally before pushing.
 `tools/package_win.sh <label>` and `tools/package_linux.sh <label>` build
 the packages for HEAD in a clean worktree (`dist/ico-pc-<label>-win.zip`,
 `dist/ico-pc-<label>-linux.tar.gz`). Neither contains game data; both carry
-the README, the player guides, the licence files and the save importer.
+the README, the player guides, the licence files and the save importer, and
+a make-portable script (`x64/make_portable.cmd` in the zip, `make_portable.sh`
+in the tar; the sources are `tools/portable/`). Each script also writes a
+second archive from the same stage, the portable download:
+`dist/ico-pc-<label>-win-portable.zip` and
+`dist/ico-pc-<label>-linux-portable.tar.gz`. It differs in three ways: its
+`ico-pc.ini` has `portable=1` on (the game makes `userdata` beside the
+program at the first start), the README has a paragraph saying so, and it
+has no make-portable script. Both scripts check each archive's entries
+afterwards, and `tools/test/package_textures_test.sh` (ctest `package_textures`)
+covers the helpers.
 `tools/package_linux.sh` packages for the host's architecture: on an arm64
 host it builds `linux-arm64` into `dist/ico-pc-<label>-linux-arm64.tar.gz`
-(stage `dist/stage/linux-arm64/`, log `build-host/pkg-linux-arm64-<label>.log`),
+(stage `dist/stage/linux-arm64/`, log `build-host/pkg-linux-arm64-<label>.log`)
+and the portable `dist/ico-pc-<label>-linux-arm64-portable.tar.gz`,
 the same contents with the aarch64 program and SDL3 (and, in
 `NOTICES.txt`, the notices of the Wayland protocol files SDL3 is built
 with). On either architecture it fails when a shipped binary (`ico_pc`,
@@ -799,7 +859,7 @@ each binary's newest.
 The release's arm64 archive is built by CI, since the maintainer's machine
 is x86-64. Pushing a `v*` tag runs `ci.yml`, and its `linux-arm64` job,
 once its gating tests pass, runs `tools/package_linux.sh <tag>` and uploads
-the archive, its `.sha256` and the packaging log as the artifact
+both archives (normal and portable), their `.sha256` files and the packaging log as the artifact
 `ico-pc-<tag>-linux-arm64` (kept 30 days). Pull requests and pushes to main
 never package. To fetch it (the artifact keeps the `dist/` and
 `build-host/` folders):
@@ -807,8 +867,8 @@ never package. To fetch it (the artifact keeps the `dist/` and
 ```sh
 gh run list --workflow ci.yml --branch <tag> --limit 1     # the tag's run id
 gh run download <run-id> -n ico-pc-<tag>-linux-arm64 -D build-host/tmp/ci-arm64
-mv build-host/tmp/ci-arm64/dist/ico-pc-<tag>-linux-arm64.tar.gz* dist/
-(cd dist && sha256sum -c ico-pc-<tag>-linux-arm64.tar.gz.sha256)
+mv build-host/tmp/ci-arm64/dist/ico-pc-<tag>-linux-arm64*.tar.gz* dist/
+(cd dist && sha256sum -c ico-pc-<tag>-linux-arm64.tar.gz.sha256 ico-pc-<tag>-linux-arm64-portable.tar.gz.sha256)
 tar -xzOf dist/ico-pc-<tag>-linux-arm64.tar.gz ico-pc-<tag>/VERSION.txt  # the tag's commit
 ```
 
@@ -860,10 +920,11 @@ a release build into a function name, run
 `toolchains/llvm/prebuilt/linux-x86_64/bin/`) with the stage folder of the same
 build.
 
-A release uploads the three packages:
+A release uploads the three packages, each desktop one with its portable
+twin (the arm64 pair comes from CI, above):
 
 ```sh
-gh release create <tag> dist/ico-pc-<tag>-win.zip dist/ico-pc-<tag>-linux.tar.gz dist/ico-pc-<tag>-android.apk
+gh release create <tag> dist/ico-pc-<tag>-win.zip dist/ico-pc-<tag>-win-portable.zip dist/ico-pc-<tag>-linux.tar.gz dist/ico-pc-<tag>-linux-portable.tar.gz dist/ico-pc-<tag>-linux-arm64.tar.gz dist/ico-pc-<tag>-linux-arm64-portable.tar.gz dist/ico-pc-<tag>-android.apk
 ```
 
 ## Appendix, maintainers: the base ELF

@@ -518,6 +518,94 @@ static void testGpuDriver(void)
           "Spanish question");
 }
 
+/* Extras > Add to Steam: hidden without a host handler, on the pause menu,
+   and shown on the title with one; Cross runs the handler once and its
+   answer is the popup; the strings exist in five languages */
+static int s_steamCalls, s_steamAnswer;
+
+static int fakeSteam(void)
+{
+    s_steamCalls++;
+    return s_steamAnswer;
+}
+
+static void testAddToSteam(void)
+{
+    static const struct {
+        int answer;
+        const char *title;
+    } kAnswers[] = {{UI_STEAM_ADDED, "Added to Steam"},
+                    {UI_STEAM_EXISTS, "Already in your Steam library"},
+                    {UI_STEAM_RUNNING, "Close Steam first"},
+                    {UI_STEAM_NOT_FOUND, "Steam was not found"},
+                    {UI_STEAM_NO_USER, "No Steam account found"},
+                    {UI_STEAM_FAILED, "Could not add to Steam"},
+                    {99, "Could not add to Steam"}};
+
+    int mainL, exL, row;
+
+    ui_popup_reset();
+    ui_settings_set_steam_handler(NULL);
+
+    /* no handler (Android, or a build without it): the row is hidden */
+    mainL = enterMain(1);
+    exL = openPage(mainL, 8, UI_PAGE_EXTRAS);
+    CHECK(ui_settings_row_of(UI_PAGE_EXTRAS, UI_OPT_EXTRAS_STEAM) >= 0 &&
+              !an22bShown(UI_PAGE_EXTRAS, UI_OPT_EXTRAS_STEAM),
+          "no handler: the row is hidden");
+
+    /* a handler, on the pause menu: still hidden (Extras leaves the stage) */
+    ui_settings_set_steam_handler(fakeSteam);
+    mainL = enterMain(0);
+    exL = openPage(mainL, 8, UI_PAGE_EXTRAS);
+    CHECK(!an22bShown(UI_PAGE_EXTRAS, UI_OPT_EXTRAS_STEAM), "pause menu: the row is hidden");
+
+    /* a handler, on the title: shown, after Characters and before Back */
+    mainL = enterMain(1);
+    exL = openPage(mainL, 8, UI_PAGE_EXTRAS);
+    row = ui_settings_row_of(UI_PAGE_EXTRAS, UI_OPT_EXTRAS_STEAM);
+    CHECK(an22bShown(UI_PAGE_EXTRAS, UI_OPT_EXTRAS_STEAM), "title: the row shows");
+    CHECK(strcmp(lt_ext_row_text(row), "Add to Steam") == 0, "the row's text \"%s\"",
+          lt_ext_row_text(row));
+    {
+        int el[8];
+        const int en = ui_settings_page_rows(UI_PAGE_EXTRAS, el, NULL, NULL, 8);
+
+        CHECK(en == 6 && el[4] == row, "six rows, Add to Steam before Back (%d)", en);
+    }
+
+    /* Cross: the handler once, its answer as the popup */
+    for (unsigned i = 0; i < sizeof(kAnswers) / sizeof(kAnswers[0]); i++) {
+        ui_popup_reset();
+        s_steamCalls = 0;
+        s_steamAnswer = kAnswers[i].answer;
+        lt_ext_layout(exL)->curItem = row;
+        frame(0);
+        press(0x40);
+        CHECK(s_steamCalls == 1, "answer %d: the handler ran once (%d)", kAnswers[i].answer,
+              s_steamCalls);
+        CHECK(ui_popup_active() && strcmp(ui_popup_title(), kAnswers[i].title) == 0,
+              "answer %d: popup \"%s\"", kAnswers[i].answer, ui_popup_title());
+        CHECK(current_layout_id == exL, "answer %d: stays on the page", kAnswers[i].answer);
+    }
+    ui_popup_reset();
+    ui_settings_set_steam_handler(NULL);
+
+    static const UiStrId kIds[] = {
+        UI_STR_EXTRAS_STEAM,       UI_STR_STEAM_ADDED,          UI_STR_STEAM_ADDED_BODY,
+        UI_STR_STEAM_EXISTS,       UI_STR_STEAM_RUNNING,        UI_STR_STEAM_RUNNING_BODY,
+        UI_STR_STEAM_NOT_FOUND,    UI_STR_STEAM_NOT_FOUND_BODY, UI_STR_STEAM_NO_USER,
+        UI_STR_STEAM_NO_USER_BODY, UI_STR_STEAM_FAILED,         UI_STR_STEAM_FAILED_BODY};
+    for (int l = 1; l < UI_LANG_COUNT; l++) {
+        for (unsigned i = 0; i < sizeof(kIds) / sizeof(kIds[0]); i++) {
+            const char *t = ui_str_in((UiLang)l, kIds[i]);
+
+            CHECK(t[0] != '\0' && strcmp(t, ui_str_in(UI_LANG_EN, kIds[i])) != 0,
+                  "language %d, string %d translated", l, kIds[i]);
+        }
+    }
+}
+
 static void testQuitGame(void)
 {
     static const char *const kAsk[2] = {"Quit to desktop?", "Quit the game?"};
@@ -1607,21 +1695,35 @@ static void testAntiAlias(void)
         CHECK(o.antiAlias == aa, "full mask: Right gives %d (%d)", aa, o.antiAlias);
     }
     CHECK(strcmp(ui_settings_value_text(UI_OPT_ANTI_ALIAS), "MSAA 8x") == 0, "MSAA 8x reads so");
-    /* a mask with only the always-there values: MSAA from the file is stepped away */
+    /* a mask with only the always-there values: the stored 8x is drawn
+       without (rd__aa_mode), so the row reads Off and steps from Off */
     s_aaMask = (1u << ICO_AA_OFF) | (1u << ICO_AA_SSAA2) | (1u << ICO_AA_SSAA4);
+    CHECK(strcmp(ui_settings_value_text(UI_OPT_ANTI_ALIAS), "Off") == 0,
+          "no MSAA listed: the stored 8x reads Off (%s)",
+          ui_settings_value_text(UI_OPT_ANTI_ALIAS));
     ui_settings_step(UI_OPT_ANTI_ALIAS, 1);
     ico_video_get(&o);
-    CHECK(o.antiAlias == ICO_AA_OFF, "no MSAA listed: Right from 8x wraps to Off (%d)",
-          o.antiAlias);
+    CHECK(o.antiAlias == ICO_AA_SSAA2,
+          "no MSAA listed: Right from the shown Off is 2x supersampling (%d)", o.antiAlias);
+    ui_settings_step(UI_OPT_ANTI_ALIAS, -1);
     ui_settings_step(UI_OPT_ANTI_ALIAS, -1);
     ico_video_get(&o);
     CHECK(o.antiAlias == ICO_AA_SSAA4, "no MSAA listed: Left from Off is 4x supersampling (%d)",
           o.antiAlias);
 
-    /* the value from the file */
+    /* the value from the file: shown when the device offers it; the value
+       actually used (Off) when it does not, the file kept (issue 43) */
     useConfig("version = 1\n[video]\npreset = \"enhanced\"\nanti_aliasing = \"msaa2\"\n");
     enterMainKeep(1);
-    CHECK(strcmp(ui_settings_value_text(UI_OPT_ANTI_ALIAS), "MSAA 2x") == 0, "msaa2 from the file");
+    CHECK(strcmp(ui_settings_value_text(UI_OPT_ANTI_ALIAS), "Off") == 0,
+          "msaa2 from the file, not offered: reads Off (%s)",
+          ui_settings_value_text(UI_OPT_ANTI_ALIAS));
+    ico_video_get(&o);
+    CHECK(o.antiAlias == ICO_AA_MSAA2, "msaa2 from the file, not offered: kept (%d)", o.antiAlias);
+    s_aaMask |= 1u << ICO_AA_MSAA2;
+    CHECK(strcmp(ui_settings_value_text(UI_OPT_ANTI_ALIAS), "MSAA 2x") == 0,
+          "msaa2 from the file, offered: reads MSAA 2x (%s)",
+          ui_settings_value_text(UI_OPT_ANTI_ALIAS));
 
     /* Original: Off, greyed, no step.  Loading preset "original" applies the
        Original shortcut, which puts the stored option off too (options_test
@@ -1712,6 +1814,67 @@ static void testDoorFix(void)
     gFlagGameClear = 0;
 }
 
+/* Gameplay > Natural chains ([gameplay] natural_chains): a row from the title
+   and the pause menu after the East Reflector door fix, Off by default; a
+   step turns it on and sets the key, the saved file has it, its note shows
+   on the cursor, a step back turns it off, and the page with the game
+   finished (every row shown) still fits */
+static void testNaturalChains(void)
+{
+    char p[1100];
+
+    gFlagGameClear = 0;
+    for (int title = 1; title >= 0; title--) {
+        stage_no = title ? 1 : 11;
+        const int mainL = enterMain(title);
+        openPage(mainL, 5, UI_PAGE_GAMEPLAY);
+        const int row = ui_settings_row_of(UI_PAGE_GAMEPLAY, UI_OPT_NATURAL_CHAINS);
+        CHECK(row >= 0 && !lt_ext_prop(row)->defaultMask && !lt_ext_prop(row)->masked,
+              "title %d: the Natural chains row", title);
+        CHECK(row >= 0 && strcmp(lt_ext_row_text(row), "Natural chains") == 0,
+              "title %d: its label \"%s\"", title, row >= 0 ? lt_ext_row_text(row) : "");
+        /* between the door fix (and its note row) and the Film effect */
+        CHECK(row > ui_settings_row_of(UI_PAGE_GAMEPLAY, UI_OPT_DOOR_FIX) &&
+                  row < ui_settings_row_of(UI_PAGE_GAMEPLAY, UI_OPT_FILM_EFFECT),
+              "title %d: after the East Reflector door fix, before the Film effect", title);
+        CHECK(ico_opt_natural_chains() == 0 &&
+                  strcmp(ui_settings_value_text(UI_OPT_NATURAL_CHAINS), "Off") == 0,
+              "title %d: Off by default", title);
+        press(0x10);
+        CHECK(settle(mainL, 60), "Gameplay: back");
+    }
+
+    gFlagGameClear = 1;
+    stage_no = 11;
+    const int mainL = enterMain(0);
+    const int gameL = openPage(mainL, 5, UI_PAGE_GAMEPLAY);
+    checkPageFits(UI_PAGE_GAMEPLAY, "Gameplay (cleared, with Natural chains)");
+    const int row = ui_settings_row_of(UI_PAGE_GAMEPLAY, UI_OPT_NATURAL_CHAINS);
+    lt_ext_layout(gameL)->curItem = row;
+    press(0x2000);
+    CHECK(ico_opt_natural_chains() == 1 &&
+              strcmp(ui_settings_value_text(UI_OPT_NATURAL_CHAINS), "On") == 0 &&
+              ico_config_get_bool("gameplay.natural_chains", 0) == 1,
+          "Right: Natural chains On and the key set");
+    const int note = noteStarting(UI_PAGE_GAMEPLAY, "A chain that comes down");
+    CHECK(note >= 0 && !lt_ext_prop(note)->masked, "the Natural chains note on the cursor");
+    CHECK(ui_settings_save() == 0, "save");
+    path(p, sizeof(p), "settings_test.toml");
+    IcoToml *t = ico_toml_load(p);
+    CHECK(t != NULL && ico_toml_get_bool(t, "gameplay.natural_chains", 0) == 1,
+          "saved: gameplay.natural_chains = true");
+    if (t != NULL) {
+        ico_toml_free(t);
+    }
+    press(0x8000);
+    CHECK(ico_opt_natural_chains() == 0 && ico_config_get_bool("gameplay.natural_chains", 1) == 0,
+          "Left: Natural chains Off again");
+    press(0x10);
+    CHECK(settle(mainL, 60), "Gameplay: back");
+    ico_opt_set_natural_chains(0);
+    gFlagGameClear = 0;
+}
+
 int main(int argc, char **argv)
 {
     snprintf(s_dir, sizeof(s_dir), "%s", argc > 1 ? argv[1] : ".");
@@ -1726,6 +1889,7 @@ int main(int argc, char **argv)
     testItemSelectArg();
     /* Settings > Graphics driver, the Quit game label */
     testGpuDriver();
+    testAddToSteam();
     testQuitGame();
     /* Controls > the mouse camera rows */
     testMouseCamera();
@@ -1747,6 +1911,7 @@ int main(int argc, char **argv)
     testAntiAlias();
     /* Gameplay > East Reflector door fix */
     testDoorFix();
+    testNaturalChains();
     if (failures) {
         printf("settings_extra_test: %d failure(s)\n", failures);
         return 1;

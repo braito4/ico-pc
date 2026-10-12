@@ -53,9 +53,11 @@ __UINTPTR_TYPE__ ico_arena_ee_addr(unsigned int ee);
    idle boots of stages 12, 17, 23 and 42 came within 300 KB of its end, and
    "stat mot" peaked at 94% and "common" at 98%. The
    stage partition gets 4 MB and the others the same share of their size
-   (4 MB / 15,826,944 bytes, rounded up to 64 KB). */
+   (4 MB / 15,826,944 bytes, rounded up to 64 KB).  The common partition
+   also carries the packet banks' host pad, 2 x 0x80000 (DmaPacket.c
+   DPK_HOST_PAD; 0xC0000 more than v0.6.0's 2 x 0x20000, review B1). */
 #define ICO_HOST_STAGE_EXTRA 0x400000
-#define ICO_HOST_COMMON_EXTRA 0x120000  /* of 4,227,072 */
+#define ICO_HOST_COMMON_EXTRA 0x1E0000  /* of 4,227,072 */
 #define ICO_HOST_SMOTION_EXTRA 0x50000  /* of 1,179,648 */
 #define ICO_HOST_S2MOTION_EXTRA 0xD0000 /* of 3,145,728 */
 #define ICO_HOST_HEAP_EXTRA                                                                        \

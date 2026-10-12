@@ -11,6 +11,8 @@
 void DrawPolygon(void *a, void *b, void *c, void *d, unsigned char *col, void *mtx);
 void do_DrawLine(void *from, void *to, unsigned int *c, int unused);
 float IsPointIsInScreen(void *out, void *pos);
+/* PC port: the same at the native frame's width (Ico's own looks) */
+float IsPointIsInScreenWide(void *out, void *pos);
 void after_DrawLine(void);
 void after_DrawPolygon(void);
 void before_DrawLine(void *m);

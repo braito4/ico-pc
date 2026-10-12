@@ -45,12 +45,17 @@
 // vu_batch x = header qwords before each batch's vertices (the GIF tag:
 //          1; mesh: the tag and the batch colour, 2, or 3 with the VIF qword
 //          of an unstripped Mesh3D buffer), y = qwords after each batch's
-//          vertices (an unstripped Mesh3D buffer's MSCNT: 1), zw reserved
+//          vertices (an unstripped Mesh3D buffer's MSCNT: 1), z = a clip
+//          plane's code (0 none; vu_plane_distance), w = its offset's bits
+// vu_strip x, y = the draw's vertices, the first and one past the last
+//          (the region rule's strip test, vu_strip_of; y 0: no strip test,
+//          the PS2's rule), zw reserved
 cbuffer VuCB : register(b2, space1)
 {
     float4 vu_mem[36];
     uint4 vu_draw;
     uint4 vu_batch;
+    uint4 vu_strip;
 };
 
 StructuredBuffer<float4> vu_stream : register(t0, space1);
@@ -73,6 +78,11 @@ StructuredBuffer<float4> vu_stream : register(t0, space1);
 // GPU-clipped over the whole picture, a vertex behind the eye or not, in
 // either preset (vu_triangle_out, vu_particle_vs)
 #define VU_F_BEHIND_EYE 256u
+// The picture is not the PS2's out of the box (rd_replay.c doVuDraw: the
+// Enhanced preset, a frame wider than 4:3 or a scene scale above 1): a
+// triangle the region test drops is drawn, GPU-clipped, unless it belongs
+// to a card (vu_region_rule)
+#define VU_F_EXTENDED 128u
 // Issue 25: the index bit of a triangle that overlaps an earlier triangle of
 // its mesh in the same plane (shader_consts.h ICO_VU_INDEX_LATER; static
 // prelit and lit meshes, rd_mesh.c markLaterOverlaps); vu_later_out
@@ -82,6 +92,10 @@ StructuredBuffer<float4> vu_stream : register(t0, space1);
 // for the 4:3 picture, drawn nowhere (HIDE). Static prelit and lit meshes
 // only; shader_consts.h ICO_VU_INDEX_HIDE
 #define VU_INDEX_HIDE 0x20000000u
+// VIS-WINDOW: the index bit of a triangle of a joined strip (rd_mesh.c
+// markJoinedStrips; shader_consts.h ICO_VU_INDEX_JOINED): not a card
+// (vu_region_rule)
+#define VU_INDEX_JOINED 0x10000000u
 #define VU_INDEX_MASK 0x0FFFFFFFu
 
 // Whether the triangle of index value vid is left out of every draw (HIDE).
@@ -232,16 +246,26 @@ struct VuVSOut
     float4 pos : SV_Position;
     VK_LOC(0) noperspective float4 col : COLOR0;   // RGBA 0..255, the GS interpolates in screen space
     VK_LOC(1) noperspective float3 stq : TEXCOORD0; // S, T, Q linear in screen space, divided per pixel
+    VK_LOC(2) noperspective float plane : TEXCOORD1; // vu_plane_distance; drawn where >= 0
+    // The triangle's attribute planes (vu_attr_planes): col, stq and plane
+    // at its first corner (a0: col, a1: stq, plane) and per texel across
+    // (x0, x1) and down (y0, y1); r.xy the corner in texels from the
+    // target's centre, r.z 1 when the planes hold (vu_pixel_attrs).
+    VK_LOC(3) nointerpolation float4 a0 : TEXCOORD2;
+    VK_LOC(4) nointerpolation float4 a1 : TEXCOORD3;
+    VK_LOC(5) nointerpolation float4 x0 : TEXCOORD4;
+    VK_LOC(6) nointerpolation float4 x1 : TEXCOORD5;
+    VK_LOC(7) nointerpolation float4 y0 : TEXCOORD6;
+    VK_LOC(8) nointerpolation float4 y1 : TEXCOORD7;
+    VK_LOC(9) nointerpolation float4 r : TEXCOORD8;
 };
 
 // GS pixels (XYOFFSET-relative window coordinates / 16) to clip space;
-// gs_xy_to_ndc for signed and wider-than-16-bit values.
-// precise: common.hlsli gs_xy_to_ndc.
+// gs_xy_to_ndc for signed and wider-than-16-bit values (common.hlsli
+// gs_px_to_ndc: exact on the 1/16 grid under the exact viewport).
 float2 vu_ndc(float2 px)
 {
-    precise float2 q = px - g_origin.xy + g_origin.zw;
-    precise float2 ndc = float2(q.x * g_target.z * 2.0 - 1.0, 1.0 - q.y * g_target.w * 2.0);
-    return ndc;
+    return gs_px_to_ndc(px);
 }
 
 // The vertex as the GS gets it: X, Y and Z as integers, w = 1, no
@@ -265,11 +289,20 @@ float4 vu_gs_position(int3 gs, bool wrap)
 // device's shaderClipDistance), which the pipelines do not use.
 float4 vu_homogeneous_position(float4 h)
 {
+    precise float z = 16.0 * h.z * g_z.x; // gs_z_to_depth's z * scale
+    if (g_vp.x != 0.0) {
+        // the exact viewport's form (common.hlsli gs_px_to_ndc) times w:
+        // about the target's centre, so the same at every frame width up to
+        // the viewport's power-of-two factor
+        precise float2 c = g_origin.xy + g_target.xy * 0.5;
+        precise float x = ((h.x - c.x * h.w) * g_vp.z + (g_frame.w + g_vpo.x) * h.w) * g_vp.x;
+        precise float y = -(((h.y - c.y * h.w) * g_vp.w + (g_frame.w + g_vpo.y) * h.w) * g_vp.y);
+        return float4(x, y, z, h.w);
+    }
     float2 o = g_origin.xy - g_origin.zw;
-    // precise: common.hlsli gs_xy_to_ndc
+    // precise: common.hlsli gs_px_to_ndc
     precise float x = (h.x - o.x * h.w) * g_target.z * 2.0 - h.w;
     precise float y = h.w - (h.y - o.y * h.w) * g_target.w * 2.0;
-    precise float z = 16.0 * h.z * g_z.x; // gs_z_to_depth's z * scale
     return float4(x, y, z, h.w);
 }
 
@@ -422,17 +455,321 @@ VuVSOut vu_out_init()
     o.pos = VU_CULLED;
     o.col = float4(0.0, 0.0, 0.0, 0.0);
     o.stq = float3(0.0, 0.0, 1.0);
+    o.plane = 1.0;
+    o.a0 = o.a1 = o.x0 = o.x1 = o.y0 = o.y1 = o.r = float4(0.0, 0.0, 0.0, 0.0);
     return o;
 }
 
-// The triangle k-2, k-1, k: what the GS draws of it. me is the corner this invocation outputs.
-// mode: VU_CLIP_*; the programs without a scissor or no-test variant pass
-// VU_CLIP_REGION whatever vu_draw.z says.
-VuVSOut vu_triangle_out(VuVtx a, VuVtx b, VuVtx c, VuVtx me, uint mode)
+// ------------------------------------------------- the attribute planes
+// EXACT-RASTER (v0.6.1).  The GPU interpolates a varying from the pixel's
+// place in the target: its float rounding depends on how far the triangle
+// sits from the target's corner, so at a frame width other than 512 the
+// 4:3 columns' Gouraud colours and STs came out one step apart on some
+// pixels (rd_native_test: up to 2000 pixels at 2x, though the coverage
+// was the same).  A triangle drawn at its GS positions carries its own
+// planes instead, made from its three corners in texels from the target's
+// centre (the same numbers at every width: a frame-wide target's centre is
+// GS 2048), and the pixel shader evaluates them at the pixel's offset from
+// the first corner (exact: pixel centres are k + 0.5, corners on the 1/16
+// grid at an integer scale): the same operations on the same values at
+// every width.  The GS's own colours and STs run linearly in screen space
+// (noperspective), which the planes are.  A triangle with a corner the GPU
+// clips (vu_cut_position's homogeneous form: behind the eye, saturated,
+// outside the Z range) keeps the GPU's interpolation (the clip changes the
+// corners).
+
+// GS pixels to texels from the target's centre (gs_px_to_ndc's q: exact
+// on the 1/16 grid at an integer scale)
+float2 vu_texel_offset_px(float2 px)
+{
+    return gs_texel_offset(px);
+}
+
+// A corner's position in texels from the target's centre, on the 12.4 grid
+// (vu_vtx_position's: unquantised under ICO_RD_VU_OFFGRID)
+float2 vu_texel_offset(VuVtx v)
+{
+    return vu_texel_offset_px(g_z.w != 0.0 ? v.p.xy : float2(v.gs.xy) * (1.0 / 16.0));
+}
+
+// The gradient basis of the triangle with corners pa, pb, pc: for values
+// va, vb, vc the change per texel across is (vb - va) g.x + (vc - va) g.y,
+// down (vb - va) g.z + (vc - va) g.w.  Zero for a triangle without area.
+float4 vu_grad_basis(float2 pa, float2 pb, float2 pc)
+{
+    precise float2 d1 = pb - pa;
+    precise float2 d2 = pc - pa;
+    precise float det = d1.x * d2.y - d1.y * d2.x;
+    if (det == 0.0) {
+        return float4(0.0, 0.0, 0.0, 0.0);
+    }
+    precise float4 g = float4(d2.y, -d1.y, -d2.x, d1.x) / det;
+    return g;
+}
+
+// the planes of col and stq (o.r.z 1) of the triangle with corners pa, pb,
+// pc (texels from the target's centre) and those values there; only under
+// the exact viewport
+VuVSOut vu_attr_planes_at(VuVSOut o, float2 pa, float2 pb, float2 pc, float4 ca, float4 cb,
+                          float4 cc, float3 sa, float3 sb, float3 sc)
+{
+    if (g_vp.x == 0.0) {
+        return o;
+    }
+    float4 g = vu_grad_basis(pa, pb, pc);
+    precise float4 db = cb - ca;
+    precise float4 dc = cc - ca;
+    precise float3 eb = sb - sa;
+    precise float3 ec = sc - sa;
+    precise float4 cx = db * g.x + dc * g.y;
+    precise float4 cy = db * g.z + dc * g.w;
+    precise float3 sx = eb * g.x + ec * g.y;
+    precise float3 sy = eb * g.z + ec * g.w;
+    o.a0 = ca;
+    o.a1 = float4(sa, 0.0);
+    o.x0 = cx;
+    o.y0 = cy;
+    o.x1 = float4(sx, 0.0);
+    o.y1 = float4(sy, 0.0);
+    o.r = float4(pa, 1.0, 0.0);
+    return o;
+}
+
+// the planes of a triangle every corner of which is drawn at its GS
+// position (exact); the plane distance's are vu_plane_out's
+// (vu_plane_planes)
+VuVSOut vu_attr_planes(VuVSOut o, VuVtx a, VuVtx b, VuVtx c, bool exact)
+{
+    if (!exact) {
+        return o;
+    }
+    return vu_attr_planes_at(o, vu_texel_offset(a), vu_texel_offset(b), vu_texel_offset(c),
+                             float4(a.rgba), float4(b.rgba), float4(c.rgba), a.stq, b.stq, c.stq);
+}
+
+// the plane distance's plane (da, db, dc at the corners), where vu_attr_planes made the others
+VuVSOut vu_plane_planes(VuVSOut o, VuVtx a, VuVtx b, VuVtx c, float da, float db, float dc)
+{
+    if (o.r.z == 0.0) {
+        return o;
+    }
+    float4 g = vu_grad_basis(vu_texel_offset(a), vu_texel_offset(b), vu_texel_offset(c));
+    precise float x = (db - da) * g.x + (dc - da) * g.y;
+    precise float y = (db - da) * g.z + (dc - da) * g.w;
+    o.a1.w = da;
+    o.x1.w = x;
+    o.y1.w = y;
+    return o;
+}
+
+// The pixel's col, stq and plane from the planes where the triangle has
+// them (else the GPU's): at the pixel's offset from the first corner in
+// texels, pos.xy less the target's centre (exact: both on a fine grid).
+VuVSOut vu_pixel_attrs(VuVSOut i)
+{
+    if (i.r.z == 0.0) {
+        return i;
+    }
+    float2 d = gs_plane_offset(i.pos, i.r.xy);
+    precise float4 col = i.a0 + i.x0 * d.x + i.y0 * d.y;
+    precise float4 sp = i.a1 + i.x1 * d.x + i.y1 * d.y;
+    i.col = col;
+    i.stq = sp.xyz;
+    i.plane = sp.w;
+    return i;
+}
+
+// A clip plane in the model's space (port/render/rd_chain.h, Natural
+// chains: a chain's link drawn at its size, the part still at the top not
+// drawn): vu_batch.z = 0 for none, else the axis + 1 in bits 0..1 and bit 2
+// for the minus side, vu_batch.w the offset's bits.  The distance of
+// vertex v (its stream position, qword 0 of a prelit or lit vertex) is the
+// coordinate on the axis, negated for the minus side, plus the offset; the
+// pixels where it is negative are discarded (vu_pixel, DF_PLANE).  Like
+// every VU varying it runs linearly in screen space, as the GS's colours
+// and STs do; a link's triangles are a few pixels long.
+float vu_plane_distance(uint v)
+{
+    float4 p = vu_stream[vu_vertex_qw(v)];
+    uint axis = (vu_batch.z & 3u) - 1u;
+    float c = axis == 0u ? p.x : (axis == 1u ? p.y : p.z);
+    precise float d = ((vu_batch.z & 4u) != 0u ? -c : c) + asfloat(vu_batch.w);
+    return d;
+}
+
+// The plane on a drawn triangle k-2, k-1, k (me: the corner output): its
+// distance at the corner, and the triangle not drawn when all three are
+// past the plane.
+VuVSOut vu_plane_out(VuVSOut o, VuVtx a, VuVtx b, VuVtx c, uint kick, uint me)
+{
+    if (vu_batch.z == 0u) {
+        return o;
+    }
+    float da = vu_plane_distance(kick - 2u), db = vu_plane_distance(kick - 1u);
+    float dc = vu_plane_distance(kick);
+    if (da < 0.0 && db < 0.0 && dc < 0.0) {
+        o.pos = VU_CULLED;
+    }
+    o.plane = me == 0u ? da : (me == 1u ? db : dc);
+    return vu_plane_planes(o, a, b, c, da, db, dc);
+}
+
+// What the port draws of a triangle of a program with the region test
+// (vu_region_rule; vu1_ref.h vu1ref_region_draw is the CPU mirror).
+#define VU_RULE_EXACT 0u // all three vertices inside: at their GS positions
+#define VU_RULE_CLIP 1u  // GPU-clipped at the native frustum (vu_cut_position)
+#define VU_RULE_DROP 2u  // not drawn
+// The card test decides (the caller's): VU_RULE_DROP for a triangle of a
+// card, a free-standing strip (no VU_INDEX_JOINED) none of whose
+// triangles passes the region test (vu_*_strip_passes), else VU_RULE_CLIP
+#define VU_RULE_STRIP 3u
+
+// The region rule (VIS-RULES items 11 and 12, VIS-WINDOW, v0.6.1).
+// On the PS2 any vertex outside the region sets ADC on itself and the next
+// two, and the triangle is not drawn. That test is the camera's own: the
+// program's, on the position as computed (VuVtx.inside, the tests' probe
+// field), and the projection is the same at every aspect. The rule, in
+// this order:
+// - all three vertices inside: drawn exactly (vu_vtx_position, on the
+//   ftoi4 grid);
+// - photo mode's free camera (VU_F_BEHIND_EYE): drawn, clipped by the GPU
+//   at the native frustum (a walkway low under the camera left a hole);
+// - a triangle whose GPU-clipped extent (0 <= z <= w, a vertex behind the
+//   eye or not) lies wholly beside the camera's picture (GS 2048 -+ 256
+//   across by the native height, the drawing camera's,
+//   vu_cut_reaches_picture; seen only on a frame wider than 4:3): drawn,
+//   clipped (there the PS2 showed nothing, and dropped triangles left
+//   holes: a wall with one vertex past the window, issue 29; at 48:9 a
+//   patch of the sea at the far left of the old bridge whose only
+//   triangles there have a vertex behind the eye);
+// - one that reaches into the picture, out of the box (the Original preset
+//   at 4:3 and 1x, VU_F_EXTENDED clear): not drawn, as the PS2 does not
+//   draw it. At 4:3 the frame is the picture, so every failing triangle
+//   that could show reaches it, and the picture is the PS2's;
+// - one that reaches into the picture in any other state (VU_F_EXTENDED:
+//   Enhanced, wider than 4:3, or scaled up), every vertex in front of the
+//   eye: the user's ruling (2026-10-12), "these expanded aspect ratios and
+//   resolutions need to be rendering everything in the camera that it
+//   would expect ... like what the game would still look like if they had
+//   larger resolutions and aspect ratios in mind". A game made for that
+//   picture clips such a triangle, so it is drawn, clipped, unless it
+//   belongs to an artist's card parked at the picture's edge: a
+//   free-standing strip (the run of triangles the strip flag ties together,
+//   vu_strip_of: one strip of the model, pac_makeNormalStrip; sharing no
+//   vertex position with another strip of its mesh but a double-sided
+//   copy, no VU_INDEX_JOINED, rd_mesh.c markJoinedStrips) none of whose
+//   triangles pass the test. The opening's tree card (st26a_near, a
+//   free-standing 2-triangle strip of a 12-card draw, every vertex 160 to
+//   540 units in front of the eye) and the waterfall's mist cards (issue
+//   57) stay out of the picture, as out of the box. A wall is drawn: its
+//   strip passes (issue 72: the water tower's lift wall, st20a_p2 part 28,
+//   packet 4, strip 14, two of its six triangles pass) or is joined to the
+//   rest of the surface (the old bridge's plank faces at 48:9, st08a_p4,
+//   issue 29). The unit is not the draw: the tree card's draw has 7
+//   passing triangles in its other cards;
+// - one with a vertex behind the eye that reaches into the picture: not
+//   drawn in any state (the opening's cliff st26a_p1, filmed from inside):
+//   a game made for a wide picture would not draw geometry behind the eye
+//   either. None is cut at the picture's edge (the waterfall's mist,
+//   issue 57).
+// A drawn triangle with a vertex outside takes code 36's corner rule
+// (vu_cut_position: the GS position where the vertex has one, the
+// homogeneous form of h where it is behind the eye, saturated or below GS
+// Z 0; every program computes h before the test). A HIDE triangle never
+// reaches here (vu_content_hidden); the strip test counts every triangle
+// of the strip, marked or not. A grid (vu_grid.hlsl, Mesh3D) has a batch
+// a strip, each the rows i and i + 1 of one vertex grid
+// (Primitive.c prim_UpdateMesh3D), so neighbouring strips share a row of
+// positions: rd_replay.c marks every triangle of a grid of two strips or
+// more VU_INDEX_JOINED; a grid of one strip is a card when none of its
+// triangles pass.
+// Two differences from a code-36 draw of the same triangle remain: code
+// 36's clipped triangles go through their own earlier pass with ABE forced
+// on (rd_replay.c draws them as the VU's fans, PRIM 0x5D), which a code-32
+// draw does not, so a mesh whose clip code flips between 32 and 36 still
+// changes the blending along its cut rim; and vu_later_out's bias needs
+// all three GS positions, so a later-marked triangle with a corner
+// saturated or below GS Z 0 is drawn without it.
+uint vu_region_rule(VuVtx a, VuVtx b, VuVtx c)
+{
+    if (a.inside && b.inside && c.inside) {
+        return VU_RULE_EXACT;
+    }
+    if ((vu_draw.z & VU_F_BEHIND_EYE) != 0u ||
+        !vu_cut_reaches_picture(vu_cut_position(a), vu_cut_position(b), vu_cut_position(c))) {
+        return VU_RULE_CLIP;
+    }
+    if ((vu_draw.z & VU_F_EXTENDED) != 0u && vu_strip.y != 0u &&
+        min(a.h.w, min(b.h.w, c.h.w)) > 0.0) {
+        return VU_RULE_STRIP;
+    }
+    return VU_RULE_DROP;
+}
+
+// The strip test's longest scan, in vertices each way: a strip of the
+// game's models has at most 64 (Packet.c pac_checkDivide: 192 qwords a
+// batch, a batch holds whole strips); a longer one (a replacement model's,
+// modelpack.c stripify) counts as having a passing triangle (not a card).
+#define VU_STRIP_SCAN 256u
+
+// Whether vertex v starts a strip (ST.w < 1, the strip flag; ST is the
+// second-last quadword of a normal_c, normal_l and cluster vertex,
+// rd_mesh.c batchIndices). flagged: the program reads the flag (mesh does
+// not: a batch is one strip).
+bool vu_strip_start(uint v, bool flagged)
+{
+    return flagged && vu_stream[vu_vertex_qw(v) + vu_draw.y - 2u].w < 1.0;
+}
+
+// The strip of kick k, as the static kicks see it (vu1_ref.h
+// vu1ref_static_kicks): x its first vertex, y one past its last, z 1 when
+// it is longer than VU_STRIP_SCAN. Its triangles are the kicks x + 2 ..
+// y - 1, every one drawn (no vertex after x starts a strip). Bounded by
+// the draw's vertices (vu_strip.xy) and, in a stream with batches
+// (vu_draw.w), by k's batch; a tagless mesh's batch starts a strip
+// (pac_makeNormalStrip and pac_makeClusterStrip write ST.w 0 on every
+// strip's first vertex, modelpack.c on every one it starts).
+uint3 vu_strip_of(uint k, bool flagged)
+{
+    uint lo = vu_strip.x;
+    uint hi = vu_strip.y;
+    uint vpb = vu_draw.w;
+    if (vpb != 0u) {
+        uint b0 = (k / vpb) * vpb;
+        lo = max(lo, b0);
+        hi = min(hi, b0 + vpb);
+    }
+    if (!flagged) {
+        return uint3(lo, hi, 0u);
+    }
+    // k and k - 1 start nothing (k is a kick): the start is at k - 2 or before
+    uint s = k - 2u;
+    uint n = 0u;
+    [loop] while (s > lo && !vu_strip_start(s, true) && n < VU_STRIP_SCAN) {
+        s--;
+        n++;
+    }
+    uint e = k + 1u;
+    uint m = 0u;
+    [loop] while (e < hi && !vu_strip_start(e, true) && m < VU_STRIP_SCAN) {
+        e++;
+        m++;
+    }
+    return uint3(s, e, n >= VU_STRIP_SCAN || m >= VU_STRIP_SCAN ? 1u : 0u);
+}
+
+// The triangle k-2, k-1, k: what the GS draws of it (vu_triangle_out),
+// without the planes; exact: every corner drawn at its GS position.
+VuVSOut vu_triangle_out_pos(VuVtx a, VuVtx b, VuVtx c, VuVtx me, uint mode, uint rule,
+                            out bool exact)
 {
     VuVSOut o = vu_out_init();
     o.col = float4(me.rgba);
     o.stq = me.stq;
+    // every corner at its GS position (vu_attr_planes): the corners the
+    // GPU clips have none
+    bool gsPos = vu_has_gs_position(a) && vu_has_gs_position(b) && vu_has_gs_position(c);
+    exact = false;
     if (mode == VU_CLIP_NONE) {
         // vu_vtx_position, as codes 32, 36 and 38 draw (on the 12.4 grid,
         // or off it under ICO_RD_VU_OFFGRID): a triangle placed differently
@@ -444,66 +781,23 @@ VuVSOut vu_triangle_out(VuVtx a, VuVtx b, VuVtx c, VuVtx me, uint mode)
         // keeps the wrapped GS value.
         bool wrapped = any((me.gs.xy & 0xFFFF) != me.gs.xy);
         o.pos = wrapped ? vu_gs_position(me.gs, true) : vu_vtx_position(me);
+        exact = !any((a.gs.xy & 0xFFFF) != a.gs.xy) && !any((b.gs.xy & 0xFFFF) != b.gs.xy) &&
+                !any((c.gs.xy & 0xFFFF) != c.gs.xy);
         return o;
     }
     if (mode == VU_CLIP_REGION) {
-        // On the PS2 any vertex outside the region sets ADC on itself and
-        // the next two, and the triangle is not drawn. That test is the
-        // camera's own: the program's, on the position as computed
-        // (VuVtx.inside, the tests' probe field), and the projection is
-        // the same at every aspect. The port's rule, one camera on the
-        // native frame (user decision 2026-10-11 after v0.6.0-rc1's forest
-        // shot: "don't draw things that would've been hidden, but 4:3 is
-        // not a separate viewport, it's a camera; don't render something
-        // that will get clipped off inside of the 4:3"), the same in both
-        // presets:
-        // - all three vertices inside: drawn exactly (vu_vtx_position, on
-        //   the ftoi4 grid);
-        // - a failing triangle under photo mode's free camera
-        //   (VU_F_BEHIND_EYE) is drawn, clipped by the GPU at the native
-        //   frustum (a walkway low under the camera left a hole);
-        // - a failing triangle whose GPU-clipped extent (0 <= z <= w, a
-        //   vertex behind the eye or not) reaches into the camera's
-        //   picture (GS 2048 -+ 256 across by the native height, the
-        //   drawing camera's, vu_cut_reaches_picture) is not
-        //   drawn, as the PS2 does not draw it: the opening's cliff
-        //   (st26a_p1, filmed from inside, vertices behind the eye) and the
-        //   forest's tree card (st26a_near, a vertex past the window, every
-        //   vertex 160 to 540 units in front of the eye) stay out of the
-        //   picture, and none is cut at the picture's edge (the waterfall's
-        //   mist, issue 57);
-        // - a failing triangle wholly beside the camera's picture (seen
-        //   only on a frame wider than 4:3) is drawn, clipped by the GPU at
-        //   the native frustum: there the PS2 showed nothing, and dropped
-        //   triangles left holes (a wall with one vertex past the window,
-        //   issue 29; at 48:9 a patch of the sea at the far left of the old
-        //   bridge whose only triangles there have a vertex behind the
-        //   eye). It never touches the picture, so nothing is discarded.
-        // At 4:3 the frame is the picture, so every failing triangle that
-        // could show reaches it: the picture is the PS2's in both presets.
-        // A drawn triangle with a vertex outside takes code 36's corner
-        // rule (vu_cut_position: the GS position where the vertex has one,
-        // the homogeneous form of h where it is behind the eye, saturated
-        // or below GS Z 0; every program computes h before the test). A
-        // HIDE triangle never reaches here (vu_content_hidden).
-        // Two differences from a code-36 draw of the same triangle remain:
-        // code 36's clipped triangles go through their own earlier pass
-        // with ABE forced on (rd_replay.c draws them as the VU's fans,
-        // PRIM 0x5D), which a code-32 draw does not, so a mesh whose clip
-        // code flips between 32 and 36 still changes the blending along its
-        // cut rim; and vu_later_out's bias needs all three GS positions, so
-        // a later-marked triangle with a corner saturated or below GS Z 0
-        // is drawn without it.
-        if (a.inside && b.inside && c.inside) {
+        // the region rule (vu_region_rule)
+        if (rule == VU_RULE_EXACT) {
             o.pos = vu_vtx_position(me);
-        } else if ((vu_draw.z & VU_F_BEHIND_EYE) != 0u ||
-                   !vu_cut_reaches_picture(vu_cut_position(a), vu_cut_position(b),
-                                           vu_cut_position(c))) {
+            exact = true;
+        } else if (rule == VU_RULE_CLIP) {
             o.pos = vu_cut_position(me);
+            exact = gsPos;
         }
         return o;
     }
-    // VU_CLIP_SCISSOR
+    // VU_CLIP_SCISSOR (VIS-RULES item 13, v0.6.1, kept: parity; RegistPacket.c
+    // also gives it the packets whose own box fails, item 4)
     uint fa = vu_clipw(a.clip), fb = vu_clipw(b.clip), fc = vu_clipw(c.clip);
     bool cut = (fa | fb | fc) != 0u;
     if ((cut && (vu_draw.z & VU_F_KICK_ONLY) != 0u) ||
@@ -512,18 +806,33 @@ VuVSOut vu_triangle_out(VuVtx a, VuVtx b, VuVtx c, VuVtx me, uint mode)
     }
     if (!cut) {
         o.pos = vu_vtx_position(me); // kicked as it is
+        exact = true;
     } else if ((fa & fb & fc) != 0u) {
         return o; // trivially rejected (the six fcor tests)
     } else if (((fa | fb | fc) & 0x30u) != 0u || min(a.h.w, min(b.h.w, c.h.w)) <= 0.0) {
         // SCISSOR_COMMON; the GPU clips (at 0 <= z <= w, not the VU's
         // z = -w: that would need SV_ClipDistance)
         o.pos = vu_cut_position(me);
+        exact = gsPos;
     } else {
         // only x/y flags: the VU clips to its guard band (the 1500 unit
         // clip window, wider than any target), the GS scissor does the rest
         o.pos = vu_vtx_position(me);
+        exact = true;
     }
     return o;
+}
+
+// The triangle k-2, k-1, k: what the GS draws of it, with its attribute
+// planes (vu_attr_planes). me is the corner this invocation outputs.
+// mode: VU_CLIP_*; the programs without a scissor or no-test variant pass
+// VU_CLIP_REGION whatever vu_draw.z says. rule: VU_CLIP_REGION's decision,
+// vu_region_rule with VU_RULE_STRIP resolved (the others ignore it).
+VuVSOut vu_triangle_out(VuVtx a, VuVtx b, VuVtx c, VuVtx me, uint mode, uint rule)
+{
+    bool exact;
+    VuVSOut o = vu_triangle_out_pos(a, b, c, me, mode, rule, exact);
+    return vu_attr_planes(o, a, b, c, exact);
 }
 
 // Issue 25: a triangle marked VU_INDEX_LATER and the earlier one it
@@ -587,7 +896,12 @@ VuVSOut vu_probe_out(uint vid, uint value)
     uint corner = vid % 3u;
     float2 px = float2(float(cell % VU_PROBE_FIELDS), float(cell / VU_PROBE_FIELDS));
     px += corner == 1u ? float2(1.5, 0.0) : (corner == 2u ? float2(0.0, 1.5) : float2(0.0, 0.0));
-    o.pos = float4(px.x * g_target.z * 2.0 - 1.0, 1.0 - px.y * g_target.w * 2.0, 0.5, 1.0);
+    // texel px of the target (under the exact viewport the target is the
+    // share g_misc.zw of it about its centre: common.hlsli fullscreen_triangle)
+    o.pos = g_vp.x != 0.0
+                ? float4((px.x + g_vpo.x) * g_vp.x - g_misc.z,
+                         g_misc.w - (px.y + g_vpo.y) * g_vp.y, 0.5, 1.0)
+                : float4(px.x * g_target.z * 2.0 - 1.0, 1.0 - px.y * g_target.w * 2.0, 0.5, 1.0);
     o.col = float4(float(value & 0xFFFFu), float(value >> 16), 0.0, 0.0);
     return o;
 }
@@ -630,6 +944,10 @@ Texture2D<float> g_dateSnap : register(t2, space2);
 // DATE; the entry (vu_prelit.hlsl) writes the result (GS_RETURN).
 uint4 vu_pixel(VuVSOut i)
 {
+    i = vu_pixel_attrs(i);
+    if ((g_mode.x & DF_PLANE) != 0u && i.plane < 0.0) {
+        discard;
+    }
     if ((g_mode.x & DF_DATE) != 0u) {
         if (gs_date_discard(g_mode.x, g_dateSnap.Load(int3(int2(i.pos.xy), 0)))) {
             discard;
@@ -653,6 +971,10 @@ uint4 vu_pixel(VuVSOut i)
 // planner gives it (the texture formats and TEXA modes of sprite_texa_ps).
 uint4 vu_pixel_texa(VuVSOut i)
 {
+    i = vu_pixel_attrs(i);
+    if ((g_mode.x & DF_PLANE) != 0u && i.plane < 0.0) {
+        discard;
+    }
     if ((g_mode.x & DF_DATE) != 0u) {
         if (gs_date_discard(g_mode.x, g_dateSnap.Load(int3(int2(i.pos.xy), 0)))) {
             discard;

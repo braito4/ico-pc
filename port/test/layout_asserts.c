@@ -1287,7 +1287,7 @@ OFF(AdpcmStream, remain, 0x50);
 OFF(AdpcmStream, pad54, 0x54);
 #endif
 
-/* AdpcmDataRec: overlay, ico2/fumi/include/adpcm_init.h:95 */
+/* AdpcmDataRec: overlay, ico2/fumi/include/adpcm_init.h:100 */
 OFF(AdpcmDataRec, path, 0x0);
 OFF(AdpcmDataRec, loopStart, 0x30);
 OFF(AdpcmDataRec, sectors, 0x34);
@@ -3144,6 +3144,14 @@ SIZE(HandModeCmd, 0x8); /* config */
 
 /* GamesysObjInfo: save, ico2/common/include/backStage.h:23 */
 SIZE(GamesysObjInfo, 0x40); /* config */
+
+/* Host sizes the game's code depends on.  The EE ClipWork is 0xC0 bytes; the host one
+ * is wider (WallCfg holds pointers), so a buffer sized from the EE record and cast to it
+ * is overrun (issue 71: item.c's avoidInsideOfWall; tools/struct_cast_audit.py looks for
+ * the rest).  item.c keeps its clip in a ClipWork itself and sets the radius by member. */
+_Static_assert(sizeof(ClipWork) == 0xF0, "the host ClipWork is 0xF0 bytes, not the EE's 0xC0");
+_Static_assert(sizeof(ClipWork) > 0xC0, "a 0xC0-byte buffer cannot hold a host ClipWork");
+_Static_assert(offsetof(ClipWork, radius) == 0x70, "ClipWork.radius at 0x70 on the host");
 
 int main(void)
 {

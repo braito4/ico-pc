@@ -56,4 +56,13 @@ void dpk_Init(void);
 void dpk_SwapBuffer(void);
 unsigned int dpk_CheckBufferSize(void);
 
+/* PC port: a bank's size on the EE (DmaPacket.c), the bytes of the current
+   bank written so far, and whether an object may still be registered: 0
+   (logged, before anything is written) once the fill has reached the
+   host's pad's end less DPK_HOST_RESERVE */
+#define DPK_EE_SIZE 524288
+
+long dpk_HostFill(void);
+int dpk_HostRoom(void);
+
 #endif /* DMAPACKET_H */

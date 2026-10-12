@@ -35,7 +35,19 @@ add_executable(mix_gain_test test/mix_gain_test.c)
 target_compile_options(mix_gain_test PRIVATE ${ICO_SEMANTIC_OPTIONS} ${ICO_PORT_WARNINGS})
 target_link_libraries(mix_gain_test PRIVATE ico_audio)
 
+# adpcm_slots_test: the request daemon's full-slot rule (issue 67): a stream
+# already fading out is closed at once and gives its slot up, else the PS2's
+# path runs.  The game's adpcm_init.c with the driver and disc stubbed.
+ico_include_dirs(fumi _ico_adpcm_slots_incs)
+add_executable(adpcm_slots_test test/adpcm_slots_test.c)
+target_include_directories(adpcm_slots_test PRIVATE ${_ico_adpcm_slots_incs}
+                           "${CMAKE_SOURCE_DIR}/port/include")
+target_compile_definitions(adpcm_slots_test PRIVATE ICO_HOST=1)
+target_compile_options(adpcm_slots_test PRIVATE ${ICO_SEMANTIC_OPTIONS} ${ICO_GAME_LAYOUT_OPTIONS}
+                       ${ICO_GAME_WARNINGS})
+
 if(ICO_RUN_TESTS)
+    add_test(NAME adpcm_slots COMMAND adpcm_slots_test)
     add_test(NAME volume COMMAND volume_test)
     add_test(NAME mix_gain COMMAND mix_gain_test)
     add_test(NAME adpcm COMMAND adpcm_test)

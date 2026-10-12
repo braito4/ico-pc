@@ -139,8 +139,11 @@ The window that asks for your disc image needs a small program named
 2. Start `ico_pc` once in Desktop Mode, so it can ask for your disc image
    and set itself up. Or put the image beside `ico_pc` named
    `Ico_PAL.iso` and skip the question.
-3. In Steam, choose **Add a Non-Steam Game**, browse to `ico_pc`, and add
-   it. It needs no launch options.
+3. Close Steam, start the game, and choose Options > Extras > Add to Steam on the
+   title screen
+   ([what it does](OPTIONS.md#extras)). Or add it by hand: in Steam, choose
+   **Add a Non-Steam Game**, browse to `ico_pc`, and add it. It needs no
+   launch options.
 4. Play it in Game Mode with the normal controller layout. The Deck's
    buttons work with no setup.
 

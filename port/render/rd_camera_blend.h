@@ -28,6 +28,14 @@
 #define RD_INTERP_CAMERA_MOVE 300.0f /* the eye, per tick */
 #define RD_INTERP_CAMERA_TURN 30.0f  /* degrees, per tick */
 
+/* The cull's margin while pictures are blended: the game's cull frustum
+ * (GsBase.c gsbHostCullMargin) is 1 + RD_CULL_MARGIN times the picture's
+ * half-width and half-height, so a part just past the picture's edge is
+ * still registered at the tick.  The presenter's test of whether a draw of
+ * the tick before alone can have gone because of that cull (rd_interp.c
+ * prevAlone) uses the same frustum, so the two agree on one number. */
+#define RD_CULL_MARGIN 0.12f
+
 /* The inverse of a column-major 4 x 4 (cofactors); 0 when singular */
 static inline int rdcb_invert4d(const double *a, double *o)
 {
@@ -378,16 +386,15 @@ static inline void rdcb_view_eye(const float *v, float eye[3])
     }
 }
 
-/* 1 when the camera turned more than RD_INTERP_CAMERA_TURN or its eye moved
- * more than RD_INTERP_CAMERA_MOVE between the views vp and vc (world to
- * view, column-major): the presenter's cut rule (rd_interp.c cameraJump),
- * in float as it computes it, so the cull and the presenter agree on the
- * same two matrices.  0 when either view's 3 x 3 is zero.  The float square
- * root and cosine go through the double functions: the game's files map
- * sqrtf and cosf to their own (port/compat/ico_libc.h), the renderer's do
- * not, and a float's square root rounded from the double's is the float
- * square root. */
-static inline int rdcb_camera_jump(const float *vp, const float *vc)
+/* 1 when the camera turned more than turnDeg degrees or its eye moved more
+ * than move units between the views vp and vc (world to view,
+ * column-major); 0 when either view's 3 x 3 is zero.  rdcb_camera_jump
+ * below is it at the presenter's limits; GsBase.c's cull also asks it at
+ * half of them (gsbHostCullViews).  The float square root and cosine go
+ * through the double functions: the game's files map sqrtf and cosf to
+ * their own (port/compat/ico_libc.h), the renderer's do not, and a float's
+ * square root rounded from the double's is the float square root. */
+static inline int rdcb_camera_beyond(const float *vp, const float *vc, float turnDeg, float move)
 {
     const float fp = rdcb_frob3(vp, vp), fc = rdcb_frob3(vc, vc);
     float cosT, a[3], b[3], x, y, z;
@@ -397,7 +404,7 @@ static inline int rdcb_camera_jump(const float *vp, const float *vc)
     }
     /* cos of the turn between the two rotations, scale removed */
     cosT = (3.0f * rdcb_frob3(vp, vc) / (float)sqrt((double)(fp * fc)) - 1.0f) * 0.5f;
-    if (cosT < (float)cos((double)(RD_INTERP_CAMERA_TURN * 3.14159265f / 180.0f))) {
+    if (cosT < (float)cos((double)(turnDeg * 3.14159265f / 180.0f))) {
         return 1;
     }
     rdcb_view_eye(vp, a);
@@ -405,7 +412,17 @@ static inline int rdcb_camera_jump(const float *vp, const float *vc)
     x = a[0] - b[0];
     y = a[1] - b[1];
     z = a[2] - b[2];
-    return (float)sqrt((double)(x * x + y * y + z * z)) > RD_INTERP_CAMERA_MOVE;
+    return (float)sqrt((double)(x * x + y * y + z * z)) > move;
+}
+
+/* 1 when the camera turned more than RD_INTERP_CAMERA_TURN or its eye moved
+ * more than RD_INTERP_CAMERA_MOVE between the views vp and vc (world to
+ * view, column-major): the presenter's cut rule (rd_interp.c cameraJump),
+ * in float as it computes it, so the cull and the presenter agree on the
+ * same two matrices. */
+static inline int rdcb_camera_jump(const float *vp, const float *vc)
+{
+    return rdcb_camera_beyond(vp, vc, RD_INTERP_CAMERA_TURN, RD_INTERP_CAMERA_MOVE);
 }
 
 #endif /* PORT_RENDER_RD_CAMERA_BLEND_H */

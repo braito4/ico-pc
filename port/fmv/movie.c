@@ -74,6 +74,10 @@ int sceGsSyncV(int mode);
 int movie_init(char *name, int imageW, int imageH, int dbx, int dby, int mono, int clearCol);
 void movie_end(void);
 int movie_proc(int (*poll)(void));
+/* port/game/gamestate.c: pad[0].now and .flags */
+void ico_game_pad0(int *now, int *flags);
+/* port/input/pad_host.c */
+const char *ico_input_start_source(void);
 
 #define READ_CHUNK 65536   /* readMpeg: strFileRead(strf, p, 65536, &eof) */
 #define ST_SECTORS 576     /* iosCdvdDirectStOpen: sceCdStInit(576, 36, ...) */
@@ -138,6 +142,7 @@ static struct {
     /* pacing */
     IcoMoviePace pace;
     uint32_t vsyncs;
+    uint32_t padLogAt; /* vsyncs at the last "fmv: pad" line */
     int callerPri;
 } mv;
 
@@ -947,6 +952,16 @@ static int readMpeg(int (*poll)(void))
         if (ico_movie_pace_poll_due(&mv.pace) && poll != NULL && poll() != 0) {
             mv.pace.abort_pending = 1; /* videoDecAbort */
             abort = 1;
+            ico_diag_log("fmv: skip (START, %s) at vsync %u", ico_input_start_source(), mv.vsyncs);
+        }
+        /* once a second: what the pad delivered to the poll (the game's
+           pad[0].now and .flags as movie_abort_check last read them) */
+        if (mv.vsyncs - mv.padLogAt >= 60) {
+            mv.padLogAt = mv.vsyncs;
+            int now, flags;
+            ico_game_pad0(&now, &flags);
+            ico_diag_log("fmv: pad now 0x%04x flags 0x%04x (Start is 0x0800), start source %s",
+                         (unsigned)now, (unsigned)flags, ico_input_start_source());
         }
         if (mv.pace.abort_pending &&
             ico_movie_pace_check_end(&mv.pace, mv.total, ev == ICO_PACE_FREE)) {

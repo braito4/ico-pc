@@ -38,8 +38,9 @@ if(ICO_RUN_TESTS)
 endif()
 
 # IsPointIsInScreen's x bound (ico2/omori/src/poly-flat.c, compiled into the
-# test) at gsFrame.w = 512 and wider: the PS2's window at 4:3, the native width
-# otherwise.  Stubs for the projection and the packet writers.
+# test) at gsFrame.w = 512 and wider: the PS2's 4:3 window at every width
+# (its callers are camera decisions, VIS-RULES item 19).  Stubs for the
+# projection and the packet writers.
 add_executable(poly_flat_test test/poly_flat_test.c)
 target_include_directories(poly_flat_test PRIVATE ${_ico_options_incs})
 target_compile_definitions(poly_flat_test PRIVATE ${ICO_GAME_DEFINITIONS})

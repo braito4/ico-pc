@@ -415,9 +415,11 @@ const char *const ui_strings_fr[UI_STR_COUNT] = {
     [UI_STR_PHOTO_ACT_SAVE] = "enregistrer une image",
     [UI_STR_PHOTO_ACT_HIDE] = "masquer ce panneau (mémorisé)",
     [UI_STR_PHOTO_ACT_BACK] = "retour",
+    [UI_STR_PHOTO_ACT_FILM] = "effet séquence (mémorisé)",
     [UI_STR_PHOTO_MOUSE_PREFIX] = "Souris",
     [UI_STR_PHOTO_UP] = "Haut",
     [UI_STR_PHOTO_DOWN] = "Bas",
+    [UI_STR_PHOTO_RIGHT] = "Droite",
     [UI_STR_SECTION_CHARACTERS] = "Personnalisation des personnages",
     [UI_STR_CHAR_ICO_SKIN] = "Ico : peau",
     [UI_STR_CHAR_ICO_PONCHO_NAVY] = "Ico : poncho, marine",
@@ -497,6 +499,9 @@ const char *const ui_strings_fr[UI_STR_COUNT] = {
     [UI_STR_OPT_DOOR_FIX] = "Porte du réflecteur est",
     [UI_STR_OPT_DOOR_FIX_NOTE] =
         "Main dans la main, Ico et Yorda ne ressortent plus aussitôt d’une porte.",
+    [UI_STR_OPT_NATURAL_CHAINS] = "Chaînes naturelles",
+    [UI_STR_OPT_NATURAL_CHAINS_NOTE] =
+        "Une chaîne qui descend pour Ico garde des maillons à la bonne taille tout du long.",
     [UI_STR_OPT_AA] = "Anticrénelage",
     [UI_STR_OPT_AA_NOTE] =
         "Atténue les bords crénelés. Le supersampling dessine l’image en plus grand puis la réduit ; le MSAA lisse les bords des formes.",
@@ -506,4 +511,17 @@ const char *const ui_strings_fr[UI_STR_COUNT] = {
     [UI_STR_AA_MSAA2] = "MSAA 2x",
     [UI_STR_AA_MSAA4] = "MSAA 4x",
     [UI_STR_AA_MSAA8] = "MSAA 8x",
+    [UI_STR_EXTRAS_STEAM] = "Ajouter à Steam",
+    [UI_STR_STEAM_ADDED] = "Ajouté à Steam",
+    [UI_STR_STEAM_ADDED_BODY] = "Lancer Steam et chercher ICO\ndans la bibliothèque.",
+    [UI_STR_STEAM_EXISTS] = "Déjà dans la bibliothèque Steam",
+    [UI_STR_STEAM_RUNNING] = "Fermer d’abord Steam",
+    [UI_STR_STEAM_RUNNING_BODY] = "Puis réessayer. Sur Steam Deck,\nutiliser le mode Bureau.",
+    [UI_STR_STEAM_NOT_FOUND] = "Steam est introuvable",
+    [UI_STR_STEAM_NOT_FOUND_BODY] = "Installer d’abord Steam.",
+    [UI_STR_STEAM_NO_USER] = "Aucun compte Steam trouvé",
+    [UI_STR_STEAM_NO_USER_BODY] = "Se connecter une fois à Steam,\npuis réessayer.",
+    [UI_STR_STEAM_FAILED] = "Ajout à Steam impossible",
+    [UI_STR_STEAM_FAILED_BODY] =
+        "La liste des raccourcis n’a pas pu être modifiée.\nLe README explique l’ajout manuel.",
 };

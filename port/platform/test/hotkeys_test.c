@@ -109,6 +109,17 @@ int main(void)
         CHECK(small[0] == '\0' && png[0] == '\0' && zip[0] == '\0');
     }
 
+    /* the presented picture's file */
+    {
+        char pp[128], tiny[16];
+
+        CHECK(ico_frame_present_path("/p/dumps", "20261005-073732", pp, sizeof(pp)) == 0);
+#ifndef _WIN32
+        CHECK(strcmp(pp, "/p/dumps/frame-20261005-073732-present.png") == 0);
+#endif
+        CHECK(ico_frame_present_path("/p/dumps", "x", tiny, sizeof(tiny)) == -1 && tiny[0] == '\0');
+    }
+
     printf("hotkeys_test: %s\n", fails ? "FAILED" : "ok");
     return fails ? 1 : 0;
 }

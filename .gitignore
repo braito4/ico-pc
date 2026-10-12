@@ -144,3 +144,6 @@ android/local.properties
 *.keystore
 android-keystores/
 /android-keystores
+
+# coverage_check.py: the previous run's pictures
+tools/.coverage/

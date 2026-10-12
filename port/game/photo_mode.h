@@ -20,6 +20,8 @@
  *   [photo] invert_y     false         the looking stick's up and down swapped (the
  *                                      right stick in the free camera, the left in orbit)
  *   [photo] hide_ui      false         the help panel hidden at enter (Square saves it)
+ *   [photo] film_effect  0             the Film effect photo mode shows, 0 (off) .. 4 (Right
+ *                                      cycles it, saved); the game's own setting is not touched
  *   [photo] png_dir      "screenshots" the captures' folder, in the pref folder
  *
  * Two cameras: the free camera (ICO_PHOTO_CAM_FREE, the one at enter) and
@@ -50,6 +52,8 @@
  *   Select          the current camera back to the game's view, and the
  *                   zoom (the other camera's state kept)
  *   Square          the help panel shown or hidden, saved as hide_ui
+ *   Right (d-pad)   the Film effect: Off, 1, 2, 3, 4, Off ... (saved as
+ *                   film_effect; shown whether or not the game is cleared)
  *   Cross           a capture (ico_photo_take_capture)
  *   Triangle, Circle, Start  leave (the proc goes back to the pause menu)
  * The pivot is the game camera's look-at point: the point of its forward
@@ -88,6 +92,7 @@ extern "C" {
 #define ICO_PHOTO_R3 0x0400u
 #define ICO_PHOTO_START 0x0800u
 #define ICO_PHOTO_UP 0x1000u
+#define ICO_PHOTO_RIGHT 0x2000u
 #define ICO_PHOTO_DOWN 0x4000u
 
 /* the cameras (IcoPhotoState.mode) */
@@ -185,9 +190,15 @@ void ico_photo_get(IcoPhotoState *out);
 /* ICO_PHOTO_CAM_FREE or ICO_PHOTO_CAM_ORBIT; ICO_PHOTO_SPEED_* */
 int ico_photo_mode(void);
 int ico_photo_speed(void);
-/* [photo]: stick_speed, invert_y, hide_ui, png_dir (read at each enter;
-   hide_ui also follows Square) */
+/* [photo]: stick_speed, invert_y, hide_ui, film_effect, png_dir (read at
+   each enter; hide_ui also follows Square, film_effect Right) */
 int ico_photo_hide_ui(void);
+/* The Film effect photo mode shows, 0 (off) .. ICO_PHOTO_FILM_MODES - 1:
+   the modes Options > Gameplay > Film effect has.  GsBase.c draws the
+   grain with it while photo mode is active, whatever the game's setting
+   and whether or not the game is cleared. */
+#define ICO_PHOTO_FILM_MODES 5
+int ico_photo_film(void);
 float ico_photo_stick_speed(void);
 const char *ico_photo_png_dir(void);
 /* The capture's file name for a local time (ico-YYYYMMDD-HHMMSS.png, then

@@ -82,7 +82,11 @@ static const char *const s_vsNames[RD_VS_COUNT] = {"sprite_ui_vs" /* indexed by 
                                                    "sprite_aa1_world_vs",
                                                    "sprite_stq_ui_vs",
                                                    "sprite_stq_world_vs",
-                                                   "crt_vs"};
+                                                   "crt_vs",
+                                                   "sprite_plane_ui_vs",
+                                                   "sprite_plane_world_vs",
+                                                   "sprite_stq_plane_ui_vs",
+                                                   "sprite_stq_plane_world_vs"};
 
 static const char *const s_fsNames[RD_FS_COUNT] = {"sprite_ps" /* indexed by RD_FS_* */,
                                                    "blit_ps",
@@ -611,6 +615,68 @@ RdUniform rd__frame_group_z(uint32_t targetW, uint32_t targetH, float originX, f
  * texel edges instead of texel centres */
 static bool s_frameNoHalf;
 
+/* The exact viewport (EXACT-RASTER, v0.6.1).  With the viewport the target
+ * itself, the 4:3 columns of a frame changed with its width (rd_native_test
+ * measured up to 160 pixels at 1x, 600 at 2x):
+ *  - the GPU clips a triangle at the viewport (the clip volume), and the
+ *    corners it makes there are float results off the GS's 1/16 grid, so
+ *    a triangle reaching past the target had its edges inside it moved by
+ *    a rounding, and a pixel centre on such an edge (a tie the fill rule
+ *    decides) went the other way; the target's edge is at another GS
+ *    column at every width (at W 512 it is the 4:3 band's own edge);
+ *  - the positions went to clip space through 1 / the target's size and
+ *    back through the GPU's multiply by half of it, exact only at a power
+ *    of two (the GPU's sub-pixel snap absorbs that for a corner on the 1/16
+ *    grid, not for a corner the GPU clipped at the eye);
+ *  - the colours and STs the GPU interpolates depend on the pixel's place
+ *    in the target (vu_common.hlsli vu_attr_planes, the VU programs' fix).
+ * Every pass the replay records instead has one viewport size, the largest
+ * power of two the GPU takes (vpExtent; it reaches far past the target and
+ * the scissor, always set within the target, bounds the drawing), centred
+ * on the target, and FrameCB maps positions to it (rd__frame_group_ex,
+ * common.hlsli gs_px_to_ndc): offset from the target's centre, times the
+ * scale, plus the half texel, times 2 / the size, then the GPU's multiply
+ * by half the size: every step exact for a GS position at an integer
+ * scale, and the same clip-space numbers at every width (a frame-wide
+ * target's centre is GS 2048), so the GPU clips the same corners the same
+ * way whatever the width (and almost never at the sides).
+ * On while replayFrame records its lists; the present, the films and the
+ * camera probe keep the plain mapping (FrameCB vp 0). */
+static bool s_vpExact;
+
+/* The exact viewport's size for a target n texels across: the largest
+ * power of two the GPU's viewport takes (maxRenderTargetSize is at most its
+ * viewport limit; 16384 at most, D3D12's viewport bounds), the same for
+ * every target, so the clip-space positions, and the GPU's clipping of a
+ * triangle that reaches past the viewport, are the same at every frame
+ * width; n itself where that is smaller than n */
+static uint32_t vpExtent(uint32_t n)
+{
+    const uint32_t lim = g_rd.hasDevice ? rhi_limits()->maxRenderTargetSize : 16384u;
+    uint32_t p = 16384u;
+    while (p > lim) {
+        p >>= 1;
+    }
+    return p >= n ? p : n;
+}
+
+/* a replay pass's viewport for a target w x h texels: the exact one while
+ * replayFrame records, else the target */
+static void setViewport(uint32_t w, uint32_t h)
+{
+    RhiViewport vp = {0.0f, 0.0f, (float)w, (float)h, 0.0f, 1.0f};
+    if (s_vpExact) {
+        const uint32_t pw = vpExtent(w), ph = vpExtent(h);
+        /* on a whole texel (an odd-sized target's centre is half a texel
+         * past the viewport's: FrameCB vpo carries it) */
+        vp.x = floorf(((float)w - (float)pw) * 0.5f);
+        vp.y = floorf(((float)h - (float)ph) * 0.5f);
+        vp.w = (float)pw;
+        vp.h = (float)ph;
+    }
+    rhi_cmd_set_viewport(s_cl, &vp);
+}
+
 /* the camera's picture of the frame group being made (Replay.picture), and
  * the height of the frame it is drawn on (0: the native height) */
 static uint32_t s_framePicture, s_framePictureFrameH;
@@ -670,6 +736,26 @@ RdUniform rd__frame_group_ex(uint32_t targetW, uint32_t targetH, float originX, 
                   : 0.0f;
     cb.misc[0] = (float)g_rd.replayCounter;
     cb.misc[1] = (float)g_rd.settings.preset;
+    if (s_vpExact && targetW && targetH) {
+        /* the viewport setViewport gives the target: its texture size is
+         * rd_core.c rd__target_scale_of's (scaled), the target's texels per
+         * GS pixel that over the GS size (the scale itself at an integer
+         * scale) */
+        const uint32_t tw = scaleX == 1.0f ? targetW : (uint32_t)((float)targetW * scaleX + 0.5f);
+        const uint32_t th = scaleY == 1.0f ? targetH : (uint32_t)((float)targetH * scaleY + 0.5f);
+        const uint32_t pw = vpExtent(tw ? tw : 1), ph = vpExtent(th ? th : 1);
+        cb.vp[0] = 2.0f / (float)pw;
+        cb.vp[1] = 2.0f / (float)ph;
+        cb.vp[2] = (float)tw / (float)targetW;
+        cb.vp[3] = (float)th / (float)targetH;
+        cb.frame[3] = s_frameNoHalf ? 0.0f : 0.5f;
+        cb.misc[2] = (float)tw / (float)pw;
+        cb.misc[3] = (float)th / (float)ph;
+        /* the target's centre less the viewport's (setViewport: its origin
+         * floor((w - P) / 2)): 0, or 0.5 for an odd size */
+        cb.vpo[0] = (float)tw * 0.5f - (floorf(((float)tw - (float)pw) * 0.5f) + (float)pw * 0.5f);
+        cb.vpo[1] = (float)th * 0.5f - (floorf(((float)th - (float)ph) * 0.5f) + (float)ph * 0.5f);
+    }
     return uniformGroup(g_rd.layoutFrame, 0, &cb, sizeof(cb));
 }
 
@@ -1088,8 +1174,7 @@ static void beginPass(Replay *r, RdTargetRec *c, RdTargetRec *d, uint32_t cid, u
     p.width = c->tw;
     p.height = c->th;
     rhi_cmd_begin_render_pass(s_cl, &p);
-    RhiViewport vp = {0.0f, 0.0f, (float)c->tw, (float)c->th, 0.0f, 1.0f};
-    rhi_cmd_set_viewport(s_cl, &vp);
+    setViewport(c->tw, c->th);
     r->passOpen = 1;
     r->passColor = cid;
     r->passDepth = did;
@@ -1124,9 +1209,20 @@ static void beginPass(Replay *r, RdTargetRec *c, RdTargetRec *d, uint32_t cid, u
  *    the replay (dumps and readbacks then read the resolved SCENE);
  *  - closing resolves: the colour by rhi_cmd_resolve_color (the mean of the
  *    samples) into SCENE's colour, the depth by depth_resolve_ps (the
- *    largest sample: the nearest under GEQUAL) into SCENE's depth, each
+ *    smallest sample: the farthest under GEQUAL) into SCENE's depth, each
  *    only when the epoch drew it.  Everything after draws single-sampled;
- *    the epoch does not open again in the replay;
+ *    the epoch does not open again in the replay.  The smallest because the
+ *    sample patterns are centred on the pixel centre: on a plane it is at
+ *    or below the centre's depth, so a surface the game draws again after
+ *    the close with GEQUAL against SCENE's depth (the flare mask's and the
+ *    aura's re-draws of the glowing meshes, issue 43) passes on every
+ *    pixel it passed at 1x; the largest sample lies above the centre on
+ *    any slope and failed nearly all of them.  The cost is on silhouettes:
+ *    a pixel shared by a near and a far surface resolves to the far one,
+ *    so a pass after the close treats it as the far surface (the largest
+ *    made it the near one: the same one-pixel error on the other side);
+ *    inside a surface every pass after the close sees the 1x depth or
+ *    below it by under a pixel's slope;
  *  - the fog inside the epoch, with sample-rate shading and the depth drawn
  *    in it, runs per sample (fog_lut_ms_ps reading SCENE_MS's depth at
  *    SV_SampleIndex) and keeps the epoch open; otherwise its depth read
@@ -1275,8 +1371,7 @@ static void msaaUpsample(RdTargetRec *ts, int depth)
     p.width = s_ms.w;
     p.height = s_ms.h;
     rhi_cmd_begin_render_pass(s_cl, &p);
-    const RhiViewport vp = {0.0f, 0.0f, (float)s_ms.w, (float)s_ms.h, 0.0f, 1.0f};
-    rhi_cmd_set_viewport(s_cl, &vp);
+    setViewport(s_ms.w, s_ms.h);
     g_rd.passSamples = (uint8_t)s_ms.samples;
     if (!depth) {
         msaaFullscreen(RD_FS_BLIT, RHI_FMT_RGBA8_UNORM, ts->color, RHI_ASPECT_COLOR, s_ms.w,
@@ -1347,8 +1442,7 @@ static void msaaEnd(struct Replay *r)
         p.width = ts->tw;
         p.height = ts->th;
         rhi_cmd_begin_render_pass(s_cl, &p);
-        const RhiViewport vp = {0.0f, 0.0f, (float)ts->tw, (float)ts->th, 0.0f, 1.0f};
-        rhi_cmd_set_viewport(s_cl, &vp);
+        setViewport(ts->tw, ts->th);
         msaaFullscreen(RD_FS_DEPTH_RESOLVE, RHI_FMT_UNKNOWN, s_ms.depth, RHI_ASPECT_DEPTH, ts->tw,
                        ts->th);
         rhi_cmd_end_render_pass(s_cl);
@@ -2020,8 +2114,7 @@ static RhiTexture dateSnapshot(Replay *r, RdTargetRec *tc, uint32_t tcId, const 
     p.width = sn->tw;
     p.height = sn->th;
     rhi_cmd_begin_render_pass(s_cl, &p);
-    RhiViewport vp = {0.0f, 0.0f, (float)w, (float)h, 0.0f, 1.0f};
-    rhi_cmd_set_viewport(s_cl, &vp);
+    setViewport(w, h);
     /* the same full-target triangle and viewport, cut to the area */
     rhi_cmd_set_scissor(s_cl, &take);
     RdPipeKeyInt k = rd__post_key(RD_VS_BLIT, RD_FS_DATE_SNAP, RHI_FMT_R8_UNORM);
@@ -2428,6 +2521,32 @@ static RdWrap drawWrap(const Replay *r, const DrawSetup *ds, RdWrap w)
     return t && t->kind == RD_TEXKIND_TARGET ? RD_WRAP_CLAMP : w;
 }
 
+/* FrameCB of the draw (r->frameBG), made again when the target, the frame
+ * size, the offset, the pass or the camera's picture changed since the last
+ * draw */
+static void frameRefresh(Replay *r, const DrawSetup *ds)
+{
+    const RdTargetRec *tc = ds->tc;
+    const uint32_t useOffset = drawOffset(r, ds);
+    const uint32_t fk[6] = {r->st.color, r->st.gsW,     r->st.gsH,
+                            useOffset,   r->passSerial, r->picture};
+    if (memcmp(fk, r->frameKey, sizeof(fk)) != 0) {
+        /* XYOFFSET = (2048 - w/2, 2048 - h/2), w the native frame's width
+         * (+ the preset's field offset when useOffset; zero in Original) */
+        float ox = 2048.0f - (float)(r->st.gsW >> 1);
+        float oy = 2048.0f - (float)(r->st.gsH >> 1);
+        if (useOffset & RD_TARGET_HALF_Y) {
+            oy += 0.5f; /* the flip's sceGsSetHalfOffset */
+        }
+        s_framePicture = r->picture;
+        s_framePictureFrameH = r->st.gsH;
+        r->frameBG = rd__frame_group_ex(tc->w, tc->h, ox, oy, rd__target_z_scale(ds->tdId),
+                                        rd__region_scale(tc), tc->sx, tc->sy);
+        s_framePicture = s_framePictureFrameH = 0;
+        memcpy(r->frameKey, fk, sizeof(fk));
+    }
+}
+
 /* The scissor, the pass and FrameCB; returns the texture group, id 0 when
  * the scissor leaves nothing to draw.  With scOut the scissor is returned
  * (doScreen sets it when it draws) instead of set, and the sampler's id
@@ -2457,24 +2576,7 @@ static RhiBindGroup bindDrawEx(Replay *r, const DrawSetup *ds, RhiRect *scOut, u
         beginPass(r, tc, ds->tdId ? rd__target_rec(ds->tdId) : NULL, r->st.color, ds->tdId,
                   RHI_LOAD_LOAD, NULL, RHI_LOAD_LOAD, 0.0f, false);
     }
-    const uint32_t useOffset = drawOffset(r, ds);
-    const uint32_t fk[6] = {r->st.color, r->st.gsW,     r->st.gsH,
-                            useOffset,   r->passSerial, r->picture};
-    if (memcmp(fk, r->frameKey, sizeof(fk)) != 0) {
-        /* XYOFFSET = (2048 - w/2, 2048 - h/2), w the native frame's width
-         * (+ the preset's field offset when useOffset; zero in Original) */
-        float ox = 2048.0f - (float)(r->st.gsW >> 1);
-        float oy = 2048.0f - (float)(r->st.gsH >> 1);
-        if (useOffset & RD_TARGET_HALF_Y) {
-            oy += 0.5f; /* the flip's sceGsSetHalfOffset */
-        }
-        s_framePicture = r->picture;
-        s_framePictureFrameH = r->st.gsH;
-        r->frameBG = rd__frame_group_ex(tc->w, tc->h, ox, oy, rd__target_z_scale(ds->tdId),
-                                        rd__region_scale(tc), tc->sx, tc->sy);
-        s_framePicture = s_framePictureFrameH = 0;
-        memcpy(r->frameKey, fk, sizeof(fk));
-    }
+    frameRefresh(r, ds);
     if (scOut) {
         *scOut = sc;
         *smpOut = smp.id;
@@ -2667,6 +2769,22 @@ static void fillDrawCB(const Replay *r, const RdDrawPass *dp, const DrawSetup *d
     if (ds->textured && ds->gsLevels) {
         cb->mode[0] |= ICO_DF_GS_LOD;
         cb->blend[3] = gsLodWord(r, ds);
+    }
+    if (ds->textured && !ds->replacement && r->st.ds.magFilter == RD_FILTER_NEAREST &&
+        r->st.ds.minFilter == RD_FILTER_NEAREST) {
+        /* nearest both ways (on the one-level sampler texSampler binds, or
+         * at the GS's level): the GS's texel at a texel boundary
+         * (common.hlsli gs_nearest_texel), not whichever side the
+         * interpolated UV's rounding falls on, which depends on the pixel's
+         * place in the target (a 4:3 column of a wide frame took other
+         * texels than the 4:3 frame).  At the GS's level the shader loads
+         * the texels itself (gs_sample_lod_nearest), wrapped as the sampler
+         * (gsLodSampler) wraps */
+        cb->mode[0] |= ICO_DF_NEAREST;
+        if (ds->gsLevels) {
+            cb->mode[0] |= (drawWrap(r, ds, (RdWrap)r->st.ds.wrap.s) ? ICO_DF_TEXA_CLAMP_S : 0u) |
+                           (drawWrap(r, ds, (RdWrap)r->st.ds.wrap.t) ? ICO_DF_TEXA_CLAMP_T : 0u);
+        }
     }
     cb->mode[2] = dp->modeZ;
     cb->mode[3] = dp->aref;
@@ -3183,6 +3301,23 @@ static void doScreen(Replay *r, const RdFrame *f, const RdCmd *c)
             stride = sizeof(IcoSpriteStqVertex);
         }
     }
+    /* EXACT-RASTER: a triangle command's triangles with their planes
+     * (rd_screen_planes.c); sprites and points keep their axis-aligned path */
+    if (!aa1 && s_vpExact && topo == RD_PRIM_TRIANGLES && c->b[0] != RD_PRIM_SPRITES &&
+        c->b[0] != RD_PRIM_POINTS && nv % 3 == 0) {
+        RdDrawPass pp[2];
+        int planes = 1;
+        memcpy(pp, dp, sizeof(pp));
+        for (int i = 0; i < np && planes; i++) {
+            planes = rd__plane_pass(&pp[i]);
+        }
+        const IcoSpritePlaneVertex *pv = planes ? rd__screen_planes(vb, stride, nv) : NULL;
+        if (pv) {
+            memcpy(dp, pp, sizeof(pp));
+            vb = pv;
+            stride = sizeof(IcoSpritePlaneVertex);
+        }
+    }
     uint32_t nDraw = nv, nFirst = nv;
     if (aa1) {
         int split = 0;
@@ -3238,12 +3373,16 @@ static void doScreen(Replay *r, const RdFrame *f, const RdCmd *c)
         /* the open pass of the kind the run draws in (a run of the other
          * kind is drawn by the switch, in its own) */
         dstPassMode(r, &ex[0].key);
+        /* a switch to the storage pass began a new pass: the draw's FrameCB
+         * is the one the next command of the run finds (else every run
+         * under the storage blend broke after its first command) */
+        frameRefresh(r, &ds);
         nr.key = ex[0].key;
         nr.count = nDraw;
         nr.stride = stride;
         nr.prim = c->b[0];
         nr.pipe = p;
-        nr.frame = frame;
+        nr.frame = msExpand ? frame : r->frameBG;
         fillDrawCB(r, &ex[0], &ds, &nr.cb);
         nr.passes = (uint8_t)ne;
         memset(&nr.key2, 0, sizeof(nr.key2));
@@ -3672,8 +3811,7 @@ static void doScreenWrap(Replay *r, const RdFrame *f, const RdCmd *c)
     p.width = tc->tw;
     p.height = tc->th;
     rhi_cmd_begin_render_pass(s_cl, &p);
-    const RhiViewport vp = {0.0f, 0.0f, (float)tc->tw, (float)tc->th, 0.0f, 1.0f};
-    rhi_cmd_set_viewport(s_cl, &vp);
+    setViewport(tc->tw, tc->th);
     rhi_cmd_set_scissor(s_cl, &sc);
     float ox = 2048.0f - (float)(r->st.gsW >> 1);
     float oy = 2048.0f - (float)(r->st.gsH >> 1);
@@ -3869,6 +4007,12 @@ static void vuDraw(Replay *r, const RdStateBlock *s, const DrawSetup *ds, RhiBin
         pl[i].key.vs = vs;
         /* the planner's sprite_texa_ps becomes vu_texa_ps */
         pl[i].key.fs = pl[i].key.fs == RD_FS_SPRITE_TEXA ? RD_FS_VU_TEXA : RD_FS_VU;
+        if (vcb->batch[2] != 0u) {
+            /* a clip plane (rd_chain.h): the pixels past it are discarded,
+             * which the exact blend's storage path must know (rd_dst_read.c
+             * passDiscards) */
+            pl[i].flags |= ICO_DF_PLANE;
+        }
     }
     /* the exact blend's passes, two passes without dual-source blend */
     const int np = expandPasses(r, pl, npl, dp);
@@ -3909,6 +4053,18 @@ static void vuDraw(Replay *r, const RdStateBlock *s, const DrawSetup *ds, RhiBin
 }
 
 static void doVuDraw(Replay *r, const RdFrame *f, const RdCmd *c);
+
+/* VIS-WINDOW (v0.6.1): whether the picture is not the PS2's out of the box,
+ * the Original preset on a 4:3 frame at 1x (ICO_VU_EXTENDED; the region
+ * rule, vu_common.hlsli vu_region_rule): the Enhanced preset, a frame
+ * wider than 4:3 or a scene scale above 1.  The user's ruling
+ * (2026-10-12): out of the box the PS2's behaviour stays; any other state
+ * draws what a game made for that picture would draw. */
+static bool vuExtended(void)
+{
+    return g_rd.settings.preset != RD_PRESET_ORIGINAL || g_rd.gsW > ICO_SH_FRAME_BASE_W ||
+           g_rd.sceneSx > 1.0f || g_rd.sceneSy > 1.0f;
+}
 
 /* A VU draw under its camera's picture (Replay.picture: the frame group's
  * g_frame.yz) */
@@ -3995,9 +4151,21 @@ static void doVuDraw(Replay *r, const RdFrame *f, const RdCmd *c)
     const uint8_t vs = vuVs(p.prog, p.code);
     vcb.draw[0] = 0;
     vcb.draw[2] = p.clip;
+    if (c->type == RDC_MESH && c->b[5] != 0) {
+        /* a clip plane in the model's space (rd_chain.h, rd_mesh.c's b[5]
+         * and f[0]): vu_batch.z its code, w its offset (vu_common.hlsli
+         * vu_plane_distance) */
+        vcb.batch[2] = c->b[5];
+        memcpy(&vcb.batch[3], &c->f[0], sizeof(vcb.batch[3]));
+    }
     if (f->camera.freeCamera) {
         /* photo mode: behind-eye triangles clipped, not dropped */
         vcb.draw[2] |= ICO_VU_BEHIND_EYE;
+    }
+    if (vuExtended()) {
+        /* a triangle the region test drops is clipped unless it belongs
+         * to a card (vu_region_rule) */
+        vcb.draw[2] |= ICO_VU_EXTENDED;
     }
 
     if (c->type == RDC_GRID) {
@@ -4008,16 +4176,25 @@ static void doVuDraw(Replay *r, const RdFrame *f, const RdCmd *c)
         vcb.draw[3] = vpb;
         vcb.batch[0] = 3;
         vcb.batch[1] = 1;
+        /* the strip test's bounds: every vertex of the buffer (a batch is
+         * one strip) */
+        vcb.strip[0] = 0;
+        vcb.strip[1] = p.batchCount * vpb;
         const uint32_t ni = p.batchCount * (vpb - 2) * 3;
         const uint64_t iOff = rd__ring_alloc((uint64_t)ni * 4, 16);
         if (iOff == ~0ull) {
             return;
         }
         uint32_t *idx = (uint32_t *)(g_rd.ringMap[s_slot] + iOff);
+        /* VIS-WINDOW: strip i is the grid's rows i and i + 1
+         * (Primitive.c prim_UpdateMesh3D), so with two strips or more
+         * every strip shares a row of positions with a neighbour: joined,
+         * never a card (vu_region_rule) */
+        const uint32_t mark = p.batchCount >= 2 ? ICO_VU_INDEX_JOINED : 0u;
         for (uint32_t b = 0, k = 0; b < p.batchCount; b++) {
             for (uint32_t v = 2; v < vpb; v++) {
                 for (uint32_t cc = 0; cc < 3; cc++) {
-                    idx[k++] = ICO_VU_INDEX(b * vpb + v, cc);
+                    idx[k++] = ICO_VU_INDEX(b * vpb + v, cc) | mark;
                 }
             }
         }
@@ -4049,6 +4226,9 @@ static void doVuDraw(Replay *r, const RdFrame *f, const RdCmd *c)
     if (last > m->batchCount || p.batchCount == 0) {
         last = m->batchCount;
     }
+    /* the strip test's bounds: the draw's vertices (its batches') */
+    vcb.strip[0] = m->batches[p.firstBatch].firstVertex;
+    vcb.strip[1] = m->batches[last - 1].firstVertex + m->batches[last - 1].vertexCount;
     if (p.clip != RD_VU_CLIP_SCISSOR) {
         const RdVuBatchRec *b0 = &m->batches[p.firstBatch], *b1 = &m->batches[last - 1];
         vuDraw(r, &r->st, &ds, g2, p.prog, vs, streamBuf, streamBufSize, streamOff, streamSize,
@@ -4116,8 +4296,7 @@ static void doExact(Replay *r, const RdCmd *c)
     p.width = w;
     p.height = h;
     rhi_cmd_begin_render_pass(s_cl, &p);
-    RhiViewport vp = {0.0f, 0.0f, (float)w, (float)h, 0.0f, 1.0f};
-    rhi_cmd_set_viewport(s_cl, &vp);
+    setViewport(w, h);
     rhi_cmd_set_scissor(s_cl, &all);
     RdPipeKeyInt k = rd__post_key(RD_VS_BLEND_INT, RD_FS_BLEND_INT, RHI_FMT_RGBA8_UINT);
     RhiPipeline pipe = rd__get_pipeline(&k);
@@ -4374,8 +4553,7 @@ static void shadowReduce(Replay *r, RdTargetRec *tc)
     p.width = tc->w;
     p.height = tc->h;
     rhi_cmd_begin_render_pass(s_cl, &p);
-    RhiViewport vp = {0.0f, 0.0f, (float)tc->w, (float)tc->h, 0.0f, 1.0f};
-    rhi_cmd_set_viewport(s_cl, &vp);
+    setViewport(tc->w, tc->h);
     const RhiRect all = {0, 0, tc->w, tc->h};
     rhi_cmd_set_scissor(s_cl, &all);
     IcoDrawCB cb;
@@ -5119,6 +5297,8 @@ static uint64_t estimateRing(const RdFrame *f, int keep)
             total += 4 * align;
             if (c->type == RDC_SCREEN) {
                 total += (uint64_t)c->u[1] * 6 * sizeof(IcoSpriteVertex) + 16;
+                /* a triangle command's planes: at most 3 vertices a vertex */
+                total += (uint64_t)c->u[1] * 3 * sizeof(IcoSpritePlaneVertex) + 16;
                 if (hasAa1) {
                     total += (uint64_t)c->u[1] * 21 * sizeof(IcoSpriteAa1Vertex) + 16;
                 }
@@ -5148,6 +5328,13 @@ static uint64_t estimateRing(const RdFrame *f, int keep)
             }
         }
     }
+    return total + rd__texture_ring_bytes();
+}
+
+uint64_t rd__texture_ring_bytes(void)
+{
+    const uint64_t pitchA = rhi_limits()->copyRowPitchAlign;
+    uint64_t total = 0;
     const bool walk = g_rd.texDirtyCount != 0 || g_rd.texLevelsFilter != (int)g_rd.filterUpgrade;
     for (uint32_t i = 0; walk && i < RD_MAX_TEXTURES; i++) {
         const RdTexRec *t = &g_rd.textures[i];
@@ -5466,6 +5653,14 @@ static void uploadTextures(void)
  * ring and one buffer copy each, all before the first pass.  The
  * interpolation's scratch meshes (transient) and a mesh the arena has no
  * room for stay on the ring path in doVu. */
+void rd__upload_textures(RhiCommandList cl)
+{
+    const RhiCommandList prev = s_cl;
+    s_cl = cl;
+    uploadTextures();
+    s_cl = prev;
+}
+
 static void uploadMeshes(const RdFrame *f, int keep)
 {
     const uint64_t ua = rhi_limits()->uniformAlign;
@@ -5642,6 +5837,7 @@ static bool replayFrame(const RdFrame *f, int keep, bool present)
     if (!s_cl.id) {
         return false;
     }
+    s_vpExact = true; /* the lists' passes: the exact viewport (setViewport) */
     rd__perf_stamp(s_cl, RD_PERF_TS_BEGIN);
     /* no shadow window from another replay (clearNewTargets reads it) */
     memset(&s_stencil, 0, sizeof(s_stencil));
@@ -5741,6 +5937,7 @@ static bool replayFrame(const RdFrame *f, int keep, bool present)
     msaaEnd(&r); /* an epoch still open: SCENE resolved before anything reads it */
     endPass(&r);
     s_ms.r = NULL;
+    s_vpExact = false; /* the present sets its own viewports */
     if (doPresent) {
         rd__present_record(s_cl);
         rd__perf_stamp(s_cl, RD_PERF_TS_PRESENT);

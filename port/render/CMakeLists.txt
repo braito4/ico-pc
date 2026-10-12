@@ -104,6 +104,7 @@ add_library(ico_render STATIC
     rd_interp.c # interpolation between the retained frames
     rd_mesh.c
     rd_content_hide.c # the content table: stage geometry made for the 4:3 picture
+    rd_content_chain.c # Natural chains: the chains a stage animation lets down
     modelpack.c # model packs, the index, the glTF conversion, the dump
     rd_perf.c # per-replay performance records
     rd_pipeline.c
@@ -111,6 +112,7 @@ add_library(ico_render STATIC
     rd_post.c
     rd_present.c
     rd_replay.c
+    rd_screen_planes.c # EXACT-RASTER: the screen-prim triangles' planes
     rd_shadow.c
     rd_tex.c
     rd_water.c # block targets, aliases, camera scopes
@@ -168,9 +170,9 @@ target_link_libraries(rd_pixel_test PRIVATE ico_render ico_sheet_ref)
 
 # rd_native_test: one synthetic game frame (VU triangles, UI and full-frame
 # sprites, the DISPLAY reduction) at native widths 512..2560: the centre
-# columns equal the 512 render's and no step at the old band edges (Gate B).
-# The wide cases run with ICO_NATIVE_GATE=1 (the gate once W2 has landed);
-# without it only W = 512 is checked and the test exits 77.
+# columns equal the 512 render's, the sides continue exactly (a narrower
+# frame is the widest one's centre) and no step at the old band edges
+# (Gate B); corners on pixel boundaries cover the same pixels at every width.
 add_executable(rd_native_test test/rd_native_test.c)
 target_include_directories(rd_native_test PRIVATE "${CMAKE_SOURCE_DIR}/port/shaders"
                            "${CMAKE_SOURCE_DIR}/port/rhi")
@@ -359,6 +361,7 @@ target_link_libraries(rd_boot_present_test PRIVATE ico_render)
 # without one); the title logo's strips Packet.c draws in another order,
 # their geometry from the disc image when there is one.
 add_executable(rd_mesh_test test/rd_mesh_test.c
+    "${CMAKE_SOURCE_DIR}/ico2/common/src/PObj.c"
     "${CMAKE_SOURCE_DIR}/ico2/seki/src/Packet.c"
     "${CMAKE_SOURCE_DIR}/ico2/seki/src/RegistPacket.c"
     "${CMAKE_SOURCE_DIR}/ico2/seki/src/MicroCode.c"
@@ -375,7 +378,8 @@ target_compile_definitions(rd_mesh_test PRIVATE ICO_HOST=1 ICO_RD=1)
 target_compile_options(rd_mesh_test PRIVATE ${ICO_SEMANTIC_OPTIONS} ${ICO_GAME_LAYOUT_OPTIONS}
                        ${ICO_GAME_WARNINGS})
 # the strip order case reads the title logo's models from the disc image
-# (df_pack.h); without it that part is skipped
+# (df_pack.h); without it that part is skipped.  PObj.c: the boxes case loads
+# every model on the disc through the game's own loader (VIS-RULES, v0.6.1)
 target_link_libraries(rd_mesh_test PRIVATE ico_render ico_vu1_ref ico_math ico_port_data)
 
 # modelpack_test: model packs.  The same game files as
@@ -695,6 +699,19 @@ if(ICO_RUN_TESTS)
         set_tests_properties(native_frame_gate_a native_frame_gate_b native_frame_check_selftest
                              PROPERTIES SKIP_RETURN_CODE 77)
         set_tests_properties(native_frame_gate_a PROPERTIES TIMEOUT 3600)
+        # the regression renders (tools/coverage_check.py, tools/coverage_corpus.txt): every
+        # corpus dump at its own aspect, per-mesh draw counts and the pixel change against the
+        # previous run's pictures in tools/.coverage.  Seed the baseline after a build with
+        #   python3 -I tools/coverage_check.py seed --tool <rd_replay_tool>
+        # Skips (77) when the dumps, the tool or Pillow are absent.
+        set(ICO_COV "${CMAKE_SOURCE_DIR}/tools/coverage_check.py")
+        add_test(NAME coverage_corpus
+                 COMMAND "${Python3_EXECUTABLE}" -I "${ICO_COV}" check --ctest
+                         --tool $<TARGET_FILE:rd_replay_tool>)
+        add_test(NAME coverage_check_selftest
+                 COMMAND "${Python3_EXECUTABLE}" -I "${ICO_COV}" selftest)
+        set_tests_properties(coverage_corpus coverage_check_selftest PROPERTIES SKIP_RETURN_CODE 77)
+        set_tests_properties(coverage_corpus PROPERTIES TIMEOUT 3600)
     endif()
     add_test(NAME rd_water COMMAND rd_water_test)
     set_tests_properties(rd_water PROPERTIES SKIP_RETURN_CODE 77)

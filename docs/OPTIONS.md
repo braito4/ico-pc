@@ -61,7 +61,9 @@ How the picture looks.
   textures) but needs more from your graphics card. **MSAA 2x**, **4x** and
   **8x** smooth the edges of shapes and are lighter to run; they only appear
   when your graphics card supports them. This row only works with the
-  Enhanced preset.
+  Enhanced preset. It always shows what is in use: **Off** under the
+  Original preset, and **Off** when your graphics card cannot do the choice
+  you saved.
 - **Window mode** is **Windowed** (a normal window), **Borderless** (a
   window without a frame that fills the whole screen, so switching to
   another program is quick) or **Fullscreen**. In Steam Deck Game Mode the
@@ -79,7 +81,10 @@ How the picture looks.
   Uncapped. With Vertical sync on, Uncapped follows your
   screen: one new picture each time the screen shows one (and never
   fewer than sixty a second where the screen can take them). With it off,
-  Uncapped draws as fast as your computer can. On Android it starts at 60.
+  Uncapped draws as fast as your computer can. A limit equal to your
+  screen's refresh rate (60 on a 60 Hz screen, 120 on a 120 Hz screen)
+  follows the screen, so motion stays smooth, and the 144 and 240 limits
+  reach their rate. On Android it starts at 60.
 - **Video mode** is PAL 50 Hz or 60 Hz. The normal choice is 60 Hz. This
   row is only on the title screen's Options.
 
@@ -196,7 +201,7 @@ The six mouse rows do not show on phones and tablets.
 
 ## Gameplay
 
-The first three are off unless you turn them on, on a phone too.
+The first four are off unless you turn them on, on a phone too.
 
 - **Shadows never take Yorda** makes the game gentler. A few scenes in the
   story still show her being taken.
@@ -208,11 +213,17 @@ The first three are off unless you turn them on, on a phone too.
   of the ladder in the East Reflector. For a few seconds after you come
   through a door holding her hand, that door does not take you back.
   [Why this is needed](FAQ.md#ico-and-yorda-come-straight-back-out-of-a-doorway).
+- **Natural chains** changes how two chains look as they come down for
+  Ico: the one at the Stone Pillar and one underground, by the water
+  wheel. In the original game the links look squashed until the chain is
+  all the way down. With this on, the links stay the right size and more
+  of the chain shows as it comes down. It only changes the picture, not
+  the game.
 
 Two more rows are the game's own, and only show up in the pause menu's
 Options once you have finished the game:
 
-- **Film effect** is Off or 1 to 4, the game's own film look (a colour tint and grain) over the picture.
+- **Film effect** is Off or 1 to 4, the game's own film look (a colour tint and grain) over the picture. Photo mode has its own Film effect, which works without finishing the game (see [Controls](CONTROLS.md#take-a-photo)).
 - **Players** is 1 or 2. With 2, a second controller controls Yorda.
 ## Language
 
@@ -233,9 +244,9 @@ them, and the list shows them.
 
 ## Extras
 
-On the title screen's Options this page has Music, Models, Credits and
-Character Customization. In the pause menu's Options it has only Character
-Customization.
+On the title screen's Options this page has Music, Models, Credits,
+Character Customization and, on Windows and Linux, Add to Steam. In the
+pause menu's Options it has only Character Customization.
 
 - **Music:** listen to the game's music and sound effects.
 - **Models:** the model viewer. Look closely at the characters and some
@@ -243,6 +254,18 @@ Customization.
 - **Credits:** watch the ending credits again. It unlocks once you have
   finished the game.
 - **Character Customization:** change the colours of Ico and Yorda. [Details below](#character-customization).
+- **Add to Steam** (Windows and Linux, including the Steam Deck; on the
+  title screen's Extras page only): adds the
+  game to your Steam library as a non-Steam game, so you can start it from
+  Steam. Close Steam first: the game will not change Steam's list while
+  Steam is open, and says so if Steam is running. On a Steam Deck, use
+  Desktop Mode, where you can quit Steam from its icon in the taskbar
+  (right-click it, then Exit Steam). If Steam has several accounts, the game goes to the one
+  used last. It adds no pictures, so Steam shows its plain tile for it. If
+  the game is already in your library, the row says so and changes
+  nothing; a copy of the old list is kept as `shortcuts.vdf.bak` in the
+  same folder. If you move the game to another folder, add it again from
+  there. The row is not in the Android version.
 
 ### Character Customization
 
@@ -360,6 +383,7 @@ Under `[photo]`, for photo mode:
 | `stick_speed = 1.0` | How fast the camera moves, turns, tilts and zooms. `0.5` is half as fast, `2.0` twice as fast. |
 | `invert_y = false` | `true` swaps up and down when you look around. |
 | `hide_ui = false` | `true` opens photo mode with its help panel hidden. Square in photo mode changes this for you. |
+| `film_effect = 0` | The Film effect photo mode opens with: `0` is off, `1` to `4` are the game's four looks. The D-pad Right button in photo mode changes this for you. |
 | `png_dir = "screenshots"` | The folder your pictures go in, inside the folder with your saves. |
 
 Under `[video]`:

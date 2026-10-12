@@ -38,6 +38,14 @@
  *            frame's width covers all 688 columns
  *   content table  rd_content_hide.c's verbs on the top of the listed
  *            closing box (st08a_p4), below ("the content table")
+ *   natural chains  rd_content_chain.c's table and a let-down chain laid
+ *            out as BgAnimation.c lays it out with the option on: the links
+ *            at their size along the chain, the far end where the keyed
+ *            scale puts it, one clip plane at the top for all of them; the
+ *            planes reach the draws of the noted nodes through reg_DispObj
+ *            (RDC_MESH b[5], f[0]); on the device the plane's far side is
+ *            not drawn, its near side byte for byte as without it, below
+ *            ("natural chains")
  *   strip order  the title logo's strips Packet.c draws in another order of
  *            their entries (pac_HostStrips): the table, the I's through
  *            p2o_MakePacket, and with the disc image given as the argument
@@ -53,6 +61,17 @@
  *            cluster one with the object's bone count); the morph path
  *            (pac_HostRefreshFor) declines a replaced mesh and draws the
  *            original again; recording only
+ *   VIS-RULES (v0.6.1) a packet whose own box fails in a part that passed
+ *            is drawn with the clipping program (code 36), not dropped
+ *            (item 4); a part's and an object's dropped boxes are noted on
+ *            the frame for F12's cull line (rules 3 and 2, with the model's
+ *            name); an accessory whose box is dropped still registers its
+ *            shadow volume (item 7)
+ *   boxes    with the disc image: every *.p2o of every pack through PObj.c's
+ *            loader (AllocPObj): each vertex a strip names lies in its
+ *            part's box and its object's box (items 2 and 3); one model
+ *            through InitPObj with a y offset of 105 (the PAL table's
+ *            shinkan_a): its object box moved with it; recording only
  *
  * Checks on the recording (no device needed): the mesh built from the
  * packet (vertex count, batches, the index list against vu1ref_static_kicks);
@@ -76,6 +95,7 @@
 #include "gltf.h"
 #include "host_fs.h"
 #include "modelpack.h"
+#include "rd_chain.h"
 #include "rd_internal.h"
 #include "rd_mesh.h"
 #include "shader_consts.h"
@@ -101,6 +121,8 @@
 /* the disc (the strip order case) */
 #include "df_pack.h"
 #include "vfs.h"
+/* PObj.c's loader (the boxes case) */
+#include "charFileManager.h"
 
 static int failures;
 
@@ -1950,7 +1972,486 @@ static void modelPackChecks(void)
     packHookChecks();
 }
 
+/* ----------------------------------------------------- natural chains */
+/* rd_chain.h.  Recording: the table names the two let-down chains (st10l's
+ * Null 21, st19a's Null 22, Y, 1000 units of links 50 apart); a chain at
+ * the Stone Pillar's first keyed scale (0.1) laid out as BgAnimation.c lays
+ * it out with the option on (rd_chain_null for the Null, rd_chain_link per
+ * link) fills the stretch the disc's squashed chain fills, with its links
+ * at unit scale 50 apart: the last link's bottom where the squashed one's
+ * is (the Null's place + 0.1 x (1000 + 54.82)) and one plane for all of
+ * them where the squashed top link begins (0.1 x -5.37): the links wholly
+ * above it clipped whole, the last one whole, two cut; at full length the
+ * layout is the disc's (no move, nothing clipped).  A prelit model
+ * drawn as a stage animation draws it (dispType 2, two nodes) through
+ * reg_DispObj: the noted node's draw carries its plane (b[5], f[0]), the
+ * other none, and none once the note is cleared.
+ * Device: a quad y -1000..1000 drawn with the plane y >= 0 is drawn below
+ * the quad's middle only, those rows byte for byte the plain draw's; the
+ * minus side the other half; an offset past the quad clips nothing (the
+ * plain picture) and one before it draws nothing. */
+
+/* the y of a link's node in the Null's frame and the world y of its plane,
+   for the chain c at scale s: link i's node at pos (unscaled) */
+static void chainLink(const RdChain *c, float s, float nullY, float pos, float *nodeY,
+                      float *planeY, uint8_t *code)
+{
+    const float sc[3] = {1.0f, s, 1.0f};
+    float so[3], t[4], off;
+    rd_chain_null(c, sc, so, t);
+    rd_chain_link(c, s, pos, code, &off);
+    /* the Null at nullY, unscaled along Y (so[1]), moved by t; the link at
+       pos below it; the plane where the link's own y is -off */
+    *nodeY = nullY + so[1] * (t[1] + pos);
+    *planeY = *nodeY - off;
+}
+
+static void chainTableChecks(void)
+{
+    const RdChain *a = rd_chain_find(731), *b = rd_chain_find(636);
+    CHECK(rd__chain_count == 2 && a && b && !rd_chain_find(0) && !rd_chain_find(349),
+          "natural chains: two listed (%d), by their groups", rd__chain_count);
+    if (!a || !b) {
+        return;
+    }
+    CHECK(a->null == 21 && a->axis == 1 && a->anchor == 0.0f && a->end == 1000.0f &&
+              b->null == 22 && b->axis == 1 && b->anchor == 2700.0f && b->end == 3700.0f,
+          "natural chains: st10l Null 21 Y 0..1000, st19a Null 22 Y 2700..3700");
+    /* the Stone Pillar's chain at its first keyed scale */
+    const float sc[3] = {1.0f, 0.1f, 1.0f};
+    float so[3], t[4];
+    rd_chain_null(a, sc, so, t);
+    CHECK(so[0] == 1.0f && so[1] == 1.0f && so[2] == 1.0f && t[0] == 0.0f &&
+              fabsf(t[1] + 0.9f * 1054.82f) < 1e-3f && t[2] == 0.0f && t[3] == 1.0f,
+          "natural chains: the Null at scale 0.1 keeps scale 1 and moves -0.9 x 1054.82 (%g %g "
+          "%g, %g)",
+          (double)so[0], (double)so[1], (double)so[2], (double)t[1]);
+    const float nullY = -50.0f; /* st10l_chain_down's Null */
+    float first = 0.0f, prevY = 0.0f;
+    int whole = 0, clipped = 0, part = 0, samePlane = 1, pitch = 1, codes = 1;
+    for (int i = 0; i <= 20; i++) {
+        float y, py;
+        uint8_t code;
+        chainLink(a, 0.1f, nullY, 50.0f * (float)i, &y, &py, &code);
+        codes &= code == rd_chain_plane_code(1, 0);
+        if (i == 0) {
+            first = py;
+        } else {
+            samePlane &= fabsf(py - first) < 1e-3f;
+            pitch &= fabsf(y - prevY - 50.0f) < 1e-3f;
+        }
+        prevY = y;
+        /* chain4: y -5.37 .. 54.82 about its node */
+        if (y - 5.37f >= py - 1e-3f) {
+            whole++;
+        } else if (y + 54.82f <= py) {
+            clipped++;
+        } else {
+            part++;
+        }
+    }
+    CHECK(codes && samePlane && fabsf(first - (nullY - 0.1f * 5.37f)) < 1e-3f,
+          "natural chains: one plane on Y for every link, where the squashed top link begins "
+          "(%g)",
+          (double)first);
+    CHECK(pitch && fabsf(prevY + 54.82f - (nullY + 0.1f * 1054.82f)) < 1e-3f,
+          "natural chains: the links 50 apart at their size, the last one's bottom where the "
+          "squashed one's is (%g)",
+          (double)(prevY + 54.82f));
+    CHECK(whole == 1 && part == 2 && clipped == 18,
+          "natural chains: the last link whole, two cut, 18 above the top (%d %d %d)", whole, part,
+          clipped);
+    /* at full length: the disc's layout, nothing clipped */
+    const float one[3] = {1.0f, 1.0f, 1.0f};
+    rd_chain_null(b, one, so, t);
+    int none = t[1] == 0.0f && so[1] == 1.0f;
+    for (int i = 0; i <= 20; i++) {
+        float y, py;
+        uint8_t code;
+        chainLink(b, 1.0f, 0.0f, 2700.0f + 50.0f * (float)i, &y, &py, &code);
+        none &= y == 2700.0f + 50.0f * (float)i && y - 5.37f >= py - 1e-3f;
+    }
+    CHECK(none, "natural chains: at full length the disc's layout and nothing clipped");
+}
+
+static void chainDrawChecks(void)
+{
+    /* the prelit model as a stage animation draws it: two nodes */
+    const int nodeNum = s_objA.nodeNum, dispType = s_objA.dispType;
+    struct DObjNode saved[2];
+    memcpy(saved, s_modelA.nodes, sizeof(saved));
+    s_objA.nodeNum = 2;
+    s_objA.dispType = 2;
+    for (int i = 0; i < 2; i++) {
+        s_modelA.nodes[i].fade = 0.0f;
+        s_modelA.nodes[i].alpha = 1.0f; /* stage_Init's: drawn */
+    }
+    const uint8_t code = rd_chain_plane_code(1, 0);
+    rd_chain_reset();
+    rd_chain_note(&s_objA, 1, code, -12.5f);
+    recordPrelit(&s_objA, 1);
+    const RdFrame *f = rd__last_frame();
+    Found fd;
+    walkFrame(f, &fd);
+    CHECK(fd.n == 2 && fd.cmd[0]->type == RDC_MESH && fd.cmd[1]->type == RDC_MESH,
+          "natural chains: two node draws (%d)", fd.n);
+    if (fd.n == 2) {
+        CHECK(fd.cmd[0]->b[5] == 0 && fd.cmd[0]->f[0] == 0.0f,
+              "natural chains: node 0, not noted, has no plane (%u %g)", fd.cmd[0]->b[5],
+              (double)fd.cmd[0]->f[0]);
+        CHECK(fd.cmd[1]->b[5] == code && fd.cmd[1]->f[0] == -12.5f,
+              "natural chains: node 1 carries its plane (%u %g)", fd.cmd[1]->b[5],
+              (double)fd.cmd[1]->f[0]);
+    }
+    rd_chain_note(&s_objA, 1, 0, 0.0f); /* the option off: cleared */
+    recordPrelit(&s_objA, 1);
+    f = rd__last_frame();
+    walkFrame(f, &fd);
+    CHECK(fd.n == 2 && fd.cmd[0]->b[5] == 0 && fd.cmd[1]->b[5] == 0,
+          "natural chains: cleared, no draw has a plane");
+    rd_chain_reset();
+    s_objA.nodeNum = nodeNum;
+    s_objA.dispType = dispType;
+    memcpy(s_modelA.nodes, saved, sizeof(saved));
+}
+
+static const char kChainKey;
+
+/* a quad x and y -1000..1000 (z 0), prelit, one strip */
+static RdMesh chainQuad(void)
+{
+    float qw[1 + 4 * 3][4];
+    memset(qw, 0, sizeof(qw));
+    const uint32_t tag = 0x8000u | 4u; /* NLOOP 4, EOP */
+    memcpy(&qw[0][0], &tag, 4);
+    for (int k = 0; k < 4; k++) {
+        qw[1 + k * 3][0] = (k & 1) ? 1000.0f : -1000.0f;
+        qw[1 + k * 3][1] = (k & 2) ? 1000.0f : -1000.0f;
+        qw[1 + k * 3][3] = 1.0f;
+        qw[2 + k * 3][0] = (float)(k & 1);
+        qw[2 + k * 3][2] = 1.0f;
+        qw[2 + k * 3][3] = k == 0 ? 0.0f : 1.0f; /* the strip starts at vertex 0 */
+        qw[3 + k * 3][0] = 200.0f;
+        qw[3 + k * 3][1] = 120.0f;
+        qw[3 + k * 3][2] = 30.0f;
+        qw[3 + k * 3][3] = 127.0f;
+    }
+    const RdVuBatchDesc bd = {0, 0, 0};
+    RdVuMeshDesc md;
+    memset(&md, 0, sizeof(md));
+    md.qw = (const float (*)[4])qw;
+    md.qwCount = 1 + 4 * 3;
+    md.qwPerVertex = RD_VU_QW_PRELIT;
+    md.batchCount = 1;
+    md.batches = &bd;
+    md.materialCount = 1;
+    md.debugName = "chain quad";
+    return rd_create_vu_mesh(&md);
+}
+
+/* one frame: SCENE cleared grey, the quad by code 32 at GS 2048 + 0.08 x,
+   2048 + 0.08 y (rows 176..336), with the plane code / offset (0: none);
+   the picture into img, false when it cannot be read */
+static int chainDraw(RdMesh m, uint8_t code, float offset, uint8_t *img, uint32_t *w)
+{
+    static const uint8_t grey[4] = {40, 40, 60, 0x80};
+    dl_Clear();
+    dl_SetDLPriority(0);
+    rd_set_target(rd_target(RD_TARGET_SCENE), rd_target(RD_TARGET_SCENE), s_sceneW, 512, 1);
+    rd_clear_target(rd_target(RD_TARGET_SCENE), grey, 1, 0);
+    rd_test_gs(RD_TEST_Z_GEQUAL);
+    rd_z_write(1);
+    rd_blend(RD_BLEND_LERP_AS, 0x80, 0);
+    rd_abe(0);
+    rd_pabe(0);
+    rd_fba(0);
+    rd_gouraud(1);
+    rd_texture_off();
+    RdVuDraw d;
+    memset(&d, 0, sizeof(d));
+    d.prog = RD_PROG_PRELIT;
+    d.code = 32;
+    d.clip = RD_VU_CLIP_REGION;
+    d.plane = code;
+    d.planeOffset = offset;
+    d.vu.mem[16][0] = 0.08f;
+    d.vu.mem[17][1] = 0.08f;
+    d.vu.mem[19][0] = 2048.0f;
+    d.vu.mem[19][1] = 2048.0f;
+    d.vu.mem[19][2] = 1000.0f;
+    d.vu.mem[19][3] = 1.0f;
+    rd_draw_vu_mesh(m, &d, RD_KEY(&kChainKey, 0, 32));
+    dl_Swap();
+    return closingRead(img, w);
+}
+
+/* the texels drawn (not the grey clear) in rows y0..y1 - 1 */
+static int chainRows(const uint8_t *img, uint32_t w, int y0, int y1)
+{
+    int n = 0;
+    for (int y = y0; y < y1; y++) {
+        for (uint32_t x = 0; x < w; x++) {
+            const uint8_t *p = &img[((size_t)y * w + x) * 4];
+            n += p[0] != 40 || p[1] != 40 || p[2] != 60;
+        }
+    }
+    return n;
+}
+
+static uint8_t s_chainPlain[WT * 512 * 4];
+
+static void chainPixels(void)
+{
+    const RdMesh m = chainQuad();
+    uint32_t w = 0, wp = 0;
+    if (!chainDraw(m, 0, 0.0f, s_chainPlain, &wp)) {
+        CHECK(0, "natural chains: SCENE read");
+        rd_destroy_vu_mesh(m);
+        return;
+    }
+    const int top = chainRows(s_chainPlain, wp, 0, 254),
+              bottom = chainRows(s_chainPlain, wp, 258, 512);
+    CHECK(top >= 5000 && bottom >= 5000,
+          "natural chains: the plain quad above and below its middle "
+          "(%d, %d)",
+          top, bottom);
+    const uint8_t plus = rd_chain_plane_code(1, 0), minus = rd_chain_plane_code(1, 1);
+    /* y >= 0: the rows below the middle only, as the plain draw has them */
+    if (chainDraw(m, plus, 0.0f, s_closingA, &w)) {
+        const int t = chainRows(s_closingA, w, 0, 254), b = chainRows(s_closingA, w, 258, 512);
+        const size_t at = (size_t)258 * w * 4;
+        CHECK(t == 0 && b == bottom && w == wp &&
+                  memcmp(s_closingA + at, s_chainPlain + at, (size_t)(512 - 258) * w * 4) == 0,
+              "natural chains: y >= 0 draws the lower half only, as the plain draw (%d above, %d "
+              "below)",
+              t, b);
+    }
+    /* -y >= 0: the other half */
+    if (chainDraw(m, minus, 0.0f, s_closingA, &w)) {
+        const int t = chainRows(s_closingA, w, 0, 254), b = chainRows(s_closingA, w, 258, 512);
+        CHECK(t == top && b == 0 && memcmp(s_closingA, s_chainPlain, (size_t)254 * w * 4) == 0,
+              "natural chains: -y >= 0 draws the upper half only (%d above, %d below)", t, b);
+    }
+    /* past the quad: nothing clipped; before it: nothing drawn */
+    if (chainDraw(m, plus, 1500.0f, s_closingA, &w)) {
+        CHECK(w == wp && memcmp(s_closingA, s_chainPlain, (size_t)512 * w * 4) == 0,
+              "natural chains: a plane past the quad clips nothing");
+    }
+    if (chainDraw(m, plus, -1500.0f, s_closingA, &w)) {
+        CHECK(chainRows(s_closingA, w, 0, 512) == 0,
+              "natural chains: a plane before the quad draws nothing");
+    }
+    rd_destroy_vu_mesh(m);
+}
+
 /* ----------------------------------------------------------- the setup */
+
+/* ---- VIS-RULES (v0.6.1): the box culls' rules in RegistPacket.c
+ *
+ *   packet   (item 4) a packet whose own box gsb_ClipBox drops, in a part
+ *            that passed: drawn with the clipping program (code 36), not
+ *            dropped (the PS2 dropped it)
+ *   notes    (F12's cull line) the object's box dropped (rule 2, part -1)
+ *            and a part's box dropped (rule 3, part 0) noted on the frame
+ *            with the model's name (rd_note_cull_drop)
+ *   shadow   (item 7) an accessory (reg_DispAccessoryWithShadow) whose box
+ *            is dropped still registers its shadow volume (the PS2 drew it
+ *            only with the accessory) */
+static void visRuleChecks(void)
+{
+    /* packet */
+    s_clipOnly = packetA()->box[0];
+    s_clipOnlyRet = 0;
+    recordPrelit(&s_objA, 1);
+    s_clipOnly = NULL;
+    checkPrelitRecording(36, RD_VU_CLIP_SCISSOR);
+
+    /* notes: the part's box */
+    s_clipOnly = (const float *)s_modelA.boxes;
+    s_clipOnlyRet = 0;
+    recordPrelit(&s_objA, 1);
+    s_clipOnly = NULL;
+    const RdFrame *f = rd__last_frame();
+    Found fd;
+    walkFrame(f, &fd);
+    CHECK(fd.n == 0 && f->cullDropCount == 1 && f->cullDrops[0].rule == 3 &&
+              f->cullDrops[0].part == 0 && strcmp(f->cullDrops[0].model, "test_prelit") == 0,
+          "a part's box dropped: no draw, noted as rule 3 part 0 (%d draws, %u notes, rule %u "
+          "part %d %s)",
+          fd.n, f->cullDropCount, f->cullDropCount ? f->cullDrops[0].rule : 0,
+          f->cullDropCount ? f->cullDrops[0].part : 0,
+          f->cullDropCount ? f->cullDrops[0].model : "");
+
+    /* shadow, and the object's box noted */
+    static PObjModel shadowModel;
+    s_objA.shadow = &shadowModel;
+    s_shadowVolumes = 0;
+    s_clipRet = 0;
+    dl_Clear();
+    setCommon();
+    dl_SetDLPriority(0);
+    reg_DispAccessoryWithShadow(&s_objA, &s_objB);
+    dl_Swap();
+    s_clipRet = 1;
+    s_objA.shadow = NULL;
+    f = rd__last_frame();
+    walkFrame(f, &fd);
+    CHECK(fd.n == 0 && s_shadowVolumes == 1,
+          "an accessory outside the picture: no draw, its shadow volume registered (%d draws, "
+          "%d volumes)",
+          fd.n, s_shadowVolumes);
+    CHECK(f->cullDropCount == 1 && f->cullDrops[0].rule == 2 && f->cullDrops[0].part == -1 &&
+              strcmp(f->cullDrops[0].model, "test_prelit") == 0,
+          "the object's box dropped noted as rule 2 part -1 (%u notes)", f->cullDropCount);
+}
+
+/* ---- VIS-RULES items 2 and 3, with the disc: every model's boxes hold
+ * the vertices its strips draw.
+ *
+ * Every *.p2o member of every pack goes through PObj.c's own loader
+ * (AllocPObj, the relocation and MakeBoundingBox, its image copied into the
+ * EE word arena as the game's heap has it): for each part, each vertex a
+ * strip record names (a head with the count, then a record per vertex with
+ * its index at +4: the display strips and the shadow silhouettes alike) is
+ * one of the part's vertices and lies inside the part's box (model->boxes,
+ * the part cull's, RegistPacket.c) and the whole object's (model->box, the
+ * object cull's).  Then one model through InitPObj with a model-table
+ * offset (the one the PAL table has, shinkan_a's y 105): the object's box
+ * moves with the vertices (the PS2 left it where it was, PObj.c). */
+PObjMdl modelData[2];
+
+PObjModel *AllocPObj(void *buf, char *name, int id);
+PObjModel *InitPObj(void *buf, char *name, int id);
+void PObj_FreeImageTables(void);
+
+#define BOX_IMAGE_AT (1u << 20) /* the image's place in the arena */
+
+static int inBox(const float (*b)[4], const float *v)
+{
+    float lo[3] = {b[0][0], b[0][1], b[0][2]}, hi[3] = {b[0][0], b[0][1], b[0][2]};
+    for (int i = 1; i < 8; i++) {
+        for (int k = 0; k < 3; k++) {
+            lo[k] = b[i][k] < lo[k] ? b[i][k] : lo[k];
+            hi[k] = b[i][k] > hi[k] ? b[i][k] : hi[k];
+        }
+    }
+    return v[0] >= lo[0] && v[0] <= hi[0] && v[1] >= lo[1] && v[1] <= hi[1] && v[2] >= lo[2] &&
+           v[2] <= hi[2];
+}
+
+/* the model's parts' strips against its boxes: the vertices checked, the
+   ones outside (or past the part's list) counted into *bad */
+static long boxCheckModel(const PObjModel *m, const unsigned char *lo, const unsigned char *hi,
+                          long *bad)
+{
+    long n = 0;
+    for (int j = 0; j < m->partCount; j++) {
+        const PObjPart *pt = &m->parts[j];
+        const float (*pb)[4] = (const float (*)[4])(const void *)(m->boxes + j * 128);
+        for (unsigned int s = 0; s < pt->stripCount; s++) {
+            const unsigned char *r = ((unsigned char *const *)pt->strips)[s];
+            for (;;) {
+                short cnt;
+                if (r < lo || r + 16 > hi) {
+                    break;
+                }
+                memcpy(&cnt, r, 2);
+                if (cnt <= 0 || r + 16 + (size_t)cnt * 16 > hi) {
+                    break;
+                }
+                for (int k = 0; k < cnt; k++) {
+                    short vi;
+                    memcpy(&vi, r + 16 + k * 16 + 4, 2);
+                    n++;
+                    if (vi < 0 || (unsigned int)vi >= pt->vtxCount) {
+                        (*bad)++;
+                        continue;
+                    }
+                    const float *v = (const float *)(const void *)(pt->vtx + vi * 16);
+                    if (!inBox(pb, v) || !inBox((const float (*)[4])m->box, v)) {
+                        if (*bad < 5) {
+                            printf("  boxes: %s part %d vertex %d (%g %g %g) outside\n", m->name, j,
+                                   vi, (double)v[0], (double)v[1], (double)v[2]);
+                        }
+                        (*bad)++;
+                    }
+                }
+                r += 16 + (size_t)cnt * 16;
+            }
+        }
+    }
+    return n;
+}
+
+static void boxDiscChecks(const char *disc)
+{
+    IcoVfs *vfs = disc ? ico_vfs_mount(&ico_vfs_iso9660, disc) : NULL;
+    if (!vfs) {
+        printf("  boxes: SKIP the disc's models (no disc image)\n");
+        return;
+    }
+    IcoDfMember m;
+    ico_df_find_member(vfs, "object/none.p2o", &m); /* builds the index */
+    const int members = ico_df_index_members();
+    unsigned char *img = ico_arena_base() + BOX_IMAGE_AT;
+    const size_t room = sizeof(s_arena) - BOX_IMAGE_AT;
+    long models = 0, verts = 0, bad = 0, tooBig = 0;
+    int offsetDone = 0;
+    for (int i = 0; i < members; i++) {
+        const char *name = ico_df_member_name(i);
+        const size_t len = name ? strlen(name) : 0;
+        if (len < 4 || name[len - 4] != '.' || (name[len - 3] | 0x20) != 'p' ||
+            name[len - 2] != '2' || (name[len - 1] | 0x20) != 'o' || ico_df_member(i, &m) != 0) {
+            continue;
+        }
+        if (m.size > room) {
+            tooBig++;
+            continue;
+        }
+        if (ico_df_read_member(vfs, &m, img) != 0) {
+            CHECK(0, "boxes: %s from the disc", name);
+            continue;
+        }
+        /* the model's name as the game's names fit PObjModel's 32 bytes:
+           the file's, without its folders */
+        char nm[32];
+        const char *base = strrchr(name, '/');
+        snprintf(nm, sizeof(nm), "%s", base ? base + 1 : name);
+        const size_t heapAt = s_heapAt;
+        if (!offsetDone) {
+            /* the offset: shinkan_a's, through InitPObj; table kind 4
+               builds no packets (PObj.c MakePacket) */
+            memset(modelData, 0, sizeof(modelData));
+            modelData[1].offset[1] = 105.0f;
+            modelData[1].pktKind = 4;
+            PObjModel *pm = InitPObj(img, nm, 1);
+            long ob = 0;
+            const long on = boxCheckModel(pm, img, img + m.size, &ob);
+            CHECK(on > 0 && ob == 0,
+                  "boxes: %s with a y offset of 105: %ld of %ld vertices outside its boxes", name,
+                  ob, on);
+            PObj_FreeImageTables();
+            s_heapAt = heapAt;
+            offsetDone = 1;
+            if (ico_df_read_member(vfs, &m, img) != 0) {
+                continue;
+            }
+        }
+        PObjModel *pm = AllocPObj(img, nm, 0);
+        verts += boxCheckModel(pm, img, img + m.size, &bad);
+        models++;
+        PObj_FreeImageTables();
+        s_heapAt = heapAt;
+    }
+    ico_vfs_unmount(vfs);
+    printf("  boxes: %ld models, %ld strip vertices, %ld outside their boxes, %ld too big for "
+           "the arena\n",
+           models, verts, bad, tooBig);
+    CHECK(models > 100 && verts > 0 && bad == 0 && tooBig == 0,
+          "boxes: every strip vertex of the disc's %ld models inside its part's and its object's "
+          "box (%ld outside, %ld models not loaded)",
+          models, bad, tooBig);
+}
 
 static void setup(void)
 {
@@ -1968,6 +2469,105 @@ static void buildModels(void)
     p2o_MakePacket(&s_objB);
     makeGrid();
     makeParticles();
+}
+
+/* ------------------------------------------------- joined strips */
+/* rd_mesh.c markJoinedStrips (VIS-WINDOW): a strip that shares a corner
+ * position with another strip of its mesh, not its double-sided copy,
+ * carries ICO_VU_INDEX_JOINED on every triangle of the draw's list (the
+ * region rule draws it as a wall outside the out-of-the-box state, never as
+ * a card); a free-standing strip, or one whose only neighbour is its
+ * double-sided copy, does not. */
+
+/* a prelit mesh of one batch: n corners (x, y) at z 0, a strip starting at
+   each corner with start[k] set */
+static RdMesh joinMesh(const float (*xy)[2], const uint8_t *start, int n)
+{
+    float qw[1 + 16 * 3][4];
+    memset(qw, 0, sizeof(qw));
+    const uint32_t tag = 0x8000u | (uint32_t)n;
+    memcpy(&qw[0][0], &tag, 4);
+    for (int k = 0; k < n; k++) {
+        qw[1 + k * 3][0] = xy[k][0];
+        qw[1 + k * 3][1] = xy[k][1];
+        qw[1 + k * 3][3] = 1.0f;
+        qw[2 + k * 3][2] = 1.0f;
+        qw[2 + k * 3][3] = start[k] ? 0.0f : 1.0f;
+        qw[3 + k * 3][0] = qw[3 + k * 3][1] = qw[3 + k * 3][2] = 100.0f;
+        qw[3 + k * 3][3] = 127.0f;
+    }
+    const RdVuBatchDesc bd = {0, 0, 0};
+    RdVuMeshDesc md;
+    memset(&md, 0, sizeof(md));
+    md.qw = (const float (*)[4])qw;
+    md.qwCount = (uint32_t)(1 + n * 3);
+    md.qwPerVertex = RD_VU_QW_PRELIT;
+    md.batchCount = 1;
+    md.batches = &bd;
+    md.materialCount = 1;
+    md.debugName = "joined";
+    const RdMesh m = rd_create_vu_mesh(&md);
+    CHECK(m.id != 0, "joined strips: rd_create_vu_mesh");
+    return m;
+}
+
+/* the joined mark of the triangle that kick ends in m's draw list: 1
+   marked, 0 not, -1 no such triangle */
+static int joinedAt(const RdMeshRec *m, uint32_t kick)
+{
+    for (uint32_t i = 0; i + 2 < m->indexCount; i += 3) {
+        if ((m->index[i] & ICO_VU_INDEX_MASK) / 4u == kick) {
+            const uint32_t *d = rd__mesh_draw_index(m);
+            const int j = (d[i] & ICO_VU_INDEX_JOINED) != 0;
+            return j == ((d[i + 1] & ICO_VU_INDEX_JOINED) != 0) &&
+                           j == ((d[i + 2] & ICO_VU_INDEX_JOINED) != 0)
+                       ? j
+                       : -1;
+        }
+    }
+    return -1;
+}
+
+static void joinedStripChecks(void)
+{
+    /* a quad (kicks 2, 3) and a triangle (kick 6) sharing the corner
+     * (1, 1); then a free-standing quad (kicks 9, 10) */
+    static const float kWall[11][2] = {{0, 0}, {1, 0}, {0, 1}, {1, 1}, {1, 1}, {2, 1},
+                                       {1, 2}, {5, 5}, {6, 5}, {5, 6}, {6, 6}};
+    static const uint8_t kWallStart[11] = {1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0};
+    const RdMesh wall = joinMesh(kWall, kWallStart, 11);
+    const RdMeshRec *w = rd__mesh_rec(wall.id);
+    CHECK(w && joinedAt(w, 2) == 1 && joinedAt(w, 3) == 1 && joinedAt(w, 6) == 1 &&
+              joinedAt(w, 9) == 0 && joinedAt(w, 10) == 0,
+          "joined strips: the quad and the triangle sharing a corner are joined, the "
+          "free-standing quad is not (%d %d %d %d %d)",
+          w ? joinedAt(w, 2) : -2, w ? joinedAt(w, 3) : -2, w ? joinedAt(w, 6) : -2,
+          w ? joinedAt(w, 9) : -2, w ? joinedAt(w, 10) : -2);
+    rd_destroy_vu_mesh(wall);
+
+    /* a double-sided card: the same four corners twice, the second strip
+     * turned (its back face): not joined (its back triangles carry
+     * ICO_VU_INDEX_LATER, issue 25) */
+    static const float kCard[8][2] = {{0, 0}, {1, 0}, {0, 1}, {1, 1},
+                                      {1, 0}, {0, 0}, {1, 1}, {0, 1}};
+    static const uint8_t kCardStart[8] = {1, 0, 0, 0, 1, 0, 0, 0};
+    const RdMesh card = joinMesh(kCard, kCardStart, 8);
+    const RdMeshRec *c = rd__mesh_rec(card.id);
+    CHECK(c && joinedAt(c, 2) == 0 && joinedAt(c, 3) == 0 && joinedAt(c, 6) == 0 &&
+              joinedAt(c, 7) == 0,
+          "joined strips: a double-sided card is not joined");
+    rd_destroy_vu_mesh(card);
+
+    /* the same card with a third strip on one of its corners: all three
+     * joined */
+    static const float kCard3[11][2] = {{0, 0}, {1, 0}, {0, 1}, {1, 1}, {1, 0}, {0, 0},
+                                        {1, 1}, {0, 1}, {1, 1}, {2, 1}, {1, 2}};
+    static const uint8_t kCard3Start[11] = {1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0};
+    const RdMesh card3 = joinMesh(kCard3, kCard3Start, 11);
+    const RdMeshRec *c3 = rd__mesh_rec(card3.id);
+    CHECK(c3 && joinedAt(c3, 2) == 1 && joinedAt(c3, 7) == 1 && joinedAt(c3, 10) == 1,
+          "joined strips: a double-sided card touching a third strip is joined");
+    rd_destroy_vu_mesh(card3);
 }
 
 static void recordingChecks(void)
@@ -1992,9 +2592,13 @@ static void recordingChecks(void)
     checkParticleRecording();
     checkStretchRecording();
     closingPlaneChecks();
+    chainTableChecks();
+    chainDrawChecks();
     stripTableChecks();
     stripPacketChecks();
     modelPackChecks();
+    visRuleChecks();
+    joinedStripChecks();
 }
 
 int main(int argc, char **argv)
@@ -2009,6 +2613,7 @@ int main(int argc, char **argv)
     buildModels();
     recordingChecks();
     stripDiscChecks(argc > 1 ? argv[1] : NULL);
+    boxDiscChecks(argc > 1 ? argv[1] : NULL);
     rd_shutdown();
     if (failures) {
         printf("rd_mesh_test: %d failures\n", failures);
@@ -2041,7 +2646,7 @@ int main(int argc, char **argv)
     rd__enumerate_reachable(keys, RD_PIPELINE_REACHABLE_MAX);
     printf("  pipelines: %u created, %u reachable (%u screen and post)\n", rd__pipeline_count(), n,
            ns);
-    CHECK(n < RD_PIPELINE_REACHABLE_MAX && ns < 250, "reachable pipelines %u (screen %u)", n, ns);
+    CHECK(n < RD_PIPELINE_REACHABLE_MAX && ns < 400, "reachable pipelines %u (screen %u)", n, ns);
     for (uint32_t i = 0; i < rd__pipeline_count(); i++) {
         const RdPipeKeyInt *k = rd__pipeline_key_at(i);
         int found = 0;
@@ -2052,6 +2657,7 @@ int main(int argc, char **argv)
               k->gs.program, k->vs, k->gs.blend, k->gs.ztst, k->gs.zwrite);
     }
     closingPixels(0);
+    chainPixels();
     CHECK(rhi_vk_validation_error_count() == 0, "%u validation errors",
           rhi_vk_validation_error_count());
     CHECK(rd__not_implemented_count() == 0, "no stubbed command replayed");

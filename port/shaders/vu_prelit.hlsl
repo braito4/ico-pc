@@ -34,6 +34,28 @@ VuVtx vu_prelit_vertex(uint v, uint mode, bool full)
     return o;
 }
 
+// VU_RULE_STRIP: whether a triangle of kick's strip passes the region
+// test (vu_strip_of; each vertex evaluated once, the first passing
+// triangle ends the scan)
+bool vu_prelit_strip_passes(uint kick)
+{
+    uint3 r = vu_strip_of(kick, true);
+    if (r.z != 0u) {
+        return true;
+    }
+    bool i0 = vu_prelit_vertex(r.x, VU_CLIP_REGION, false).inside;
+    bool i1 = vu_prelit_vertex(r.x + 1u, VU_CLIP_REGION, false).inside;
+    [loop] for (uint v = r.x + 2u; v < r.y; v++) {
+        bool i2 = vu_prelit_vertex(v, VU_CLIP_REGION, false).inside;
+        if (i0 && i1 && i2) {
+            return true;
+        }
+        i0 = i1;
+        i1 = i2;
+    }
+    return false;
+}
+
 VuVSOut vu_prelit_vs(uint vid : SV_VertexID)
 {
     uint mode = vu_draw.z & VU_CLIP_MASK;
@@ -46,11 +68,31 @@ VuVSOut vu_prelit_vs(uint vid : SV_VertexID)
     }
     uint kick = (vid & VU_INDEX_MASK) >> 2;
     uint corner = vid & 3u;
-    VuVtx a = vu_prelit_vertex(kick - 2u, mode, false);
-    VuVtx b = vu_prelit_vertex(kick - 1u, mode, false);
-    VuVtx c = vu_prelit_vertex(kick, mode, false);
-    VuVtx me = vu_prelit_vertex(kick - 2u + corner, mode, true);
-    VuVSOut o = vu_triangle_out(a, b, c, me, mode);
+    // every corner's attributes under the exact viewport (the attribute
+    // planes, vu_common.hlsli vu_attr_planes), else only this corner's
+    bool full = g_vp.x != 0.0;
+    VuVtx a = vu_prelit_vertex(kick - 2u, mode, full);
+    VuVtx b = vu_prelit_vertex(kick - 1u, mode, full);
+    VuVtx c = vu_prelit_vertex(kick, mode, full);
+    VuVtx me = a;
+    if (!full) {
+        me = vu_prelit_vertex(kick - 2u + corner, mode, true);
+    } else if (corner == 1u) {
+        me = b;
+    } else if (corner == 2u) {
+        me = c;
+    }
+    uint rule = mode == VU_CLIP_REGION ? vu_region_rule(a, b, c) : VU_RULE_EXACT;
+    if (rule == VU_RULE_STRIP) {
+        // a joined strip is not a card; a free-standing one is unless a
+        // triangle of it passes
+        if ((vid & VU_INDEX_JOINED) != 0u) {
+            rule = VU_RULE_CLIP;
+        } else {
+            rule = vu_prelit_strip_passes(kick) ? VU_RULE_CLIP : VU_RULE_DROP;
+        }
+    }
+    VuVSOut o = vu_plane_out(vu_triangle_out(a, b, c, me, mode, rule), a, b, c, kick, corner);
     if ((vid & VU_INDEX_LATER) != 0u) {
         o = vu_later_out(o, a, b, c);
     }

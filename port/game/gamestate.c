@@ -30,6 +30,7 @@ extern int gameover_layout_flag;            /* common/src/main.c */
 extern int frame_count;                     /* common/src/main.c */
 extern int NonLinearCameraMove;             /* common/src/main.c */
 extern int systemStatus[12];                /* common/src/main.c */
+extern PadState pad[16];                    /* common/src/main.c, main.h */
 extern GObj *boyGObj;                       /* common/src/main.c */
 extern GObj *girlGObj;                      /* common/src/main.c */
 extern int gamesysTimeCount;                /* common/src/gamesys.c */
@@ -102,6 +103,15 @@ void ico_gs_sample_live(IcoGsSnapshot *s)
             g->actMode == ACT_CARRIED && g->carrier != 0 && g->carrier->kind == ENEMY_KIND;
     }
 }
+
+/* pad[0].now and .flags as the last ExecKeyInput left them, for the movie
+   player's "fmv: pad" log line (port/fmv/movie.c) */
+void ico_game_pad0(int *now, int *flags)
+{
+    *now = pad[0].now;
+    *flags = pad[0].flags;
+}
+
 #endif /* ICO_GS_LIVE */
 
 /* --- signals ------------------------------------------------------------ */

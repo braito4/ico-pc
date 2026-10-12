@@ -164,9 +164,13 @@ void shadow_Render(Sub15C *o)
     (void)o;
 }
 
+/* the shadow volumes registered (RegistPacket.c's casters) */
+static int s_shadowVolumes;
+
 void shadow_RenderVolume(Sub15C *o)
 {
     (void)o;
+    s_shadowVolumes++;
 }
 
 void shadow_RenderVolumeMulti(Sub15C *o, int idx)
@@ -193,13 +197,26 @@ float (*MatrixDrive_GetMatrix(void))[4]
 
 /* gsb_ClipBox: every box in view; the value picks the packets' clip result
  * (reg_clipPacketBoundingBox: shade 1 and 1 give code 32, shade 2 and 2 give
- * the scissor code 36) */
+ * the scissor code 36).  A case may give one box (s_clipOnly, its first
+ * corner) its own result. */
 static int s_clipRet = 1;
+
+static const float *s_clipOnly;
+
+static int s_clipOnlyRet;
 
 int gsb_ClipBox(float *p)
 {
-    (void)p;
+    if (s_clipOnly != NULL && p == s_clipOnly) {
+        return s_clipOnlyRet;
+    }
     return s_clipRet;
+}
+
+/* GsBase.c: the cameras the last gsb_ClipBox tested (F12's cull line) */
+int gsb_HostCullViewsUsed(void)
+{
+    return 1;
 }
 
 /* GsBase.c: RegistPacket.c says whether the next part is locked to the
@@ -210,7 +227,8 @@ void gsb_HostCullCameraLocked(int on)
 }
 
 /* the EE word arena (eeword.h): the cluster tables' bone lists live in it */
-static unsigned char s_arena[1 << 16] __attribute__((aligned(16)));
+/* (8 MB: rd_mesh_test's disc case loads model files into it, from 1 MB) */
+static unsigned char s_arena[1 << 23] __attribute__((aligned(16)));
 
 unsigned char *ico_arena_cached_base = s_arena;
 

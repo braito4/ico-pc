@@ -634,6 +634,21 @@ static RhiPipeline createPipeline(const RdPipeKeyInt *k)
         {3, 0, RHI_VTX_F32x2, offsetof(IcoSpriteVertex, u)},
         {4, 0, RHI_VTX_F32x1, offsetof(IcoSpriteStqVertex, q)},
     };
+    /* the triangles' planes (rd_screen_planes.c): the STQ vertex and the planes */
+    static const RhiVertexBinding vbPlane = {0, sizeof(IcoSpritePlaneVertex), false};
+    static const RhiVertexAttr vaPlane[11] = {
+        {0, 0, RHI_VTX_U16x2_UINT, offsetof(IcoSpriteVertex, x)},
+        {1, 0, RHI_VTX_U32x1, offsetof(IcoSpriteVertex, z)},
+        {2, 0, RHI_VTX_U8x4_UINT, offsetof(IcoSpriteVertex, rgba)},
+        {3, 0, RHI_VTX_F32x2, offsetof(IcoSpriteVertex, u)},
+        {4, 0, RHI_VTX_F32x1, offsetof(IcoSpriteStqVertex, q)},
+        {5, 0, RHI_VTX_F32x4, offsetof(IcoSpritePlaneVertex, c0)},
+        {6, 0, RHI_VTX_F32x4, offsetof(IcoSpritePlaneVertex, cx)},
+        {7, 0, RHI_VTX_F32x4, offsetof(IcoSpritePlaneVertex, cy)},
+        {8, 0, RHI_VTX_F32x4, offsetof(IcoSpritePlaneVertex, s0)},
+        {9, 0, RHI_VTX_F32x4, offsetof(IcoSpritePlaneVertex, sx)},
+        {10, 0, RHI_VTX_F32x4, offsetof(IcoSpritePlaneVertex, sy)},
+    };
     const int vu = k->vs >= RD_VS_VU_FIRST && k->vs <= RD_VS_VU_LAST;
     /* the VU program shaders read the stream, VuCB and
      * VuBoneCB from group 1 next to DrawCB, and have no vertex input */
@@ -673,6 +688,11 @@ static RhiPipeline createPipeline(const RdPipeKeyInt *k)
         d.vertexBindingCount = 1;
         d.vertexAttrs = vaStq;
         d.vertexAttrCount = 5;
+    } else if (k->vs >= RD_VS_SPRITE_PLANE_UI && k->vs <= RD_VS_SPRITE_STQ_PLANE_WORLD) {
+        d.vertexBindings = &vbPlane;
+        d.vertexBindingCount = 1;
+        d.vertexAttrs = vaPlane;
+        d.vertexAttrCount = 11;
     }
     d.topology = k->gs.prim == RD_PRIM_LINES ? RHI_TOPO_LINE_LIST : RHI_TOPO_TRIANGLE_LIST;
     d.cullNone = true;
@@ -1081,13 +1101,28 @@ uint32_t rd__enumerate_reachable_screen(RdPipeKeyInt *out, uint32_t max)
                                 int np = rd__plan_screen_draw(&s, kPrims[p],
                                                               space ? RD_SPACE_WORLD : RD_SPACE_UI,
                                                               RHI_FMT_RGBA8_UNORM, kDepth[dz], dp);
+                                /* a triangle command draws with its
+                                 * planes when every pass takes them
+                                 * (rd_replay.c doScreen, rd_screen_planes.c);
+                                 * a sprite command's passes (the same
+                                 * triangle topology) without */
+                                int planes = kPrims[p] == RD_PRIM_TRIANGLES;
+                                for (int i = 0; i < np && planes; i++) {
+                                    RdDrawPass t = dp[i];
+                                    planes = rd__plane_pass(&t);
+                                }
                                 for (int i = 0; i < np; i++) {
                                     n = rd__add_pipe_key(out, max, n, &dp[i].key);
                                     /* TEXA per texel: the same state on a
                                      * 24- or 16-bit texture under AEM */
-                                    RdPipeKeyInt kt = dp[i].key;
-                                    kt.fs = RD_FS_SPRITE_TEXA;
-                                    n = rd__add_pipe_key(out, max, n, &kt);
+                                    RdDrawPass kt = dp[i];
+                                    kt.key.fs = RD_FS_SPRITE_TEXA;
+                                    n = rd__add_pipe_key(out, max, n, &kt.key);
+                                    RdDrawPass pl = dp[i];
+                                    if (planes && rd__plane_pass(&pl) && rd__plane_pass(&kt)) {
+                                        n = rd__add_pipe_key(out, max, n, &pl.key);
+                                        n = rd__add_pipe_key(out, max, n, &kt.key);
+                                    }
                                 }
                                 /* STQ: a textured STQ triangle
                                  * command with Q != 1 (the lightning's strips,
@@ -1095,6 +1130,9 @@ uint32_t rd__enumerate_reachable_screen(RdPipeKeyInt *out, uint32_t max)
                                 if (space && kPrims[p] == RD_PRIM_TRIANGLES) {
                                     for (int i = 0; i < np; i++) {
                                         if (rd__stq_pass(&dp[i])) {
+                                            if (planes) {
+                                                rd__plane_pass(&dp[i]);
+                                            }
                                             n = rd__add_pipe_key(out, max, n, &dp[i].key);
                                         }
                                     }

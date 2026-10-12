@@ -633,6 +633,41 @@ void ui_settings_set_gpu_driver_host(const UiGpuDriverHost *host)
     s_gpuPending = 0;
 }
 
+/* Extras > Add to Steam: the host's job, and the popup for its answer */
+static int (*s_steamFn)(void);
+
+void ui_settings_set_steam_handler(int (*fn)(void))
+{
+    s_steamFn = fn;
+}
+
+static void steamAdd(void)
+{
+    static const struct {
+        UiStrId title, body;
+    } kAnswers[] = {
+        [UI_STEAM_ADDED] = {UI_STR_STEAM_ADDED, UI_STR_STEAM_ADDED_BODY},
+        [UI_STEAM_EXISTS] = {UI_STR_STEAM_EXISTS, UI_STR_COUNT},
+        [UI_STEAM_RUNNING] = {UI_STR_STEAM_RUNNING, UI_STR_STEAM_RUNNING_BODY},
+        [UI_STEAM_NOT_FOUND] = {UI_STR_STEAM_NOT_FOUND, UI_STR_STEAM_NOT_FOUND_BODY},
+        [UI_STEAM_NO_USER] = {UI_STR_STEAM_NO_USER, UI_STR_STEAM_NO_USER_BODY},
+        [UI_STEAM_FAILED] = {UI_STR_STEAM_FAILED, UI_STR_STEAM_FAILED_BODY},
+    };
+
+    int r;
+
+    if (s_steamFn == NULL) {
+        return;
+    }
+    r = s_steamFn();
+    if (r < 0 || r >= (int)N_OF(kAnswers)) {
+        r = UI_STEAM_FAILED;
+    }
+    fprintf(stderr, "extras: add to steam: %d\n", r);
+    ui_popup_push(ui_str(kAnswers[r].title),
+                  kAnswers[r].body == UI_STR_COUNT ? "" : ui_str(kAnswers[r].body));
+}
+
 static int isTouchOpt(int opt)
 {
     return opt == UI_OPT_TOUCH_MODE || opt == UI_OPT_TOUCH_SIZE || opt == UI_OPT_TOUCH_OPACITY;
@@ -758,6 +793,18 @@ static int aaLocked(void)
     IcoVideoOptions o;
     ico_video_get(&o);
     return ico_video_preset(&o) == ICO_VIDEO_ORIGINAL;
+}
+
+/* the value in force, which the row shows and steps from: the stored one
+   (Off under Original, ico_video_anti_alias), Off when the device does not
+   offer it (the renderer draws without: rd__aa_mode) */
+static int aaInForce(void)
+{
+    const int aa = ico_video_anti_alias();
+    if (aa <= ICO_AA_OFF || aa >= ICO_AA_COUNT || !(aaMask() & (1u << aa))) {
+        return ICO_AA_OFF;
+    }
+    return aa;
 }
 
 void ui_settings_set_models_handler(int (*fn)(void))
@@ -1043,8 +1090,7 @@ static const char *rawValue(int opt, char *buf, unsigned size)
     case UI_OPT_ANTI_ALIAS: {
         static const int aaStr[ICO_AA_COUNT] = {UI_STR_AA_OFF,   UI_STR_AA_SSAA2, UI_STR_AA_SSAA4,
                                                 UI_STR_AA_MSAA2, UI_STR_AA_MSAA4, UI_STR_AA_MSAA8};
-        const int aa = ico_video_anti_alias(); /* Off under Original */
-        return ui_str(aaStr[aa >= 0 && aa < ICO_AA_COUNT ? aa : ICO_AA_OFF]);
+        return ui_str(aaStr[aaInForce()]);
     }
     case UI_OPT_WINDOW_MODE: {
         /* the window's own answer when the host installed one */
@@ -1199,6 +1245,8 @@ static const char *rawValue(int opt, char *buf, unsigned size)
         return onOff(ico_opt_yorda_safe());
     case UI_OPT_DOOR_FIX:
         return onOff(ico_opt_door_fix());
+    case UI_OPT_NATURAL_CHAINS:
+        return onOff(ico_opt_natural_chains());
     case UI_OPT_LANGUAGE:
         return languageName(NonLinearCameraMove);
     case UI_OPT_DEVELOPER:
@@ -1236,6 +1284,9 @@ static int optShown(int opt, int link)
     }
     if (isExtrasOpt(opt)) {
         return onTitle(); /* the Extras row itself shows from both */
+    }
+    if (opt == UI_OPT_EXTRAS_STEAM) {
+        return onTitle() && s_steamFn != NULL;
     }
     if (opt == UI_OPT_CHAR_SWITCH) {
         return ui_settings_characters_in_viewer();
@@ -1401,10 +1452,10 @@ void ui_settings_step(UiSettingsOpt opt, int dir)
         if (aaLocked()) {
             return; /* Off under Original */
         }
-        /* Off, then the values the device can draw, around */
+        /* Off, then the values the device can draw, around, from the
+           value the row shows */
         const unsigned m = aaMask();
-        int a = o.antiAlias;
-        a = a >= 0 && a < ICO_AA_COUNT ? a : ICO_AA_OFF;
+        int a = aaInForce();
         for (int k = 0; k < ICO_AA_COUNT; k++) {
             a = stepIndex(a, ICO_AA_COUNT, dir);
             if (m & (1u << a)) {
@@ -1625,6 +1676,11 @@ void ui_settings_step(UiSettingsOpt opt, int dir)
     case UI_OPT_DOOR_FIX:
         ico_opt_set_door_fix(!ico_opt_door_fix());
         ico_config_set_bool("gameplay.door_fix", ico_opt_door_fix());
+        s_dirtyConfig = 1;
+        break;
+    case UI_OPT_NATURAL_CHAINS:
+        ico_opt_set_natural_chains(!ico_opt_natural_chains());
+        ico_config_set_bool("gameplay.natural_chains", ico_opt_natural_chains());
         s_dirtyConfig = 1;
         break;
     case UI_OPT_LANGUAGE: {
@@ -2161,6 +2217,7 @@ static void buildOptionPage(int id, int header, const int *opts, const int *strs
     case UI_PAGE_GAMEPLAY:
         addNote(pg, UI_OPT_YORDA, UI_STR_OPT_YORDA_NOTE);
         addNote(pg, UI_OPT_DOOR_FIX, UI_STR_OPT_DOOR_FIX_NOTE);
+        addNote(pg, UI_OPT_NATURAL_CHAINS, UI_STR_OPT_NATURAL_CHAINS_NOTE);
         addNote(pg, UI_OPT_PLAYERS, UI_STR_PLAYERS_NOTE);
         break;
     case UI_PAGE_EXTRAS:
@@ -2590,11 +2647,13 @@ static void build(void)
                                  UI_STR_BACK};
     /* Characters after Credits (from both entries; the other three
        from the title only) */
-    static const int extrasOpts[] = {UI_OPT_EXTRAS_MUSIC, UI_OPT_EXTRAS_MODELS,
-                                     UI_OPT_EXTRAS_CREDITS, UI_OPT_LINK, UI_OPT_BACK};
-    static const int extrasStrs[] = {UI_STR_EXTRAS_MUSIC, UI_STR_EXTRAS_MODELS,
-                                     UI_STR_EXTRAS_CREDITS, UI_STR_SECTION_CHARACTERS, UI_STR_BACK};
-    static const int extrasLinks[] = {-1, -1, -1, UI_PAGE_CHARACTERS, -1};
+    static const int extrasOpts[] = {UI_OPT_EXTRAS_MUSIC,   UI_OPT_EXTRAS_MODELS,
+                                     UI_OPT_EXTRAS_CREDITS, UI_OPT_LINK,
+                                     UI_OPT_EXTRAS_STEAM,   UI_OPT_BACK};
+    static const int extrasStrs[] = {UI_STR_EXTRAS_MUSIC,   UI_STR_EXTRAS_MODELS,
+                                     UI_STR_EXTRAS_CREDITS, UI_STR_SECTION_CHARACTERS,
+                                     UI_STR_EXTRAS_STEAM,   UI_STR_BACK};
+    static const int extrasLinks[] = {-1, -1, -1, UI_PAGE_CHARACTERS, -1, -1};
     /* the characters' colours, one row per IcoAppPart; Switch shows
        only inside the model viewer */
     static const int charOpts[] = {UI_OPT_CHAR_ICO_SKIN,
@@ -2663,11 +2722,16 @@ static void build(void)
     static const int ctlLinks[] = {
         UI_PAGE_REMAP, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
     /* the game's Film effect and Players, once the game is cleared */
-    static const int gameOpts[] = {UI_OPT_YORDA,       UI_OPT_STICK_FIX, UI_OPT_DOOR_FIX,
-                                   UI_OPT_FILM_EFFECT, UI_OPT_PLAYERS,   UI_OPT_BACK};
-    static const int gameStrs[] = {UI_STR_OPT_YORDA,    UI_STR_OPT_STICK_FIX,
-                                   UI_STR_OPT_DOOR_FIX, UI_STR_OPT_FILM_EFFECT,
-                                   UI_STR_OPT_PLAYERS,  UI_STR_BACK};
+    static const int gameOpts[] = {
+        UI_OPT_YORDA,       UI_OPT_STICK_FIX, UI_OPT_DOOR_FIX, UI_OPT_NATURAL_CHAINS,
+        UI_OPT_FILM_EFFECT, UI_OPT_PLAYERS,   UI_OPT_BACK};
+    static const int gameStrs[] = {UI_STR_OPT_YORDA,
+                                   UI_STR_OPT_STICK_FIX,
+                                   UI_STR_OPT_DOOR_FIX,
+                                   UI_STR_OPT_NATURAL_CHAINS,
+                                   UI_STR_OPT_FILM_EFFECT,
+                                   UI_STR_OPT_PLAYERS,
+                                   UI_STR_BACK};
     _Static_assert(sizeof(dispOpts) == sizeof(dispStrs), "a string for each Display row");
     _Static_assert(sizeof(ctlOpts) == sizeof(ctlStrs) && sizeof(ctlOpts) == sizeof(ctlLinks),
                    "a string and a link for each Controls row");
@@ -4146,6 +4210,10 @@ static int settingsProc(int first, int item)
                 POSITIVE_SE();
                 return to;
             }
+        }
+        if ((flags & LT_PAD_CROSS) && r->opt == UI_OPT_EXTRAS_STEAM) {
+            POSITIVE_SE();
+            steamAdd();
         }
         if ((flags & LT_PAD_CROSS) && r->opt == UI_OPT_GPU_ADD) {
             POSITIVE_SE();

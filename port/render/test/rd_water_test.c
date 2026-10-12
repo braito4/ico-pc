@@ -39,7 +39,9 @@
  *   cloth     DispClothMesh: a lit, textured grid in list 2 (ALPHA 0x44
  *             with ABE, CLAMP 0)
  *   frame W   the puddle, the pool and the barrier on a native frame 1376
- *             wide (32:9): SCENE at the frame's width, the copies across the
+ *             wide (32:9), and 2048 (48:9) and 2560 (the widest;
+ *             VIS-RULES item 18: no water work target narrower than the
+ *             frame's share of it): SCENE at the frame's width, the copies across the
  *             whole frame (UVs past the GS's 14 bits), the grid ST scale and
  *             the refraction STs per pixel of the frame
  *
@@ -330,6 +332,12 @@ void DrawLineG(void *from, void *fc, void *to, void *tc, int z)
 int gsb_ClipBox(float *p)
 {
     (void)p;
+    return 1;
+}
+
+/* GsBase.c: the cameras the last gsb_ClipBox tested (F12's cull line) */
+int gsb_HostCullViewsUsed(void)
+{
     return 1;
 }
 
@@ -2051,9 +2059,8 @@ static int sceneTargetsAt(int list, int fw, int *count)
     return ok;
 }
 
-static void checkFrameExtentsAtW(void)
+static void checkFrameExtentsAtW(int fw)
 {
-    const int fw = 1376;
     int n;
     setFrameWidth(fw);
 
@@ -2790,7 +2797,12 @@ static void recordingChecks(void)
     recordDots();
     checkDotsRecording();
     checkDotsWindow();
-    checkFrameExtentsAtW();
+    checkFrameExtentsAtW(1376);
+    /* VIS-RULES item 18 (v0.6.1): the reflection and copy blocks are the
+       frame's at 48:9 and at the widest too, never narrower than what the
+       frame's copy maps back over it */
+    checkFrameExtentsAtW(2048);
+    checkFrameExtentsAtW(2560);
     recordCloth();
     checkClothRecording();
     CHECK(s_vsCalls >= 3, "gsb_SetVSMatrix called by the effects (%d)", s_vsCalls);

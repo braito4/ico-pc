@@ -47,16 +47,27 @@ cbuffer FrameCB : register(b0, space0)
     // y, z the drawing camera's picture, its half-width and half-height in
     // GS pixels about (2048, 2048) (vu_common.hlsli vu_picture_half: 256 by
     // half the native height for the frame's camera, a reflection camera's
-    // own); w reserved. g_frameRegs[1] reserved. Nothing transforms a
+    // own); w the exact viewport's half texel (below). Nothing transforms a
     // position: a GS X is drawn where the game put it, at every aspect, and
     // the VU programs' region test reads the position as computed
     // (vu_common.hlsli vu_triangle_out).
+    // g_frameRegs[1] (g_vp): the exact viewport (rd_replay.c
+    // rd__frame_group_ex, setViewport): x, y 2 / its width and height in
+    // texels (a power of two, centred on the target: positions on the GS's
+    // 1/16 grid map to the same texel at every frame width, exactly),
+    // z, w the target's texels per GS pixel; 0 when the viewport is the
+    // target (the present, the films, the shader tests: the plain mapping).
     float4 g_frameRegs[2];
     float4 g_z;         // x scale (1 / 2^24), yz the bound target's texels per GS
                         // pixel (1 in Original), w 1: the VU programs output
                         // unquantised X, Y (only the developer switch
                         // ICO_RD_VU_OFFGRID, Enhanced on a scaled target)
-    float4 g_misc;      // x frame counter, y preset (0 Original, 1 Enhanced), zw reserved
+    float4 g_misc;      // x frame counter, y preset (0 Original, 1 Enhanced), zw the
+                        // target's share of the exact viewport (fullscreen_triangle)
+    float4 g_vpo;       // xy the exact viewport's centre this far (0 or 0.5 texel)
+                        // before the target's (its origin on a whole texel for an
+                        // odd-sized target: no device's viewport sub-pixel
+                        // precision is relied on), zw reserved
 };
 
 // ---------------------------------------------------------------- DrawCB
@@ -102,8 +113,9 @@ cbuffer DrawCB : register(b1, space1)
 // *_nodual entries, built with ICO_NO_DUAL=1; rd_pipeline.c rd__expand_no_dual):
 #define DF_NODUAL_FACTOR 65536u      // colour pass: c0.a is the blend factor c1 would carry
 #define DF_NODUAL_ALPHA_PASS 131072u // alpha pass: c0.a is the stored alpha (RGB unused)
-// sprite_texa_ps and vu_texa_ps only (gs_texa_texture): the sampler state
-// the four-tap filter reproduces. Other entries never read these bits.
+// sprite_texa_ps and vu_texa_ps (gs_texa_texture): the sampler state the
+// four-tap filter reproduces; the CLAMP bits also for gs_sample_lod_nearest
+// (DF_GS_LOD with DF_NEAREST). Other entries never read these bits.
 #define DF_TEXA_MAG_LINEAR 1024u  // TEX1.MMAG linear
 #define DF_TEXA_MIN_LINEAR 2048u  // TEX1.MMIN linear
 #define DF_TEXA_CLAMP_S 4096u     // CLAMP on s (else REPEAT)
@@ -117,6 +129,13 @@ cbuffer DrawCB : register(b1, space1)
 // A destination-read pass (the *_dstrov and *_dstatt entries): the channels
 // it writes, R G B A = bits 19..22 (shader_consts.h ICO_DF_WMASK_SHIFT)
 #define DF_WMASK_SHIFT 19u
+// A VU draw with a clip plane (vu_common.hlsli vu_plane_distance,
+// port/render/rd_chain.h): the pixels past it are discarded
+#define DF_PLANE 8388608u
+// Both of the draw's filters nearest (rd_replay.c fillDrawCB): gs_sample
+// takes the texel the GS takes (gs_nearest_uv; with DF_GS_LOD
+// gs_sample_lod_nearest, which reads DF_TEXA_CLAMP_S/T for the wrap)
+#define DF_NEAREST 16777216u
 
 // TEST.DATE. snap is the R8 DATE snapshot (1.0 where the destination alpha
 // had its MSB set when the snapshot was taken). Returns true when the
@@ -132,6 +151,7 @@ bool gs_date_discard(uint flags, float snap)
 }
 
 #define g_frame g_frameRegs[0]
+#define g_vp g_frameRegs[1]
 
 // ------------------------------------------------------------ vector forms
 
@@ -194,6 +214,19 @@ uint4 gs_bilerp(uint4 a, uint4 b, uint4 c, uint4 d, uint fu, uint fv)
 // sampler's: REPEAT or CLAMP at t1's own size. MAG or MIN by the
 // footprint (rho > 1 texel: minified), as the sampler picks it. uvn is the
 // normalised UV; flags g_mode.x.
+// The texel the GS's nearest filter takes at tc (in texels of the level
+// sampled): the coordinate at the GS's 4-bit texel fraction (rounded, as
+// the bilinear taps below take it), its integer part. The GS samples a
+// pixel at its integer coordinate, so a UV step of a whole or half texel
+// per pixel puts every few pixels exactly on a texel boundary, where the
+// GS takes the texel the boundary starts; the interpolated UV is that
+// value only to within float rounding, which depends on the pixel's place
+// in the target, and floor(tc) took the texel before on some of them.
+int2 gs_nearest_texel(float2 tc)
+{
+    return int2(floor(tc * 16.0 + 0.5)) >> 4;
+}
+
 uint4 gs_texa_load(Texture2D<float4> tex, int2 c, int2 size, uint flags)
 {
     c.x = (flags & DF_TEXA_CLAMP_S) != 0u ? clamp(c.x, 0, size.x - 1)
@@ -202,6 +235,17 @@ uint4 gs_texa_load(Texture2D<float4> tex, int2 c, int2 size, uint flags)
                                           : ((c.y % size.y) + size.y) % size.y;
     uint4 t = uint4(floor(tex.Load(int3(c, 0)) * 255.0 + 0.5));
     return gs_texa_expand(t, g_mode.y & 0xFFu, g_mode.y >> 8);
+}
+
+// The texel c of t1's mip level lv, 0..255, wrapped by DF_TEXA_CLAMP_S/T
+// (REPEAT or CLAMP at the level's size), before TEXA.
+uint4 gs_load_lv(Texture2D<float4> tex, int2 c, int2 size, uint lv, uint flags)
+{
+    c.x = (flags & DF_TEXA_CLAMP_S) != 0u ? clamp(c.x, 0, size.x - 1)
+                                          : ((c.x % size.x) + size.x) % size.x;
+    c.y = (flags & DF_TEXA_CLAMP_T) != 0u ? clamp(c.y, 0, size.y - 1)
+                                          : ((c.y % size.y) + size.y) % size.y;
+    return uint4(floor(tex.Load(int3(c, int(lv))) * 255.0 + 0.5));
 }
 
 uint4 gs_texa_texture(Texture2D<float4> tex, SamplerState smp, float2 uvn, uint flags)
@@ -219,7 +263,7 @@ uint4 gs_texa_texture(Texture2D<float4> tex, SamplerState smp, float2 uvn, uint 
     }
     const bool filtered = (flags & (minified ? DF_TEXA_MIN_LINEAR : DF_TEXA_MAG_LINEAR)) != 0u;
     if (!filtered) {
-        return gs_texa_load(tex, int2(floor(tc)), size, flags);
+        return gs_texa_load(tex, gs_nearest_texel(tc), size, flags);
     }
     const int2 q = int2(floor(tc * 16.0 + 0.5)) - int2(8, 8);
     const int2 i0 = q >> 4;
@@ -275,12 +319,58 @@ float gs_lod_level(float q)
     return max(lv, 1.0 / 256.0);
 }
 
-// The texel at uv: at the GS's level with DF_GS_LOD, else as the sampler
-// takes it (q unused).
+// The centre of the texel the GS's nearest filter takes at uvn (normalised
+// on tex's level 0, gs_nearest_texel), for the sampler to read: the
+// interpolated UV's own rounding took the texel on either side of a
+// boundary depending on the frame's width and the row.
+float2 gs_nearest_uv(Texture2D<float4> tex, float2 uvn)
+{
+    uint w, h;
+    tex.GetDimensions(w, h);
+    const float2 size = float2(max(w, 1u), max(h, 1u));
+    return (float2(gs_nearest_texel(uvn * size)) + 0.5) / size;
+}
+
+// gs_sample with DF_GS_LOD and DF_NEAREST (both filters nearest): the
+// GS's nearest texel (gs_nearest_texel) on the level gs_lod_level picks,
+// wrapped as the sampler wraps (DF_TEXA_CLAMP_S/T), and for MMIN 3 on the
+// level after it too, the two blended by the LOD's fraction in 256ths,
+// truncated (as gs_texa_texture_lod blends them).
+float4 gs_sample_lod_nearest(Texture2D<float4> tex, float2 uvn, float q)
+{
+    const float lv = gs_lod_level(q);
+    const uint l0 = uint(floor(lv));
+    uint w, h, n;
+    tex.GetDimensions(l0, w, h, n);
+    int2 size = max(int2(int(w), int(h)), int2(1, 1));
+    uint4 t = gs_load_lv(tex, gs_nearest_texel(uvn * float2(size)), size, l0, g_mode.x);
+    if (gs_lod(q) > 0.0 && (g_blend.w & 7u) == 3u) {
+        const uint f = uint(floor((lv - float(l0)) * 256.0));
+        if (f > 0u) {
+            tex.GetDimensions(l0 + 1u, w, h, n);
+            size = max(int2(int(w), int(h)), int2(1, 1));
+            const uint4 u =
+                gs_load_lv(tex, gs_nearest_texel(uvn * float2(size)), size, l0 + 1u, g_mode.x);
+            t = (t * (256u - f) + u * f) >> 8;
+        }
+    }
+    return float4(t) * (1.0 / 255.0);
+}
+
+// The texel at uv: at the GS's level with DF_GS_LOD (the GS's nearest
+// texel there with DF_NEAREST), the GS's nearest texel with DF_NEAREST
+// alone (the sampler has the one level), else as the sampler takes it (q
+// unused).
 float4 gs_sample(Texture2D<float4> tex, SamplerState smp, float2 uv, float q)
 {
     if ((g_mode.x & DF_GS_LOD) != 0u) {
+        if ((g_mode.x & DF_NEAREST) != 0u) {
+            return gs_sample_lod_nearest(tex, uv, q);
+        }
         return tex.SampleLevel(smp, uv, gs_lod_level(q));
+    }
+    if ((g_mode.x & DF_NEAREST) != 0u) {
+        return tex.SampleLevel(smp, gs_nearest_uv(tex, uv), 0.0);
     }
     return tex.Sample(smp, uv);
 }
@@ -288,12 +378,7 @@ float4 gs_sample(Texture2D<float4> tex, SamplerState smp, float2 uv, float q)
 // gs_texa_load at mip level lv of t1.
 uint4 gs_texa_load_lv(Texture2D<float4> tex, int2 c, int2 size, uint lv, uint flags)
 {
-    c.x = (flags & DF_TEXA_CLAMP_S) != 0u ? clamp(c.x, 0, size.x - 1)
-                                          : ((c.x % size.x) + size.x) % size.x;
-    c.y = (flags & DF_TEXA_CLAMP_T) != 0u ? clamp(c.y, 0, size.y - 1)
-                                          : ((c.y % size.y) + size.y) % size.y;
-    uint4 t = uint4(floor(tex.Load(int3(c, int(lv))) * 255.0 + 0.5));
-    return gs_texa_expand(t, g_mode.y & 0xFFu, g_mode.y >> 8);
+    return gs_texa_expand(gs_load_lv(tex, c, size, lv, flags), g_mode.y & 0xFFu, g_mode.y >> 8);
 }
 
 // gs_texa_texture's four taps at mip level lv (filtered: bilinear with the
@@ -305,7 +390,7 @@ uint4 gs_texa_level(Texture2D<float4> tex, float2 uvn, uint lv, bool filtered, u
     const int2 size = max(int2(int(w), int(h)), int2(1, 1));
     const float2 tc = uvn * float2(size);
     if (!filtered) {
-        return gs_texa_load_lv(tex, int2(floor(tc)), size, lv, flags);
+        return gs_texa_load_lv(tex, gs_nearest_texel(tc), size, lv, flags);
     }
     const int2 q = int2(floor(tc * 16.0 + 0.5)) - int2(8, 8);
     const int2 i0 = q >> 4;
@@ -578,18 +663,62 @@ DstOut gs_dst_out(uint4 col)
 
 // ------------------------------------------------------- vertex helpers
 
-// A 12.4 GS window coordinate (as two u16 in a uint2) to clip space, the
-// same for every space tag.  precise (here and in gs_depth,
-// vu_common.hlsli vu_ndc and vu_homogeneous_position): no fused
-// multiply-add, so every pipeline that draws a primitive gets the same
-// position and depth bits (the two-pass blend of a device without
-// dual-source blending draws it twice, the second pass GEQUAL against the
-// depth the first wrote: rd_pipeline.c).
+// A GS window coordinate in GS pixels (XYOFFSET-relative / 16) to clip
+// space, the same for every space tag.  precise (here and in gs_depth,
+// vu_common.hlsli vu_homogeneous_position): no fused multiply-add, so every
+// pipeline that draws a primitive gets the same position and depth bits
+// (the two-pass blend of a device without dual-source blending draws it
+// twice, the second pass GEQUAL against the depth the first wrote:
+// rd_pipeline.c).
+//
+// With the exact viewport (g_vp.x set, rd_replay.c s_vpExact) every step
+// is exact for a position on the GS's 1/16 grid at an integer scale: the
+// offset from the target's centre (GS pixels, 4 fraction bits), times the
+// scale, plus the half texel, is the texel offset from the centre; times
+// 2 / the viewport's power-of-two size is clip space; the GPU's viewport
+// transform multiplies it back by half that size and adds the centre.  The
+// clip-space numbers are the same at every frame width (a frame-wide
+// target's centre is GS 2048 and the viewport's size is one for every
+// target), so is what the GPU clips of a triangle.  The plain mapping
+// (1 / the target's size, then the GPU's multiply by it) rounds at any
+// size that is not a power of two.
+float2 gs_px_to_ndc(float2 px)
+{
+    if (g_vp.x != 0.0) {
+        precise float2 c = g_origin.xy + g_target.xy * 0.5;
+        precise float2 q = (px - c) * g_vp.zw + g_frame.w + g_vpo.xy;
+        precise float2 ndc = float2(q.x * g_vp.x, -(q.y * g_vp.y));
+        return ndc;
+    }
+    precise float2 p = px - g_origin.xy + g_origin.zw;
+    precise float2 ndc = float2(p.x * g_target.z * 2.0 - 1.0, 1.0 - p.y * g_target.w * 2.0);
+    return ndc;
+}
+
+// A 12.4 GS window coordinate (as two u16 in a uint2) to clip space.
 float2 gs_xy_to_ndc(uint2 xy)
 {
-    precise float2 px = float2(xy) * (1.0 / 16.0) - g_origin.xy + g_origin.zw;
-    precise float2 ndc = float2(px.x * g_target.z * 2.0 - 1.0, 1.0 - px.y * g_target.w * 2.0);
-    return ndc;
+    return gs_px_to_ndc(float2(xy) * (1.0 / 16.0));
+}
+
+// The exact viewport's attribute planes (vu_common.hlsli vu_attr_planes,
+// sprite.hlsl sprite_plane_attrs).  gs_texel_offset: GS pixels to texels
+// from the target's centre (gs_px_to_ndc's q: exact on the 1/16 grid at an
+// integer scale, the same numbers at every frame width).  gs_plane_offset:
+// a pixel's offset in texels from a corner given that way (pixel centres
+// are k + 0.5, the centre a whole or half texel: exact).
+float2 gs_texel_offset(float2 px)
+{
+    precise float2 c = g_origin.xy + g_target.xy * 0.5;
+    precise float2 q = (px - c) * g_vp.zw + g_frame.w;
+    return q;
+}
+
+float2 gs_plane_offset(float4 pos, float2 corner)
+{
+    precise float2 c = g_target.xy * g_vp.zw * 0.5;
+    precise float2 d = (pos.xy - c) - corner;
+    return d;
 }
 
 float gs_depth(uint z)
@@ -599,11 +728,16 @@ float gs_depth(uint z)
 }
 
 // Fullscreen triangle from SV_VertexID, no vertex buffer: ndc covers the
-// target, t is 0..1 across it (y down).
+// target, t is 0..1 across it (y down).  Under the exact viewport the
+// target is the share g_misc.zw (a power of two's fraction: exact) of it
+// about its centre.
 void fullscreen_triangle(uint id, out float4 pos, out float2 t)
 {
     float2 c = float2((id << 1) & 2u, id & 2u);
-    pos = float4(c.x * 2.0 - 1.0, 1.0 - c.y * 2.0, 0.0, 1.0);
+    float2 k = g_misc.z != 0.0 ? g_misc.zw : float2(1.0, 1.0);
+    // the viewport's centre g_vpo before the target's (0 in the plain mapping)
+    pos = float4((c.x * 2.0 - 1.0) * k.x + g_vpo.x * g_vp.x,
+                 (1.0 - c.y * 2.0) * k.y - g_vpo.y * g_vp.y, 0.0, 1.0);
     t = c;
 }
 

@@ -6,6 +6,7 @@
 #include "debug_exception.h"
 #include "cdvd.h"
 #include <assert.h>
+#include <stdio.h>
 #include <sound.h>
 
 /* port/audio/mix_gain.h: the voices of stream `no` are music, or effects for
@@ -41,6 +42,16 @@ static int adpcmSpuSlot[4]; /* derived name */
 static int adpcmStartNo = -1;
 
 static int adpcmStartBytes;
+
+/* PC port (issue 67): the sound-data entry and the stream number each of the
+   two stream records was opened for, so the request daemon can close a
+   fading stream at once when it needs the slot (AdpcmFadingCloseNow) and the
+   log can name streams. */
+static SqEntry *adpcmObj[2];
+
+static int adpcmNo[2];
+
+void ico_diag_log(const char *fmt, ...);
 
 void ico_adpcm_set_start(int no, int bytes)
 {
@@ -147,6 +158,9 @@ found:
     p = (AdpcmStream *)((char *)adpcmStream + i * 0x58);
     p->used = 1;
     obj->stream = p;
+    adpcmObj[i] = obj; /* PC port (issue 67) */
+    adpcmNo[i] = no;
+    ico_diag_log("adpcm: open %d slot %d", no, i);
     p->n = adpcmFile[no].channels;
     switch (p->n) {
     case 1:
@@ -306,9 +320,54 @@ void AdpcmClose(SqEntry *obj)
         debug_assert(adpcmSrcFile, 605);
         __assert(adpcmSrcFile, 605, "0");
     found:
+        /* PC port (issue 67): a stream whose fade ran out is closed "fade",
+           one closed by a call (or by AdpcmFadingCloseNow) "now" */
+        ico_diag_log("adpcm: close %d (%s)", adpcmNo[j], self->fadeStep != 0 ? "fade" : "now");
         adpcmStream[j].used = 0;
         self->mask = 0;
     }
+}
+
+/* PC port (issue 67): the request daemon (scpSubAdpcmPlay) found both stream
+   slots taken.  A stream that is already fading out is on its way to
+   closing and will free its slot within a few ticks, so close it now and
+   let the request take the slot.  Returns how many streams were closed;
+   0 when nothing was fading, and then the PS2's path runs (every stream
+   fades, the daemon waits).  Without this the PS2's path fades the stream
+   the boat scene had just opened along with the dying sea stream. */
+int AdpcmFadingCloseNow(void)
+{
+    int i;
+    int closed = 0;
+
+    for (i = 0; i < 2; i++) {
+        AdpcmStream *p = &adpcmStream[i];
+
+        if (p->used != 0 && p->fadeStep != 0 && adpcmObj[i] != 0) {
+            p->fadeStep = 0; /* logged as "now" */
+            soundDataClose(adpcmObj[i]);
+            if (p->used == 0) {
+                closed++;
+            }
+        }
+    }
+    return closed;
+}
+
+/* PC port (issue 67): the PS2's path is about to fade every stream out */
+void AdpcmLogFull(void)
+{
+    char list[32];
+    int n = 0;
+    int i;
+
+    list[0] = 0;
+    for (i = 0; i < 2; i++) {
+        if (adpcmStream[i].used != 0) {
+            n += snprintf(list + n, sizeof list - n, n != 0 ? " %d" : "%d", adpcmNo[i]);
+        }
+    }
+    ico_diag_log("adpcm: full: closing %s", list);
 }
 
 /* the levels come back out of the record the caller just wrote */

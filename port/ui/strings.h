@@ -472,12 +472,14 @@ typedef enum UiStrId {
     UI_STR_PHOTO_ACT_SAVE,
     UI_STR_PHOTO_ACT_HIDE,
     UI_STR_PHOTO_ACT_BACK,
+    UI_STR_PHOTO_ACT_FILM, /* the Film effect button, then the popup's title is UI_STR_OPT_FILM_EFFECT */
     /* the word before a mouse button's name on a key cap ("Mouse left") */
     UI_STR_PHOTO_MOUSE_PREFIX,
     /* the D-pad's Up and Down named on the photo panel (the game's button
        pictures have no up or down arrow) */
     UI_STR_PHOTO_UP,
     UI_STR_PHOTO_DOWN,
+    UI_STR_PHOTO_RIGHT, /* and Right, which cycles the Film effect */
     /* Options > Extras > Characters (settings.c, port/game/
        appearance.h): the page, its nine colour rows, Randomize and Reset,
        a skin tone's value ("%d" is the tone's number), the page's note
@@ -565,6 +567,9 @@ typedef enum UiStrId {
     /* Gameplay > Doorway fix ([gameplay] door_fix) and its explanation */
     UI_STR_OPT_DOOR_FIX,
     UI_STR_OPT_DOOR_FIX_NOTE,
+    /* Gameplay > Natural chains ([gameplay] natural_chains) and its explanation */
+    UI_STR_OPT_NATURAL_CHAINS,
+    UI_STR_OPT_NATURAL_CHAINS_NOTE,
     /* Display > Anti-aliasing ([video] anti_aliasing), its note and values */
     UI_STR_OPT_AA,
     UI_STR_OPT_AA_NOTE,
@@ -574,6 +579,19 @@ typedef enum UiStrId {
     UI_STR_AA_MSAA2,
     UI_STR_AA_MSAA4,
     UI_STR_AA_MSAA8,
+    /* Extras > Add to Steam: the row and the popups (title, then body) */
+    UI_STR_EXTRAS_STEAM,
+    UI_STR_STEAM_ADDED,
+    UI_STR_STEAM_ADDED_BODY,
+    UI_STR_STEAM_EXISTS,
+    UI_STR_STEAM_RUNNING,
+    UI_STR_STEAM_RUNNING_BODY,
+    UI_STR_STEAM_NOT_FOUND,
+    UI_STR_STEAM_NOT_FOUND_BODY,
+    UI_STR_STEAM_NO_USER,
+    UI_STR_STEAM_NO_USER_BODY,
+    UI_STR_STEAM_FAILED,
+    UI_STR_STEAM_FAILED_BODY,
     UI_STR_COUNT
 } UiStrId;
 

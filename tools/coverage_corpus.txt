@@ -1,0 +1,34 @@
+# Corpus for tools/coverage_check.py (ctest coverage_corpus).  MACHINE-LOCAL:
+# these are paths on the maintainer's machine; the dumps are never committed.
+# Missing files are reported and skipped.  Relative paths are relative to this
+# file; '*' globs are allowed.
+#
+# Line forms (the last line that names a dump wins for the keys it sets):
+#   default KEY=VALUE ...         the values every later dump starts with
+#   include FILE                  the dumps of another list (no keys), e.g. native_frame_dumps.txt
+#   PATH [KEY=VALUE ...]          a dump (.rddump or the F12 .zip), or a glob of them
+# Keys:
+#   pixels=PCT      the most the picture may change since the previous run: the percentage of
+#                   pixels whose largest channel difference is above tol (default 0.5)
+#   tol=N           per-channel difference (0..255) counted as a changed pixel (default 8)
+#   interp=T:PREV   also render the frame the presenter builds at alpha T after the dump PREV
+#                   (a path, .rddump or .zip), as the variant "interp"
+#   (draw counts: no key; any mesh drawn fewer times than in the previous run fails)
+#
+# Every dump renders at its own aspect, --enhanced, --present 1376x896, with --aa off and --aa msaa4.
+# The previous run's pictures and draw counts live in tools/.coverage/ (ICO_COVERAGE_DIR);
+# a run that passes rolls them forward, a failure keeps the old ones.  Seed or re-seed with
+#   python3 -I tools/coverage_check.py seed
+
+default pixels=0.5 tol=8
+
+# the user's dumps (v0.6.0 set); the consecutive triple v17553/v17589/v17614 also renders interpolated
+/primary/dev/ico-pc/dist/dumps/*.zip
+/primary/dev/ico-pc/dist/dumps/frame-20261011-090006-v17589.zip interp=0.5:/primary/dev/ico-pc/dist/dumps/frame-20261011-090005-v17553.zip
+/primary/dev/ico-pc/dist/dumps/frame-20261011-090007-v17614.zip interp=0.5:/primary/dev/ico-pc/dist/dumps/frame-20261011-090006-v17589.zip
+
+# the reporters' dumps
+/primary/dev/ico-pc/dist/dumps/reporters/*.rddump
+
+# the native frame gates' set
+include native_frame_dumps.txt

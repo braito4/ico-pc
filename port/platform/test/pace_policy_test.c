@@ -180,6 +180,122 @@ static void testPresentGap(void)
     }
 }
 
+/* The mode a numeric cap takes with vsync on (issue 74): a cap equal to the
+   refresh within 0.5 Hz takes FIFO with no timer gap; above or below it,
+   mailbox (above) with the cap's own gap */
+static void testCapEqualsRefresh(void)
+{
+    const uint64_t r6000 = 16666667ull, r5994 = 16683350ull, r120 = 8333333ull, r11988 = 8341675ull,
+                   r144 = 6944444ull;
+
+    /* equal: 60 on 60.00 and 59.94, 120 on 120.00 and 119.88, 144 on 144 */
+    CHECK(pace_cap_equals_refresh(60, r6000));
+    CHECK(pace_cap_equals_refresh(60, r5994));
+    CHECK(pace_cap_equals_refresh(120, r120));
+    CHECK(pace_cap_equals_refresh(120, r11988));
+    CHECK(pace_cap_equals_refresh(144, r144));
+    /* the window's rule: equal -> gap 0 (FIFO); otherwise the cap's gap */
+    CHECK(pace_present_gap(-1, true, true, r6000) != 0); /* uncapped: unchanged */
+    /* above the refresh: not equal, the cap's own gap (mailbox) */
+    CHECK(!pace_cap_equals_refresh(144, r6000));
+    CHECK(!pace_cap_equals_refresh(144, r120));
+    CHECK(!pace_cap_equals_refresh(240, r144));
+    CHECK(pace_present_gap(144, false, true, r6000) == 1000000000ull / 144);
+    CHECK(pace_present_gap(240, false, true, r144) == 1000000000ull / 240);
+    /* below the refresh: 60 on 120, 59 on 60, 30 on 60 */
+    CHECK(!pace_cap_equals_refresh(60, r120));
+    CHECK(!pace_cap_equals_refresh(59, r6000));
+    CHECK(!pace_cap_equals_refresh(30, r6000));
+    CHECK(pace_present_gap(60, false, true, r120) == 16666666ull);
+    /* the edges: 0.5 Hz either side of 60 still equal, a whole Hz not */
+    CHECK(pace_cap_equals_refresh(60, 1000000000ull * 2 / 119));
+    CHECK(pace_cap_equals_refresh(60, 1000000000ull * 2 / 121 + 1));
+    CHECK(!pace_cap_equals_refresh(60, 1000000000ull / 61));
+    CHECK(!pace_cap_equals_refresh(60, 1000000000ull / 59));
+    /* no cap */
+    CHECK(!pace_cap_equals_refresh(0, r6000));
+    CHECK(!pace_cap_equals_refresh(-1, r6000));
+    CHECK(!pace_cap_equals_refresh(60, 0));
+}
+
+/* The limiter's grid under a fake clock.  pace() in window_host.c loops per
+   simulated vsync: a game step (stepNs, no presents), then presents due on
+   the grid until the vsync's deadline; a present of a frame already shown
+   that would end past the deadline is skipped.  newGrid 0 is the old
+   scheduling (due at the last present's start + gap), 1 the grid. */
+static double simulate(int cap, int newGrid, uint64_t stepNs, uint64_t costNs, double seconds)
+{
+    const uint64_t period = 16683333ull, gap = 1000000000ull / (uint64_t)cap;
+    const uint64_t end = (uint64_t)(seconds * 1e9);
+    uint64_t t = 1000000000ull, deadline = t, last = 0, next = 0;
+    unsigned presents = 0;
+
+    while (t < 1000000000ull + end) {
+        int shown = 0;
+
+        deadline += period;
+        t += stepNs;
+        for (;;) {
+            const uint64_t due = newGrid ? next : (last ? last + gap : 0);
+
+            if (shown && t + costNs > deadline) {
+                break;
+            }
+            if (due && t < due) {
+                if (due >= deadline) {
+                    break;
+                }
+                t = due;
+                continue;
+            }
+            last = t;
+            next = pace_next_present(next, t, gap);
+            t += costNs;
+            presents++;
+            shown = 1;
+        }
+        if (t < deadline) {
+            t = deadline;
+        }
+    }
+    return presents / seconds;
+}
+
+static void testLimiterGrid(void)
+{
+    uint64_t n = 0;
+
+    CHECK(pace_next_present(0, 5000, 100) == 5100);
+    CHECK(pace_next_present(1000, 1050, 100) == 1100); /* on the grid */
+    CHECK(pace_next_present(1000, 1100, 100) == 1100); /* a gap late: still the grid */
+    CHECK(pace_next_present(1000, 1101, 100) == 1201); /* more than a gap: restart */
+    for (int i = 0; i < 1000; i++) {
+        n = pace_next_present(n, n ? n + 30 : 1, 100); /* late by 30 every time: no drift */
+    }
+    CHECK(n == 1 + 100 * 1000);
+
+    /* 4K-like costs: a 3 ms step and a 2.5 ms present up to 165 presents a
+       second, a 1 ms present at 240 */
+    static const int caps[] = {60, 120, 144, 165, 240};
+
+    for (unsigned i = 0; i < sizeof(caps) / sizeof(caps[0]); i++) {
+        const double g =
+            simulate(caps[i], 1, 3000000ull, caps[i] > 165 ? 1000000ull : 2500000ull, 10.0);
+
+        if (g < caps[i] - 0.5 || g > caps[i] + 0.5) {
+            printf("FAIL limiter cap %d: %.2f presents/s\n", caps[i], g);
+            fails++;
+        }
+    }
+    {
+        const double g = simulate(144, 1, 3000000ull, 2500000ull, 10.0);
+        const double o = simulate(144, 0, 3000000ull, 2500000ull, 10.0);
+
+        CHECK(g >= 143.5 && g <= 144.5);
+        CHECK(o < 143.0); /* the old scheduling fell short */
+    }
+}
+
 int main(void)
 {
     PaceHist h = {0};
@@ -284,6 +400,8 @@ int main(void)
 
     testAutoResolution();
     testPresentGap();
+    testCapEqualsRefresh();
+    testLimiterGrid();
 
     if (fails) {
         printf("pace_policy_test: %d failures\n", fails);

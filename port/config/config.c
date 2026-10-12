@@ -354,6 +354,11 @@ static const char first_run_text[] =
     "# \"auto\" follows the system; or en, fr, de, it, es.\n"
     "language = \"auto\"\n"
     "\n"
+    "[gameplay]\n"
+    "# true: a chain that comes down for Ico keeps its links the right size\n"
+    "# the whole way down; false shows it as the PS2 did.\n"
+    "natural_chains = false\n"
+    "\n"
     "[photo]\n"
     "# How fast photo mode's camera moves, turns, rolls and zooms (1.0 is normal).\n"
     "stick_speed = 1.0\n"
@@ -361,6 +366,9 @@ static const char first_run_text[] =
     "invert_y = false\n"
     "# true starts photo mode with its help panel hidden (Square shows it).\n"
     "hide_ui = false\n"
+    "# The Film effect photo mode starts with: 0 is off, 1 to 4 are the game's\n"
+    "# four (the d-pad Right button changes it in photo mode).\n"
+    "film_effect = 0\n"
     "# The folder for saved pictures, inside your user folder.\n"
     "png_dir = \"screenshots\"\n";
 

@@ -450,11 +450,13 @@ static void test_first_run(void)
     CHECK_STR(ico_config_get_string("audio.output", "?"), "auto");
     CHECK_STR(ico_config_get_string("audio.device", "?"), "");
     CHECK_STR(ico_config_get_string("game.language", "?"), "auto");
+    CHECK(ico_config_get_bool("gameplay.natural_chains", 1) == 0); /* Natural chains, off */
     CHECK_STR(ico_config_get_string("paths.iso", "?"), "");
     /* photo mode's keys */
     CHECK(ico_config_get_float("photo.stick_speed", 0.0) == 1.0);
     CHECK(ico_config_get_bool("photo.invert_y", 1) == 0);
     CHECK(ico_config_get_bool("photo.hide_ui", 1) == 0);
+    CHECK(ico_config_get_int("photo.film_effect", 7) == 0);
     CHECK_STR(ico_config_get_string("photo.png_dir", "?"), "screenshots");
     /* a second run does nothing, and a player's edited file is kept */
     write_file(toml, "# mine\n[video]\npreset = \"enhanced\"\n");

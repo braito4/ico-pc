@@ -18,9 +18,28 @@ pkg_stage_docs() {
     done
 }
 
-# pkg_write_ini <file> <windows|linux> <iso>: the package's ico-pc.ini, its
-# notes in the platform's wording, with the user's iso= value kept
+# pkg_write_ini <file> <windows|linux> <iso> [portable]: the package's
+# ico-pc.ini, its notes in the platform's wording, with the user's iso= value
+# kept. With a 4th argument "portable" the portable archive's file: the
+# line portable=1 is on (the game makes userdata beside the program).
 pkg_write_ini() {
+    local portable_block mp_script=make_portable.sh
+    [[ "$2" == windows ]] && mp_script=make_portable.cmd
+    if [[ "${4:-}" == portable ]]; then
+        portable_block='# portable: this copy keeps your saves, settings and the game'"'"'s data in a
+# folder named userdata next to the program (made at the first start),
+# instead of in your user folder. portable=0 turns it off, and the folder
+# is then not used.
+portable=1'
+    else
+        portable_block="# portable: remove the # in front of the next line to keep your saves,
+# settings and the game's data in a folder named userdata next to the
+# program, instead of in your user folder. Making an empty userdata folder
+# next to the program does the same, and portable=0 turns it off even when
+# that folder exists. The script $mp_script next to the program makes the
+# folder and offers to move your existing files into it.
+# portable=1"
+    fi
     if [[ "$2" == windows ]]; then
         cat > "$1" <<INI
 # ico-pc.ini: optional settings, one key=value per line; lines starting
@@ -39,13 +58,7 @@ iso=$3
 # doing to logs\\ico-pc.log and closes. 0 turns it off.
 watchdog=30
 
-# portable: remove the # in front of the next line to keep your saves,
-# settings and the game's data in a folder named userdata next to the
-# program, instead of in your user folder. Making an empty userdata folder
-# next to the program does the same, and portable=0 turns it off even when
-# that folder exists. To move an existing install, close the game and copy
-# everything from your user folder into userdata first.
-# portable=1
+$portable_block
 
 # texture packs: see textures\\SCES-50760\\replacements\\README.txt next to
 # the program.
@@ -74,13 +87,7 @@ iso=$3
 # doing to logs/ico-pc.log and closes. 0 turns it off.
 watchdog=30
 
-# portable: remove the # in front of the next line to keep your saves,
-# settings and the game's data in a folder named userdata next to the
-# program, instead of in your user folder. Making an empty userdata folder
-# next to the program does the same, and portable=0 turns it off even when
-# that folder exists. To move an existing install, close the game and copy
-# everything from your user folder into userdata first.
-# portable=1
+$portable_block
 
 # texture packs: see textures/SCES-50760/replacements/README.txt next to
 # ico_pc.
@@ -90,4 +97,19 @@ watchdog=30
 # folder. With a problem report, send logs/ico-pc.log from next to ico_pc.
 INI
     fi
+}
+
+# pkg_portable_readme_note <file>: appends the portable archive's paragraph
+# to the staged README.md
+pkg_portable_readme_note() {
+    cat >> "$1" <<'MD'
+
+## This is the portable download
+
+This copy keeps your saves, settings and the game's data in a folder named
+`userdata` beside the program (inside `x64` on Windows), so it can live on a
+USB stick or sit next to another copy. The folder is made at the first
+start. To use your user folder instead, put `portable=0` in `ico-pc.ini`.
+See [Saves and portable mode](docs/PORTABLE_MODE.md).
+MD
 }

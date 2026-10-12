@@ -6,6 +6,8 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # shellcheck source=../package_textures_lib.sh
 . "$here/tools/package_textures_lib.sh"
+# shellcheck source=../package_docs_lib.sh
+. "$here/tools/package_docs_lib.sh"
 t="$(mktemp -d)"; trap 'rm -rf "$t"' EXIT
 ok() { echo "ok: $1"; }
 bad() { echo "FAIL: $1" >&2; exit 1; }
@@ -44,4 +46,45 @@ tar -C "$l/pkg" --sort=name --owner=0 --group=0 --numeric-owner -czf "$t/out/a.t
 pkg_assert_tar_has "$t/out/a.tgz" "ico-pc-x/$rel" || bad "tar check misses a present entry"
 pkg_assert_tar_has "$t/out/a.tgz" "ico-pc-x/textures/other" && bad "tar check accepts a wrong path"
 ok "linux staging LF, tar check"
+
+# portable archives: the ini, the README paragraph, the archive checks
+for plat in windows linux; do
+    pkg_write_ini "$t/n-$plat.ini" "$plat" "x.iso"
+    pkg_write_ini "$t/p-$plat.ini" "$plat" "x.iso" portable
+    ! grep -qE '^portable=1$' "$t/n-$plat.ini" || bad "$plat: the normal ini has portable=1 on"
+    [[ "$(grep -cE '^portable=1$' "$t/p-$plat.ini")" == 1 ]] || bad "$plat: the portable ini lacks portable=1"
+    grep -q '^iso=x.iso$' "$t/p-$plat.ini" || bad "$plat: the portable ini lost iso="
+    grep -q 'make_portable' "$t/n-$plat.ini" || bad "$plat: the normal ini does not name the script"
+done
+ok "pkg_write_ini portable argument"
+printf '# ICO\n' > "$t/README.md"; pkg_portable_readme_note "$t/README.md"
+grep -q 'portable download' "$t/README.md" || bad "README note missing"
+ok "README paragraph"
+q="$t/arc"; mkdir -p "$q/ico-pc-x/x64"
+cp "$t/p-windows.ini" "$q/ico-pc-x/x64/ico-pc.ini"; sed 's/$/\r/' "$here/tools/portable/make_portable.cmd" > "$q/ico-pc-x/x64/m.cmd"
+pkg_zip_dir "$q" ico-pc-x "$t/out/c.zip"
+pkg_assert_zip_line "$t/out/c.zip" ico-pc-x/x64/ico-pc.ini '^portable=1$' || bad "zip line check misses a present line"
+pkg_assert_zip_line "$t/out/c.zip" ico-pc-x/x64/ico-pc.ini '^portable=0$' && bad "zip line check accepts an absent line"
+pkg_assert_zip_line "$t/out/c.zip" ico-pc-x/x64/m.cmd '\r$' || bad "CRLF script not seen as CRLF"
+pkg_assert_zip_lacks "$t/out/c.zip" ico-pc-x/x64/make_portable.cmd || bad "zip lacks check rejects a missing entry"
+pkg_assert_zip_lacks "$t/out/c.zip" ico-pc-x/x64/m.cmd && bad "zip lacks check accepts a present entry"
+mkdir -p "$q/ico-pc-x/x64"; cp "$t/p-linux.ini" "$q/ico-pc-x/ico-pc.ini"
+tar -C "$q" --sort=name --owner=0 --group=0 --numeric-owner -czf "$t/out/c.tgz" ico-pc-x
+pkg_assert_tar_line "$t/out/c.tgz" ico-pc-x/ico-pc.ini '^portable=1$' || bad "tar line check misses a present line"
+pkg_assert_tar_line "$t/out/c.tgz" ico-pc-x/ico-pc.ini '^portable=0$' && bad "tar line check accepts an absent line"
+pkg_assert_tar_lacks "$t/out/c.tgz" ico-pc-x/make_portable.sh || bad "tar lacks check rejects a missing entry"
+pkg_assert_tar_lacks "$t/out/c.tgz" ico-pc-x/ico-pc.ini && bad "tar lacks check accepts a present entry"
+ok "portable archive checks"
+
+# make_portable.sh on a temporary install and a temporary home
+m="$t/mp"; mkdir -p "$m/game" "$m/home/.local/share/ico-pc/ico-pc/memcard"
+cp "$here/tools/portable/make_portable.sh" "$m/game/"; chmod 755 "$m/game/make_portable.sh"
+echo save > "$m/home/.local/share/ico-pc/ico-pc/memcard/s"
+HOME="$m/home" XDG_DATA_HOME= "$m/game/make_portable.sh" </dev/null >"$m/out1" 2>&1 || bad "make_portable.sh failed on a fresh copy"
+[[ -d "$m/game/userdata" ]] || bad "make_portable.sh made no userdata"
+[[ -f "$m/home/.local/share/ico-pc/ico-pc/memcard/s" ]] || bad "make_portable.sh moved files without asking"
+echo x > "$m/game/userdata/f"
+if HOME="$m/home" "$m/game/make_portable.sh" </dev/null >"$m/out2" 2>&1; then bad "make_portable.sh accepted a non-empty userdata"; fi
+rm "$m/game/userdata/f"
+ok "make_portable.sh refuses and creates"
 echo "package_textures_test: OK"

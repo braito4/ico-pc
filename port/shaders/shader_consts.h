@@ -30,17 +30,27 @@ typedef struct IcoFrameCB {
      * its half-width and half-height in GS pixels about (2048, 2048): 256 by
      * half the native height for the frame's camera, a reflection camera's
      * own (RdCamera.pictureW/H); the VU programs' rule for a triangle the
-     * region test drops reads them (vu_common.hlsli vu_picture_half).  The
-     * rest, and frameReserved, reserved (0).  No position is transformed. */
+     * region test drops reads them (vu_common.hlsli vu_picture_half).
+     * frame[3] the exact viewport's half texel (0.5, or 0 for the MSAA
+     * epoch's expanded sprites).  No position is transformed.
+     * vp: the exact viewport (common.hlsli g_vp, gs_px_to_ndc): 2 / its
+     * width and height in texels (a power of two centred on the target),
+     * the target's texels per GS pixel; all 0 when the viewport is the
+     * target (the plain mapping). */
     float frame[4];
-    float frameReserved[4];
+    float vp[4];
 
     /* x = 1 / 2^24 (PSMZ24 scale); yz the bound target's texels per GS
      * pixel (1 in Original); w = 1: the VU programs output unquantised X, Y
      * (only the developer switch ICO_RD_VU_OFFGRID; Enhanced, a scaled
      * target) */
     float z[4];
-    float misc[4]; /* x frame counter, y preset */
+    float misc[4]; /* x frame counter, y preset, zw the target's share of the exact
+                    * viewport (common.hlsli fullscreen_triangle; 0: all of it) */
+    /* xy: the exact viewport's centre lies this far (0 or 0.5 texel) before
+     * the target's: its origin is kept on a whole texel for an odd-sized
+     * target (common.hlsli g_vpo); zw reserved (0) */
+    float vpo[4];
 } IcoFrameCB;
 
 /* DrawCB: group 1, slot 1 (register b1, space1). */
@@ -88,7 +98,9 @@ enum {
     ICO_DF_DATM = 256,     /* with DF_DATE: pass where the MSB is 1 (else where it is 0) */
     ICO_DF_AA1_FULL = 512, /* sprite_aa1_ps: PRIM.ABE 0, the coverage alpha replaces every alpha */
     /* the sampler state sprite_texa_ps and vu_texa_ps filter
-     * by (gs_texa_texture in common.hlsli); set only for those entries */
+     * by (gs_texa_texture in common.hlsli); set only for those entries,
+     * and the CLAMP bits for a nearest draw at the GS's level
+     * (ICO_DF_NEAREST with ICO_DF_GS_LOD) */
     ICO_DF_TEXA_MAG_LINEAR = 1024,
     ICO_DF_TEXA_MIN_LINEAR = 2048,
     ICO_DF_TEXA_CLAMP_S = 4096,
@@ -104,7 +116,14 @@ enum {
     ICO_DF_NODUAL_ALPHA_PASS = 131072,
     /* the texture has its GS mipmap levels: sample at the GS's level from
      * Q and TEX1's fields in DrawCB.blend[3] (common.hlsli gs_lod) */
-    ICO_DF_GS_LOD = 262144
+    ICO_DF_GS_LOD = 262144,
+    /* bit 23 (past the write mask's 19..22): a VU draw with a clip plane
+     * (VuCB vu_batch.zw, rd_chain.h) discards the pixels past it */
+    ICO_DF_PLANE = 8388608,
+    /* both of the draw's filters nearest: common.hlsli gs_sample reads the
+     * texel the GS takes (gs_nearest_uv; with ICO_DF_GS_LOD
+     * gs_sample_lod_nearest, wrapped by ICO_DF_TEXA_CLAMP_S/T) */
+    ICO_DF_NEAREST = 16777216
 };
 
 /* DrawCB.mode[0] bits 19..22 on a destination-read pass (the *_dstrov and
@@ -196,6 +215,23 @@ typedef struct IcoSpriteStqVertex {
     float q;
 } IcoSpriteStqVertex;
 
+/* The vertex of sprite_plane_*_vs and sprite_stq_plane_*_vs, 120 bytes
+ * (EXACT-RASTER, v0.6.1): a screen-prim triangle's vertex (q 1 for a prim
+ * without STQ) and its triangle's planes, the same on its three vertices
+ * (rd_screen_planes.c): the colour at the triangle's first corner and its
+ * change per GS pixel across and down (loc 5..7), S, T and Q there (S and
+ * T in texels of t1, times Q) and their changes (loc 8..10, xyz), the first
+ * corner's GS x and y in s0[3] and sx[3], 1 in sy[3].  sprite.hlsl
+ * sprite_plane_attrs evaluates them per pixel, the same at every frame
+ * width. */
+typedef struct IcoSpritePlaneVertex {
+    IcoSpriteStqVertex s;
+    float c0[4], cx[4], cy[4];
+    float s0[4], sx[4], sy[4];
+} IcoSpritePlaneVertex;
+
+_Static_assert(sizeof(IcoSpritePlaneVertex) == 120, "IcoSpritePlaneVertex size");
+
 _Static_assert(offsetof(IcoFrameCB, view) == 0, "view");
 
 _Static_assert(offsetof(IcoFrameCB, proj) == 64, "proj");
@@ -212,13 +248,15 @@ _Static_assert(offsetof(IcoFrameCB, origin) == 240, "origin");
 
 _Static_assert(offsetof(IcoFrameCB, frame) == 256, "frame");
 
-_Static_assert(offsetof(IcoFrameCB, frameReserved) == 272, "frameReserved");
+_Static_assert(offsetof(IcoFrameCB, vp) == 272, "vp");
 
 _Static_assert(offsetof(IcoFrameCB, z) == 288, "z");
 
 _Static_assert(offsetof(IcoFrameCB, misc) == 304, "misc");
 
-_Static_assert(sizeof(IcoFrameCB) == 320, "FrameCB size");
+_Static_assert(offsetof(IcoFrameCB, vpo) == 320, "vpo");
+
+_Static_assert(sizeof(IcoFrameCB) == 336, "FrameCB size");
 
 _Static_assert(offsetof(IcoDrawCB, mode) == 16, "mode");
 
@@ -255,7 +293,7 @@ _Static_assert(sizeof(IcoSpriteStqVertex) == 24, "STQ vertex size");
  * stream (float4 quadwords as the VIF unpacked them), b2 = IcoVuCB,
  * b3 = IcoVuBoneCB (cluster only). */
 
-/* VuCB: group 1, slot 2 (register b2, space1). 608 bytes.
+/* VuCB: group 1, slot 2 (register b2, space1). 624 bytes.
  *   mem    VU1 data memory 0..35 as the program reads it: 0..15 the common
  *          block (RdVuCommon), 16..27 the per-object matrices, 28..35 the
  *          light matrices (vu_common.hlsli lists what each program keeps
@@ -264,11 +302,17 @@ _Static_assert(sizeof(IcoSpriteStqVertex) == 24, "STQ vertex size");
  *          ICO_VU_* flags, vertices per batch (0 = one batch)
  *   batch  qwords before each batch's vertices (GIF tag 1; mesh: tag and
  *          colour 2, 3 with the VIF qword of a Mesh3D buffer), qwords after
- *          them (a Mesh3D buffer's MSCNT: 1), 0, 0 */
+ *          them (a Mesh3D buffer's MSCNT: 1), the clip plane's code and its
+ *          offset's float bits (0, 0: none; rd_chain.h, static prelit and lit
+ *          meshes)
+ *   strip  the draw's first vertex and one past its last (the region
+ *          rule's strip test, vu_common.hlsli vu_strip_of; both 0: no strip
+ *          test), 0, 0 */
 typedef struct IcoVuCB {
     float mem[36][4];
     uint32_t draw[4];
     uint32_t batch[4];
+    uint32_t strip[4];
 } IcoVuCB;
 
 /* VuBoneCB: group 1, slot 3 (register b3, space1): VU memory 16..255, the
@@ -281,15 +325,19 @@ typedef struct IcoVuBoneCB {
 enum {
     ICO_VU_CLIP_REGION = 0,  /* region test: a failing triangle whose clipped extent
                               * reaches the camera's picture (FrameCB frame[1], [2]) is dropped,
-                              * one wholly beside it GPU-clipped at the native frustum, in
-                              * either preset; every one GPU-clipped under
-                              * ICO_VU_BEHIND_EYE */
+                              * one wholly beside it GPU-clipped at the native frustum; every
+                              * one GPU-clipped under ICO_VU_BEHIND_EYE; under
+                              * ICO_VU_EXTENDED one in front of the eye is GPU-clipped unless
+                              * it belongs to a card (vu_common.hlsli vu_region_rule) */
     ICO_VU_CLIP_NONE = 1,    /* normal_c code 34: no test, X/Y wrap to 16 bits */
     ICO_VU_CLIP_SCISSOR = 2, /* code 36: clip-space flags, trivial reject, GPU clipping */
     ICO_VU_CLIP_MASK = 3,
     ICO_VU_PROBE = 16,      /* tests: one value per pixel of a 16-wide RGBA8_UINT target */
     ICO_VU_CUT_ONLY = 32,   /* scissor: only the triangles SCISSOR_COMMON draws (first draw) */
     ICO_VU_KICK_ONLY = 64,  /* scissor: only the triangles the strip kicks (second draw) */
+    ICO_VU_EXTENDED = 128,  /* region test: the picture is not the PS2's out of the box (the
+                             * Enhanced preset, wider than 4:3 or scaled up; rd_replay.c
+                             * vuExtended) */
     ICO_VU_BEHIND_EYE = 256 /* region test and particle window: a failing triangle or
                                * sprite is GPU-clipped, not dropped, in either preset
                                * (photo mode's free camera, RdCamera.freeCamera) */
@@ -316,9 +364,15 @@ enum {
 #define ICO_VU_INDEX_LATER 0x40000000u
 /* The content table (port/render/rd_content_hide.c, rd_mesh.c
  * markContentHidden), set on the three indices of a triangle of a listed
- * artist trick: HIDE, drawn nowhere.  vu_common.hlsli's VU_INDEX_HIDE.
- * Bit 28 is unused */
+ * artist trick: HIDE, drawn nowhere.  vu_common.hlsli's VU_INDEX_HIDE */
 #define ICO_VU_INDEX_HIDE 0x20000000u
+/* VIS-WINDOW: set on the three indices of a triangle of a joined strip (one
+ * that shares a vertex position with another strip of its mesh, not its
+ * double-sided copy; rd_mesh.c markJoinedStrips; prelit, lit and skinned
+ * meshes): not a card, so the region rule draws its failing triangles
+ * clipped outside the out-of-the-box state.  vu_common.hlsli's
+ * VU_INDEX_JOINED */
+#define ICO_VU_INDEX_JOINED 0x10000000u
 #define ICO_VU_INDEX_MASK 0x0FFFFFFFu
 /* kick * 4 + corner below 2^28: the meshes rd_mesh.c marks have fewer
  * vertices */
@@ -330,8 +384,9 @@ _Static_assert(offsetof(IcoVuCB, mem) == 0, "vu mem");
 _Static_assert(offsetof(IcoVuCB, draw) == 576, "vu draw");
 
 _Static_assert(offsetof(IcoVuCB, batch) == 592, "vu batch");
+_Static_assert(offsetof(IcoVuCB, strip) == 608, "vu strip");
 
-_Static_assert(sizeof(IcoVuCB) == 608, "VuCB size");
+_Static_assert(sizeof(IcoVuCB) == 624, "VuCB size");
 
 _Static_assert(sizeof(IcoVuBoneCB) == 3840, "VuBoneCB size");
 

@@ -46,6 +46,8 @@
 #ifdef __ANDROID__
 #include "android/gpu_driver_android.h"
 #include "android/host_android.h"
+#elif !defined(ICO_IOS)
+#include "steam_shortcut.h"
 #endif
 
 /* The window's first client size: 4:3, three times 320 x 240. */
@@ -120,7 +122,9 @@ static struct {
     uint32_t frame;          /* rd_frame_number() last seen */
     uint32_t presentedFrame; /* the frame of the last present */
     Uint64 tickAt, tickPrev; /* the pace deadlines (simulated time) the last two frames closed at */
-    Uint64 lastPresent;
+    Uint64 lastPresent;      /* the last present's start (the alpha clock's) */
+    Uint64
+        nextPresent;   /* when the next present is due (0: now); the grid pace_next_present keeps */
     Uint64 cost;       /* how long the last rd_present took */
     PaceHist paceHist; /* the last presents' costs (pace_policy.h) */
     bool paceSlow;     /* pace_slow_present after the last present */
@@ -141,7 +145,9 @@ static struct {
     Uint64 paceEnd;
     double stepSumMs, stepMaxMs;
     unsigned stepCount;
-    int mailbox; /* rhi_prefer_mailbox as last applied: vsync on and presenting between ticks */
+    int mailbox;  /* rhi_prefer_mailbox as last applied: vsync on and presenting between ticks */
+    int vsync;    /* vsync on and presenting between ticks */
+    int fifoLock; /* vsync on and the cap equals the display's refresh: FIFO, a present a vblank */
     /* the slow-step lines ([dev] slow_step_ms, 0 off): the threshold,
        the block's count and lines, ico_window_pump's time, the renderer's
        texture decodes and pipeline creations at the last pace's end */
@@ -153,6 +159,8 @@ static struct {
     int legacyAlpha; /* ICO_RD_S2_LEGACY=1 (read in video_settings) */
     /* F11, the stats line every second until this time (0: off) */
     Uint64 fastUntil;
+    /* F12's presented-picture PNG while its capture is pending ("": none) */
+    char presentPng[ICO_PATH_MAX];
 } s_pres;
 
 /* resolution "auto" (video_options.h ICO_RES_AUTO): the
@@ -193,6 +201,17 @@ static struct {
 
 /* The renderer's settings from the display options and the window's pixel
    size. */
+/* The display's refresh period in ns (0 unknown); fallback is returned when
+   the display reports none */
+static Uint64 display_refresh_ns(Uint64 fallback)
+{
+    const SDL_DisplayMode *dm =
+        s_window != NULL ? SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(s_window)) : NULL;
+
+    return dm != NULL && dm->refresh_rate > 1.0f ? (Uint64)(1e9 / (double)dm->refresh_rate)
+                                                 : fallback;
+}
+
 static void video_settings(RdSettings *rs, int w, int h)
 {
     IcoVideoOptions o;
@@ -254,12 +273,30 @@ static void video_settings(RdSettings *rs, int w, int h)
 
         s_pres.legacyAlpha = e != NULL && e[0] != '\0' && e[0] != '0';
     }
+    if (s_pres.framerate != ico_video_framerate()) {
+        s_pres.nextPresent = 0; /* a new limit starts a new grid */
+    }
     s_pres.framerate = ico_video_framerate();
     rs->interpolate = (uint8_t)(s_pres.framerate != ICO_FRAMERATE_ORIGINAL);
     /* presenting between ticks with vsync on, the swapchain prefers the
        mailbox mode: no tearing, and a present never waits for the display,
        so it cannot hold the simulation back */
-    s_pres.mailbox = rs->vsync && rs->interpolate;
+    s_pres.vsync = rs->vsync && rs->interpolate;
+    /* A cap equal to the display's rate (60 on 59.94 or 60.00 Hz, 120 on
+       119.88 or 120.00) takes FIFO instead: the blocking present locks each
+       present to a vblank, one picture a refresh, which a timer between
+       mailbox presents cannot do against the simulation's 59.94 Hz clock
+       (issue 74).  D3D12 is FIFO already. */
+    {
+        const int lock =
+            s_pres.vsync && pace_cap_equals_refresh(s_pres.framerate, display_refresh_ns(0));
+        if (lock != s_pres.fifoLock) {
+            fprintf(stderr, "window: the cap %s the refresh: present mode %s\n",
+                    lock ? "equals" : "no longer equals", lock ? "fifo" : "as the options say");
+        }
+        s_pres.fifoLock = lock;
+    }
+    s_pres.mailbox = s_pres.vsync && !s_pres.fifoLock;
     rhi_prefer_mailbox(s_pres.mailbox != 0);
 }
 
@@ -269,6 +306,20 @@ static int window_fullscreen(void)
 {
     return s_window != NULL && (SDL_GetWindowFlags(s_window) & SDL_WINDOW_FULLSCREEN) != 0;
 }
+
+#if !defined(__ANDROID__) && !defined(ICO_IOS)
+/* Extras > Add to Steam: steam_shortcut.c's answers are the menu's */
+_Static_assert(ICO_STEAM_ADDED == UI_STEAM_ADDED && ICO_STEAM_EXISTS == UI_STEAM_EXISTS &&
+                   ICO_STEAM_RUNNING == UI_STEAM_RUNNING &&
+                   ICO_STEAM_NOT_FOUND == UI_STEAM_NOT_FOUND &&
+                   ICO_STEAM_NO_USER == UI_STEAM_NO_USER && ICO_STEAM_FAILED == UI_STEAM_FAILED,
+               "the Steam answers match the menu's");
+
+static int steam_add_handler(void)
+{
+    return ico_steam_add_this_game();
+}
+#endif
 
 /* The window's mode now, from SDL's flags: fullscreen, a
    frameless window, or windowed.  Android's window is fullscreen. */
@@ -917,7 +968,9 @@ int ico_window_open(unsigned int gsW, unsigned int gsH)
                 o.modelPack ? "on" : "off", o.dumpModels && ico_opt_developer_mode() ? "on" : "off",
                 rhi_limits()->depthStencilFormatName);
         fprintf(stderr, "window: present mode %s%s\n", rhi_present_mode_name(),
-                rhi_present_mailbox() ? " (vsync without waiting on the display)" : "");
+                s_pres.fifoLock         ? " (the cap equals the refresh)"
+                : rhi_present_mailbox() ? " (vsync without waiting on the display)"
+                                        : "");
         /* a program hooking the graphics API, once */
         ico_diag_set_effects_program(rhi_injector_name() != NULL);
         if (rhi_injector_name() != NULL) {
@@ -944,6 +997,10 @@ int ico_window_open(unsigned int gsW, unsigned int gsH)
     ui_settings_set_window_mode_query(window_mode_now);
     /* Display > Texture pack says "None installed" without one */
     ui_settings_set_texture_pack_count(texpack_count);
+#if !defined(__ANDROID__) && !defined(ICO_IOS)
+    /* Extras > Add to Steam (desktop only; the Android build never sets it) */
+    ui_settings_set_steam_handler(steam_add_handler);
+#endif
 #ifdef __ANDROID__
     /* the Graphics driver page, and "Quit game" for the
        title's Quit row (a phone has no desktop to quit to); both before the
@@ -1005,7 +1062,9 @@ static void set_capture(int mode)
 static void pointer_visibility(void)
 {
     /* a movie stops the game's Main loop (and the pointer's tick) before
-       the menus: the left button is Cross again (it skips the movie) */
+       the menus: the left button keeps its binding (Cross) and Cross does
+       nothing in a movie; only Start skips one, on every input (a gamepad,
+       a key bound to Start, touch START; main.c movie_abort_check) */
     if (mpegPlay != 0) {
         ico_pointer_set_menu(0);
     }
@@ -1160,6 +1219,14 @@ static void frame_dump(void)
         return;
     }
     const int ok = rd_dump_on_demand(dump, png);
+    /* the picture as presented, frame-<stamp>-present.png, at the next
+       present (the .png above is the whole DISPLAY frame, which at 16:9 is
+       wider than the window's picture; Gate B reads that one) */
+    if (ico_frame_present_path(dir, stamp, s_pres.presentPng, sizeof(s_pres.presentPng)) == 0 &&
+        !rd_capture_presented(s_pres.presentPng)) {
+        fprintf(stderr, "window: F12: the presented picture could not be armed\n");
+        s_pres.presentPng[0] = '\0';
+    }
     /* the recording up to this moment, for the same report */
     ico_input_record_flush();
     /* the zip is made after the dump is closed; with --console the log
@@ -1390,7 +1457,13 @@ static void photo_pump(void)
 
             base = b2 != NULL && (base == NULL || b2 > base) ? b2 : base;
 #endif
-            ui_photo_capture_done(r > 0, base != NULL ? base + 1 : path);
+            if (s_pres.presentPng[0] != '\0' && strcmp(path, s_pres.presentPng) == 0) {
+                /* F12's presented picture: no photo popup */
+                fprintf(stderr, "window: F12: %s %s\n", r > 0 ? "wrote" : "could not write", path);
+                s_pres.presentPng[0] = '\0';
+            } else {
+                ui_photo_capture_done(r > 0, base != NULL ? base + 1 : path);
+            }
         }
     }
 }
@@ -1494,6 +1567,12 @@ int ico_window_pump(void)
             if (window_mode_now() == ICO_WINDOW_BORDERLESS) {
                 ico_window_video_refit(s_window);
             }
+            /* the refresh may differ: whether the cap equals it, and with
+               it the present mode, is decided again */
+            video_apply(1);
+            break;
+        case SDL_EVENT_DISPLAY_CURRENT_MODE_CHANGED:
+            video_apply(1);
             break;
         case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED: {
             /* a drag sends one per size: print when the fullscreen
@@ -2147,7 +2226,7 @@ static void pace_log(Uint64 now)
             "%.1f s: %.1f "
             "presented fps, %.1f game fps; %u vsyncs (%.1f Hz simulated), %u resyncs dropping "
             "%.0f ms; longest replay %.1f ms of %u; %u steps over %.0f ms; framerate %s, present "
-            "%s, display %.1f Hz (%.2f presents a refresh), window %dx%d%s\n",
+            "%s, display %.2f Hz (%.3f presents a refresh), window %dx%d%s\n",
             s_pres.statPresents, movie - s_pres.statMovie, movieFailed, s_pres.statFrames,
             fn - s_pres.statFrameNo, sec, s_pres.statPresents / sec, s_pres.statFrames / sec,
             s_pres.statVsyncs, s_pres.statVsyncs / sec, s_pres.statResyncs,
@@ -2364,13 +2443,9 @@ static void pace(int hz)
        simulated period (pace_policy.h: the cost is smoothed, with
        hysteresis, and the limit is higher with an effects program
        loaded). */
-    Uint64 refresh = period;
     Uint64 gap;
+    const Uint64 refresh = display_refresh_ns(period);
     {
-        const SDL_DisplayMode *dm = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(s_window));
-        refresh = dm != NULL && dm->refresh_rate > 1.0f ? (Uint64)(1e9 / (double)dm->refresh_rate)
-                                                        : period;
-
         /* "uncapped" with vsync on (s_pres.mailbox: rhi_prefer_mailbox):
            a little less than one display refresh between presents, in
            mailbox mode as under FIFO, so the presents average about one a
@@ -2378,10 +2453,18 @@ static void pace(int hz)
            Two a refresh in mailbox mode drew a picture the display never
            showed for every one it did, which kept a handheld's GPU near its
            limit; a phone also lost the time for the game.  Without vsync
-           "uncapped" is back to back (pace_policy.h pace_present_gap) */
-        gap = pace_present_gap(s_pres.framerate,
-                               s_pres.framerate == ICO_FRAMERATE_UNCAPPED && s_pres.mailbox,
-                               rhi_present_mailbox(), refresh);
+           "uncapped" is back to back.  A cap equal to the refresh has no
+           gap: FIFO's blocking present is the timer (s_pres.fifoLock).
+           Any other cap is its own gap, on the drift-free grid
+           (pace_policy.h pace_present_gap, pace_next_present) */
+        gap = s_pres.fifoLock
+                  ? 0
+                  : pace_present_gap(s_pres.framerate,
+                                     s_pres.framerate == ICO_FRAMERATE_UNCAPPED && s_pres.mailbox,
+                                     rhi_present_mailbox(), refresh);
+        if (!gap) {
+            s_pres.nextPresent = 0;
+        }
     }
     Uint64 tick = s_pres.tickPrev ? s_pres.tickAt - s_pres.tickPrev : 2 * period;
     tick = tick < period ? period : (tick > 4 * period ? 4 * period : tick);
@@ -2395,14 +2478,15 @@ static void pace(int hz)
            end past the deadline (its cost the last present's): the next
            simulation step is never late for one */
         if (s_pres.presentedFrame == s_pres.frame &&
-            (now >= s_deadline || s_pres.paceSlow || now + s_pres.cost > s_deadline)) {
+            (now >= s_deadline || s_pres.paceSlow ||
+             (!s_pres.fifoLock && now + s_pres.cost > s_deadline))) {
             if (now < s_deadline) {
                 SDL_DelayPrecise(s_deadline - now);
             }
             break;
         }
-        if (gap && s_pres.lastPresent && now - s_pres.lastPresent < gap) {
-            const Uint64 wake = s_pres.lastPresent + gap;
+        if (gap && s_pres.nextPresent && now < s_pres.nextPresent) {
+            const Uint64 wake = s_pres.nextPresent;
 
             if (wake >= s_deadline) {
                 if (now < s_deadline) {
@@ -2417,9 +2501,9 @@ static void pace(int hz)
            to the presents' steady cadence) against the simulated time the
            frame closed; the raw measured time jittered with the step and
            the sleeps before the present */
-        float a =
-            rd_present_clock_alpha(&s_pres.clock, (double)now / 1e6, (double)s_pres.tickAt / 1e6,
-                                   (double)tick / 1e6, (double)gap / 1e6);
+        float a = rd_present_clock_alpha(&s_pres.clock, (double)now / 1e6,
+                                         (double)s_pres.tickAt / 1e6, (double)tick / 1e6,
+                                         (double)(s_pres.fifoLock ? refresh : gap) / 1e6);
 
         if (s_pres.legacyAlpha) {
             /* ICO_RD_S2_LEGACY=1: the raw measured time, without the clock */
@@ -2449,6 +2533,7 @@ static void pace(int hz)
             break;
         }
         s_pres.lastPresent = t0;
+        s_pres.nextPresent = gap ? pace_next_present(s_pres.nextPresent, t0, gap) : 0;
         s_pres.presentedFrame = s_pres.frame;
         s_pres.statPresents++;
 #ifdef __ANDROID__
@@ -2481,6 +2566,9 @@ void ico_window_close(void)
     ui_settings_set_window_mode_query(NULL);
     ui_settings_set_texture_pack_count(NULL);
     ui_settings_set_touch_query(NULL);
+#if !defined(__ANDROID__) && !defined(ICO_IOS)
+    ui_settings_set_steam_handler(NULL);
+#endif
 #ifdef __ANDROID__
     ui_settings_set_gpu_driver_host(NULL);
 #endif

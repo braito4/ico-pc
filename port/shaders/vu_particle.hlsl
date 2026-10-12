@@ -43,6 +43,8 @@ VuSprite vu_particle(uint i)
     bool alphaZero = (asuint(b.w) & 0x7F800000u) == 0u;
     o.drawn = !alphaZero && vu_inside(float4(p0, h.w), clipMin, clipMax) &&
               vu_inside(float4(p1, h.w), clipMin, clipMax);
+    // VIS-RULES item 10 (v0.6.1): parity out of the box, drawn beside it
+    // and outside the out-of-the-box state (VIS-WINDOW, vu_particle_vs).
     // The port keeps the alpha test and the w window (the particle in
     // front of the eye and before the far limit); a sprite outside the x/y
     // window (1024..3071, prim_InitParticleByPartition) is dropped when its
@@ -106,11 +108,14 @@ VuVSOut vu_particle_vs(uint vid : SV_VertexID)
         return o;
     }
     // A sprite the PS2 skips for its x/y window, as the region test's
-    // triangles (vu_triangle_out): not drawn when its quad reaches into the
-    // camera's picture (its columns and its rows: vu_rect_reaches_picture),
-    // drawn whole (the GPU clips the quad) when wholly beside it and under
-    // photo mode's free camera, in both presets
-    if (!s.drawn && (vu_draw.z & VU_F_BEHIND_EYE) == 0u) {
+    // triangles (vu_region_rule): out of the box not drawn when its quad
+    // reaches into the camera's picture (its columns and its rows:
+    // vu_rect_reaches_picture), drawn whole (the GPU clips the quad) when
+    // wholly beside it, under photo mode's free camera, and in any other
+    // state (VU_F_EXTENDED, VIS-WINDOW: a sprite is an effect, never a card
+    // parked at the picture's edge; the shown test keeps it in front of the
+    // eye)
+    if (!s.drawn && (vu_draw.z & (VU_F_BEHIND_EYE | VU_F_EXTENDED)) == 0u) {
         float2 p0 = vu_ndc(float2(s.c0.xy) * (1.0 / 16.0));
         float2 p1 = vu_ndc(float2(s.c1.xy) * (1.0 / 16.0));
         if (vu_rect_reaches_picture(min(p0, p1), max(p0, p1))) {
@@ -125,5 +130,12 @@ VuVSOut vu_particle_vs(uint vid : SV_VertexID)
     o.pos = vu_gs_position(g, false);
     o.col = float4(s.rgba);
     o.stq = float3(right ? s.st.z : s.st.x, down ? s.st.w : s.st.y, 1.0);
-    return o;
+    // the sprite's planes (vu_common.hlsli vu_attr_planes): S runs across,
+    // T down, the same on both triangles
+    float2 p0 = vu_texel_offset_px(float2(s.c0.xy) * (1.0 / 16.0));
+    float2 p1 = vu_texel_offset_px(float2(s.c1.xy) * (1.0 / 16.0));
+    float4 col = float4(s.rgba);
+    return vu_attr_planes_at(o, p0, float2(p1.x, p0.y), float2(p0.x, p1.y), col, col, col,
+                             float3(s.st.xy, 1.0), float3(s.st.z, s.st.y, 1.0),
+                             float3(s.st.x, s.st.w, 1.0));
 }

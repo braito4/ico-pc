@@ -33,6 +33,17 @@ if(Python3_FOUND)
     add_test(NAME font_audit COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/font_audit.py")
 endif()
 
+# content_table_chains: the Natural chains table
+# (port/render/rd_content_chain.c) against the disc's stage animations, and
+# every stage animation scanned for another chain let down by scaling
+# (tools/content_table_check.py chains); skipped (77) without the disc image
+if(Python3_FOUND)
+    add_test(NAME content_table_chains
+             COMMAND "${Python3_EXECUTABLE}" -I "${CMAKE_SOURCE_DIR}/tools/content_table_check.py"
+                     --disc "${ICO_DISC_IMAGE}" chains)
+    set_tests_properties(content_table_chains PROPERTIES SKIP_RETURN_CODE 77)
+endif()
+
 # offset_audit: every raw EE-offset access the host
 # compiles (ICO_RAW/ICO_RAWP, (char *)x + 0xNN, ((int *)x)[N], variable
 # strides, scalar and record views of a record, pad<HEX> members, static

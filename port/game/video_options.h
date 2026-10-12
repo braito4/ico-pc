@@ -271,6 +271,11 @@ int ico_video_effects_depth(void);
 /* The anti-aliasing in force, ICO_AA_*: the anti_aliasing option, except
    ICO_AA_OFF whenever the preset is Original (ico_video_preset) */
 int ico_video_anti_alias(void);
+/* VIS-WINDOW: whether the options in force are the Original preset (the
+   PS2's picture out of the box: 1x, 4:3, the original filter, half
+   height); GsBase.c's frame latch hands the opposite to GifPacket.c
+   (gif_HostSetExtended), as rd's preset is the same test (window_host.c) */
+int ico_video_original(void);
 /* Run-time change of the anti_aliasing option alone (as ico_video_set: the
    window applies it at its next pump); out of range is ICO_AA_OFF */
 void ico_video_set_anti_alias(int aa);
