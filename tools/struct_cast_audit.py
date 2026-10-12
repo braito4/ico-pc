@@ -74,7 +74,7 @@ def include_flags():
                 "-I" + os.path.join(ROOT, "port", "ui")]
 
 
-def compile_probe(path, name):
+def compile_probe(path, name, quiet=False):
     """Compile the probe file with $ICO_CC, else $CC, else gcc.  A failure to start the compiler
     or to compile is shown (the first lines of stderr, once per cause) so the cause is visible."""
     cc = os.environ.get("ICO_CC") or os.environ.get("CC") or "gcc"
@@ -83,7 +83,7 @@ def compile_probe(path, name):
         r = subprocess.run(cmd, capture_output=True, text=True)
     except OSError as e:
         r = subprocess.CompletedProcess(cmd, 127, "", "cannot run %s: %s" % (cc, e))
-    if r.returncode != 0:
+    if r.returncode != 0 and not quiet:
         msg = "\n".join(r.stderr.splitlines()[:8])
         if msg not in SHOWN:
             SHOWN.add(msg)
@@ -171,18 +171,18 @@ def probe(path, text, exprs):
     if not exprs:
         return sizes
 
-    def run(es):
+    def run(es, quiet=False):
         src = text + "\n" + "".join("char __ico_probe_%d[sizeof(%s)];\n" % (i, e) for i, e in enumerate(es))
         with tempfile.NamedTemporaryFile("wb", suffix=".c", delete=False) as t:
             t.write(src.encode("latin-1"))
             name = t.name
         try:
-            r = compile_probe(path, name)
+            r = compile_probe(path, name, quiet)
         finally:
             os.unlink(name)
         return r
 
-    r = run(exprs)
+    r = run(exprs, quiet=len(exprs) > 1)
     if r.returncode != 0:
         # some expression is not a sizeable type: probe them one at a time
         for e in exprs:
