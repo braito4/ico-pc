@@ -107,6 +107,7 @@ static struct {
     int invertY;
     char pngDir[256];
     int hideUi;    /* [photo] hide_ui, and Square's last choice */
+    int film;      /* [photo] film_effect, and Right's last choice */
     float fovGame; /* the game camera's vertical field of view at the last ico_photo_camera */
     Basis b;       /* and its basis */
     int haveBasis;
@@ -137,6 +138,8 @@ static void readConfig(void)
     }
     s.invertY = ico_config_get_bool("photo.invert_y", 0);
     s.hideUi = ico_config_get_bool("photo.hide_ui", 0);
+    const long long film = ico_config_get_int("photo.film_effect", 0);
+    s.film = film > 0 && film < ICO_PHOTO_FILM_MODES ? (int)film : 0;
     const char *d = ico_config_get_string("photo.png_dir", "screenshots");
     snprintf(s.pngDir, sizeof(s.pngDir), "%s", d && d[0] ? d : "screenshots");
 }
@@ -149,6 +152,11 @@ float ico_photo_stick_speed(void)
 int ico_photo_hide_ui(void)
 {
     return s.hideUi;
+}
+
+int ico_photo_film(void)
+{
+    return s.film;
 }
 
 int ico_photo_mode(void)
@@ -182,8 +190,10 @@ void ico_photo_enter(void)
     s.capturePending = 0;
     s.fixedBasis = 0;
     s.rollArmed = 0;
-    fprintf(stderr, "photo: enter (stick_speed %.2f, invert_y %d, hide_ui %d, png_dir \"%s\")\n",
-            (double)s.speed, s.invertY, s.hideUi, s.pngDir);
+    fprintf(
+        stderr,
+        "photo: enter (stick_speed %.2f, invert_y %d, hide_ui %d, film_effect %d, png_dir \"%s\")\n",
+        (double)s.speed, s.invertY, s.hideUi, s.film, s.pngDir);
 }
 
 void ico_photo_exit(void)
@@ -523,6 +533,15 @@ int ico_photo_update(const IcoPhotoPad *pad)
         s.hideUi = !st->hud;
         if (ico_config_set_bool("photo.hide_ui", s.hideUi) != 0 || ico_config_save() != 0) {
             fprintf(stderr, "photo: could not save hide_ui\n");
+        }
+    }
+    if (pad->pressed & ICO_PHOTO_RIGHT) {
+        /* the Film effect: off, the game's four, off ...; kept for the
+           next time */
+        s.film = s.film + 1 >= ICO_PHOTO_FILM_MODES ? 0 : s.film + 1;
+        fprintf(stderr, "photo: film effect %d\n", s.film);
+        if (ico_config_set_int("photo.film_effect", s.film) != 0 || ico_config_save() != 0) {
+            fprintf(stderr, "photo: could not save film_effect\n");
         }
     }
     if (pad->pressed & ICO_PHOTO_CROSS) {

@@ -1000,6 +1000,26 @@ static void gsb_SetGsDefault(void)
     gsb_setNormalReg(0xC);
 }
 
+#ifdef ICO_RD
+
+/* port/game/photo_mode.c: 1 while photo mode is open, and the Film effect
+   it shows, 0 (off) .. 4 */
+extern int ico_photo_active(void);
+extern int ico_photo_film(void);
+
+/* PC port: the Film effect in force, 0 for none: in photo mode the one
+   photo mode chose, whether or not the game is cleared and whatever the
+   Options row says; else the game's (cleared, and the row's mode) */
+static int gsb_filmMode(void)
+{
+    if (ico_photo_active()) {
+        return ico_photo_film();
+    }
+    return gFlagGameClear > 0 ? optionScreenMode : 0;
+}
+
+#endif
+
 /* Lay the film grain texture over the frame: the noise texture at texture
  * slot 10, drawn as one full screen sprite whose colour comes from the
  * stage record's grain tint for this target and whose UV step is the
@@ -1027,7 +1047,7 @@ static void gsb_filmNoise(void)
 
         memset(&pp, 0, sizeof(pp));
         pp.rgba[0] = pp.rgba[1] = pp.rgba[2] = 0x80;
-        pp.rgba[3] = (unsigned char)GlobalStageSetting.targetCol[optionScreenMode - 1][3];
+        pp.rgba[3] = (unsigned char)GlobalStageSetting.targetCol[gsb_filmMode() - 1][3];
         pp.scalar[0] = scale;
         rd_post(RD_POST_FILM_NOISE, &pp);
     }
@@ -1094,9 +1114,15 @@ static int gsb_PostEffect(void)
     fog_DrawFog();
     MotionBlur();
     gsb_antiAlias();
+#ifdef ICO_RD
+    if (gsb_filmMode() != 0) {
+        gsb_filmNoise();
+    }
+#else
     if (gFlagGameClear > 0 && optionScreenMode != 0) {
         gsb_filmNoise();
     }
+#endif
     gsb_controlBrightness();
     if (fbKeep != 0) {
         gsb_KeepFrameBuffer();

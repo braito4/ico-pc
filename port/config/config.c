@@ -366,6 +366,9 @@ static const char first_run_text[] =
     "invert_y = false\n"
     "# true starts photo mode with its help panel hidden (Square shows it).\n"
     "hide_ui = false\n"
+    "# The Film effect photo mode starts with: 0 is off, 1 to 4 are the game's\n"
+    "# four (the d-pad Right button changes it in photo mode).\n"
+    "film_effect = 0\n"
     "# The folder for saved pictures, inside your user folder.\n"
     "png_dir = \"screenshots\"\n";
 

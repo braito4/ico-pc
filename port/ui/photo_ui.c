@@ -130,7 +130,17 @@ static int photoProc(int first, int item)
         ico_photo_mouse_look((ico_opt_mirror() ? -mdx : mdx) * k,
                              (b->mouse_invert_y ? mdy : -mdy) * k);
     }
-    if (ico_photo_update(&p)) {
+    const int film = ico_photo_film();
+    const int leave = ico_photo_update(&p);
+    if (!leave && ico_photo_film() != film) {
+        /* Right cycled the Film effect: say which (the Options row's words) */
+        char val[16];
+        const int m = ico_photo_film();
+        snprintf(val, sizeof(val), "%d", m);
+        ui_set_language(ui_lang_from_game(NonLinearCameraMove));
+        ui_popup_push(ui_str(UI_STR_OPT_FILM_EFFECT), m > 0 ? val : ui_str(UI_STR_OFF));
+    }
+    if (leave) {
         ico_photo_exit();
         NEGATIVE_SE();
         la_host_leave();
@@ -197,6 +207,7 @@ typedef enum HudBtn {
     BTN_RSTICK,
     BTN_UP,
     BTN_DOWN,
+    BTN_RIGHT,
     BTN_L1,
     BTN_R1,
     BTN_L2,
@@ -224,6 +235,7 @@ static const struct {
     {-1, UI_STR_STICK_RIGHT, NULL, ICO_T_RSTICK_UP},
     {-1, UI_STR_PHOTO_UP, NULL, ICO_T_UP},
     {-1, UI_STR_PHOTO_DOWN, NULL, ICO_T_DOWN},
+    {-1, UI_STR_PHOTO_RIGHT, NULL, ICO_T_RIGHT},
     {LT_GLYPH_L1, -1, "L1", ICO_T_L1},
     {LT_GLYPH_R1, -1, "R1", ICO_T_R1},
     {LT_GLYPH_L2, -1, "L2", ICO_T_L2},
@@ -346,6 +358,7 @@ void ui__photo_hud_build(UiHudSet *set, int freeCam, int keyboard, const char *t
     addItem(set, 3, UI_STR_PHOTO_ACT_SAVE, BTN_CROSS, BTN_NONE, keyboard);
     addItem(set, 3, UI_STR_PHOTO_ACT_HIDE, BTN_SQUARE, BTN_NONE, keyboard);
     addItem(set, 3, UI_STR_PHOTO_ACT_BACK, BTN_TRIANGLE, BTN_NONE, keyboard);
+    addItem(set, 3, UI_STR_PHOTO_ACT_FILM, BTN_RIGHT, BTN_NONE, keyboard);
     set->item[set->n].line = 4;
     set->item[set->n++].text = fov;
 }

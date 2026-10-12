@@ -23,6 +23,8 @@
  *   reset     Select: the current camera (and the zoom) only
  *   panel     Square toggles the help panel and saves [photo] hide_ui; the
  *             next enter starts with it hidden, as hide_ui = true does
+ *   film      Right cycles the Film effect off, 1 .. 4, off, saved as
+ *             [photo] film_effect and read back at the next enter
  *   keys      Cross asks one capture, Triangle, Circle and Start ask to
  *             leave; [photo] keys from a config
  *   name      the capture's file name
@@ -380,6 +382,34 @@ int main(int argc, char **argv)
     p = pressed(ICO_PHOTO_SQUARE);
     ico_photo_update(&p);
     CHECK(ico_photo_hud(), "Square: shown");
+    ico_photo_exit();
+    /* the Film effect: Right cycles off, 1 .. 4, off; each choice saved */
+    ico_photo_enter();
+    CHECK(ico_photo_film() == 0, "film: off at enter by default (%d)", ico_photo_film());
+    p = pressed(ICO_PHOTO_RIGHT);
+    for (int want = 1; want <= 6; want++) {
+        ico_photo_update(&p);
+        const int mode = want % ICO_PHOTO_FILM_MODES;
+        CHECK(ico_photo_film() == mode && ico_config_get_int("photo.film_effect", -1) == mode,
+              "film: Right %d gives %d, saved (%d, %lld)", want, mode, ico_photo_film(),
+              ico_config_get_int("photo.film_effect", -1));
+    }
+    p = idle();
+    p.held = ICO_PHOTO_RIGHT; /* held, not pressed: nothing */
+    ico_photo_update(&p);
+    CHECK(ico_photo_film() == 1, "film: a held Right does not cycle (%d)", ico_photo_film());
+    ico_photo_exit();
+    ico_config_reset(path, "");
+    ico_photo_enter();
+    CHECK(ico_photo_film() == 1, "film: remembered from the file (%d)", ico_photo_film());
+    ico_photo_exit();
+    writeConfig(path, "version = 1\n[photo]\nfilm_effect = 9\n");
+    ico_photo_enter();
+    CHECK(ico_photo_film() == 0, "film: a value out of range is off (%d)", ico_photo_film());
+    ico_photo_exit();
+    writeConfig(path, "version = 1\n[photo]\nfilm_effect = 3\n");
+    ico_photo_enter();
+    CHECK(ico_photo_film() == 3, "film: film_effect = 3 from the file (%d)", ico_photo_film());
     ico_photo_exit();
     /* hide_ui = true from the file; stick_speed 2 doubles the zoom's rate */
     writeConfig(path, "version = 1\n[photo]\nstick_speed = 2.0\nhide_ui = true\n");

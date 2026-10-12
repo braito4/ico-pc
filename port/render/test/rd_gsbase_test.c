@@ -1594,6 +1594,65 @@ static void checkFilmNoise(void)
     compareScene("film noise", noiseRef, NULL, 1);
 }
 
+static int plainRef(int x, int y, int k, void *user)
+{
+    (void)user;
+    return scenePx(x, y, k);
+}
+
+/* photo mode's own Film effect: with the game not cleared and its Options
+   row off, photo mode set to 1 (Right) draws the grain of mode 1; photo
+   mode on with the effect off draws none even in a cleared game with the
+   row on; and leaving photo mode gives the game's own setting back */
+static void checkFilmNoisePhoto(void)
+{
+    GlobalStageSetting.targetCol[0][0] = GlobalStageSetting.targetCol[0][1] =
+        GlobalStageSetting.targetCol[0][2] = 128;
+    GlobalStageSetting.targetCol[0][3] = 64;
+    GlobalStageSetting.grainScale = 4.0f;
+    gFlagGameClear = 0;
+    optionScreenMode = 0;
+    ico_photo_enter();
+    CHECK(ico_photo_film() == 0, "photo film: off at enter (%d)", ico_photo_film());
+    drawScene(s_tex, RD_FILTER_LINEAR);
+    dl_SetDLPriority(11);
+    tick();
+    compareScene("photo film off, game not cleared: no grain", plainRef, NULL, 1);
+    IcoPhotoPad right = photoPad(0);
+    right.pressed = ICO_PHOTO_RIGHT;
+    ico_photo_update(&right);
+    CHECK(ico_photo_film() == 1, "photo film: Right gives mode 1 (%d)", ico_photo_film());
+    drawScene(s_tex, RD_FILTER_LINEAR);
+    dl_SetDLPriority(11);
+    tick();
+    compareScene("photo film 1, game not cleared: the grain", noiseRef, NULL, 1);
+    ico_photo_exit();
+    drawScene(s_tex, RD_FILTER_LINEAR);
+    dl_SetDLPriority(11);
+    tick();
+    compareScene("photo mode left, game not cleared: no grain", plainRef, NULL, 1);
+    /* cleared, the Options row on, photo mode open and its effect off */
+    gFlagGameClear = 1;
+    optionScreenMode = 1;
+    ico_photo_enter();
+    for (int i = 0; i < ICO_PHOTO_FILM_MODES && ico_photo_film() != 0; i++) {
+        ico_photo_update(&right);
+    }
+    CHECK(ico_photo_film() == 0, "photo film: cycled to off (%d)", ico_photo_film());
+    drawScene(s_tex, RD_FILTER_LINEAR);
+    dl_SetDLPriority(11);
+    tick();
+    compareScene("photo film off, game cleared with the row on: no grain", plainRef, NULL, 1);
+    ico_photo_exit();
+    drawScene(s_tex, RD_FILTER_LINEAR);
+    dl_SetDLPriority(11);
+    tick();
+    compareScene("photo mode left, game cleared with the row on: the game's grain", noiseRef, NULL,
+                 1);
+    gFlagGameClear = 0;
+    optionScreenMode = 0;
+}
+
 /* ---- letterbox */
 
 static int s_bandLevel;
@@ -2316,6 +2375,7 @@ int main(void)
     checkAa(0, 96, 1);
     checkAa(64, 96, 2);
     checkFilmNoise();
+    checkFilmNoisePhoto();
     checkLetterbox();
     checkPipelines();
     CHECK(rhi_vk_validation_error_count() == 0, "%u validation errors",

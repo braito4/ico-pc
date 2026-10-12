@@ -472,12 +472,14 @@ typedef enum UiStrId {
     UI_STR_PHOTO_ACT_SAVE,
     UI_STR_PHOTO_ACT_HIDE,
     UI_STR_PHOTO_ACT_BACK,
+    UI_STR_PHOTO_ACT_FILM, /* the Film effect button, then the popup's title is UI_STR_OPT_FILM_EFFECT */
     /* the word before a mouse button's name on a key cap ("Mouse left") */
     UI_STR_PHOTO_MOUSE_PREFIX,
     /* the D-pad's Up and Down named on the photo panel (the game's button
        pictures have no up or down arrow) */
     UI_STR_PHOTO_UP,
     UI_STR_PHOTO_DOWN,
+    UI_STR_PHOTO_RIGHT, /* and Right, which cycles the Film effect */
     /* Options > Extras > Characters (settings.c, port/game/
        appearance.h): the page, its nine colour rows, Randomize and Reset,
        a skin tone's value ("%d" is the tone's number), the page's note
