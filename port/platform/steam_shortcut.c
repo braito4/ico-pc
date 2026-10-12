@@ -413,7 +413,11 @@ int ico_steam_login_users(const char *text, size_t n, uint32_t *ids, int max)
         } else if (t == '{') {
             depth++;
             if (depth == 2) {
-                memcpy(userKey, haveKey ? key : "", sizeof(userKey));
+                if (haveKey) {
+                    memcpy(userKey, key, sizeof(userKey));
+                } else {
+                    userKey[0] = 0;
+                }
                 recent = 0;
             }
             haveKey = 0;
