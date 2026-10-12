@@ -18,6 +18,8 @@
 //       its CSM1 storage order)
 //   g_tex.xy   size of the depth source in GS pixels (the UV's texel units;
 //              the native frame's width, rd_replay.c doFog)
+//   g_scale    xy the depth's texels per GS pixel, z its Full pixel crop
+//              (common.hlsli; the UV then normalised to its own width)
 //   g_col.x    the sprite's GS Z
 //   g_col.y    the Z test (RdZTest: ALWAYS 1, GEQUAL 2, GREATER 3, NEVER 0)
 //   g_param.x  the depth source's GS Z scale (PSMZ32: 2^-33 on a float
@@ -42,8 +44,7 @@
 #include "common.hlsli"
 
 // The sprite vertex shaders' output (sprite.hlsl SpriteVSOut).
-struct FogPSIn
-{
+struct FogPSIn {
     float4 pos : SV_Position;
     VK_LOC(0) float4 col : COLOR0;   // 0..255
     VK_LOC(1) float2 uv : TEXCOORD0; // normalised by g_tex.zw
@@ -85,6 +86,18 @@ GS_PS_ATTR GS_PS_OUT fog_lut_ps(FogPSIn i)
     // in the depth target's own texels (g_scale, 1 in Original)
     float2 sc = float2(g_scale.x > 0.0 ? g_scale.x : 1.0, g_scale.y > 0.0 ? g_scale.y : 1.0);
     float2 fsize = g_tex.xy * sc;
+    if (g_scale.z != 0.0) {
+        // a Full pixel crop of the frame (common.hlsli gs_uv_norm): the UV
+        // is normalised to the texture's own width
+        uint dw, dh;
+#ifdef FOG_MS
+        uint dn;
+        g_fogDepth.GetDimensions(dw, dh, dn);
+#else
+        g_fogDepth.GetDimensions(dw, dh);
+#endif
+        fsize.x = float(dw);
+    }
     int2 size = int2(round(fsize));
     int2 tc = clamp(int2(floor(i.uv * fsize)), int2(0, 0), size - 1);
 #ifdef FOG_MS

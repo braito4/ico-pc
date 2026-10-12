@@ -338,6 +338,12 @@ typedef struct RdTargetRec {
      * scale (rd__target_scale_of) */
     uint32_t tw, th;
     float sx, sy;
+    /* Full pixel (rd__apply_display, rd_core.c rd__target_scale_of): a
+     * frame-wide scene-class target holds only the frame's exact visible
+     * width, the window's own pixels, and ox texels of the GS frame's left
+     * (and right) are not in it: GS pixel x of the target is texels
+     * x * sx - ox (rd__gs_texel_x).  0 for every other target */
+    float ox;
     RhiFormat format;
     RhiTexture color, depth;
     RhiState colorState, depthState;
@@ -389,6 +395,15 @@ float rd__depth_unorm_steps(void);
 float rd__gs_depth(uint32_t z, float scale);
 
 RdTargetRec *rd__target_rec(uint32_t id);
+
+/* The texel position of GS pixel x (from the target's left GS edge) on t:
+ * x * sx less the Full pixel crop (RdTargetRec.ox, 0 but on a cropped
+ * frame-wide target) */
+static inline float rd__gs_texel_x(const RdTargetRec *t, float x)
+{
+    return x * t->sx - t->ox;
+}
+
 /* Creates the GPU textures of a target record (no-op without a device). */
 bool rd__target_create_gpu(RdTargetRec *t, const char *name);
 void rd__target_destroy_gpu(RdTargetRec *t);
@@ -1425,6 +1440,11 @@ typedef struct RdContext {
      * to fall back (sceneFellBack) */
     float sceneReqSx, sceneReqSy;
     bool sceneFellBack;
+    /* Full pixel (rd__apply_display): the exact width in GS pixels that a
+     * frame-wide scene-class target holds (the box's aspect's, the
+     * window's pixels across it; rd__target_scale_of crops the frame to
+     * it, RdTargetRec.ox), 0 when the targets hold the whole frame */
+    float frameCropWe;
     /* the sample count of the render pass being recorded (rd_replay.c
      * beginPass): 1, or the MSAA epoch's count; rd__get_pipeline makes the
      * pipelines of that pass with it (RdPipelineKey.msaa) */

@@ -21,9 +21,14 @@
  *   [video] vsync           true
  *   [video] texture_filter  "original"  "original" | "trilinear" | "anisotropic"
  *   [video] full_height     false
- *   [video] full_pixel      false       show the strip the PS2's thin black border hid:
- *                                       the reduction draws the whole frame, nothing is
- *                                       cut or enlarged; any preset, not part of them
+ *   [video] full_pixel      (preset)    the picture is the window's own pixels (the
+ *                                       "window" resolution: one texel a pixel, nothing
+ *                                       cropped) and shows the strip the PS2's thin black
+ *                                       border hid; false keeps the PS2's frame shape with
+ *                                       its border.  Absent: true when the rows add up to
+ *                                       Enhanced, else false; the Preset shortcut sets it
+ *                                       (Enhanced on, Original off) but it is not one of
+ *                                       the four rows the preset is derived from
  *   [video] framerate       "uncapped"  "original" | "uncapped" | N (30..1000)
  *                                       (60 on Android)
  *   [video] anti_aliasing   "off"       "off" | "ssaa2" | "ssaa4" | "msaa2" | "msaa4" |
@@ -138,7 +143,7 @@ typedef struct IcoVideoOptions {
     int vsync;      /* the swapchain waits for the vertical blank */
     int filter;     /* ICO_FILTER_* */
     int fullHeight; /* skip the reduction's vertical halving */
-    int fullPixel;  /* the reduction draws the whole frame, with no black border */
+    int fullPixel;  /* the window's own pixels, no black border (full_pixel above) */
     int antiAlias;  /* ICO_AA_*, as written (ico_video_anti_alias: the one in force) */
     int framerate;  /* ICO_FRAMERATE_ORIGINAL, _UNCAPPED, or presents a second */
     /* the CRT filter: applied whatever the preset */

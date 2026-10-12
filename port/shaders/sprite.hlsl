@@ -22,8 +22,7 @@
 // and sprite_aa1_ps takes the coverage as the fragment's alpha.
 #include "common.hlsli"
 
-struct SpriteVSIn
-{
+struct SpriteVSIn {
     VK_LOC(0) uint2 xy : POSITION;
     VK_LOC(1) uint z : TEXCOORD1;
     VK_LOC(2) uint4 col : COLOR0;
@@ -48,10 +47,9 @@ struct SpriteVSIn
     VK_LOC(6) nointerpolation float4 p4 : TEXCOORD7;                                               \
     VK_LOC(7) nointerpolation float4 p5 : TEXCOORD8;
 
-struct SpriteVSOut
-{
+struct SpriteVSOut {
     float4 pos : SV_Position;
-    VK_LOC(0) float4 col : COLOR0; // 0..255, interpolated
+    VK_LOC(0) float4 col : COLOR0;   // 0..255, interpolated
     VK_LOC(1) float2 uv : TEXCOORD0; // normalised
     SPRITE_PLANES
 };
@@ -61,7 +59,7 @@ SpriteVSOut sprite_vertex(SpriteVSIn i)
     SpriteVSOut o;
     o.pos = float4(gs_xy_to_ndc(i.xy), gs_depth(i.z), 1.0);
     o.col = float4(i.col);
-    o.uv = i.uv * g_tex.zw;
+    o.uv = gs_uv_norm(i.uv);
     o.p0 = o.p1 = o.p2 = o.p3 = o.p4 = o.p5 = float4(0.0, 0.0, 0.0, 0.0);
     return o;
 }
@@ -69,8 +67,7 @@ SpriteVSOut sprite_vertex(SpriteVSIn i)
 // The vertex of sprite_plane_*_vs and sprite_stq_plane_*_vs
 // (IcoSpritePlaneVertex): SpriteVSIn, Q, and the triangle's planes per GS
 // pixel (shader_consts.h)
-struct SpritePlaneVSIn
-{
+struct SpritePlaneVSIn {
     VK_LOC(0) uint2 xy : POSITION;
     VK_LOC(1) uint z : TEXCOORD1;
     VK_LOC(2) uint4 col : COLOR0;
@@ -100,9 +97,11 @@ void sprite_planes(SpritePlaneVSIn i, out float4 p0, out float4 p1, out float4 p
     p0 = i.c0;
     precise float4 cx = i.cx * k.x;
     precise float4 cy = i.cy * k.y;
-    precise float3 s0 = i.s0.xyz * n;
-    precise float3 sx = i.sx.xyz * n * k.x;
-    precise float3 sy = i.sy.xyz * n * k.y;
+    // S less the Full pixel crop's share times Q (gs_stq_norm), per plane
+    precise float3 c = float3(g_scale.z, 0.0, 0.0);
+    precise float3 s0 = i.s0.xyz * n - c * i.s0.z;
+    precise float3 sx = (i.sx.xyz * n - c * i.sx.z) * k.x;
+    precise float3 sy = (i.sy.xyz * n - c * i.sy.z) * k.y;
     p1 = cx;
     p2 = cy;
     p3 = float4(s0, corner.x);
@@ -115,7 +114,8 @@ SpriteVSOut sprite_plane_vertex(SpritePlaneVSIn i)
     SpriteVSOut o;
     o.pos = float4(gs_xy_to_ndc(i.xy), gs_depth(i.z), 1.0);
     o.col = float4(i.col);
-    o.uv = i.uv * g_tex.zw / i.q; // Q is 1 here (rd_screen_planes.c), read so the input is used
+    o.uv = gs_stq_norm(i.uv, i.q).xy /
+           i.q; // Q is 1 here (rd_screen_planes.c), read so the input is used
     sprite_planes(i, o.p0, o.p1, o.p2, o.p3, o.p4, o.p5);
     return o;
 }
@@ -242,8 +242,7 @@ uint4 sprite_colour(float4 pos, float4 vcol, float2 uv, float q)
     return col;
 }
 
-struct SpriteAa1VSIn
-{
+struct SpriteAa1VSIn {
     VK_LOC(0) uint2 xy : POSITION;
     VK_LOC(1) uint z : TEXCOORD1;
     VK_LOC(2) uint4 col : COLOR0;
@@ -251,8 +250,7 @@ struct SpriteAa1VSIn
     VK_LOC(4) float cov : TEXCOORD2;
 };
 
-struct SpriteAa1VSOut
-{
+struct SpriteAa1VSOut {
     float4 pos : SV_Position;
     VK_LOC(0) float4 col : COLOR0;
     VK_LOC(1) float2 uv : TEXCOORD0;
@@ -264,7 +262,7 @@ SpriteAa1VSOut sprite_aa1_vertex(SpriteAa1VSIn i)
     SpriteAa1VSOut o;
     o.pos = float4(gs_xy_to_ndc(i.xy), gs_depth(i.z), 1.0);
     o.col = float4(i.col);
-    o.uv = i.uv * g_tex.zw;
+    o.uv = gs_uv_norm(i.uv);
     o.cov = i.cov;
     return o;
 }
@@ -310,8 +308,7 @@ GS_PS_ATTR GS_PS_OUT sprite_aa1_ps(SpriteAa1VSOut i)
 // space and divides per pixel: the vertex shader passes (s, t, q) without
 // perspective, sprite_stq_ps divides. Colour stays screen-space linear as
 // everywhere. Drawn only for the screen prims whose Q is not 1; every other prim keeps sprite_ps.
-struct SpriteStqVSIn
-{
+struct SpriteStqVSIn {
     VK_LOC(0) uint2 xy : POSITION;
     VK_LOC(1) uint z : TEXCOORD1;
     VK_LOC(2) uint4 col : COLOR0;
@@ -319,8 +316,7 @@ struct SpriteStqVSIn
     VK_LOC(4) float q : TEXCOORD2;
 };
 
-struct SpriteStqVSOut
-{
+struct SpriteStqVSOut {
     float4 pos : SV_Position;
     VK_LOC(0) float4 col : COLOR0;
     VK_LOC(1) noperspective float3 stq : TEXCOORD0; // s, t normalised, q
@@ -332,7 +328,7 @@ SpriteStqVSOut sprite_stq_vertex(SpriteStqVSIn i)
     SpriteStqVSOut o;
     o.pos = float4(gs_xy_to_ndc(i.xy), gs_depth(i.z), 1.0);
     o.col = float4(i.col);
-    o.stq = float3(i.uv * g_tex.zw, i.q);
+    o.stq = gs_stq_norm(i.uv, i.q);
     o.p0 = o.p1 = o.p2 = o.p3 = o.p4 = o.p5 = float4(0.0, 0.0, 0.0, 0.0);
     return o;
 }
@@ -343,7 +339,7 @@ SpriteStqVSOut sprite_stq_plane_vertex(SpritePlaneVSIn i)
     SpriteStqVSOut o;
     o.pos = float4(gs_xy_to_ndc(i.xy), gs_depth(i.z), 1.0);
     o.col = float4(i.col);
-    o.stq = float3(i.uv * g_tex.zw, i.q);
+    o.stq = gs_stq_norm(i.uv, i.q);
     sprite_planes(i, o.p0, o.p1, o.p2, o.p3, o.p4, o.p5);
     return o;
 }
@@ -381,8 +377,7 @@ GS_PS_ATTR GS_PS_OUT sprite_stq_ps(SpriteStqVSOut i)
 // date_snap_ps: the bound target's alpha MSB into the R8 DATE
 // snapshot, pixel for pixel (t1 is the target, read with Load; viewport =
 // the target's size). Drawn with blit_vs.
-struct DateSnapIn
-{
+struct DateSnapIn {
     float4 pos : SV_Position;
 };
 

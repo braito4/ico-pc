@@ -681,6 +681,11 @@ static void setViewport(uint32_t w, uint32_t h)
  * the height of the frame it is drawn on (0: the native height) */
 static uint32_t s_framePicture, s_framePictureFrameH;
 
+/* the bound target of the frame group being made when it is a Full pixel
+ * crop of the frame (RdTargetRec.ox), else NULL: its texture is narrower
+ * than its GS width times its scale (frameGroupOf) */
+static const RdTargetRec *s_frameCrop;
+
 RdUniform rd__frame_group_ex(uint32_t targetW, uint32_t targetH, float originX, float originY,
                              float zScale, float regionScale, float scaleX, float scaleY)
 {
@@ -693,6 +698,16 @@ RdUniform rd__frame_group_ex(uint32_t targetW, uint32_t targetH, float originX, 
     cb.target[3] = 1.0f / (float)targetH;
     cb.origin[0] = originX;
     cb.origin[1] = originY;
+    const RdTargetRec *crop =
+        s_frameCrop && s_frameCrop->ox > 0.0f && s_frameCrop->w == targetW ? s_frameCrop : NULL;
+    if (crop && !s_vpExact) {
+        /* the plain mapping over the texels the target holds: its GS width
+         * tw / sx from ox / sx GS pixels in (the exact viewport's form
+         * below keeps the frame's centre instead) */
+        cb.origin[0] = originX + crop->ox / scaleX;
+        cb.target[0] = (float)crop->tw / scaleX;
+        cb.target[2] = scaleX / (float)crop->tw;
+    }
     /* GS integer coordinates on GPU pixel centres; on a scaled target, on
      * the centre of the block's first texel (0.5 texel = 0.5 / s GS
      * pixels), so integer edges are block edges (expand) */
@@ -741,12 +756,22 @@ RdUniform rd__frame_group_ex(uint32_t targetW, uint32_t targetH, float originX, 
          * rd_core.c rd__target_scale_of's (scaled), the target's texels per
          * GS pixel that over the GS size (the scale itself at an integer
          * scale) */
-        const uint32_t tw = scaleX == 1.0f ? targetW : (uint32_t)((float)targetW * scaleX + 0.5f);
+        uint32_t tw = scaleX == 1.0f ? targetW : (uint32_t)((float)targetW * scaleX + 0.5f);
         const uint32_t th = scaleY == 1.0f ? targetH : (uint32_t)((float)targetH * scaleY + 0.5f);
+        float kx = (float)tw / (float)targetW;
+        if (crop) {
+            /* Full pixel: the texture holds the frame's exact width (tw),
+             * centred on the frame's centre (GS 2048, c in gs_px_to_ndc),
+             * at the target's own scale; vpo.z the texels of the GS frame
+             * left out at its left (common.hlsli gs_plane_offset, fx_sprite) */
+            tw = crop->tw;
+            kx = scaleX;
+            cb.vpo[2] = crop->ox;
+        }
         const uint32_t pw = vpExtent(tw ? tw : 1), ph = vpExtent(th ? th : 1);
         cb.vp[0] = 2.0f / (float)pw;
         cb.vp[1] = 2.0f / (float)ph;
-        cb.vp[2] = (float)tw / (float)targetW;
+        cb.vp[2] = kx;
         cb.vp[3] = (float)th / (float)targetH;
         cb.frame[3] = s_frameNoHalf ? 0.0f : 0.5f;
         cb.misc[2] = (float)tw / (float)pw;
@@ -755,8 +780,28 @@ RdUniform rd__frame_group_ex(uint32_t targetW, uint32_t targetH, float originX, 
          * floor((w - P) / 2)): 0, or 0.5 for an odd size */
         cb.vpo[0] = (float)tw * 0.5f - (floorf(((float)tw - (float)pw) * 0.5f) + (float)pw * 0.5f);
         cb.vpo[1] = (float)th * 0.5f - (floorf(((float)th - (float)ph) * 0.5f) + (float)ph * 0.5f);
+        if (crop) {
+            /* Full pixel: the frame's centre on texel edge floor(tw / 2),
+             * the viewport's own (rd__target_scale_of's ox); the
+             * fullscreen triangle a texel wider at an odd width so it
+             * still covers the last column */
+            cb.vpo[0] = 0.0f;
+            cb.misc[2] = (float)(tw + (tw & 1u)) / (float)pw;
+        }
     }
     return uniformGroup(g_rd.layoutFrame, 0, &cb, sizeof(cb));
+}
+
+/* FrameCB of a draw on target tc with XYOFFSET (ox, oy): its GS size,
+ * scale and region scale, and its texture's own width where Full pixel
+ * crops it (s_frameCrop) */
+static RdUniform frameGroupOf(const RdTargetRec *tc, float ox, float oy, float zScale)
+{
+    s_frameCrop = tc->ox > 0.0f ? tc : NULL;
+    const RdUniform u =
+        rd__frame_group_ex(tc->w, tc->h, ox, oy, zScale, rd__region_scale(tc), tc->sx, tc->sy);
+    s_frameCrop = NULL;
+    return u;
 }
 
 RdUniform rd__draw_group(const void *drawCB)
@@ -2068,6 +2113,23 @@ static RhiTexture resolveTexture(Replay *r, RdTargetRec *drawTarget, uint32_t dr
     return src->color;
 }
 
+/* The target the draw samples when it is a Full pixel crop of the frame
+ * and tex its colour or its snapshot (the texture resolveTexture gave), else
+ * NULL (an image, the shadow count's GS-size reduction, an uncropped
+ * target) */
+static const RdTargetRec *texCropOf(const Replay *r, RhiTexture tex)
+{
+    const RdTexRec *t = r->st.ds.texEnabled ? rd__tex_rec(r->st.tex) : NULL;
+    if (!t || t->kind != RD_TEXKIND_TARGET || t->view == RD_VIEW_DEPTH || !tex.id) {
+        return NULL;
+    }
+    const RdTargetRec *src = rd__target_rec(t->target);
+    if (!src || !(src->ox > 0.0f) || (tex.id != src->color.id && tex.id != src->snap.id)) {
+        return NULL;
+    }
+    return src;
+}
+
 /* TEST.DATE: the bound target's alpha MSB into the R8 snapshot
  * (RD_TARGET_DATE_SNAPSHOT), pixel for pixel, for sprite_ps to test at t2.
  * Retaken when the target changed or anything may have written alpha since
@@ -2205,10 +2267,23 @@ static bool gsRectToTexels(const RdTargetRec *tc, int32_t x0, int32_t y0, int32_
         int32_t a = (int32_t)((float)x0 * tc->sx), b = (int32_t)((float)y0 * tc->sy);
         int32_t c = (int32_t)((float)(x1 + 1) * tc->sx + 0.999f) - 1;
         int32_t d = (int32_t)((float)(y1 + 1) * tc->sy + 0.999f) - 1;
+        if (tc->ox > 0.0f) {
+            /* Full pixel: the frame's columns from ox texels in
+             * (rd__gs_texel_x); the GS pixels outside the window clip */
+            a = (int32_t)floorf(rd__gs_texel_x(tc, (float)x0));
+            c = (int32_t)ceilf(rd__gs_texel_x(tc, (float)(x1 + 1)) - 0.001f) - 1;
+            a = a < 0 ? 0 : a;
+            if (c < a) {
+                return false;
+            }
+        }
         x0 = a;
         y0 = b;
         x1 = c >= (int32_t)tc->tw ? (int32_t)tc->tw - 1 : c;
         y1 = d >= (int32_t)tc->th ? (int32_t)tc->th - 1 : d;
+        if (x1 < x0) {
+            return false;
+        }
     }
     *out = (RhiRect){x0, y0, (uint32_t)(x1 - x0 + 1), (uint32_t)(y1 - y0 + 1)};
     return true;
@@ -2394,6 +2469,11 @@ typedef struct DrawSetup {
     int gsLevels;    /* the image texture's GS levels as uploaded (RdTexRec.gsLevels), 0 none:
                         sampled at the GS's level (DF_GS_LOD) */
     int screenCopy;  /* a screen-space pass, not geometry (screenCopy): no added half pixel */
+    /* the texture is a Full pixel crop of the frame (RdTargetRec.ox): its
+     * UVs, in GS texels of the target, address its own texels at its scale
+     * less its left-out ones (fillDrawCB, common.hlsli gs_uv_norm); NULL
+     * for every other texture */
+    const RdTargetRec *texCrop;
 } DrawSetup;
 
 /* Whether a screen prim is a screen-space pass rather than geometry: a
@@ -2495,6 +2575,7 @@ static bool prepareDraw(Replay *r, DrawSetup *ds, const RhiRect *dateArea)
     ds->depthFmt = td ? RHI_FMT_D32F_S8 : RHI_FMT_UNKNOWN;
     ds->tex = resolveTexture(r, ds->tc, r->st.color, &ds->tw, &ds->th, &ds->tfmt, &ds->textured,
                              &ds->mipmapped);
+    ds->texCrop = texCropOf(r, ds->tex);
     replacementUv(r->st.tex, ds);
     ds->gsLevels = drawGsLevels(r, ds);
     return true;
@@ -2540,8 +2621,7 @@ static void frameRefresh(Replay *r, const DrawSetup *ds)
         }
         s_framePicture = r->picture;
         s_framePictureFrameH = r->st.gsH;
-        r->frameBG = rd__frame_group_ex(tc->w, tc->h, ox, oy, rd__target_z_scale(ds->tdId),
-                                        rd__region_scale(tc), tc->sx, tc->sy);
+        r->frameBG = frameGroupOf(tc, ox, oy, rd__target_z_scale(ds->tdId));
         s_framePicture = s_framePictureFrameH = 0;
         memcpy(r->frameKey, fk, sizeof(fk));
     }
@@ -2795,6 +2875,12 @@ static void fillDrawCB(const Replay *r, const RdDrawPass *dp, const DrawSetup *d
     cb->tex[1] = (float)ds->th;
     cb->tex[2] = 1.0f / (float)ds->tw;
     cb->tex[3] = 1.0f / (float)ds->th;
+    if (ds->texCrop) {
+        /* Full pixel: a GS texel u of the target is texel u sx - ox of its
+         * texture (common.hlsli gs_uv_norm) */
+        cb->tex[2] = ds->texCrop->sx / (float)ds->texCrop->tw;
+        cb->scale[2] = ds->texCrop->ox / (float)ds->texCrop->tw;
+    }
     if (dp->key.fs == RD_FS_FONT_SHEET) {
         sheetParam(rd__tex_rec(r->st.tex), cb->param);
     }
@@ -3211,8 +3297,7 @@ static RdUniform msaaFrame(const Replay *r, const DrawSetup *ds)
         oy += 0.5f;
     }
     s_frameNoHalf = true;
-    const RdUniform u = rd__frame_group_ex(tc->w, tc->h, ox, oy, rd__target_z_scale(ds->tdId),
-                                           rd__region_scale(tc), tc->sx, tc->sy);
+    const RdUniform u = frameGroupOf(tc, ox, oy, rd__target_z_scale(ds->tdId));
     s_frameNoHalf = false;
     return u;
 }
@@ -3835,9 +3920,7 @@ static void doScreenWrap(Replay *r, const RdFrame *f, const RdCmd *c)
                          drawWrap(r, &ds, (RdWrap)r->st.ds.wrap.s),
                          drawWrap(r, &ds, (RdWrap)r->st.ds.wrap.t), ds.mipmapped, ds.replacement);
     rhi_cmd_set_pipeline(s_cl, pa);
-    rd__bind_uniform(s_cl, 0,
-                     rd__frame_group_ex(tc->w, tc->h, ox, oy, rd__target_z_scale(ds.tdId),
-                                        rd__region_scale(tc), tc->sx, tc->sy));
+    rd__bind_uniform(s_cl, 0, frameGroupOf(tc, ox, oy, rd__target_z_scale(ds.tdId)));
     rd__bind_uniform(s_cl, 1, rd__draw_group(&cb));
     rhi_cmd_set_bind_group(s_cl, 2, rd__tex_group(ds.tex, smp));
     rhi_cmd_set_vertex_buffer(s_cl, 0, g_rd.ring[s_slot], vOff);
@@ -4351,12 +4434,25 @@ static void doCopy(Replay *r, const RdFrame *f, const RdCmd *c)
         rd__log_once(RD_ONCE_COPY_SCALE, "copy between targets of different resolution scales: "
                                          "not resampled");
     }
-    const uint32_t sx0 = (uint32_t)((float)cr.srcX * src->sx);
+    uint32_t sx0 = (uint32_t)((float)cr.srcX * src->sx);
     const uint32_t sy0 = (uint32_t)((float)cr.srcY * src->sy);
-    const uint32_t dx0 = (uint32_t)((float)cr.dstX * dst->sx);
+    uint32_t dx0 = (uint32_t)((float)cr.dstX * dst->sx);
     const uint32_t dy0 = (uint32_t)((float)cr.dstY * dst->sy);
     uint32_t w = src->sx == 1.0f ? cr.w : (uint32_t)((float)cr.w * src->sx + 0.5f);
     uint32_t h = src->sy == 1.0f ? cr.h : (uint32_t)((float)cr.h * src->sy + 0.5f);
+    if (src->ox > 0.0f || dst->ox > 0.0f) {
+        /* Full pixel: the columns from ox texels in (rd__gs_texel_x); what
+         * starts left of a texture's first column is left out of both */
+        const float fs = floorf(rd__gs_texel_x(src, (float)cr.srcX));
+        const float fd = floorf(rd__gs_texel_x(dst, (float)cr.dstX));
+        const float cut = fs < fd ? (fs < 0.0f ? -fs : 0.0f) : (fd < 0.0f ? -fd : 0.0f);
+        if ((float)w <= cut) {
+            return;
+        }
+        sx0 = (uint32_t)(fs + cut);
+        dx0 = (uint32_t)(fd + cut);
+        w -= (uint32_t)cut;
+    }
     if (sx0 >= src->tw || sy0 >= src->th || dx0 >= dst->tw || dy0 >= dst->th) {
         return;
     }
@@ -4570,6 +4666,12 @@ static void shadowReduce(Replay *r, RdTargetRec *tc)
     cb.param[1] = (float)tc->th / (float)tc->h;
     cb.param[2] = (float)tc->tw;
     cb.param[3] = (float)tc->th;
+    if (tc->ox > 0.0f) {
+        /* Full pixel: GS pixel x is texels x sx - ox (blit.hlsl
+         * box_reduce_ps) */
+        cb.param[0] = tc->sx;
+        cb.scale[2] = tc->ox;
+    }
     rhi_cmd_set_pipeline(s_cl, pipe);
     rd__bind_uniform(s_cl, 0, rd__frame_group(tc->w, tc->h, 0.0f, 0.0f));
     rd__bind_uniform(s_cl, 1, rd__draw_group(&cb));
@@ -4779,7 +4881,8 @@ static void doFog(Replay *r, const RdFrame *f, const RdCmd *c)
     ds.tw = tz->w;
     ds.th = tz->h;
     ds.textured = 1;
-    ds.screenCopy = 1; /* it reads the depth texel under each pixel */
+    ds.screenCopy = 1;                      /* it reads the depth texel under each pixel */
+    ds.texCrop = tz->ox > 0.0f ? tz : NULL; /* Full pixel (fog_lut.hlsl) */
     /* no prepareDraw here: the per-draw flags it resets are reset here, so
      * the previous draw's mirror (scissorRect) is not inherited.  The fog
      * sprite covers the native frame as drawn */
@@ -4875,7 +4978,7 @@ static RhiRect rectJoin(RhiRect a, RhiRect b)
  * for an empty or degenerate sprite and where the shader's int product
  * could overflow. */
 static bool blurUvAxis(int32_t x0, int32_t x1, int32_t u0, int32_t u1, float ss, float size,
-                       int clamp, uint32_t asz, int32_t *lo, int32_t *hi)
+                       int clamp, uint32_t asz, int32_t crop16, int32_t *lo, int32_t *hi)
 {
     const int64_t dx = (int64_t)x1 - x0, du = (int64_t)u1 - u0;
     if (!clamp || dx <= 0 || asz == 0 || (dx + 32) * (du < 0 ? -du : du) > (1ll << 30)) {
@@ -4892,6 +4995,15 @@ static bool blurUvAxis(int32_t x0, int32_t x1, int32_t u0, int32_t u1, float ss,
     lszHi = lszHi < 1 ? 1 : lszHi;
     t0 = t0 < 0 ? 0 : (t0 > lszLo - 1 ? lszLo - 1 : t0);
     t1 = t1 < 0 ? 0 : (t1 > lszHi - 1 ? lszHi - 1 : t1);
+    if (crop16 > 0) {
+        /* a Full pixel crop (fx_sprite.hlsl fx_src_crop16): the frame's
+         * texels moved to the crop's, a texel more each way for its
+         * rounding, the crop's ends the bounds */
+        t0 = floorDiv16(16 * t0 - crop16) - 1;
+        t1 = floorDiv16(16 * t1 - crop16) + 1;
+        t0 = t0 < 0 ? 0 : t0;
+        t1 = t1 < 0 ? 0 : t1;
+    }
     *lo = t0 < (int32_t)asz - 1 ? t0 : (int32_t)asz - 1;
     *hi = t1 < (int32_t)asz - 1 ? t1 : (int32_t)asz - 1;
     return true;
@@ -4928,12 +5040,13 @@ static void blurSnapArea(const Replay *r, const RdTargetRec *tc, const RdPostRec
         const RdDrawState *d = &r->st.ds;
         int32_t a, b, e, g;
         if (blurUvAxis(x0, x1, (int32_t)uv[0], (int32_t)uv[2], tc->sx, p->scalar[0],
-                       d->wrap.s == RD_WRAP_CLAMP, tc->tw, &a, &b)) {
+                       d->wrap.s == RD_WRAP_CLAMP, tc->tw, (int32_t)floorf(tc->ox * 16.0f + 0.5f),
+                       &a, &b)) {
             tex.x = a;
             tex.w = (uint32_t)(b - a + 1);
         }
         if (blurUvAxis(y0, y1, (int32_t)uv[1], (int32_t)uv[3], tc->sy, p->scalar[1],
-                       d->wrap.t == RD_WRAP_CLAMP, tc->th, &e, &g)) {
+                       d->wrap.t == RD_WRAP_CLAMP, tc->th, 0, &e, &g)) {
             tex.y = e;
             tex.h = (uint32_t)(g - e + 1);
         }
@@ -5173,6 +5286,9 @@ static void doBlurSpriteDraw(Replay *r, const RdFrame *f, const RdCmd *c)
     cb.tex[3] = (float)th;
     cb.scale[0] = ssx;
     cb.scale[1] = ssy;
+    if (src && src->ox > 0.0f) {
+        cb.scale[2] = src->ox / (float)src->tw; /* Full pixel (fx_sprite.hlsl fx_src_crop16) */
+    }
     memcpy(cb.param, p.rect, sizeof(cb.param));
     rhi_cmd_set_pipeline(s_cl, pipe);
     rd__bind_uniform(s_cl, 0, r->frameBG);

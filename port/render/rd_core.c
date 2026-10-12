@@ -525,6 +525,26 @@ void rd__target_scale_of(RdTargetRec *t, int named)
     t->sy = sy;
     t->tw = sx == 1.0f ? t->w : scaled(t->w, sx);
     t->th = sy == 1.0f ? t->h : scaled(t->h, sy);
+    t->ox = 0.0f;
+    /* Full pixel (rd__apply_display: g_rd.frameCropWe): a frame-wide
+     * scene-class target holds the frame's exact visible width alone, its
+     * texels the window's pixels (1920 at 1080p 16:9, not 688 x 2.8125 =
+     * 1935), the same scale, centred: the GS frame's w sx / 2 - floor(tw /
+     * 2) texels at the left are not drawn (ox), so GS pixel x is texel
+     * x sx - ox and the frame's centre (GS 2048) texel floor(tw / 2)
+     * (rd_replay.c rd__frame_group_ex) */
+    if (scene && g_rd.frameCropWe > 0.0f && t->w == g_rd.gsW && g_rd.frameCropWe < (float)t->w &&
+        sx > 1.0f) {
+        const uint32_t cw = scaled(1u, g_rd.frameCropWe * sx);
+        if (cw < t->tw) {
+            /* the frame's centre on the texture's middle texel edge,
+             * floor(tw / 2): a whole texel at every width, so the 4:3
+             * columns are the 4:3 picture's texels at an odd width too (half
+             * a texel left of the middle there) */
+            t->ox = (float)t->w * sx * 0.5f - (float)(cw / 2u);
+            t->tw = cw;
+        }
+    }
 }
 
 float rd_work_target_scale(uint32_t sceneHeight)

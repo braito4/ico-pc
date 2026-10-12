@@ -548,8 +548,10 @@ static void test_video_anti_alias(const char *dir)
     ico_video_reload();
 }
 
-/* [video] full_pixel (default off): the default, the file read, the
-   normalising, the round trip, and the presets leaving it alone */
+/* [video] full_pixel: the default, the file read, the normalising, the
+   round trip; without the key On under the Enhanced rows and Off under the
+   Original ones, a saved value kept either way; the Preset shortcut sets it
+   (Enhanced on, Original off) */
 static void test_video_full_pixel(const char *dir)
 {
     char path[512];
@@ -587,14 +589,55 @@ static void test_video_full_pixel(const char *dir)
     ico_video_reload();
     ico_video_get(&o);
     CHECK(o.fullPixel == 0);
-    /* the presets' shortcut leaves it alone */
+    /* the Preset shortcut sets it; it is not one of the rows the preset is
+       derived from */
     ico_video_defaults(&o);
-    o.fullPixel = 1;
     CHECK(ico_video_preset(&o) == ICO_VIDEO_ORIGINAL);
     ico_video_set_preset(&o, ICO_VIDEO_ENHANCED);
     CHECK(o.fullPixel == 1);
+    o.fullPixel = 0;
+    CHECK(ico_video_preset(&o) == ICO_VIDEO_ENHANCED);
     ico_video_set_preset(&o, ICO_VIDEO_ORIGINAL);
-    CHECK(o.fullPixel == 1);
+    CHECK(o.fullPixel == 0);
+    o.fullPixel = 1;
+    CHECK(ico_video_preset(&o) == ICO_VIDEO_ORIGINAL);
+    /* no key: by the rows */
+    {
+        static const struct {
+            const char *text;
+            int want;
+        } cases[] = {
+            {"[video]\npreset = \"enhanced\"\nresolution = \"window\"\naspect = \"auto\"\n"
+             "texture_filter = \"anisotropic\"\nfull_height = true\n",
+             1},
+            {"[video]\npreset = \"original\"\n", 0},
+            {"version = 1\n", 0},
+            {"[video]\npreset = \"custom\"\nresolution = \"2x\"\naspect = \"16:9\"\n", 0},
+            /* a saved value kept, whichever the rows */
+            {"[video]\npreset = \"enhanced\"\nresolution = \"window\"\naspect = \"auto\"\n"
+             "texture_filter = \"anisotropic\"\nfull_height = true\nfull_pixel = false\n",
+             0},
+            {"[video]\npreset = \"original\"\nfull_pixel = true\n", 1},
+        };
+
+        for (size_t k = 0; k < sizeof(cases) / sizeof(cases[0]); k++) {
+            f = fopen(path, "wb");
+            if (f == NULL) {
+                failures++;
+                break;
+            }
+            fputs(cases[k].text, f);
+            fclose(f);
+            ico_config_reset(path, "/nonexistent/options_test.ini");
+            ico_video_reload();
+            ico_video_get(&o);
+            if (o.fullPixel != cases[k].want) {
+                fprintf(stderr, "full_pixel case %u: %d, %d wanted\n", (unsigned)k, o.fullPixel,
+                        cases[k].want);
+            }
+            CHECK(o.fullPixel == cases[k].want);
+        }
+    }
     remove(path);
     ico_config_reset("/nonexistent/options_test.toml", "/nonexistent/options_test.ini");
     ico_video_reload();

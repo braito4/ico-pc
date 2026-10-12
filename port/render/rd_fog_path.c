@@ -660,14 +660,19 @@ static void stSamples(const RdTargetRec *t, uint32_t xs[ST_SAMPLES], uint32_t ys
             ((double)(cx * t->w / ST_CELLS) + (double)((cx + 1) * t->w / ST_CELLS)) / 2;
         const double gy =
             ((double)(cy * t->h / ST_CELLS) + (double)((cy + 1) * t->h / ST_CELLS)) / 2;
-        xs[PROBE_POINTS + c] = (uint32_t)(gx * t->tw / t->w);
+        /* a Full pixel target holds the frame's exact width alone
+           (RdTargetRec.ox): a cell past it is sampled at its edge */
+        const double tx = t->ox > 0.0f ? gx * t->sx - t->ox : gx * t->tw / t->w;
+        xs[PROBE_POINTS + c] = tx < 0.0 ? 0u : (tx >= (double)t->tw ? t->tw - 1u : (uint32_t)tx);
         ys[PROBE_POINTS + c] = (uint32_t)(gy * t->th / t->h);
     }
     /* one texel in GS pixels */
     const double dx = (double)t->w / t->tw, dy = (double)t->h / t->th;
     for (int k = 0; k < ST_SAMPLES; k++) {
         /* the texel's centre in GS pixels, one texel either side */
-        const double cx = ((double)xs[k] + 0.5) * dx, cy = ((double)ys[k] + 0.5) * dy;
+        const double cx =
+            t->ox > 0.0f ? ((double)xs[k] + 0.5 + t->ox) / t->sx : ((double)xs[k] + 0.5) * dx;
+        const double cy = ((double)ys[k] + 0.5) * dy;
         const double gx[2] = {cx - dx < 0.0 ? 0.0 : cx - dx, cx + dx};
         const double gy[2] = {cy - dy < 0.0 ? 0.0 : cy - dy, cy + dy};
         for (int j = 0; j < ST_CANDIDATES; j++) {

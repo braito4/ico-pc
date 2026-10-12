@@ -58,16 +58,19 @@ cbuffer FrameCB : register(b0, space0)
     // z, w the target's texels per GS pixel; 0 when the viewport is the
     // target (the present, the films, the shader tests: the plain mapping).
     float4 g_frameRegs[2];
-    float4 g_z;         // x scale (1 / 2^24), yz the bound target's texels per GS
-                        // pixel (1 in Original), w 1: the VU programs output
-                        // unquantised X, Y (only the developer switch
-                        // ICO_RD_VU_OFFGRID, Enhanced on a scaled target)
-    float4 g_misc;      // x frame counter, y preset (0 Original, 1 Enhanced), zw the
-                        // target's share of the exact viewport (fullscreen_triangle)
-    float4 g_vpo;       // xy the exact viewport's centre this far (0 or 0.5 texel)
-                        // before the target's (its origin on a whole texel for an
-                        // odd-sized target: no device's viewport sub-pixel
-                        // precision is relied on), zw reserved
+    float4 g_z;    // x scale (1 / 2^24), yz the bound target's texels per GS
+                   // pixel (1 in Original), w 1: the VU programs output
+                   // unquantised X, Y (only the developer switch
+                   // ICO_RD_VU_OFFGRID, Enhanced on a scaled target)
+    float4 g_misc; // x frame counter, y preset (0 Original, 1 Enhanced), zw the
+                   // target's share of the exact viewport (fullscreen_triangle)
+    float4 g_vpo;  // xy the exact viewport's centre this far (0 or 0.5 texel)
+                   // before the target's (its origin on a whole texel for an
+                   // odd-sized target: no device's viewport sub-pixel
+                   // precision is relied on), z the texels of the GS frame
+                   // a Full pixel target leaves out at its left (its texture
+                   // the frame's exact width alone, centred: rd_replay.c
+                   // rd__frame_group_ex), else 0; w reserved
 };
 
 // ---------------------------------------------------------------- DrawCB
@@ -86,7 +89,10 @@ cbuffer FrameCB : register(b0, space0)
 //   g_param  kind-specific: each entry's header says what it reads (e.g.
 //            blend_int's source offset in pixels, xy)
 //   g_scale  xy t1 texels per GS texel: 1 for images and unscaled targets,
-//            the target's scale for a scaled one; zw reserved (0)
+//            the target's scale for a scaled one; z, with t1 a Full pixel
+//            crop of the frame (rd_replay.c, RdTargetRec.ox), its left-out
+//            texels over its width (ox / tw: the normalised U subtracted,
+//            gs_uv_norm), else 0; w reserved (0)
 cbuffer DrawCB : register(b1, space1)
 {
     uint4 g_col;
@@ -98,17 +104,17 @@ cbuffer DrawCB : register(b1, space1)
     float4 g_scale;
 };
 
-#define DF_TEXTURED 1u   // PRIM.TME
-#define DF_DECAL 2u      // TFX DECAL (else MODULATE)
-#define DF_TCC_RGBA 4u   // TCC: texture alpha used (else vertex alpha)
-#define DF_FBA 8u        // force the alpha MSB on write
-#define DF_PABE 16u      // blend only where As has its MSB set (else Cs unblended)
+#define DF_TEXTURED 1u    // PRIM.TME
+#define DF_DECAL 2u       // TFX DECAL (else MODULATE)
+#define DF_TCC_RGBA 4u    // TCC: texture alpha used (else vertex alpha)
+#define DF_FBA 8u         // force the alpha MSB on write
+#define DF_PABE 16u       // blend only where As has its MSB set (else Cs unblended)
 #define DF_FIX_FACTOR 32u // dual-source factor is FIX / 128 instead of As / 128
-#define DF_PREMUL 64u    // colour output is (Cs * factor) >> 7, pipeline src factor ONE
-#define DF_DATE 128u     // TEST.DATE: destination alpha test against the snapshot in t2
-#define DF_DATM 256u     // TEST.DATM: with DF_DATE, pass where the MSB is 1 (else 0)
-#define DF_AA1_FULL 512u // sprite_aa1_ps: PRIM.ABE 0, the coverage alpha replaces every alpha
-#define DF_C1_DST 32768u // the pipeline is Cs + Cd * c1 (dst factor SRC1): see gs_dual_out
+#define DF_PREMUL 64u     // colour output is (Cs * factor) >> 7, pipeline src factor ONE
+#define DF_DATE 128u      // TEST.DATE: destination alpha test against the snapshot in t2
+#define DF_DATM 256u      // TEST.DATM: with DF_DATE, pass where the MSB is 1 (else 0)
+#define DF_AA1_FULL 512u  // sprite_aa1_ps: PRIM.ABE 0, the coverage alpha replaces every alpha
+#define DF_C1_DST 32768u  // the pipeline is Cs + Cd * c1 (dst factor SRC1): see gs_dual_out
 // The two-pass blend without dual-source blending (the
 // *_nodual entries, built with ICO_NO_DUAL=1; rd_pipeline.c rd__expand_no_dual):
 #define DF_NODUAL_FACTOR 65536u      // colour pass: c0.a is the blend factor c1 would carry
@@ -116,12 +122,13 @@ cbuffer DrawCB : register(b1, space1)
 // sprite_texa_ps and vu_texa_ps (gs_texa_texture): the sampler state the
 // four-tap filter reproduces; the CLAMP bits also for gs_sample_lod_nearest
 // (DF_GS_LOD with DF_NEAREST). Other entries never read these bits.
-#define DF_TEXA_MAG_LINEAR 1024u  // TEX1.MMAG linear
-#define DF_TEXA_MIN_LINEAR 2048u  // TEX1.MMIN linear
-#define DF_TEXA_CLAMP_S 4096u     // CLAMP on s (else REPEAT)
-#define DF_TEXA_CLAMP_T 8192u     // CLAMP on t (else REPEAT)
-#define DF_TEXA_MIN_SAMPLED 16384u // a minified pixel takes the bound sampler (the Enhanced
-                                   // trilinear or anisotropic filter over the mips), TEXA after
+#define DF_TEXA_MAG_LINEAR 1024u // TEX1.MMAG linear
+#define DF_TEXA_MIN_LINEAR 2048u // TEX1.MMIN linear
+#define DF_TEXA_CLAMP_S 4096u    // CLAMP on s (else REPEAT)
+#define DF_TEXA_CLAMP_T 8192u    // CLAMP on t (else REPEAT)
+#define DF_TEXA_MIN_SAMPLED                                                                        \
+    16384u // a minified pixel takes the bound sampler (the Enhanced
+           // trilinear or anisotropic filter over the mips), TEXA after
 // The texture has its GS mipmap levels (the TIM2's own, not box filtered):
 // sample at the GS's level of detail (gs_lod_level) with TEX1's fields in
 // g_blend.w. Every entry that samples a game texture honours it.
@@ -488,13 +495,11 @@ bool gs_alpha_discard(uint flagsZ, uint aref, uint a)
 // factor's value is the same float as c1's, so the blender sees the same
 // numbers. Every other path reads c0 alone already.
 #ifdef ICO_NO_DUAL
-struct DualOut
-{
+struct DualOut {
     VK_LOC(0) float4 c0 : SV_Target0;
 };
 #else
-struct DualOut
-{
+struct DualOut {
     VK_DUAL(0, 0) float4 c0 : SV_Target0;
     VK_DUAL(0, 1) float4 c1 : SV_Target1;
 };
@@ -629,6 +634,7 @@ void gs_dst_out(uint4 col, float4 pos)
     const uint4 dst = uint4(floor(g_dstRov[p] * 255.0 + 0.5));
     g_dstRov[p] = float4(gs_dst_pixel(col, dst, g_mode.x)) * (1.0 / 255.0);
 }
+
 #define GS_PS_OUT void
 #define GS_PS_ATTR [earlydepthstencil]
 #define GS_RETURN(col, pos)                                                                        \
@@ -639,8 +645,7 @@ void gs_dst_out(uint4 col, float4 pos)
 #elif ICO_DST_MODE == 2
 [[vk::input_attachment_index(0)]] [[vk::binding(16, 3)]] SubpassInput<float4> g_dstIn;
 
-struct DstOut
-{
+struct DstOut {
     VK_LOC(0) float4 c0 : SV_Target0;
 };
 
@@ -651,6 +656,7 @@ DstOut gs_dst_out(uint4 col)
     o.c0 = float4(gs_dst_pixel(col, dst, g_mode.x)) * (1.0 / 255.0);
     return o;
 }
+
 #define GS_PS_OUT DstOut
 #define GS_PS_ATTR
 #define GS_RETURN(col, pos) return gs_dst_out(col)
@@ -701,6 +707,20 @@ float2 gs_xy_to_ndc(uint2 xy)
     return gs_px_to_ndc(float2(xy) * (1.0 / 16.0));
 }
 
+// A UV in t1's GS texels normalised (g_tex.zw), less a Full pixel crop's
+// left-out share (g_scale.z: 0 but for a cropped frame-wide target, whose
+// g_tex.z is then its scale over its width, rd_replay.c fillDrawCB).  The
+// STQ form subtracts it times Q, so S / Q is the normalised UV.
+float2 gs_uv_norm(float2 uv)
+{
+    return uv * g_tex.zw - float2(g_scale.z, 0.0);
+}
+
+float3 gs_stq_norm(float2 st, float q)
+{
+    return float3(st * g_tex.zw - float2(g_scale.z, 0.0) * q, q);
+}
+
 // The exact viewport's attribute planes (vu_common.hlsli vu_attr_planes,
 // sprite.hlsl sprite_plane_attrs).  gs_texel_offset: GS pixels to texels
 // from the target's centre (gs_px_to_ndc's q: exact on the 1/16 grid at an
@@ -716,7 +736,9 @@ float2 gs_texel_offset(float2 px)
 
 float2 gs_plane_offset(float4 pos, float2 corner)
 {
-    precise float2 c = g_target.xy * g_vp.zw * 0.5;
+    // the texture's centre: the frame's, less the Full pixel crop's
+    // left-out texels (g_vpo.z, 0 on every other target)
+    precise float2 c = g_target.xy * g_vp.zw * 0.5 - float2(g_vpo.z, 0.0);
     precise float2 d = (pos.xy - c) - corner;
     return d;
 }

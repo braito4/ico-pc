@@ -907,6 +907,23 @@ if(ICO_RUN_TESTS)
     if(_env)
       set_tests_properties(${_odd_msaa} rd_fog_selftest_7740 PROPERTIES ENVIRONMENT "${_env}")
     endif()
+    # Full pixel at 1920 x 1080 16:9 (the window's exact pixels: SCENE 1920
+    # texels, the frame's 688 GS pixels cropped to its exact 682.67), with
+    # and without MSAA: the depth read in place passes and is taken
+    set(_fullpixel)
+    foreach(_aa 0 3 4 5)
+      set(_n rd_fog_selftest_fullpixel_aa${_aa})
+      add_test(NAME ${_n}
+               COMMAND "${CMAKE_COMMAND}" -DTOOL=$<TARGET_FILE:rd_fog_selftest_test>
+                       -DFOG_PATH=inplace "-DARGS=688|448|0|${_aa}|0|0|1920|1080"
+                       "-DRESULTS=inplace ok [0-2], copy not tried, buffer not tried"
+                       -P "${CMAKE_CURRENT_SOURCE_DIR}/test/rd_fog_selftest.cmake")
+      list(APPEND _fullpixel ${_n})
+    endforeach()
+    set_tests_properties(${_fullpixel} PROPERTIES SKIP_REGULAR_EXPRESSION "SKIP:")
+    if(_env)
+      set_tests_properties(${_fullpixel} PROPERTIES ENVIRONMENT "${_env}")
+    endif()
     set_tests_properties(rd_fog_selftest rd_fog_selftest_all rd_fog_selftest_fallback
                          PROPERTIES SKIP_REGULAR_EXPRESSION "SKIP:")
     set(_env_sab ${_env} "ICO_RD_FOG_SABOTAGE=inplace,copy")

@@ -20,7 +20,8 @@
 //   g_tex    xy the TEX0 size (2^TW, 2^TH), zw the size of t1
 //   g_param  x0 y0 x1 y1, 12.4 window coordinates (integers held as floats)
 //   g_scale  xy t1 texels per GS texel (a scaled target's scale; 1
-//            for images and in Original)
+//            for images and in Original), z t1's Full pixel crop: its
+//            left-out texels over its width (common.hlsli), else 0
 // FrameCB: g_origin.xy the XYOFFSET of the bound target (GS pixels, + 0.5 y
 // with the half-line offset), g_z.x the GS Z scale of its depth, g_z.yz the
 // bound target's texels per GS pixel (1 in Original). The target is as wide
@@ -84,15 +85,27 @@ int fx_wrap(int c, int n)
     return ((c % n) + n) % n;
 }
 
+// t1's Full pixel crop in 1/16 texels: the texels of the GS frame left out
+// at its left (g_scale.z times its width), 0 on every other texture
+int fx_src_crop16()
+{
+    return g_scale.z != 0.0 ? int(round(g_scale.z * g_tex.z * 16.0)) : 0;
+}
+
 // One texel at integer texel coordinates: CLAMP or REPEAT on the TEX0 size,
-// then clamped to the texture that backs it, then TEXA.
+// then clamped to the texture that backs it, then TEXA.  On a Full pixel
+// crop c is in the crop's texels, the wrap and the clamp in the frame's
+// (the crop's whole texels added back).
 uint4 fx_texel(int2 c, uint flags)
 {
     int2 lsz = max(int2(round(g_tex.xy * fx_src_scale())), int2(1, 1));
     int2 asz = int2(g_tex.zw);
+    const int k = fx_src_crop16() >> 4;
+    c.x += k;
     c.x = (flags & FXF_CLAMP_S) != 0u ? clamp(c.x, 0, lsz.x - 1) : fx_wrap(c.x, lsz.x);
     c.y = (flags & FXF_CLAMP_T) != 0u ? clamp(c.y, 0, lsz.y - 1) : fx_wrap(c.y, lsz.y);
-    c = min(c, asz - 1);
+    c.x -= k;
+    c = clamp(c, int2(0, 0), asz - 1);
     uint4 t = fx_load(g_texture, c);
     return gs_texa_expand(t, g_mode.y & 0xFFu, g_mode.y >> 8);
 }
@@ -105,8 +118,11 @@ float4 fx_sprite_ps(float4 pos : SV_Position) : SV_Target0
     // scaled target the texel's GS pixel (its s x s block) for the coverage,
     // and the GS position of its own centre for the UV
     const float2 ts = float2(g_z.y > 0.0 ? g_z.y : 1.0, g_z.z > 0.0 ? g_z.z : 1.0);
-    const int2 gb = int2(floor((pos.xy - 0.5) / ts)) * 16;
-    const int2 gp = int2(floor((pos.xy / ts - 0.5) * 16.0 + 0.5));
+    // the texel in the frame's texels: a Full pixel target's left-out
+    // texels added (g_vpo.z, 0 on every other target)
+    const float2 fp = pos.xy + float2(g_vpo.z, 0.0);
+    const int2 gb = int2(floor((fp - 0.5) / ts)) * 16;
+    const int2 gp = int2(floor((fp / ts - 0.5) * 16.0 + 0.5));
     const int ox = int(round(g_origin.x * 16.0)), oy = int(round(g_origin.y * 16.0));
     const int X = ox + gp.x;
     const int Y = oy + gp.y;
@@ -124,7 +140,8 @@ float4 fx_sprite_ps(float4 pos : SV_Position) : SV_Target0
         uint4 t;
         // the UV in t1's own texels, 12.4 (u, v at scale 1)
         const float2 ss = fx_src_scale();
-        const int su = int(round(float(u) * ss.x)), sv = int(round(float(v) * ss.y));
+        const int su = int(round(float(u) * ss.x)) - fx_src_crop16();
+        const int sv = int(round(float(v) * ss.y));
         if ((flags & FXF_LINEAR) != 0u) {
             const int uu = su - 8, vv = sv - 8;
             const int2 i0 = int2(uu >> 4, vv >> 4);

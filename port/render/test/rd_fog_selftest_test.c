@@ -1,6 +1,7 @@
 /* rd_fog_selftest_test.c: the fog's self-test and probe (rd_fog_path.c).
  *
- *   rd_fog_selftest test/rd_fog_selftest_test <path> [<w> <h> [<scale> [<aa> [<texels w> <texels h>]]]]
+ *   rd_fog_selftest test/rd_fog_selftest_test <path> [<w> <h> [<scale> [<aa> [<texels w> <texels h>
+ *                                               [<out w> <out h>]]]]]
  *
  * <texels w> <texels h> a scene of exactly that many texels (scale 0), as
  * the window's size gives; <aa> an RdAntiAlias value (default 0, off); with an MSAA count the device
@@ -8,7 +9,10 @@
  * (1935x1080 for the PS2's 688x448) puts the probe's centre on a cell edge
  * (issue 79): in place must still pass, and MSAA stays in force; with the
  * in-place and copy reads sabotaged (buffer taken) MSAA is off, and
- * rd_aa_supported_mask still lists it.
+ * rd_aa_supported_mask still lists it.  <out w> <out h> (texels 0 0): the
+ * Enhanced window resolution in that output at 16:9, Full pixel on: SCENE
+ * the window's exact pixels, the frame's exact width alone (RdTargetRec.ox;
+ * rd_fog_selftest_fullpixel*: 688 x 448 in 1920 x 1080).
  *
  * On a Vulkan device (77 without one), at a wide scene (16:9, scale 2,
  * Full pixel) so the self-test runs on a SCENE whose texels are not its GS
@@ -155,7 +159,13 @@ static void checkCells(void)
         const uint32_t cx = (uint32_t)(c % CELLS), cy = (uint32_t)(c / CELLS);
         const double gx = ((double)(cx * t->w / CELLS) + (double)((cx + 1) * t->w / CELLS)) / 2;
         const double gy = ((double)(cy * t->h / CELLS) + (double)((cy + 1) * t->h / CELLS)) / 2;
-        const uint32_t x = (uint32_t)(gx * t->tw / t->w), y = (uint32_t)(gy * t->th / t->h);
+        /* a Full pixel SCENE holds the frame's exact width alone: a cell
+           outside it is not in the texture */
+        const double tx = t->ox > 0.0f ? gx * t->sx - t->ox : gx * t->tw / t->w;
+        if (tx < 0.0 || tx >= (double)t->tw) {
+            continue;
+        }
+        const uint32_t x = (uint32_t)tx, y = (uint32_t)(gy * t->th / t->h);
         uint8_t l[4], cd[4];
         lutOf(c, l);
         cellColor(c, cd);
@@ -193,17 +203,19 @@ int main(int argc, char **argv)
     const int aa = argc > 5 ? atoi(argv[5]) : 0;
     const uint32_t sceneW = argc > 7 ? (uint32_t)atoi(argv[6]) : 0;
     const uint32_t sceneH = argc > 7 ? (uint32_t)atoi(argv[7]) : 0;
+    const uint32_t outW = argc > 9 ? (uint32_t)atoi(argv[8]) : 0;
+    const uint32_t outH = argc > 9 ? (uint32_t)atoi(argv[9]) : 0;
     RdSettings st;
     memset(&st, 0, sizeof(st));
     st.preset = RD_PRESET_ENHANCED;
     st.aspect = 16.0f / 9.0f;
-    st.sceneScale = sceneW ? 0.0f : scale;
+    st.sceneScale = sceneW || outW ? 0.0f : scale;
     st.sceneWidth = sceneW;
     st.sceneHeight = sceneH;
     st.antiAlias = (uint8_t)aa;
     st.fullPixel = 1;
-    st.outputWidth = 1280;
-    st.outputHeight = 720;
+    st.outputWidth = outW ? outW : 1280;
+    st.outputHeight = outH ? outH : 720;
     if (!rd_init(w, h, &st, NULL)) {
         printf("rd_fog_selftest_test: SKIP: no usable Vulkan device\n");
         return 77;
@@ -211,6 +223,11 @@ int main(int argc, char **argv)
     const RdTargetRec *t = rd__target_rec(rd_target(RD_TARGET_SCENE).id);
     CHECK(t && (scale <= 1.0f || t->tw != t->w), "a scaled, wide SCENE (%ux%u texels for %ux%u)",
           t ? t->tw : 0, t ? t->th : 0, w, h);
+    if (outW) {
+        CHECK(t && t->tw == outW && t->ox > 0.0f,
+              "Full pixel: SCENE is the window's %u columns (%u, %g left out)", outW, t ? t->tw : 0,
+              t ? (double)t->ox : 0.0);
+    }
     if (aa > RD_AA_OFF && (rd_aa_supported_mask() & (1u << aa)) == 0u) {
         printf("rd_fog_selftest_test: SKIP: anti-aliasing %d is not offered here\n", aa);
         rd_shutdown();

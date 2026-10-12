@@ -204,15 +204,14 @@ uint vu_vertex_qw(uint v)
 // ------------------------------------------------------------- one vertex
 
 // What one VU loop iteration computes for a vertex.
-struct VuVtx
-{
-    float4 h;     // the screen matrix times pos, before the divide (w: the clip w)
-    float4 p;     // xyz divided by w (pixels; z = GS Z / 16), w = h.w
-    int3 gs;      // ftoi4 of p.xyz: GS X, Y (12.4) and Z
-    uint4 rgba;   // RGBAQ, 0..255
-    float3 stq;   // PACKED ST
-    bool inside;  // the region test
-    float4 clip;  // scissor programs: model to clip space (mem[20..23]) times pos
+struct VuVtx {
+    float4 h;    // the screen matrix times pos, before the divide (w: the clip w)
+    float4 p;    // xyz divided by w (pixels; z = GS Z / 16), w = h.w
+    int3 gs;     // ftoi4 of p.xyz: GS X, Y (12.4) and Z
+    uint4 rgba;  // RGBAQ, 0..255
+    float3 stq;  // PACKED ST
+    bool inside; // the region test
+    float4 clip; // scissor programs: model to clip space (mem[20..23]) times pos
 };
 
 VuVtx vu_vtx_init()
@@ -241,11 +240,11 @@ float vu_divide(inout VuVtx o)
 
 // ------------------------------------------------------------ the output
 
-struct VuVSOut
-{
+struct VuVSOut {
     float4 pos : SV_Position;
-    VK_LOC(0) noperspective float4 col : COLOR0;   // RGBA 0..255, the GS interpolates in screen space
-    VK_LOC(1) noperspective float3 stq : TEXCOORD0; // S, T, Q linear in screen space, divided per pixel
+    VK_LOC(0) noperspective float4 col : COLOR0; // RGBA 0..255, the GS interpolates in screen space
+    VK_LOC(1)
+    noperspective float3 stq : TEXCOORD0; // S, T, Q linear in screen space, divided per pixel
     VK_LOC(2) noperspective float plane : TEXCOORD1; // vu_plane_distance; drawn where >= 0
     // The triangle's attribute planes (vu_attr_planes): col, stq and plane
     // at its first corner (a0: col, a1: stq, plane) and per texel across
@@ -398,6 +397,7 @@ bool vu_rect_reaches_picture(float2 lo, float2 hi)
 // dot(plane, v) >= 0 (Sutherland-Hodgman). A triangle cut by four planes
 // has at most seven corners.
 #define VU_CUT_CORNERS 7u
+
 void vu_clip_corners(inout float4 p[VU_CUT_CORNERS], inout uint n, float4 plane)
 {
     float4 q[VU_CUT_CORNERS] = p;
@@ -745,13 +745,15 @@ uint3 vu_strip_of(uint k, bool flagged)
     // k and k - 1 start nothing (k is a kick): the start is at k - 2 or before
     uint s = k - 2u;
     uint n = 0u;
-    [loop] while (s > lo && !vu_strip_start(s, true) && n < VU_STRIP_SCAN) {
+    [loop] while (s > lo && !vu_strip_start(s, true) && n < VU_STRIP_SCAN)
+    {
         s--;
         n++;
     }
     uint e = k + 1u;
     uint m = 0u;
-    [loop] while (e < hi && !vu_strip_start(e, true) && m < VU_STRIP_SCAN) {
+    [loop] while (e < hi && !vu_strip_start(e, true) && m < VU_STRIP_SCAN)
+    {
         e++;
         m++;
     }
@@ -899,8 +901,8 @@ VuVSOut vu_probe_out(uint vid, uint value)
     // texel px of the target (under the exact viewport the target is the
     // share g_misc.zw of it about its centre: common.hlsli fullscreen_triangle)
     o.pos = g_vp.x != 0.0
-                ? float4((px.x + g_vpo.x) * g_vp.x - g_misc.z,
-                         g_misc.w - (px.y + g_vpo.y) * g_vp.y, 0.5, 1.0)
+                ? float4((px.x + g_vpo.x) * g_vp.x - g_misc.z, g_misc.w - (px.y + g_vpo.y) * g_vp.y,
+                         0.5, 1.0)
                 : float4(px.x * g_target.z * 2.0 - 1.0, 1.0 - px.y * g_target.w * 2.0, 0.5, 1.0);
     o.col = float4(float(value & 0xFFFFu), float(value >> 16), 0.0, 0.0);
     return o;
@@ -938,6 +940,19 @@ Texture2D<float4> g_texture : register(t1, space2);
 SamplerState g_sampler : register(s1, space2);
 Texture2D<float> g_dateSnap : register(t2, space2);
 
+// S/Q, T/Q: the texture's normalised UV.  On a Full pixel crop of the
+// frame (g_scale.z set, rd_replay.c fillDrawCB) the STs, normalised to the
+// target's GS size (g_tex.x), address its texture at its scale over its
+// width (g_tex.z) less its left-out share.
+float2 vu_uv(float3 stq)
+{
+    float2 uv = stq.xy / stq.z;
+    if (g_scale.z != 0.0) {
+        uv.x = uv.x * (g_tex.x * g_tex.z) - g_scale.z;
+    }
+    return uv;
+}
+
 // sprite_ps with STQ: the texel at S/Q, T/Q (the texture is padded to
 // 2^TW x 2^TH, so STQ is normalised already; a texture with GS levels at
 // the GS's level by Q, gs_sample), texture function, TEXA, alpha test,
@@ -955,7 +970,7 @@ uint4 vu_pixel(VuVSOut i)
     }
     uint4 col = uint4(floor(i.col + 0.5));
     if ((g_mode.x & DF_TEXTURED) != 0u) {
-        float2 uv = i.stq.xy / i.stq.z;
+        float2 uv = vu_uv(i.stq);
         uint4 t = uint4(floor(gs_sample(g_texture, g_sampler, uv, i.stq.z) * 255.0 + 0.5));
         t = gs_texa_expand(t, g_mode.y & 0xFFu, g_mode.y >> 8);
         col = gs_texture_function(t, col, g_mode.x);
@@ -982,7 +997,7 @@ uint4 vu_pixel_texa(VuVSOut i)
     }
     uint4 col = uint4(floor(i.col + 0.5));
     if ((g_mode.x & DF_TEXTURED) != 0u) {
-        float2 uv = i.stq.xy / i.stq.z;
+        float2 uv = vu_uv(i.stq);
         uint4 t = (g_mode.x & DF_GS_LOD) != 0u
                       ? gs_texa_texture_lod(g_texture, uv, i.stq.z, g_mode.x)
                       : gs_texa_texture(g_texture, g_sampler, uv, g_mode.x);

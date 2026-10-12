@@ -305,8 +305,9 @@ static void set_preset(IcoVideoOptions *o, int preset, int android)
         o->aspect = ICO_ASPECT_4_3;
         o->filter = ICO_FILTER_ORIGINAL;
         o->fullHeight = 0;
-        /* the PS2 picture has no anti-aliasing */
+        /* the PS2 picture has no anti-aliasing, and its frame's shape */
         o->antiAlias = ICO_AA_OFF;
+        o->fullPixel = 0;
     } else if (preset == ICO_VIDEO_ENHANCED) {
         /* the window's size (on Android "auto": the window's, lowered
            while the phone falls behind), its aspect, anisotropic, full
@@ -316,6 +317,8 @@ static void set_preset(IcoVideoOptions *o, int preset, int android)
         o->aspect = ICO_ASPECT_AUTO;
         o->filter = ICO_FILTER_ANISOTROPIC;
         o->fullHeight = 1;
+        /* the window's own pixels (rd_present.c rd__apply_display) */
+        o->fullPixel = 1;
     }
 }
 
@@ -521,7 +524,16 @@ static void read_config(void)
        (a misspelling) is the PS2 picture whatever they say */
     s = ico_config_get_string("video.preset", "original");
     if (s == NULL || !(lower_eq(s, "enhanced") || lower_eq(s, "custom"))) {
+        const int fullPixel = o.fullPixel; /* a saved Full pixel is kept */
+
         ico_video_set_preset(&o, ICO_VIDEO_ORIGINAL);
+        o.fullPixel = fullPixel;
+    }
+    /* Full pixel without its key (a new config, or one from before the
+       option was saved): on under the Enhanced rows, off otherwise; a saved
+       value is kept as it is */
+    if (ico_config_get_bool("video.full_pixel", 0) != ico_config_get_bool("video.full_pixel", 1)) {
+        o.fullPixel = ico_video_preset(&o) == ICO_VIDEO_ENHANCED;
     }
     sanitize(&o);
     s_opt = o;

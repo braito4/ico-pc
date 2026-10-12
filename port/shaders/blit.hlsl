@@ -10,8 +10,7 @@
 // pass writes the tint colour alone (fade, letterbox).
 #include "common.hlsli"
 
-struct BlitVSOut
-{
+struct BlitVSOut {
     float4 pos : SV_Position;
     VK_LOC(0) float2 uv : TEXCOORD0;
 };
@@ -54,8 +53,7 @@ float4 blit_ps(BlitVSOut i) : SV_Target0
 // RESHADE_DEPTH_INPUT_IS_REVERSED=1.
 Texture2D<float> g_sceneDepth : register(t2, space2);
 
-struct BlitDepthOut
-{
+struct BlitDepthOut {
     VK_LOC(0) float4 c : SV_Target0;
     float d : SV_Depth;
 };
@@ -78,12 +76,14 @@ BlitDepthOut blit_depth_ps(BlitVSOut i)
 // DrawCB.g_param.xy the source texels per output pixel (not necessarily an
 // integer: a texel counts by its overlap), g_param.zw the source size in
 // texels. Drawn with blit_vs into an RGBA8 target of the GS size, the
-// viewport the target.
+// viewport the target. g_scale.z: a Full pixel source's left-out texels
+// (rd_replay.c shadowReduce; the GS pixel p is then [p f - z, (p + 1) f -
+// z), the texels outside the source not counted), else 0.
 float4 box_reduce_ps(BlitVSOut i) : SV_Target0
 {
-    float2 lo = floor(i.pos.xy) * g_param.xy;
+    float2 lo = floor(i.pos.xy) * g_param.xy - float2(g_scale.z, 0.0);
     float2 hi = lo + g_param.xy;
-    int2 first = int2(floor(lo));
+    int2 first = max(int2(floor(lo)), int2(0, 0));
     int2 last = min(int2(ceil(hi)), int2(g_param.zw));
     float4 sum = float4(0.0, 0.0, 0.0, 0.0);
     for (int y = first.y; y < last.y; y++) {
@@ -197,5 +197,6 @@ float4 camera_probe_ps(BlitVSOut i) : SV_Target0
     }
     uint bits = asuint(f);
     return float4(float(bits & 0xFFu), float((bits >> 8) & 0xFFu), float((bits >> 16) & 0xFFu),
-                  float(bits >> 24)) * (1.0 / 255.0);
+                  float(bits >> 24)) *
+           (1.0 / 255.0);
 }

@@ -43,6 +43,13 @@
  *             letterbox bars over all 688 columns; the present fills a
  *             16:9 output with the frame's exact width, the 2.67 columns a
  *             side past it cropped (the reduction's border with them)
+ *   exact window  Full pixel under the Enhanced window resolution (1920 x
+ *             1080, 2560 x 1440, 3840 x 2160 at 16:9, 3840 x 720 at 48:9,
+ *             an odd 2341 x 1080): SCENE and DISPLAY the box's exact size,
+ *             the present DISPLAY byte for byte, the frame's 4:3 columns
+ *             the 4:3 picture at the box's height byte for byte (SCENE;
+ *             DISPLAY but the reduction's edge columns); the Full pixel off
+ *             frame's columns against them logged
  *   present info  with interpolation off, rd_last_present_info names the
  *             frame rd_end_frame presented
  *   full pixel  the reduction draws the whole frame: the box's edges show
@@ -2123,6 +2130,211 @@ static void checkPresent1to1(void)
     checkOneToOne("1to1 3840x2160 48:9", 48.0f / 9.0f, 3840, 2160, 3840, 0);
 }
 
+/* Full pixel: the window's exact pixels (v0.6.2).  One frame drawn by GS
+ * X (so the same picture at every frame width): a band of one-column
+ * sprites, colour hash(X), a Gouraud triangle wider than any frame (cut by
+ * the exact viewport, EXACT-RASTER), and a sprite sampling SCENE itself
+ * (its snapshot through the UV crop, nearest), then the reduction into
+ * DISPLAY; full height, so DISPLAY has every row.  The Enhanced window
+ * resolution at aspect `aspect` in outW x outH.  Returns SCENE, DISPLAY and
+ * the present (malloc'd; NULL on a failed readback) and the box. */
+typedef struct {
+    uint8_t *scene, *disp, *out;
+    uint32_t sw, sh, dw, dh;
+    RhiRect box;
+} ExactRun;
+
+static void exactFree(ExactRun *e)
+{
+    free(e->scene);
+    free(e->disp);
+    free(e->out);
+    memset(e, 0, sizeof(*e));
+}
+
+static bool exactRun(float aspect, uint32_t outW, uint32_t outH, int full, ExactRun *e)
+{
+    memset(e, 0, sizeof(*e));
+    RdSettings s = originalSettings();
+    s.preset = RD_PRESET_ENHANCED;
+    s.aspect = aspect;
+    s.sceneScale = 0.0f;
+    s.outputWidth = outW;
+    s.outputHeight = outH;
+    s.fullPixel = (uint8_t)full;
+    s.fullHeightScene = 1;
+    const uint32_t FW = (uint32_t)ico_frame_width_for(aspect);
+    if (!rd_init(FW, 512, &s, NULL)) {
+        return false;
+    }
+    static const uint8_t black[4] = {0, 0, 0, 0x80}, grey[4] = {0x80, 0x80, 0x80, 0x80};
+    const int32_t left = 2048 - (int32_t)FW / 2, top = 2048 - 256;
+    rd_begin_frame();
+    rd_select_list(0);
+    rd_clear_target(rd_target(RD_TARGET_SCENE), black, 1, 0);
+    rd_set_target(rd_target(RD_TARGET_SCENE), rd_target(RD_TARGET_SCENE), FW, 512, 1);
+    opaque2D();
+    rd_texture_off();
+    RdScreenVtx *v = (RdScreenVtx *)malloc(sizeof(RdScreenVtx) * 2u * FW);
+    for (uint32_t c = 0; v && c < FW; c++) {
+        const int32_t X = left + (int32_t)c;
+        const uint32_t hh = hash((uint32_t)X * 2654435761u + 777u);
+        const uint8_t col[4] = {(uint8_t)hh, (uint8_t)(hh >> 8), (uint8_t)(hh >> 16), 0x80};
+        v[2 * c] = vtx(X * 16, (top + 96) * 16, 0, col, 0.0f, 0.0f);
+        v[2 * c + 1] = vtx((X + 1) * 16, (top + 240) * 16, 0, col, 0.0f, 0.0f);
+    }
+    if (v) {
+        rd_screen_prims(RD_PRIM_SPRITES, v, 2u * FW, RD_SPACE_WORLD, 1, 0);
+    }
+    free(v);
+    rd_gouraud(1);
+    {
+        static const uint8_t ca[4] = {250, 10, 40, 0x80}, cb[4] = {20, 240, 60, 0x80},
+                             cc[4] = {30, 70, 230, 0x80};
+        /* GS 1000 .. 3100 across (wider than 48:9's 2048), 12.4 off the grid */
+        const RdScreenVtx t[3] = {vtx(1000 * 16 + 5, (top + 250) * 16 + 3, 0, ca, 0.0f, 0.0f),
+                                  vtx(3100 * 16 + 11, (top + 262) * 16 + 7, 0, cb, 0.0f, 0.0f),
+                                  vtx(2049 * 16 + 9, (top + 330) * 16 + 1, 0, cc, 0.0f, 0.0f)};
+        rd_screen_prims(RD_PRIM_TRIANGLES, t, 3, RD_SPACE_WORLD, 1, 0);
+    }
+    /* SCENE's rows 96..136 (the band) again at rows 360..400, sampled from
+       SCENE itself: u = the column's GS X less the frame's left, in 1/16 */
+    rd_texture(rd_target_texture(rd_target(RD_TARGET_SCENE), RD_VIEW_RGBA), RD_TEXFN_MODULATE,
+               RD_TCC_RGBA);
+    rd_sampler(RD_FILTER_NEAREST, RD_FILTER_NEAREST, RD_WRAP_CLAMP, RD_WRAP_CLAMP);
+    {
+        const RdScreenVtx q[2] = {
+            vtx(left * 16, (top + 360) * 16, 0, grey, 8.0f, 96.0f * 16.0f + 8.0f),
+            vtx((left + (int32_t)FW) * 16, (top + 400) * 16, 0, grey, (float)FW * 16.0f + 8.0f,
+                136.0f * 16.0f + 8.0f)};
+        rd_screen_prims(RD_PRIM_SPRITES, q, 2, RD_SPACE_WORLD, 1, 0);
+    }
+    rd_texture_off();
+    rd_select_list(12);
+    RdPostParams pp;
+    memset(&pp, 0, sizeof(pp));
+    pp.rgba[0] = pp.rgba[1] = pp.rgba[2] = 128;
+    rd_post(RD_POST_REDUCTION, &pp);
+    rd_end_frame(0);
+    const size_t cap = (size_t)4096 * 2304 * 4;
+    e->scene = (uint8_t *)malloc(cap);
+    e->disp = (uint8_t *)malloc(cap);
+    e->out = (uint8_t *)malloc((size_t)outW * outH * 4);
+    uint32_t ow = 0, oh = 0;
+    rd__present_box(outW, outH, aspect, &e->box);
+    const bool ok = e->scene && e->disp && e->out &&
+                    rd__read_target(rd_target(RD_TARGET_SCENE), e->scene, cap, &e->sw, &e->sh) &&
+                    rd__read_target(rd_target(RD_TARGET_DISPLAY), e->disp, cap, &e->dw, &e->dh) &&
+                    rd__read_present(e->out, (size_t)outW * outH * 4, &ow, &oh) && ow == outW &&
+                    oh == outH;
+    CHECK(rhi_vk_validation_error_count() == 0, "exact window: %u validation errors",
+          rhi_vk_validation_error_count());
+    rd_shutdown();
+    if (!ok) {
+        exactFree(e);
+    }
+    return ok;
+}
+
+/* the columns of a and b (rows 0..h) that differ: a's x0 + i against b's
+ * y0 + i for i < n */
+static uint32_t colsDiffer(const uint8_t *a, uint32_t aw, uint32_t x0, const uint8_t *b,
+                           uint32_t bw, uint32_t y0, uint32_t n, uint32_t h, uint32_t *first)
+{
+    uint32_t bad = 0;
+    *first = ~0u;
+    for (uint32_t i = 0; i < n; i++) {
+        int d = 0;
+        for (uint32_t y = 0; y < h && !d; y++) {
+            d = memcmp(&a[((size_t)y * aw + x0 + i) * 4], &b[((size_t)y * bw + y0 + i) * 4], 3);
+        }
+        if (d) {
+            bad++;
+            *first = *first == ~0u ? i : *first;
+        }
+    }
+    return bad;
+}
+
+/* With Full pixel on: SCENE and DISPLAY are the box's exact size, the
+ * present is DISPLAY one texel a pixel (the whole box, nothing cropped),
+ * and the frame's 4:3 columns are byte for byte the 4:3 picture at the
+ * same height (the Enhanced window at 4:3 in a box as high: "4:3 is a
+ * camera"): SCENE whole, DISPLAY but the reduction's few columns at the
+ * 4:3 picture's own edges (it reads past them there).  With it off the
+ * scene keeps the 688-rounded frame (1935 at 1080p 16:9); its columns
+ * against the Full pixel ones are logged (the old frame's centre is half a
+ * texel off a whole texel: no byte match is expected). */
+static void checkExactWindow(const char *name, float aspect, uint32_t outW, uint32_t outH)
+{
+    ExactRun a, b, c;
+    if (!exactRun(aspect, outW, outH, 1, &a)) {
+        CHECK(0, "%s: full pixel readback", name);
+        return;
+    }
+    CHECK(a.sw == a.box.w && a.sh == a.box.h, "%s: SCENE is the box, %ux%u (%ux%u)", name, a.box.w,
+          a.box.h, a.sw, a.sh);
+    CHECK(a.dw == a.sw && a.dh == a.sh, "%s: DISPLAY is SCENE's size (%ux%u)", name, a.dw, a.dh);
+    if (a.dw == a.box.w && a.dh == a.box.h) {
+        uint32_t bad = 0;
+        for (uint32_t y = 0; y < a.dh; y++) {
+            bad += memcmp(&a.out[(((size_t)a.box.y + y) * outW + (uint32_t)a.box.x) * 4],
+                          &a.disp[(size_t)y * a.dw * 4], (size_t)a.dw * 4) != 0;
+        }
+        CHECK(bad == 0, "%s: the present is DISPLAY byte for byte (%u rows differ)", name, bad);
+    }
+    /* the 4:3 picture as high as the box */
+    const uint32_t w43 = (uint32_t)(((uint64_t)a.box.h * 4u + 1u) / 3u);
+    if (!exactRun(4.0f / 3.0f, w43, a.box.h, 1, &b)) {
+        CHECK(0, "%s: 4:3 readback", name);
+        exactFree(&a);
+        return;
+    }
+    if (b.sw == w43 && b.sh == a.sh && a.sw >= w43) {
+        /* the frame's centre, GS 2048, is texel floor(w / 2) of each */
+        const uint32_t off = a.sw / 2u - b.sw / 2u;
+        uint32_t first;
+        uint32_t bad = colsDiffer(a.scene, a.sw, off, b.scene, b.sw, 0, b.sw, b.sh, &first);
+        CHECK(bad == 0,
+              "%s: SCENE's 4:3 columns (%u..%u) are the 4:3 picture's byte for byte (%u differ, "
+              "the first %u)",
+              name, off, off + b.sw - 1, bad, first);
+        const uint32_t edge = 8;
+        bad =
+            colsDiffer(a.disp, a.dw, off + edge, b.disp, b.dw, edge, b.dw - 2 * edge, b.dh, &first);
+        CHECK(bad == 0, "%s: DISPLAY's 4:3 columns are the 4:3 picture's (%u differ, the first %u)",
+              name, bad, first);
+    } else {
+        CHECK(0, "%s: the 4:3 picture is %ux%u (%ux%u wanted)", name, b.sw, b.sh, w43, a.sh);
+    }
+    exactFree(&b);
+    if (exactRun(aspect, outW, outH, 0, &c)) {
+        if (c.sw > a.sw && c.sh == a.sh) {
+            const uint32_t off = (c.sw - a.sw + 1u) / 2u;
+            uint32_t first;
+            const uint32_t bad =
+                colsDiffer(a.scene, a.sw, 0, c.scene, c.sw, off, a.sw, a.sh, &first);
+            printf("%s: full pixel off: SCENE %ux%u; its columns %u.. against Full pixel's: %u of "
+                   "%u differ\n",
+                   name, c.sw, c.sh, off, bad, a.sw);
+        } else {
+            printf("%s: full pixel off: SCENE %ux%u (the same frame: the aspect has no crop)\n",
+                   name, c.sw, c.sh);
+        }
+        exactFree(&c);
+    }
+    exactFree(&a);
+}
+
+static void checkExactWindows(void)
+{
+    checkExactWindow("exact 1920x1080 16:9", 16.0f / 9.0f, 1920, 1080);
+    checkExactWindow("exact 2560x1440 16:9", 16.0f / 9.0f, 2560, 1440);
+    checkExactWindow("exact 3840x2160 16:9", 16.0f / 9.0f, 3840, 2160);
+    checkExactWindow("exact 3840x720 48:9", 48.0f / 9.0f, 3840, 720);
+    checkExactWindow("exact 2341x1080 odd", 2341.0f / 1080.0f, 2341, 1080);
+}
+
 /* Full pixel: SCENE red through the reduction pass (which leaves its border
  * black), presented into w x h.  The box's edge columns and rows are red
  * with the option on, the reduction drawing the whole frame, and, with it
@@ -3811,6 +4023,7 @@ int main(int argc, char **argv)
     checkSceneLimit();
     checkWide169();
     checkPresent1to1();
+    checkExactWindows();
     checkPresentInfo();
     checkFullPixel();
     checkFullPixelSquare();

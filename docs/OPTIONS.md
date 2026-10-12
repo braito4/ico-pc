@@ -127,14 +127,17 @@ gives you, and that is how the game starts.
 
 The last row is not one of the game's effects:
 
-- **Full pixel (no border)** shows the whole picture the game draws,
-  including the strip the PS2 hid under its thin black border. Nothing is
-  cut off or enlarged, and the picture stays as sharp as it is without the
-  option. With Video mode at 50 Hz the strip at the top and bottom is a
-  little taller. Off by default. It works with every Preset and with the CRT
-  filter.
+- **Full pixel (exact screen pixels)** makes the picture out of your
+  screen's own pixels: each pixel of the game's picture is one pixel on your
+  screen, so nothing is rounded, cropped or stretched, and the strip the PS2
+  hid under its thin black border is shown too. The picture is exactly as
+  wide as the window shows it, at every size and shape of window. It is on
+  by default with the Enhanced Preset. Off keeps the original game's frame
+  shape, with its thin black border. With Video mode at 50 Hz the strip at
+  the top and bottom is a little taller. It works with every Preset and with
+  the CRT filter (which shows the PS2's own pixels whatever this row says).
 
-The Preset on the Display page sets Texture filtering and Full-height picture on this page too, but it does not change the rest. Changes you make
+The Preset on the Display page sets Texture filtering, Full-height picture and Full pixel on this page too (Enhanced turns Full pixel on, Original turns it off), but it does not change the rest. Changes you make
 here show in photo mode at once.
 
 ## Graphics driver

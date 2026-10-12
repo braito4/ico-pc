@@ -221,10 +221,15 @@ static float sourceCrop(uint32_t sw)
 {
     const uint32_t gw = g_rd.gsW ? g_rd.gsW : ICO_FRAME_BASE_W;
     const float we = rd__frame_wexact();
-    if (gw == ICO_FRAME_BASE_W || !(we < (float)gw)) {
+    /* Full pixel: DISPLAY holds the exact width alone (frameCropWe,
+     * rd__target_scale_of), so nothing is left out but what a narrower
+     * frame than the targets were made for leaves (none in the game: the
+     * frame's exact width is the option's aspect's) */
+    const float held = g_rd.frameCropWe > 0.0f ? g_rd.frameCropWe : (float)gw;
+    if (gw == ICO_FRAME_BASE_W || !(we < held)) {
         return 0.0f;
     }
-    return ((float)gw - we) * 0.5f * (float)sw / (float)gw;
+    return (held - we) * 0.5f * (float)sw / held;
 }
 
 bool rd__apply_display(void)
@@ -244,6 +249,14 @@ bool rd__apply_display(void)
      * takes effect again with the filter off) */
     const int crtLock = rd__crt_on() && st->sceneScale != 1.0f;
     const float scale = rd__crt_on() ? 1.0f : st->sceneScale;
+    /* Full pixel (the Enhanced flag, the "window" resolution, the frame
+     * wider than its exact width): the scene is the box's own pixels, one
+     * texel an output pixel, with no frame rounded to whole GS pixels
+     * around it and nothing cropped.  The scale is the box's width over the
+     * frame's exact width (2.8125 at 1080p 16:9, as 1935 / 688 is) and the
+     * scene-class targets hold that exact width alone (cropWe:
+     * rd_core.c rd__target_scale_of) */
+    float cropWe = 0.0f;
     if (scale > 0.0f) {
         h = gh * scale;
         w = gw * scale;
@@ -260,12 +273,26 @@ bool rd__apply_display(void)
         RhiRect b;
         rd__present_box(st->outputWidth, st->outputHeight, aspect, &b);
         const float we = wexactFor(aspect);
-        w = we == gw ? (float)b.w : (float)b.w * gw / we;
-        /* a whole texel count: the box's width over the exact width is a
-         * fraction of a texel off at 16:9 (1934.99..), and the presenter
-         * snaps its source window to whole texels only when the scene's
-         * density is the box's (snapWindow) */
-        w = floorf(w + 0.5f);
+        if (st->fullPixel && we < gw) {
+            /* the frame's width at the box's scale: b.w / we texels a GS
+             * pixel, held to a 1/4096 step when that keeps the box's width
+             * (2.8125 = 11520 / 4096 exactly, where b.w / we in float may
+             * be a last bit off), so the 4:3 columns are the 4:3 box's */
+            double k = (double)b.w / (double)we;
+            const double kq = floor(k * 4096.0 + 0.5) / 4096.0;
+            if (floor((double)we * kq + 0.5) == (double)b.w) {
+                k = kq;
+            }
+            w = (float)((double)gw * k);
+            cropWe = we;
+        } else {
+            w = we == gw ? (float)b.w : (float)b.w * gw / we;
+            /* a whole texel count: the box's width over the exact width is a
+             * fraction of a texel off at 16:9 (1934.99..), and the presenter
+             * snaps its source window to whole texels only when the scene's
+             * density is the box's (snapWindow) */
+            w = floorf(w + 0.5f);
+        }
         h = (float)b.h;
     } else {
         w = gw;
@@ -343,7 +370,7 @@ bool rd__apply_display(void)
      * allocation fallback (createNamedTargets) settled on, so an unrelated
      * change does not recreate the targets just to fail the same way again */
     const bool changed = sx != g_rd.sceneReqSx || sy != g_rd.sceneReqSy || work != g_rd.workScale ||
-                         full != g_rd.fullHeight;
+                         full != g_rd.fullHeight || cropWe != g_rd.frameCropWe;
     /* one line when what the options give differs from what was in force:
      * this runs on a settings change or a resize (rd_begin_frame's
      * settingsPending) and at init, never per frame */
@@ -358,12 +385,18 @@ bool rd__apply_display(void)
             snprintf(ssaaNote, sizeof(ssaaNote),
                      " (skipped: the resolution has %.2f texels an output pixel)", (double)perPx);
         }
-        rd__log("display: scene %gx%g%s, work %g, aspect %.3f, filter %u, %s height, vsync %s%s%s",
-                (double)sx, (double)sy, crtLock ? " (CRT: 1x)" : "", (double)work, (double)aspect,
-                (unsigned)filter, full ? "full" : "half", st->vsync ? "on" : "off",
+        /* the scene's texels (SCENE's texture: the frame's exact width
+         * alone with Full pixel, rd__target_scale_of) */
+        const float sceneW = (cropWe > 0.0f ? cropWe : gw) * sx;
+        rd__log("display: scene %gx%g (%.0fx%.0f)%s, work %g, aspect %.3f, filter %u, %s height, "
+                "full pixel %s, vsync %s%s%s",
+                (double)sx, (double)sy, floor((double)sceneW + 0.5), floor((double)(gh * sy) + 0.5),
+                crtLock ? " (CRT: 1x)" : "", (double)work, (double)aspect, (unsigned)filter,
+                full ? "full" : "half", st->fullPixel ? "on" : "off", st->vsync ? "on" : "off",
                 aaMode == RD_AA_OFF ? "" : rd__aa_label(aaMode), ssaaNote);
     }
     if (changed) {
+        g_rd.frameCropWe = cropWe;
         g_rd.sceneReqSx = sx;
         g_rd.sceneReqSy = sy;
         g_rd.sceneSx = sx;
