@@ -681,12 +681,16 @@ static void checkFilmGrain(void)
 /* ------------------------------------------------- the strip rule (s) */
 
 /* One or two strips of n VU vertices (code 32, the identity matrix of
- * triDraw: x, y GS pixels, z GS Z, w 1 or -1 behind the eye with x and y
- * negated), one colour; split: the vertex the second strip starts at (0:
- * one strip) */
+ * triDraw: x, y GS pixels, z GS Z; w 1), one colour; split: the vertex the
+ * second strip starts at (0: one strip).  eye: a vertex's w is its clip w
+ * (-1 behind the eye, x and y then negated by the divide).  The region
+ * programs transform pos with w 1 (normal_c.vsm:152-155, vf00.w), so a
+ * stream w never reaches h.w: an eye mesh streams (x, y, w, 1) and is
+ * drawn with the matrix h = (x, y, Z w, w), Z the vertices' GS Z (v[0][2]),
+ * so h.w is the given w and every vertex in front lands at GS Z. */
 typedef struct StripMesh {
     const char *what;
-    int n, split;
+    int n, split, eye;
     float v[8][4];
     uint8_t c[3];
 } StripMesh;
@@ -697,6 +701,7 @@ typedef struct StripMesh {
 static const StripMesh kWall = {"wall",
                                 4,
                                 0,
+                                0,
                                 {{1900, 2250, 1000000, 1},
                                  {2200, 2250, 1000000, 1},
                                  {2050, 2000, 1000000, 1},
@@ -706,6 +711,7 @@ static const StripMesh kWall = {"wall",
  * picture; a free-standing strip (the opening's tree card) */
 static const StripMesh kCard = {"card",
                                 4,
+                                0,
                                 0,
                                 {{1820, -100, 1000000, 1},
                                  {1900, -100, 1000000, 1},
@@ -718,6 +724,7 @@ static const StripMesh kCard = {"card",
 static const StripMesh kJoined = {"joined card",
                                   7,
                                   3,
+                                  0,
                                   {{1820, 2000, 1000000, 1},
                                    {1900, 2000, 1000000, 1},
                                    {1860, 2100, 1000000, 1},
@@ -726,11 +733,13 @@ static const StripMesh kJoined = {"joined card",
                                    {1820, 2000, 1000000, 1},
                                    {1900, 2000, 1000000, 1}},
                                   {60, 200, 200}};
-/* triangle 2 passes, triangle 3 has a vertex behind the eye and reaches
- * the picture (as kTris' "behind the eye") */
+/* triangle 2 passes, triangle 3 has a vertex behind the eye (h.w -1) and
+ * reaches the picture: what of it lies in front of the eye runs from the
+ * edge 1-2, inside the picture, away from the vertex's image */
 static const StripMesh kEye = {"behind the eye",
                                4,
                                0,
+                               1,
                                {{1960, 1850, 1006000, 1},
                                 {2030, 1850, 1006000, 1},
                                 {1960, 1980, 1006000, 1},
@@ -745,6 +754,10 @@ static RdMesh stripMesh(const StripMesh *m, int n)
     memcpy(&qw[0][0], &tag, 4);
     for (int k = 0; k < n; k++) {
         memcpy(qw[1 + k * 3], m->v[k], sizeof(m->v[k]));
+        if (m->eye) {
+            qw[1 + k * 3][2] = m->v[k][3]; /* (x, y, w, 1): the eye matrix */
+            qw[1 + k * 3][3] = 1.0f;
+        }
         qw[1 + k * 3 + 1][2] = 1.0f; /* Q */
         /* the strip flag: 0 where a strip starts */
         qw[1 + k * 3 + 1][3] = k == 0 || (m->split && k == m->split) ? 0.0f : 1.0f;
@@ -803,7 +816,21 @@ static int renderStrip(const Cfg *cfg, int W, const StripMesh *m, int n, Img *sc
     rd_fba(0);
     rd_gouraud(1);
     rd_texture_off();
-    if (mesh.id) {
+    if (mesh.id && m->eye) {
+        /* h = (x, y, Z w, w) from (x, y, w, 1) */
+        RdVuDraw d;
+        memset(&d, 0, sizeof(d));
+        d.prog = RD_PROG_PRELIT;
+        d.code = 32;
+        d.clip = RD_VU_CLIP_REGION;
+        d.vu.mem[16][0] = 1.0f;
+        d.vu.mem[17][1] = 1.0f;
+        d.vu.mem[18][2] = m->v[0][2];
+        d.vu.mem[18][3] = 1.0f;
+        d.vu.mem[23][3] = 1.0f;
+        d.vu.mem[22][2] = 1.0f / 1020000.0f;
+        rd_draw_vu_mesh(mesh, &d, RD_KEY(&kKey, 0, 0));
+    } else if (mesh.id) {
         Tri t;
         memset(&t, 0, sizeof(t));
         t.code = 32;
