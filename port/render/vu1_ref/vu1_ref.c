@@ -176,16 +176,15 @@ int vu1ref_strip_passes(const VuGsVertex *v, const float *stw, const int *batchF
     return 0;
 }
 
-int vu1ref_particle_draw(int preset, int freeCamera, int drawn, int shown, int reaches)
+int vu1ref_particle_draw(int extended, int freeCamera, int drawn, int shown, int reaches)
 {
-    (void)preset;
     if (!shown) {
         return VU1REF_DRAW_NONE;
     }
     if (drawn) {
         return VU1REF_DRAW_EXACT;
     }
-    if (freeCamera) {
+    if (freeCamera || extended) {
         return VU1REF_DRAW_CLIPPED;
     }
     return reaches ? VU1REF_DRAW_NONE : VU1REF_DRAW_CLIPPED;

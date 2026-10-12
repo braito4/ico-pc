@@ -74,7 +74,9 @@ VuVSOut vu_grid_main(uint vid, uint variant)
         VuVtx v = vu_grid_vertex(vu_probe_vertex(vid), variant, true);
         return vu_probe_out(vid, vu_probe_field(v, (vid / 3u) % VU_PROBE_FIELDS));
     }
-    uint kick = vid >> 2;
+    // the index marks: VU_INDEX_JOINED (rd_replay.c, a grid of two strips
+    // or more)
+    uint kick = (vid & VU_INDEX_MASK) >> 2;
     uint corner = vid & 3u;
     VuVtx a = vu_grid_vertex(kick - 2u, variant, false);
     VuVtx b = vu_grid_vertex(kick - 1u, variant, false);
@@ -82,7 +84,13 @@ VuVSOut vu_grid_main(uint vid, uint variant)
     VuVtx me = vu_grid_vertex(kick - 2u + corner, variant, true);
     uint rule = vu_region_rule(a, b, c);
     if (rule == VU_RULE_STRIP) {
-        rule = vu_grid_strip_passes(kick, variant) ? VU_RULE_CLIP : VU_RULE_DROP;
+        // a grid's strips share their rows: joined; a grid of one strip is
+        // a card unless a triangle of it passes
+        if ((vid & VU_INDEX_JOINED) != 0u) {
+            rule = VU_RULE_CLIP;
+        } else {
+            rule = vu_grid_strip_passes(kick, variant) ? VU_RULE_CLIP : VU_RULE_DROP;
+        }
     }
     return vu_triangle_out(a, b, c, me, VU_CLIP_REGION, rule);
 }

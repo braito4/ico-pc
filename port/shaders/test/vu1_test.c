@@ -847,21 +847,21 @@ static void traceRegion(void)
 
     /* particles: shown, drawn (the VU's window) */
     static const struct {
-        int preset, free, drawn, shown, reach, want;
+        int ext, free, drawn, shown, reach, want;
     } kSprite[] = {
-        {VU1REF_ORIGINAL, 0, 1, 1, 1, VU1REF_DRAW_EXACT},
-        {VU1REF_ORIGINAL, 0, 0, 1, 1, VU1REF_DRAW_NONE}, /* reaches the picture */
-        {VU1REF_ENHANCED, 0, 0, 1, 1, VU1REF_DRAW_NONE},
-        {VU1REF_ORIGINAL, 0, 0, 1, 0, VU1REF_DRAW_CLIPPED}, /* wholly beside */
-        {VU1REF_ENHANCED, 0, 0, 1, 0, VU1REF_DRAW_CLIPPED},
-        {VU1REF_ORIGINAL, 1, 0, 1, 1, VU1REF_DRAW_CLIPPED}, /* the free camera */
-        {VU1REF_ENHANCED, 1, 0, 1, 1, VU1REF_DRAW_CLIPPED},
-        {VU1REF_ENHANCED, 0, 0, 0, 0, VU1REF_DRAW_NONE},
-        {VU1REF_ENHANCED, 1, 0, 0, 0, VU1REF_DRAW_NONE},
+        {0, 0, 1, 1, 1, VU1REF_DRAW_EXACT},
+        {0, 0, 0, 1, 1, VU1REF_DRAW_NONE},    /* reaches the picture: out of the box */
+        {1, 0, 0, 1, 1, VU1REF_DRAW_CLIPPED}, /* any other state: an effect, not a card */
+        {0, 0, 0, 1, 0, VU1REF_DRAW_CLIPPED}, /* wholly beside */
+        {1, 0, 0, 1, 0, VU1REF_DRAW_CLIPPED},
+        {0, 1, 0, 1, 1, VU1REF_DRAW_CLIPPED}, /* the free camera */
+        {1, 1, 0, 1, 1, VU1REF_DRAW_CLIPPED},
+        {1, 0, 0, 0, 0, VU1REF_DRAW_NONE},
+        {1, 1, 0, 0, 0, VU1REF_DRAW_NONE},
     };
 
     for (int i = 0; i < (int)(sizeof(kSprite) / sizeof(kSprite[0])); i++) {
-        const int d = vu1ref_particle_draw(kSprite[i].preset, kSprite[i].free, kSprite[i].drawn,
+        const int d = vu1ref_particle_draw(kSprite[i].ext, kSprite[i].free, kSprite[i].drawn,
                                            kSprite[i].shown, kSprite[i].reach);
         if (d != kSprite[i].want) {
             FAILF("particle rule %d: %d, expected %d\n", i, d, kSprite[i].want);
@@ -956,7 +956,12 @@ typedef struct Case {
  * 11), so they are drawn clipped (a wall, issue 72). DEPART_CARD_STRIP:
  * vertices 7 and 9 past the window far left: no triangle of the strip
  * 5..11 passes, a card as the opening's tree card (issue 59, st26a_near's
- * 2-triangle strip): not drawn in any state. DEPART_BESIDE: the target placed right of the
+ * 2-triangle strip): not drawn in any state. DEPART_GRID_ROW (the grid):
+ * the last batch's odd vertices past the window far left (X -3904), the
+ * others at GS X 2088..2128: none of that batch's triangles passes; with
+ * two batches or more its strips share rows (ICO_VU_INDEX_JOINED, as
+ * rd_replay.c marks a grid), drawn clipped outside the out-of-the-box
+ * state; a grid of one batch is a card. DEPART_BESIDE: the target placed right of the
  * picture (GS X 2320..2384), the strip at GS X 2330..2378 and vertex 7 at
  * X 8000: its failing triangles lie wholly beside the picture, drawn
  * clipped in both presets (the walls and the sea of issue 29).
@@ -993,7 +998,8 @@ enum {
     DEPART_ABOVE,
     DEPART_ABOVE_IN,
     DEPART_REFL_BESIDE,
-    DEPART_CARD_STRIP
+    DEPART_CARD_STRIP,
+    DEPART_GRID_ROW
 };
 
 /* The content table's mark (rd_content_hide.c; vu_content_hidden):
@@ -1015,8 +1021,18 @@ static int extendedState(const Case *c)
     return vu1ref_extended(c->preset, c->wide != 1.0f ? 1365 : 512, 1.0f);
 }
 
+/* the strips are joined: the case's mark, or a grid of two batches or
+   more (rd_replay.c marks its indices ICO_VU_INDEX_JOINED) */
+static int joinedCase(const Case *c)
+{
+    return c->mark == MARK_JOINED || (c->prog == P_MESH && c->nbatch >= 2);
+}
+
 static uint32_t markBit(const Case *c)
 {
+    if (c->prog == P_MESH && c->mark == MARK_NONE) {
+        return joinedCase(c) ? ICO_VU_INDEX_JOINED : 0u;
+    }
     return c->mark == MARK_HIDE     ? ICO_VU_INDEX_HIDE
            : c->mark == MARK_JOINED ? ICO_VU_INDEX_JOINED
                                     : 0u;
@@ -1100,8 +1116,8 @@ static int portDraws(const Case *c, const CaseRef *cr, const VuGsVertex *v, int 
     }
     const int front = v[k - 2].clipW > 0.0f && v[k - 1].clipW > 0.0f && v[k].clipW > 0.0f;
     return vu1ref_region_draw(extendedState(c), freeCamera(c), v[k - 2].inside, v[k - 1].inside,
-                              v[k].inside, c->mark == MARK_HIDE, reaches, front,
-                              c->mark == MARK_JOINED, strip);
+                              v[k].inside, c->mark == MARK_HIDE, reaches, front, joinedCase(c),
+                              strip);
 }
 
 /* the CPU side of one case */
@@ -1275,6 +1291,9 @@ static int makeInput(const Case *c, float (*in)[4])
             if (c->depart == DEPART_CARD_STRIP) {
                 out = k == 7 || k == 9 ? 8 : 6;
             }
+            if (c->depart == DEPART_GRID_ROW) {
+                out = b == c->nbatch - 1 && (k & 1) ? 8 : 6;
+            }
             if (c->depart == DEPART_BESIDE) {
                 out = k == 7 ? 3 : 9;
             }
@@ -1424,7 +1443,7 @@ static void runRef(const Case *c, const float (*in)[4], int nq, CaseRef *cr)
                                             (float)added.xyz[1][0] / 16.0f - targetLeft(c),
                                             (float)added.xyz[1][1] / 16.0f - top, pic);
             const int d =
-                vu1ref_particle_draw(c->preset, freeCamera(c), drawn, cr->shown[k], reaches);
+                vu1ref_particle_draw(extendedState(c), freeCamera(c), drawn, cr->shown[k], reaches);
             if (drawn) {
                 s = &cr->po.s[pi++];
             } else if (d == VU1REF_DRAW_CLIPPED) {
@@ -1855,6 +1874,17 @@ static const Case kCases[] = {
      DEPART_CARD_STRIP, VU1REF_ENHANCED, MARK_JOINED, 0, 1},
     {"prelit joined 43", "vu_prelit_vs", P_NORMALC, 32, ICO_VU_CLIP_REGION, 3, 1, 2, 12, 0, 0, 0,
      1.0f, DEPART_CARD_STRIP, VU1REF_ORIGINAL, MARK_JOINED, 0, 0},
+    /* a grid's last batch past the window: joined to the batch before it
+     * (its rows), drawn clipped outside the out-of-the-box state, not out
+     * of the box; a grid of that one batch is a card, never drawn */
+    {"grid row enh", "vu_grid_vs", P_MESH, 20, ICO_VU_CLIP_REGION, 2, 2, 2, 10, 0, 0, 0, 1.0f,
+     DEPART_GRID_ROW, VU1REF_ENHANCED, MARK_NONE, 0, 1},
+    {"grid row wide", "vu_grid_vs", P_MESH, 20, ICO_VU_CLIP_REGION, 2, 2, 2, 10, 0, 0, 0, 0.375f,
+     DEPART_GRID_ROW, VU1REF_ORIGINAL, MARK_NONE, 0, 1},
+    {"grid row 43", "vu_grid_vs", P_MESH, 20, ICO_VU_CLIP_REGION, 2, 2, 2, 10, 0, 0, 0, 1.0f,
+     DEPART_GRID_ROW, VU1REF_ORIGINAL, MARK_NONE, 0, 0},
+    {"grid card enh", "vu_grid_vs", P_MESH, 20, ICO_VU_CLIP_REGION, 2, 2, 1, 10, 0, 0, 0, 1.0f,
+     DEPART_GRID_ROW, VU1REF_ENHANCED, MARK_NONE, 0, 0},
     /* a strip wholly right of the camera's picture with a vertex past the
      * window: its failing triangles are drawn clipped beside the picture
      * in both presets (issue 29's walls and sea) */
@@ -1864,9 +1894,10 @@ static const Case kCases[] = {
      0.375f, DEPART_BESIDE, VU1REF_ENHANCED, MARK_NONE, 0, 0},
     {"lit beside enh", "vu_lit_vs", P_NORMALL, 32, ICO_VU_CLIP_REGION, 4, 1, 1, 12, 0, 0, 0, 0.375f,
      DEPART_BESIDE, VU1REF_ENHANCED, MARK_NONE, 0, 0},
-    /* a particle past the window: across the camera's picture neither
-     * preset draws it; wholly beside it both draw its whole quad, which the
-     * GPU clips; the free camera draws it */
+    /* a particle past the window: across the camera's picture out of the
+     * box not drawn, in any other state drawn whole (VIS-WINDOW); wholly
+     * beside it both draw its whole quad, which the GPU clips; the free
+     * camera draws it */
     {"particle past", "vu_particle_vs", P_PARTICLE, 18, 0, 2, 6, 1, 12, 0, 0, 0, 1.0f,
      DEPART_SPRITE, VU1REF_ORIGINAL, MARK_NONE, 0, 0},
     {"particle past enh", "vu_particle_vs", P_PARTICLE, 18, 0, 2, 6, 1, 12, 0, 0, 0, 0.375f,
@@ -2362,12 +2393,13 @@ static int gpuTests(void)
             ((cr.po.count > 0 && cr.po.s[0].index == 0) || !cr.shown[0])) {
             FAILF("%s: particle 0 is not one the VU skips\n", c->name);
         }
-        /* the particles the VU skips: not drawn when they reach the camera's
-         * picture (DEPART_SPRITE's), drawn whole when wholly beside it (the
-         * other cases' particle 0 at X 3248) and under the free camera, in
-         * both presets (in the reference image too) */
+        /* the particles the VU skips: out of the box not drawn when they
+         * reach the camera's picture (DEPART_SPRITE's), drawn whole when
+         * wholly beside it (the other cases' particle 0 at X 3248), under
+         * the free camera and in any other state (VIS-WINDOW; in the
+         * reference image too) */
         if (c->prog == P_PARTICLE) {
-            const int adds = freeCamera(c) || c->depart != DEPART_SPRITE;
+            const int adds = freeCamera(c) || extendedState(c) || c->depart != DEPART_SPRITE;
             if (adds ? (cr.added == 0 || cr.dropped != 0) : (cr.added != 0 || cr.dropped == 0)) {
                 FAILF("%s: %d particles the VU skips drawn whole, %d dropped\n", c->name, cr.added,
                       cr.dropped);

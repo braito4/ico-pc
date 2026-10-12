@@ -194,7 +194,11 @@ static void _setParticleEffect(PEPartRec *out, PEPackage *pkg, char *m, float k)
    frozen.  The particles of an effect drawn near the window's edge are
    cut by the VU program's own window, as on the PS2. */
 /* VIS-RULES item 10 (v0.6.1), kept: the PS2's gate on the GS window,
-   parity (an effect is drawn exactly when it is updated) */
+   parity (an effect is drawn exactly when it is updated).  VIS-WINDOW
+   (v0.6.1) keeps it in every state too: it gates the update, which draws
+   from the shared _GetRandom (game logic, the same at every display
+   setting); the sprites of an effect it passes are drawn clipped outside
+   the out-of-the-box state (vu_particle.hlsl) */
 static inline int particleEffectOffScreen(PEGeo *geo) /* derived name */
 {
     float v[4];

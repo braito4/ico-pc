@@ -539,9 +539,12 @@ VuVSOut vu_plane_out(VuVSOut o, uint kick, uint me)
 // homogeneous form of h where it is behind the eye, saturated or below GS
 // Z 0; every program computes h before the test). A HIDE triangle never
 // reaches here (vu_content_hidden); the strip test counts every triangle
-// of the strip, marked or not. The grids (vu_grid.hlsl) carry no marks: a
-// batch is their strip, and a batch none of whose triangles pass is a
-// card.
+// of the strip, marked or not. A grid (vu_grid.hlsl, Mesh3D) has a batch
+// a strip, each the rows i and i + 1 of one vertex grid
+// (Primitive.c prim_UpdateMesh3D), so neighbouring strips share a row of
+// positions: rd_replay.c marks every triangle of a grid of two strips or
+// more VU_INDEX_JOINED; a grid of one strip is a card when none of its
+// triangles pass.
 // Two differences from a code-36 draw of the same triangle remain: code
 // 36's clipped triangles go through their own earlier pass with ABE forced
 // on (rd_replay.c draws them as the VU's fans, PRIM 0x5D), which a code-32

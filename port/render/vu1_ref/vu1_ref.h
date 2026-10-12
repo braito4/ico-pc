@@ -189,12 +189,12 @@ int vu1ref_strip_passes(const VuGsVertex *v, const float *stw, const int *batchF
                         int k);
 /* A particle: shown (alpha non-zero, w inside the window) and drawn (the
  * VU's test, both corners inside its x/y window too).  Not drawn by the VU:
- * the whole sprite (the GPU clips it) under the free camera; else dropped
- * when its quad reaches the camera's picture (reaches,
- * vu1ref_rect_reaches_picture), drawn whole when
- * wholly beside it; the same in every state (the strip rule is the
- * triangles'). */
-int vu1ref_particle_draw(int preset, int freeCamera, int drawn, int shown, int reaches);
+ * the whole sprite (the GPU clips it) under the free camera and in any
+ * state but out of the box (extended, vu1ref_extended: a sprite is an
+ * effect, never a card); out of the box dropped when its quad reaches the
+ * camera's picture (reaches, vu1ref_rect_reaches_picture), drawn whole
+ * when wholly beside it. */
+int vu1ref_particle_draw(int extended, int freeCamera, int drawn, int shown, int reaches);
 
 /* The reach those two take (vu_common.hlsli vu_cut_reaches_picture,
  * vu_rect_reaches_picture). pic = the camera's picture: x0, x1, y0, y1

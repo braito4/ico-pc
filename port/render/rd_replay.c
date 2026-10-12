@@ -4059,10 +4059,15 @@ static void doVuDraw(Replay *r, const RdFrame *f, const RdCmd *c)
             return;
         }
         uint32_t *idx = (uint32_t *)(g_rd.ringMap[s_slot] + iOff);
+        /* VIS-WINDOW: strip i is the grid's rows i and i + 1
+         * (Primitive.c prim_UpdateMesh3D), so with two strips or more
+         * every strip shares a row of positions with a neighbour: joined,
+         * never a card (vu_region_rule) */
+        const uint32_t mark = p.batchCount >= 2 ? ICO_VU_INDEX_JOINED : 0u;
         for (uint32_t b = 0, k = 0; b < p.batchCount; b++) {
             for (uint32_t v = 2; v < vpb; v++) {
                 for (uint32_t cc = 0; cc < 3; cc++) {
-                    idx[k++] = ICO_VU_INDEX(b * vpb + v, cc);
+                    idx[k++] = ICO_VU_INDEX(b * vpb + v, cc) | mark;
                 }
             }
         }

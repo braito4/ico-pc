@@ -459,7 +459,15 @@ mesh but its own double-sided copy (`markJoinedStrips` in
 `port/render/rd_mesh.c` marks the others), none of whose triangles passes
 the test, such as the opening's tree card; it stays undrawn, as does a
 triangle with a vertex behind the eye. Photo mode's free camera draws every
-one of them, clipped.
+one of them, clipped. The same rule covers every path that drops on the GS
+window: the CPU strips (`gifHostBeside` in `ico2/seki/src/GifPacket.c`,
+where each strip call or `gif_DrawPolyF4` quad is one strip, and the
+extended state comes from `ico_video_original`), the grids (a grid of two
+strips or more is joined: its strips share rows) and the particles (an
+effect, never a card: drawn clipped in any state but out of the box). The
+particle effects' origin gate in `particleEffect.c` stays the PS2's in every
+state: it also gates the effect's update, which draws from the game's
+shared random numbers, so it is game logic.
 
 ## Native frame gates
 

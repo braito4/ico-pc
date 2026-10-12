@@ -1406,8 +1406,13 @@ static void gsbHostFrameLatch(void)
         /* GifPacket.c (every build): isInScreen's window and the decoder's
            field widths and work-buffer classes read the frame's width */
         extern void gif_HostSetFrameWidth(int w);
+        extern void gif_HostSetExtended(int on);
+        extern int ico_video_original(void);
 
         gif_HostSetFrameWidth(gsFrame.w);
+        /* VIS-WINDOW: the CPU strips' and particles' window rule outside
+           the out-of-the-box state (the Original preset) */
+        gif_HostSetExtended(!ico_video_original());
     }
 #ifdef ICO_RD
     {

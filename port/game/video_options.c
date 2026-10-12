@@ -748,6 +748,14 @@ int ico_video_effects_depth(void)
     return s_opt.effectsDepth;
 }
 
+int ico_video_original(void)
+{
+    if (!s_read) {
+        read_config();
+    }
+    return ico_video_preset(&s_opt) == ICO_VIDEO_ORIGINAL;
+}
+
 int ico_video_anti_alias(void)
 {
     if (!s_read) {
