@@ -74,6 +74,27 @@ def include_flags():
                 "-I" + os.path.join(ROOT, "port", "ui")]
 
 
+def compile_probe(path, name):
+    """Compile the probe file with $ICO_CC, else $CC, else gcc.  A failure to start the compiler
+    or to compile is shown (the first lines of stderr, once per cause) so the cause is visible."""
+    cc = os.environ.get("ICO_CC") or os.environ.get("CC") or "gcc"
+    cmd = [cc] + include_flags() + ["-I" + os.path.dirname(path)] + FLAGS + [name]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True)
+    except OSError as e:
+        r = subprocess.CompletedProcess(cmd, 127, "", "cannot run %s: %s" % (cc, e))
+    if r.returncode != 0:
+        msg = "\n".join(r.stderr.splitlines()[:8])
+        if msg not in SHOWN:
+            SHOWN.add(msg)
+            print("struct_cast_audit: %s failed on %s (exit %d):\n%s" % (cc, os.path.relpath(path, ROOT), r.returncode, msg),
+                  file=sys.stderr)
+    return r
+
+
+SHOWN = set()
+
+
 def read(path):
     with open(path, "rb") as f:
         return f.read().decode("latin-1")
@@ -119,8 +140,7 @@ def probe_at(path, text, line, expr):
         t.write("\n".join(lines).encode("latin-1"))
         name = t.name
     try:
-        r = subprocess.run(["gcc"] + include_flags() + ["-I" + os.path.dirname(path)] + FLAGS + [name],
-                           capture_output=True, text=True)
+        r = compile_probe(path, name)
     finally:
         os.unlink(name)
     m = re.search(r"\.size\s+__ico_probe_0(?:\.\d+)?,\s*(\d+)", r.stdout) if r.returncode == 0 else None
@@ -157,7 +177,7 @@ def probe(path, text, exprs):
             t.write(src.encode("latin-1"))
             name = t.name
         try:
-            r = subprocess.run(["gcc"] + include_flags() + ["-I" + os.path.dirname(path)] + FLAGS + [name], capture_output=True, text=True)
+            r = compile_probe(path, name)
         finally:
             os.unlink(name)
         return r
