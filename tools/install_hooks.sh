@@ -36,6 +36,8 @@ cat > "$HOOK" <<'EOF'
 #                                          layout in ico2/
 #   6. tools/check_call_types.py           calls and declarations agree with
 #                                          the definitions (as CI)
+#   7. tools/struct_cast_audit.py          no buffer cast to a struct wider on
+#                                          the host in ico2/
 set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 
@@ -69,6 +71,12 @@ done
 "$PY" "$ROOT/tools/check_call_types.py" >/dev/null || {
     "$PY" "$ROOT/tools/check_call_types.py"
     echo "pre-commit: a call or a declaration disagrees with its definition: see tools/check_call_types.py" >&2
+    exit 1
+}
+
+"$PY" "$ROOT/tools/struct_cast_audit.py" >/dev/null || {
+    "$PY" "$ROOT/tools/struct_cast_audit.py"
+    echo "pre-commit: a buffer is cast to a struct wider on the host: see tools/struct_cast_audit.py" >&2
     exit 1
 }
 EOF

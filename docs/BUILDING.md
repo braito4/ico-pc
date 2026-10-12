@@ -341,7 +341,10 @@ hook that runs, in order:
 5. `tools/stack_overread_audit.py`: no game code that relies on the PS2's
    stack layout (the CI table below says what it looks for);
 6. `tools/check_call_types.py`: calls and declarations agree with the
-   definitions, as in CI.
+   definitions, as in CI;
+7. `tools/struct_cast_audit.py`: no fixed buffer in the game sources is cast
+   to a struct that is wider on the host (the CI table below says what it
+   looks for).
 
 `tools/format.sh` formats the tracked C with the tracked `.clang-format` and
 then applies `tools/format_layout.py`'s top-level blank-line layout. With
@@ -605,6 +608,7 @@ more preset; `linux-arm64` and `android` are described after the table.
 | `tools/format.sh --check` | clang-format over the tracked C |
 | `tools/strip_host_gates.py --check` | no `ICO_HOST` conditional in `ico2/` or `sce/` |
 | `tools/stack_overread_audit.py` (`--selftest`, then the tree) | no game code in `ico2/` that relies on the PS2's stack layout: a matrix or vector call that reads or writes past the local it is given, or a local that is only written; checked exceptions are in `tools/stack_overread_allow.txt` |
+| `tools/struct_cast_audit.py` (`--selftest`, then the tree) | no fixed array, buffer or smaller record in `ico2/` cast to a struct whose host size is larger (records holding pointers are wider on the host than the EE's 4-byte pointers: `ClipWork` is 0xF0 bytes, not 0xC0), sized by compiling the file with the host compiler; checked exceptions are in `tools/struct_cast_allow.txt` |
 | `tools/check_call_types.py` | no call through a function-pointer cast that passes fewer arguments than the function it reaches reads, and no `extern` in an `ico2/` `.c` file that differs from its definition in parameter count, integer width or return width; checked exceptions are in `tools/check_call_types_allow.txt` |
 | `gen_data_desc.py`, `gen_layout_asserts.py`, `gen_sources.py` with `--check` | the generated files are fresh |
 | `linux-x64` headless | configure with `-DICO_LINK_EXE=ON`, build, `ctest` |

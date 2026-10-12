@@ -41,6 +41,11 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(ROOT, "port", "test", "layout_asserts.c")
 CLASSES = os.path.join(ROOT, "config", "struct_classes.txt")
+HOST_ASSERTS = [
+    "_Static_assert(sizeof(ClipWork) == 0xF0, \"the host ClipWork is 0xF0 bytes, not the EE's 0xC0\");",
+    "_Static_assert(sizeof(ClipWork) > 0xC0, \"a 0xC0-byte buffer cannot hold a host ClipWork\");",
+    "_Static_assert(offsetof(ClipWork, radius) == 0x70, \"ClipWork.radius at 0x70 on the host\");",
+]
 CLASS_NAMES = ("runtime", "overlay", "save")
 # The preprocessor symbols the headers are read with (the host build's).
 DEFINED = {"ICO_HOST"}
@@ -683,6 +688,13 @@ def render(structs, others, classes, order):
         counts[cls][0] += 1
         counts[cls][1] += n_f
         counts[cls][2] += 1 if size is not None else 0
+    w("/* Host sizes the game's code depends on.  The EE ClipWork is 0xC0 bytes; the host one")
+    w(" * is wider (WallCfg holds pointers), so a buffer sized from the EE record and cast to it")
+    w(" * is overrun (issue 71: item.c's avoidInsideOfWall; tools/struct_cast_audit.py looks for")
+    w(" * the rest).  item.c keeps its clip in a ClipWork itself and sets the radius by member. */")
+    for line in HOST_ASSERTS:
+        w(line)
+    w("")
     w("int main(void)")
     w("{")
     w("    return 0;")

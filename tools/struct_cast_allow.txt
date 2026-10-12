@@ -1,0 +1,5 @@
+# tools/struct_cast_audit.py allow list: path:NAME:T reason
+# Each entry is a hit checked by hand and found not to overrun: the buffer is
+# only ever used for the first bytes of T, or the cast never reads or writes
+# past the buffer.  The audit finds none in ico2/ today (item.c's itemWork was
+# the one hit, fixed in the source), so the list is empty.
