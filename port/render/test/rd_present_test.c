@@ -2025,7 +2025,7 @@ static void checkWide169(void)
  * an output pixel.  A window-sized scene (Enhanced, scale 0) at aspect
  * `aspect` in outW x outH; GS column c of the frame is one flat colour of its
  * own, in rows 160..352 (the centre row's neighbourhood).  The presented
- * picture's centre row must equal the SCENE row's texels srcX .. srcX + outW
+ * picture's centre row must equal the DISPLAY row's texels srcX .. srcX + outW
  * byte for byte (no half-texel blend: u0 = floor(crop + 1/2), snapWindow);
  * wantScene is the scene's width (the native width over the exact width
  * of the box: 1935 at 1920 across 16:9) and srcX the first texel shown. */
@@ -2062,25 +2062,37 @@ static void checkOneToOne(const char *name, float aspect, uint32_t outW, uint32_
         if (v) {
             rd_screen_prims(RD_PRIM_SPRITES, v, 2u * FW, RD_SPACE_FULLFRAME, 1, 0);
         }
+        /* the reduction pass writes SCENE into DISPLAY, which is what the
+           presenter shows (as checkWide169 gets content there) */
+        rd_select_list(12);
+        RdPostParams pp;
+        memset(&pp, 0, sizeof(pp));
+        pp.rgba[0] = pp.rgba[1] = pp.rgba[2] = 128;
+        rd_post(RD_POST_REDUCTION, &pp);
         rd_end_frame(0);
         free(v);
     }
-    uint32_t sw = 0, sh = 0, ow = 0, oh = 0;
-    uint8_t *scene = (uint8_t *)malloc((size_t)8192 * 4096 * 4);
+    uint32_t sw = 0, sh = 0, dw = 0, dh = 0, ow = 0, oh = 0;
+    const size_t cap = (size_t)8192 * 4096 * 4;
+    uint8_t *scene = (uint8_t *)malloc(cap);
+    uint8_t *disp = (uint8_t *)malloc(cap);
     uint8_t *out = (uint8_t *)malloc((size_t)outW * outH * 4);
-    if (scene && out &&
-        rd__read_target(rd_target(RD_TARGET_SCENE), scene, (size_t)8192 * 4096 * 4, &sw, &sh) &&
+    if (scene && disp && out && rd__read_target(rd_target(RD_TARGET_SCENE), scene, cap, &sw, &sh) &&
+        rd__read_target(rd_target(RD_TARGET_DISPLAY), disp, cap, &dw, &dh) &&
         rd__read_present(out, (size_t)outW * outH * 4, &ow, &oh) && ow == outW && oh == outH) {
-        CHECK(sw == wantScene, "%s: the scene is %u wide (%u)", name, wantScene, sw);
+        CHECK(sw == wantScene && dw == wantScene, "%s: SCENE and DISPLAY are %u wide (%u, %u)",
+              name, wantScene, sw, dw);
         RhiRect bx;
         rd__present_box(outW, outH, aspect, &bx);
+        /* the box's centre row; DISPLAY is the half-height or the full-height
+           picture of the box (the bands are flat down their rows, so either
+           maps the centre to dh / 2) */
         const uint32_t y = (uint32_t)bx.y + bx.h / 2;
-        const uint32_t sy = (uint32_t)((uint64_t)(bx.h / 2) * sh / bx.h);
+        const uint32_t dy = dh / 2;
         uint32_t bad = 0, first = 0;
-        /* the box's columns: it fills the width at 16:9 and 48:9 */
-        for (uint32_t x = 0; x < outW; x++) {
+        for (uint32_t x = 0; x < outW && srcX + x < dw; x++) {
             const uint8_t *a = &out[((size_t)y * outW + x) * 4];
-            const uint8_t *b = &scene[((size_t)sy * sw + srcX + x) * 4];
+            const uint8_t *b = &disp[((size_t)dy * dw + srcX + x) * 4];
             if (a[0] != b[0] || a[1] != b[1] || a[2] != b[2]) {
                 if (!bad++) {
                     first = x;
@@ -2088,12 +2100,13 @@ static void checkOneToOne(const char *name, float aspect, uint32_t outW, uint32_
             }
         }
         CHECK(bad == 0,
-              "%s: the presented centre row is SCENE texels %u..%u byte for byte (%u "
-              "columns differ, the first %u)",
+              "%s: the presented centre row is DISPLAY texels %u..%u byte for byte (%u columns "
+              "differ, the first %u)",
               name, srcX, srcX + outW, bad, first);
     } else {
         CHECK(0, "%s: readback", name);
     }
+    free(disp);
     free(scene);
     free(out);
     rd_shutdown();
