@@ -1876,16 +1876,15 @@ int ico_host_pref_dir(char *out, size_t size)
 int ico_host_ini_path(char *out, size_t size)
 {
     char dir[ICO_PATH_MAX];
-#if defined(__APPLE__) && !defined(ICO_IOS) && defined(ICO_HOST_SDL_PREFPATH)
-    int r = ico_host_pref_dir(dir, sizeof(dir));
-#else
-    int r = ico_host_exe_dir(dir, sizeof(dir));
-#endif
 
-    if (ico_path_join(out, size, dir, "ico-pc.ini") != 0) {
-        return -1;
-    }
-    return r;
+    /* a folder lookup that fails leaves "." (the working folder), which
+       main_host.c uses as before: only a path that does not fit fails */
+#if defined(__APPLE__) && !defined(ICO_IOS) && defined(ICO_HOST_SDL_PREFPATH)
+    ico_host_pref_dir(dir, sizeof(dir));
+#else
+    ico_host_exe_dir(dir, sizeof(dir));
+#endif
+    return ico_path_join(out, size, dir, "ico-pc.ini") != 0 ? -1 : 0;
 }
 
 /* ico_host_saves2_dir and ico_host_saves_dir (below) are a read of

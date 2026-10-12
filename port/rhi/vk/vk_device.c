@@ -246,6 +246,25 @@ static bool vkr_has_instance_ext(const char *name)
     return found;
 }
 
+#ifdef ICO_RHI_MOLTENVK
+/* The instance's API version (vkr_create_instance): linked straight to
+ * MoltenVK there is no loader above the driver, so the instance asks for
+ * no more than the driver reports */
+static uint32_t s_instanceApi = VK_API_VERSION_1_3;
+#endif
+
+/* Whether a device of this API version takes the Vulkan 1.3 core paths
+ * (dynamic rendering, VkPhysicalDeviceVulkan13Features): its own version,
+ * and under MoltenVK the instance's too */
+static bool vkr_core13(uint32_t deviceApi)
+{
+#ifdef ICO_RHI_MOLTENVK
+    return deviceApi >= VK_API_VERSION_1_3 && s_instanceApi >= VK_API_VERSION_1_3;
+#else
+    return deviceApi >= VK_API_VERSION_1_3;
+#endif
+}
+
 static bool vkr_create_instance(const RhiDeviceDesc *desc)
 {
     const char *exts[16];
@@ -271,10 +290,14 @@ static bool vkr_create_instance(const RhiDeviceDesc *desc)
 #endif
     }
     g_vkr.debugUtils = false;
+#ifdef ICO_RHI_MOLTENVK
+    /* MoltenVK is a portability driver: listed only when asked for. The
+     * other builds keep the loader's conformant devices. */
     if (vkr_has_instance_ext(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME)) {
         exts[extCount++] = VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME;
         flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
     }
+#endif
     bool debug = desc->debugLayers;
 #ifdef ICO_RHI_DEBUG_DEFAULT
     debug = true;
@@ -309,13 +332,19 @@ static bool vkr_create_instance(const RhiDeviceDesc *desc)
                 VK_API_VERSION_MAJOR(loaderVersion), VK_API_VERSION_MINOR(loaderVersion));
         return false;
     }
+#ifdef ICO_RHI_MOLTENVK
+    s_instanceApi = loaderVersion < VK_API_VERSION_1_3 ? loaderVersion : VK_API_VERSION_1_3;
+    const uint32_t instanceApi = s_instanceApi;
+#else
+    const uint32_t instanceApi = VK_API_VERSION_1_3;
+#endif
     VkApplicationInfo app = {
         .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
         .pApplicationName = desc->appName ? desc->appName : "ico",
         .applicationVersion = 1,
         .pEngineName = "ico rhi",
         .engineVersion = 1,
-        .apiVersion = loaderVersion < VK_API_VERSION_1_3 ? loaderVersion : VK_API_VERSION_1_3,
+        .apiVersion = instanceApi,
     };
     VkInstanceCreateInfo ci = {
         .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
@@ -466,7 +495,7 @@ static int vkr_rate_device(VkPhysicalDevice pd, uint32_t *outQueue, const char *
         *why = "Vulkan 1.2 not supported";
         return -1;
     }
-    bool core13 = p.apiVersion >= VK_API_VERSION_1_3;
+    bool core13 = vkr_core13(p.apiVersion);
     if (!core13 && !vkr_device_has_ext(pd, VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME)) {
         *why = "no dynamic rendering";
         return -1;
@@ -690,8 +719,14 @@ static uint32_t vkr_msaa_counts(void)
 
 static bool vkr_create_device(void)
 {
-    bool core13 = g_vkr.props.apiVersion >= VK_API_VERSION_1_3;
+    bool core13 = vkr_core13(g_vkr.props.apiVersion);
     g_vkr.apiVersion = g_vkr.props.apiVersion;
+#ifdef ICO_RHI_MOLTENVK
+    /* the version the device is used at: no more than the instance's */
+    if (g_vkr.apiVersion > s_instanceApi) {
+        g_vkr.apiVersion = s_instanceApi;
+    }
+#endif
     const char *exts[8];
     uint32_t extCount = 0;
     if (g_vkr.surface) {
@@ -700,10 +735,13 @@ static bool vkr_create_device(void)
     if (!core13) {
         exts[extCount++] = VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME;
     }
+#ifdef ICO_RHI_MOLTENVK
+    /* the subset MoltenVK implements, with its features (below) */
     const bool portability = vkr_device_has_ext(g_vkr.phys, "VK_KHR_portability_subset");
     if (portability) {
         exts[extCount++] = "VK_KHR_portability_subset";
     }
+#endif
 
     VkPhysicalDeviceFeatures avail;
     vkGetPhysicalDeviceFeatures(g_vkr.phys, &avail);

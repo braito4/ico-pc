@@ -105,9 +105,15 @@ static unsigned s_videoSerial;
    its own */
 static int s_fullscreen;
 
+#if !defined(__ANDROID__) && !defined(ICO_IOS)
 /* the mode Alt+Enter goes back to from Windowed (the last
-   non-windowed one the options or the window had; Fullscreen to begin with) */
+   non-windowed one the options or the window had; Fullscreen to begin with);
+   the phone builds are always the whole screen */
 static int s_lastFullMode = ICO_WINDOW_FULLSCREEN;
+#define WINDOW_LAST_FULL(m) (s_lastFullMode = (m))
+#else
+#define WINDOW_LAST_FULL(m) ((void)(m))
+#endif
 
 /* the options the last "display changed" line compared against (seeded
    after the startup line) */
@@ -451,7 +457,7 @@ static void video_apply(int force)
        already matches what the window is asks for nothing */
     int request = !force && o.windowMode != window_mode_now();
     if (o.windowMode != ICO_WINDOW_WINDOWED) {
-        s_lastFullMode = o.windowMode;
+        WINDOW_LAST_FULL(o.windowMode);
     }
 #if defined(__ANDROID__) || defined(ICO_IOS)
     /* Android: always fullscreen (immersive, the window's creation
@@ -872,7 +878,7 @@ int ico_window_open(unsigned int gsW, unsigned int gsH)
        resolution; no exclusive mode) */
     s_window = SDL_CreateWindow("ICO", WINDOW_W, WINDOW_H, window_flags(start.windowMode));
     if (start.windowMode != ICO_WINDOW_WINDOWED) {
-        s_lastFullMode = start.windowMode;
+        WINDOW_LAST_FULL(start.windowMode);
     }
     if (s_window == NULL) {
         fprintf(stderr, "window: SDL_CreateWindow: %s\n", SDL_GetError());
@@ -2221,19 +2227,12 @@ static void pace_log(Uint64 now)
     if (now - s_pres.statAt < ico_stats_period_ns(now, s_pres.fastUntil)) {
         return;
     }
-#ifndef ICO_IOS
     const double sec = (double)(now - s_pres.statAt) / 1e9;
-#endif
     uint32_t replays = 0;
-#ifndef ICO_IOS
     const double maxMs = rd_replay_time_max(1, &replays);
-#else
-    rd_replay_time_max(1, &replays);
-#endif
     const uint32_t fn = rd_frame_number();
     uint32_t movieFail;
     const uint32_t movie = rd_video_presents(&movieFail);
-#ifndef ICO_IOS
     char movieFailed[32] = "";
 
     if (!rd_interpolation_active()) {
@@ -2251,7 +2250,6 @@ static void pace_log(Uint64 now)
         snprintf(movieFailed, sizeof(movieFailed), " (%u failed)",
                  movieFail - s_pres.statMovieFail);
     }
-#endif
     /* the vsync lock's state, and the audio's rate: under the lock the
        simulation runs at the display's rate over n (0.1 % fast on a 60.00
        Hz screen), and the audio plays the samples that much faster, so its
@@ -2278,7 +2276,6 @@ static void pace_log(Uint64 now)
         s_pres.audioRatio = ratio;
         ico_audio_set_rate_ratio(ratio);
     }
-#ifndef ICO_IOS
     fprintf(stderr,
             "window: %u presents, %u movie presents%s and %u game frames (%u frame numbers) in "
             "%.1f s: %.1f "
@@ -2295,7 +2292,6 @@ static void pace_log(Uint64 now)
             dm != NULL && dm->refresh_rate > 1.0f ? s_pres.statPresents / sec / dm->refresh_rate
                                                   : 0.0,
             pw, ph, window_fullscreen() ? " fullscreen" : "", (double)s_pres.lateMaxNs / 1e6, lock);
-#endif
     perf_drain();
     perf_log();
     s_pres.statAt = now;
