@@ -63,7 +63,8 @@ float gsb_ViewFocus(void);
    pictures.  RegistPacket.c says whether the part it culls next is locked
    to the camera (node flag 2: culled against this tick's camera only);
    gsb_HostCullViewsUsed is how many cameras the last gsb_ClipBox tested
-   (1, 2 or 3; the tests read it).  The windows sized by the native
+   (1, 2 or 3; 0 when a step past half the presenter's limits kept every
+   box, v0.6.1; the tests and F12's cull line read it).  The windows sized by the native
    frame's width (gsFrame.w): the water dots' (waterDot.c; ip the dot's GS position
    in 1/16 pixels, pos its world position), the lines' x clip
    (lineManager.c) and the shadow volumes' edge clip (Shadow.c). */
@@ -73,4 +74,7 @@ int gsb_HostDotVisible(const int *ip, const float *pos);
 float gsb_HostLineHalfWidth(void);
 float gsb_HostShadowClipX(void);
 
+/* the largest edge clip gsb_HostShadowClipX gives (GsBase.c: a clipped end
+   at GS x 2 or 4094 passes Shadow.c's range test) */
+#define GSB_SHADOW_CLIP_MAX 2046.0f
 #endif /* GSBASE_H */

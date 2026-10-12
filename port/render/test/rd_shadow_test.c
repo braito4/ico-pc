@@ -17,6 +17,10 @@
  *      sizes per 512 columns (688 x 256, 344 x 128, 172 x 64: the named
  *      targets and every FRAME, rect and UV of the chain), the composites'
  *      UVs over those widths.
+ *   w  (VIS-RULES item 17) on a frame 2048 wide (48:9), a caster's volume
+ *      running past the picture's side: every edge clipped at the edge clip
+ *      (GSB_SHADOW_CLIP_MAX), the strip drawn whole (eight triangles), its
+ *      clipped ends inside the range emitVolumeStrip keeps.
  * On a Vulkan device (exit 77 without one, after the recording checks):
  *   a  the resolved count against the wrapped colour sum the GS makes (4 n
  *      mod 256, A = 0x80 where non-zero), exact, for net counts 0..127,
@@ -49,6 +53,7 @@
 #include "DmaPacket.h"
 #include "GifHost.h"
 #include "GifPacket.h"
+#include "GsBase.h"
 #include "Matrix.h"
 #include "Shadow.h"
 #include "main.h"
@@ -151,10 +156,12 @@ void ico_assert(const char *file, int line, const char *e)
 
 void mc_Reset(void) {}
 
-/* GsBase.c: Shadow.c's edge clip across, ScreenWidth at 4:3 */
+/* GsBase.c: Shadow.c's edge clip across, the frame's width (ScreenWidth at
+   4:3), at most GSB_SHADOW_CLIP_MAX (gsb_cull_test checks GsBase.c's own) */
 float gsb_HostShadowClipX(void)
 {
-    return (float)ScreenWidth;
+    const float x = (float)gsFrame.w;
+    return x > GSB_SHADOW_CLIP_MAX ? GSB_SHADOW_CLIP_MAX : x;
 }
 
 float GetTableSin(short angle)
@@ -1031,6 +1038,92 @@ static void checkScaledIntegral(void)
     rd_shutdown();
 }
 
+/* --------------------- (w) VIS-RULES item 17: a strip across a 48:9 side
+ *
+ * On a frame 2048 wide (48:9) the edge clip is GSB_SHADOW_CLIP_MAX.  A
+ * caster at the picture's right side (GS x 3482 .. 3584) whose volume runs
+ * out along view +x (the shadow direction (1, 0, 0.01), 600 long) past
+ * GS x 4094: each of its three edges is clipped at the edge clip, and the
+ * strip they make is drawn (its eight triangles recorded), the clipped ends
+ * at GS x 2048 + GSB_SHADOW_CLIP_MAX.  Before v0.6.1 the clip was 2047: a
+ * clipped end at GS x 4095 (65520 sixteenths) failed emitVolumeStrip's
+ * range test (at most 0xFFEF) and the strip, the shadow inside the picture
+ * with it, was dropped. */
+static Sub15C *buildWideModel(void)
+{
+    static const float caster[3][3] = {
+        {560.0f, 0.0f, 100.0f}, {530.0f, 0.0f, 100.0f}, {530.0f, 30.0f, 100.0f}};
+    Sub15C *o = zalloc(sizeof(Sub15C));
+    PObjModel *m = zalloc(sizeof(PObjModel));
+    PObjModel *x = zalloc(sizeof(PObjModel));
+    PObjPart *p = zalloc(sizeof(PObjPart));
+    float (*node)[4] = zalloc(64);
+    for (int i = 0; i < 4; i++) {
+        node[i][i] = 1.0f;
+    }
+    float (*vtx)[4] = zalloc(3 * 16);
+    for (int i = 0; i < 3; i++) {
+        vtx[i][0] = caster[i][0];
+        vtx[i][1] = caster[i][1];
+        vtx[i][2] = caster[i][2];
+        vtx[i][3] = 1.0f;
+    }
+    TestRun *run = zalloc(5 * sizeof(TestRun));
+    run[0].count = 3;
+    for (int i = 0; i < 3; i++) {
+        run[1 + i].count = 1;
+        run[1 + i].vtx = (short)i;
+    }
+    TestRun **strips = zalloc(sizeof(TestRun *));
+    strips[0] = run;
+    p->vtx = (char *)vtx;
+    p->vtxCount = 3;
+    p->vtxSave = zalloc(3 * 16);
+    p->nrmSave = zalloc(3 * 16);
+    p->strips = strips;
+    p->stripCount = 1;
+    x->partCount = 1;
+    x->parts = p;
+    m->shadowLength = 600.0f;
+    o->nodeNum = 1;
+    o->nodeMtx = (ICO_WORD)node;
+    o->model = m;
+    o->shadow = x;
+    o->dispType = 0;
+    o->shadowDir[0] = 1.0f;
+    o->shadowDir[1] = 0.0f;
+    o->shadowDir[2] = 0.01f;
+    return o;
+}
+
+static void checkWideClip(void)
+{
+    const RdFrame *f = rd__last_frame();
+    const RdCmdList *cl = f ? &f->lists[3] : NULL;
+    const RdCmd *c = NULL;
+    for (uint32_t i = 0; cl && i < cl->count; i++) {
+        if (cl->cmds[i].type == RDC_SHADOW_STRIP) {
+            c = &cl->cmds[i];
+            break;
+        }
+    }
+    CHECK(c != NULL, "48:9: the strip across the side is drawn (edge clip %g)",
+          (double)gsb_HostShadowClipX());
+    if (!c) {
+        return;
+    }
+    const RdScreenVtx *v = (const RdScreenVtx *)(f->payload + c->u[1]);
+    const uint32_t n = c->u[0] + c->u[3];
+    int32_t maxX = 0;
+    for (uint32_t k = 0; k < n; k++) {
+        maxX = v[k].x > maxX ? v[k].x : maxX;
+    }
+    const int32_t want = (int32_t)((2048.0f + GSB_SHADOW_CLIP_MAX) * 16.0f);
+    CHECK(n == 8 * 3 && maxX >= want - 1 && maxX <= 0xFFEF,
+          "48:9: eight triangles (%u), the clipped ends at GS x %d / 16 (want %d, at most %d)",
+          n / 3, maxX, want, 0xFFEF);
+}
+
 int main(void)
 {
     rd__set_not_implemented_fatal(true); /* a stub command replayed stops the test */
@@ -1066,6 +1159,34 @@ int main(void)
         dl_Clear();
         recordFrame(VOL_MODEL, kAll);
         checkRecording();
+        rd_shutdown();
+        gsFrame.w = W;
+        gsFrame.fbw = W / 64;
+        gsFrame.wExact = (float)W;
+        gsFrame.aspect = 4.0f / 3.0f;
+        gif_HostSetFrameWidth(W);
+    }
+    /* (w) a strip across the side of a frame 2048 wide (48:9) */
+    {
+        const int fw = 2048;
+        Sub15C *keep = s_obj;
+
+        gsFrame.w = fw;
+        gsFrame.fbw = fw / 64;
+        gsFrame.wExact = (float)fw;
+        gsFrame.aspect = 4.0f / 3.0f * (float)fw / 512.0f;
+        gif_HostSetFrameWidth(fw);
+        if (!rd__init_record_only((uint32_t)fw, H)) {
+            printf("FAIL rd__init_record_only at W %d\n", fw);
+            return 1;
+        }
+        gif_HostForgetTextures();
+        gif_HostFrameReset();
+        dl_Clear();
+        s_obj = buildWideModel();
+        recordFrame(VOL_MODEL, kAll);
+        checkWideClip();
+        s_obj = keep;
         rd_shutdown();
         gsFrame.w = W;
         gsFrame.fbw = W / 64;

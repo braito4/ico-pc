@@ -55,8 +55,9 @@
  *             ones; neither copy without the read or the write
  *   native    (W5) the record-only context at the native widths 688,
  *             1376, 2560: a draw left behind beside the 4:3 columns but
- *             inside the native frame is not of prev alone (outsideCur at
- *             W / 2), one past the frame's edge is; at 2560 a CPU-projected
+ *             inside the native frame is not of prev alone
+ *             (mayBeCulledAtCur at W / 2 x 1.12), one past the cull's edge
+ *             is; at 2560 a CPU-projected
  *             triangle past 0xFFFF (XYZ2_HI) wholly beside the picture
  *             re-projects, at 512 it stays as its tick drew it; one across
  *             the picture stays at both; pool.c's grids at usc 1 / 1376
@@ -100,11 +101,13 @@
  *             its own draw (no draw unmatched while one of its key is
  *             free); an emitter's batch count changing keeps every batch
  *             paired or drawn; the camera turning 28 degrees: a mesh of the
- *             tick before alone that left the picture is drawn at alpha
- *             0.25, 0.5 and 0.75 where the blended camera sees it, one still
- *             in the picture is not, nor one whose object and part the
- *             current tick draws; with a still camera such a draw leaves the
- *             frame byte for byte as it was
+ *             tick before alone that left the cull's frustum (the picture
+ *             times 1 + RD_CULL_MARGIN) is drawn at alpha 0.25, 0.5 and 0.75
+ *             where the blended camera sees it, one still in the picture is
+ *             not, nor one whose object and part the current tick draws; a
+ *             ball across the picture's edge is (VIS-RULES item 15), a
+ *             point inside the cull's margin is not; with a still camera
+ *             such a draw leaves the frame byte for byte as it was
  *   grid STs  a grid sampling a target blends its STs half way; a grid
  *             with an image keeps the tick's
  *   pool STs  pool.c's formula (rd.h rd_grid_screen_st) gives the STs of two
@@ -141,6 +144,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "rd_camera_blend.h" /* RD_CULL_MARGIN */
 #include "rd_internal.h"
 #include "rd_mesh.h"
 #include "vk/rhi_vk.h"
@@ -425,6 +429,30 @@ static RdMesh makeMesh(void)
     const uint32_t tag = 0x8003u;
     memcpy(&qw[0][0], &tag, 4);
     for (int k = 0; k < 3; k++) {
+        qw[1 + k * 3 + 1][3] = k == 0 ? 0.0f : 1.0f;
+    }
+    const RdVuBatchDesc bd = {0, 0, 0};
+    RdVuMeshDesc md;
+    memset(&md, 0, sizeof(md));
+    md.qw = (const float (*)[4])qw;
+    md.qwCount = 10;
+    md.qwPerVertex = RD_VU_QW_PRELIT;
+    md.batchCount = 1;
+    md.batches = &bd;
+    return rd_create_vu_mesh(&md);
+}
+
+/* makeMesh's triangle with its vertices r from the origin (x -r, x +r,
+ * y +r), so a draw of it is a ball of radius r about its origin */
+static RdMesh makeMeshR(float r)
+{
+    static float qw[1 + 3 * 3][4];
+    memset(qw, 0, sizeof(qw));
+    const uint32_t tag = 0x8003u;
+    memcpy(&qw[0][0], &tag, 4);
+    for (int k = 0; k < 3; k++) {
+        qw[1 + k * 3][0] = k == 0 ? -r : k == 1 ? r : 0.0f;
+        qw[1 + k * 3][1] = k == 2 ? r : 0.0f;
         qw[1 + k * 3 + 1][3] = k == 0 ? 0.0f : 1.0f;
     }
     const RdVuBatchDesc bd = {0, 0, 0};
@@ -4577,6 +4605,22 @@ static const char kObjAl;
 /* the s6 camera turned deg; mesh A (W = I) and, when b is not NULL, mesh B
  * (key part 2) with its origin at world b; with bOther, a draw of B's
  * object and part under another ordinal byte at A's place */
+/* the world point the 28 degree camera of aloneFrame sees at GS x gx, y
+ * 2048, depth zv */
+static void alonePointAt(double gx, double zv, double o[3])
+{
+    double eye[3], v[16];
+    s6OrbitEye(28.0, eye);
+    s6View(28.0, eye, v);
+    const double pv[3] = {(gx - 2048.0) * zv / s6Focal, 0.0, zv};
+    for (int c = 0; c < 3; c++) {
+        o[c] = 0.0;
+        for (int r = 0; r < 3; r++) {
+            o[c] += v[c * 4 + r] * (pv[r] - v[12 + r]);
+        }
+    }
+}
+
 static void aloneFrame(RdMesh mesh, double deg, const double *b, int bOther)
 {
     rd_begin_frame();
@@ -4724,12 +4768,14 @@ static void testPairedOrKept(void)
           "added (lerped %u, unmatched %u, kept %u, drawn %d)",
           st.lerped, st.missing, st.prevKept, f ? typeCount(f, 6, RDC_PARTICLES) : -1);
 
-    /* (c) the camera turns 28 degrees and leaves B (at x 250, z 100: GS x
-     * 2256 at 0 degrees, 2332 at 28, past the picture's 2304) behind: B is
-     * of prev alone, outside cur's picture, and is drawn through the
-     * blended camera at every t */
+    /* (c) the camera turns 28 degrees and leaves B (at depth 300, GS x
+     * 2048 + 256 x 1.12 + 30 at 28 degrees, past the cull's edge 2334.72,
+     * GsBase.c's margin) behind: B is of prev alone, outside cur's cull
+     * frustum, and is drawn through the blended camera at every t */
     const RdKey kb = RD_KEY(&kObjAl, 2, 32);
-    const double bOut[3] = {250.0, 0.0, 100.0}, bIn[3] = {-200.0, 0.0, 150.0};
+    const double bIn[3] = {-200.0, 0.0, 150.0};
+    double bOut[3];
+    alonePointAt(2048.0 + 256.0 * (1.0 + RD_CULL_MARGIN) + 30.0, 300.0, bOut);
     aloneFrame(mesh, 0.0, bOut, 0);
     aloneFrame(mesh, 28.0, NULL, 0);
     for (int i = 1; i <= 3; i++) {
@@ -4746,7 +4792,7 @@ static void testPairedOrKept(void)
         CHECK(m && a && c > a && st.prevKept == 1 && st.prevHeld == 0 &&
                   drawsOf(f, 0, kb, RDC_MESH) == 1 &&
                   hypot(got[0] - want[0], got[1] - want[1]) < 0.01,
-              "t %.2f: B of the tick before alone, outside the picture, drawn after A at %.3f "
+              "t %.2f: B of the tick before alone, outside the cull, drawn after A at %.3f "
               "%.3f (want %.3f %.3f; kept %u, held %u)",
               t, got[0], got[1], want[0], want[1], st.prevKept, st.prevHeld);
     }
@@ -4767,6 +4813,37 @@ static void testPairedOrKept(void)
     CHECK(f && st.prevKept == 0 && drawsOf(f, 0, kb, RDC_MESH) == 0,
           "B of the tick before is not drawn beside its object and part (kept %u, drawn %d)",
           st.prevKept, f ? drawsOf(f, 0, kb, RDC_MESH) : -1);
+
+    /* (f) VIS-RULES item 15: B a ball of radius 40 (C) centred on the
+     * picture's edge at depth 300 (GS x 2304, 40 units = 66.7 pixels): it
+     * reaches past the cull's edge (2334.72), so the game may have culled
+     * it and it is drawn through the interval; before v0.6.1 (outsideCur:
+     * wholly outside the picture, no margin) it vanished at t 0 */
+    {
+        RdMesh ball = makeMeshR(40.0f);
+        double bEdge[3];
+        alonePointAt(2304.0, 300.0, bEdge);
+        aloneFrame(ball, 0.0, bEdge, 0);
+        aloneFrame(ball, 28.0, NULL, 0);
+        f = rd__interp_frame(rd__prev_frame(), rd__last_frame(), 0.5f, 1, &st);
+        CHECK(f && st.prevKept == 1 && st.prevHeld == 0 && drawsOf(f, 0, kb, RDC_MESH) == 1,
+              "a ball across the picture's edge of the tick before alone is drawn (kept %u, held "
+              "%u, drawn %d)",
+              st.prevKept, st.prevHeld, f ? drawsOf(f, 0, kb, RDC_MESH) : -1);
+        /* (g) B a point between the picture's edge and the cull's (GS x
+         * 2320): the game keeps everything there, so a draw of the tick
+         * before alone there went for another reason and is not drawn */
+        double bBand[3];
+        alonePointAt(2320.0, 300.0, bBand);
+        aloneFrame(mesh, 0.0, bBand, 0);
+        aloneFrame(mesh, 28.0, NULL, 0);
+        f = rd__interp_frame(rd__prev_frame(), rd__last_frame(), 0.5f, 1, &st);
+        CHECK(f && st.prevKept == 0 && drawsOf(f, 0, kb, RDC_MESH) == 0,
+              "a point inside the cull's margin of the tick before alone is not drawn (kept %u, "
+              "drawn %d)",
+              st.prevKept, f ? drawsOf(f, 0, kb, RDC_MESH) : -1);
+        rd_destroy_vu_mesh(ball);
+    }
 
     /* (e) a still camera: B of the tick before alone (x 350, z -100: past
      * the picture's right edge at 10 degrees) changes nothing; the frame is
@@ -5356,10 +5433,10 @@ static void testReprojectOneTick(void)
  *
  * The record-only context at a native width W (688, 1376, 2560: 16:9, 32:9,
  * 60:9; GsBase.c's gsFrame.w), the frames' gsW:
- *   outside   (outsideCur at hw = W / 2) testPairedOrKept's B, left behind
+ *   outside   (mayBeCulledAtCur at hw = W / 2 x 1.12) a B left behind
  *             by the 28 degree turn at GS x 2332, beside the 4:3 columns
  *             (past 2304) but inside the native frame: not of prev alone,
- *             not drawn; a B past the native frame's edge (W / 2 + 40
+ *             not drawn; a B past the cull's edge (W / 2 x 1.12 + 40
  *             beyond the centre at 28 degrees) is, through the blended
  *             camera
  *   reproject (reprojProject's window, the GS's 16 bits at every width,
@@ -5375,22 +5452,6 @@ static void testReprojectOneTick(void)
  *             the scale, and the STs half way are the formula's through the
  *             blended camera at that scale */
 
-/* the world point the 28 degree camera of aloneFrame sees at GS x gx, y
- * 2048, depth zv */
-static void alonePointAt(double gx, double zv, double o[3])
-{
-    double eye[3], v[16];
-    s6OrbitEye(28.0, eye);
-    s6View(28.0, eye, v);
-    const double pv[3] = {(gx - 2048.0) * zv / s6Focal, 0.0, zv};
-    for (int c = 0; c < 3; c++) {
-        o[c] = 0.0;
-        for (int r = 0; r < 3; r++) {
-            o[c] += v[c * 4 + r] * (pv[r] - v[12 + r]);
-        }
-    }
-}
-
 static void nativeOutside(uint32_t W)
 {
     RdMesh mesh = makeMesh();
@@ -5405,7 +5466,7 @@ static void nativeOutside(uint32_t W)
           "%u, drawn %d)",
           W, st.prevKept, f ? drawsOf(f, 0, kb, RDC_MESH) : -1);
     double bFar[3];
-    alonePointAt(2048.0 + 0.5 * (double)W + 40.0, 300.0, bFar);
+    alonePointAt(2048.0 + 0.5 * (double)W * (1.0 + RD_CULL_MARGIN) + 40.0, 300.0, bFar);
     aloneFrame(mesh, 0.0, bFar, 0);
     aloneFrame(mesh, 28.0, NULL, 0);
     f = rd__interp_frame(rd__prev_frame(), rd__last_frame(), 0.5f, 1, &st);
@@ -5418,7 +5479,7 @@ static void nativeOutside(uint32_t W)
     aloneExpected(0.5, bFar, want);
     CHECK(m && st.prevKept == 1 && st.prevHeld == 0 && drawsOf(f, 0, kb, RDC_MESH) == 1 &&
               hypot(got[0] - want[0], got[1] - want[1]) < 0.01,
-          "native %u: B past the frame's edge is of prev alone, at %.3f %.3f (want %.3f %.3f; "
+          "native %u: B past the cull's edge is of prev alone, at %.3f %.3f (want %.3f %.3f; "
           "kept %u, held %u)",
           W, got[0], got[1], want[0], want[1], st.prevKept, st.prevHeld);
     rd_destroy_vu_mesh(mesh);

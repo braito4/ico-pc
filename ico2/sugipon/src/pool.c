@@ -144,6 +144,8 @@ static int work1Vram = 0; /* derived name */
    span the frame over 0 .. 1, which the renderer reads over the block's
    own width (a render target is sampled whole: no power of two).  The
    block's VRAM address is the PS2's (ADDRESS). */
+/* VIS-RULES item 18 (v0.6.1): checked, not narrower than the frame's share
+   (rd_water_test "frame W" at 1376, 2048 and 2560) */
 static int poolBlockW(void) /* port name */
 {
     return ico_frame_x(&gsFrame, 0x100);

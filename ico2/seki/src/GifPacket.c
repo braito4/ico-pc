@@ -552,6 +552,9 @@ static int stripIndex = 0; /* derived name */
    at every native width the frame (2048 -+ W / 2 pixels, at most 768 ..
    3328) lies inside it.  The triangles it drops that the port draws on a
    wide frame are gifHostBeside's. */
+/* VIS-RULES item 9 (v0.6.1), kept: an in-view CPU strip is dropped only
+   where the PS2 dropped it (a vertex past the GS's range, the triangle
+   reaching the picture); beside the picture gifHostBeside draws it */
 static inline int isInScreen(volatile int *p) /* derived name */
 {
     if (p[2] < 0)

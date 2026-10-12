@@ -32,6 +32,8 @@
  */
 #include "rd_internal.h"
 
+/* VIS-RULES item 14 (v0.6.1), kept: each row authored, decided on 4:3
+   dumps (the 4:3 picture never shows it) */
 const RdContentHide rd__content_hide[] = {
     /* the long walkway (issue 29's frame v31438 at 16:9): a black box 846
      * units wide through the arch at the walkway's end showed as a flat

@@ -444,6 +444,15 @@ PObj *InitPObj(ICO_WORD h, ICO_WORD name, int n)
         for (j = 0; j < 8; j++)
             _AddVector(p->boxes[i][j], p->boxes[i][j], v);
     }
+    /* PC port (v0.6.1, VIS-RULES item 2): the whole object's box moves with
+       its vertices.  The PS2 moved the parts' boxes and left bb (the box
+       RegistPacket.c culls the whole object by, model->box[0]) where
+       MakeBoundingBox put it, so a model with an offset was culled by a box
+       offset from what it draws, in view or not.  One model of the PAL
+       table has one (id 53, shinkan_a: y 105); every other offset is 0, for
+       which this adds 0. */
+    for (j = 0; j < 8; j++)
+        _AddVector(p->bb[j], p->bb[j], v);
     MakePacket(p, n);
     return p;
 }

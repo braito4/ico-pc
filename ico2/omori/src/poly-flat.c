@@ -54,7 +54,18 @@ static float _IsInScreen2(int *p)
     if (0x0FFFFFF0 < p[2]) {
         return -1.0f;
     }
-    hw = gsFrame.w / 2; /* the native width: 512 at 4:3, so 256 as ScreenWidth / 2 was */
+    /* PC port (v0.6.1, VIS-RULES item 19): the 4:3 picture's half-width
+       at every frame width, the PS2's ScreenWidth / 2.  Its two callers
+       are camera decisions: camera-root.c Camctrl_Exec (a blend inserted
+       when the camera's target leaves the screen) and act-game.c
+       ACTGame_InsertCamera_GirlIsPinch (a camera inserted when the girl is
+       off the screen).  With the native width (v0.6.0) the camera of a
+       wide picture behaved differently from the original's, reaching
+       angles the PS2 never framed, where the parity rules drop what the
+       original never showed; the camera is the original's, the wider
+       picture only shows more of what it frames.  The bird's own test
+       (act_bird.c) keeps the frame's width. */
+    hw = ICO_FRAME_BASE_W / 2;
     if (p[0] < (0x800 - hw) * 16) {
         return -1.0f;
     }

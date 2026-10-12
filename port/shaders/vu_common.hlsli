@@ -447,6 +447,8 @@ VuVSOut vu_triangle_out(VuVtx a, VuVtx b, VuVtx c, VuVtx me, uint mode)
         return o;
     }
     if (mode == VU_CLIP_REGION) {
+        // VIS-RULES items 11 and 12 (v0.6.1), kept: the window rule and the
+        // behind-the-eye drop are the PS2's at every aspect (parity).
         // On the PS2 any vertex outside the region sets ADC on itself and
         // the next two, and the triangle is not drawn. That test is the
         // camera's own: the program's, on the position as computed
@@ -503,7 +505,8 @@ VuVSOut vu_triangle_out(VuVtx a, VuVtx b, VuVtx c, VuVtx me, uint mode)
         }
         return o;
     }
-    // VU_CLIP_SCISSOR
+    // VU_CLIP_SCISSOR (VIS-RULES item 13, v0.6.1, kept: parity; RegistPacket.c
+    // also gives it the packets whose own box fails, item 4)
     uint fa = vu_clipw(a.clip), fb = vu_clipw(b.clip), fc = vu_clipw(c.clip);
     bool cut = (fa | fb | fc) != 0u;
     if ((cut && (vu_draw.z & VU_F_KICK_ONLY) != 0u) ||

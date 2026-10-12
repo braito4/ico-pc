@@ -53,6 +53,17 @@
  *            cluster one with the object's bone count); the morph path
  *            (pac_HostRefreshFor) declines a replaced mesh and draws the
  *            original again; recording only
+ *   VIS-RULES (v0.6.1) a packet whose own box fails in a part that passed
+ *            is drawn with the clipping program (code 36), not dropped
+ *            (item 4); a part's and an object's dropped boxes are noted on
+ *            the frame for F12's cull line (rules 3 and 2, with the model's
+ *            name); an accessory whose box is dropped still registers its
+ *            shadow volume (item 7)
+ *   boxes    with the disc image: every *.p2o of every pack through PObj.c's
+ *            loader (AllocPObj): each vertex a strip names lies in its
+ *            part's box and its object's box (items 2 and 3); one model
+ *            through InitPObj with a y offset of 105 (the PAL table's
+ *            shinkan_a): its object box moved with it; recording only
  *
  * Checks on the recording (no device needed): the mesh built from the
  * packet (vertex count, batches, the index list against vu1ref_static_kicks);
@@ -101,6 +112,8 @@
 /* the disc (the strip order case) */
 #include "df_pack.h"
 #include "vfs.h"
+/* PObj.c's loader (the boxes case) */
+#include "charFileManager.h"
 
 static int failures;
 
@@ -1952,6 +1965,213 @@ static void modelPackChecks(void)
 
 /* ----------------------------------------------------------- the setup */
 
+/* ---- VIS-RULES (v0.6.1): the box culls' rules in RegistPacket.c
+ *
+ *   packet   (item 4) a packet whose own box gsb_ClipBox drops, in a part
+ *            that passed: drawn with the clipping program (code 36), not
+ *            dropped (the PS2 dropped it)
+ *   notes    (F12's cull line) the object's box dropped (rule 2, part -1)
+ *            and a part's box dropped (rule 3, part 0) noted on the frame
+ *            with the model's name (rd_note_cull_drop)
+ *   shadow   (item 7) an accessory (reg_DispAccessoryWithShadow) whose box
+ *            is dropped still registers its shadow volume (the PS2 drew it
+ *            only with the accessory) */
+static void visRuleChecks(void)
+{
+    /* packet */
+    s_clipOnly = packetA()->box[0];
+    s_clipOnlyRet = 0;
+    recordPrelit(&s_objA, 1);
+    s_clipOnly = NULL;
+    checkPrelitRecording(36, RD_VU_CLIP_SCISSOR);
+
+    /* notes: the part's box */
+    s_clipOnly = (const float *)s_modelA.boxes;
+    s_clipOnlyRet = 0;
+    recordPrelit(&s_objA, 1);
+    s_clipOnly = NULL;
+    const RdFrame *f = rd__last_frame();
+    Found fd;
+    walkFrame(f, &fd);
+    CHECK(fd.n == 0 && f->cullDropCount == 1 && f->cullDrops[0].rule == 3 &&
+              f->cullDrops[0].part == 0 && strcmp(f->cullDrops[0].model, "test_prelit") == 0,
+          "a part's box dropped: no draw, noted as rule 3 part 0 (%d draws, %u notes, rule %u "
+          "part %d %s)",
+          fd.n, f->cullDropCount, f->cullDropCount ? f->cullDrops[0].rule : 0,
+          f->cullDropCount ? f->cullDrops[0].part : 0,
+          f->cullDropCount ? f->cullDrops[0].model : "");
+
+    /* shadow, and the object's box noted */
+    static PObjModel shadowModel;
+    s_objA.shadow = &shadowModel;
+    s_shadowVolumes = 0;
+    s_clipRet = 0;
+    dl_Clear();
+    setCommon();
+    dl_SetDLPriority(0);
+    reg_DispAccessoryWithShadow(&s_objA, &s_objB);
+    dl_Swap();
+    s_clipRet = 1;
+    s_objA.shadow = NULL;
+    f = rd__last_frame();
+    walkFrame(f, &fd);
+    CHECK(fd.n == 0 && s_shadowVolumes == 1,
+          "an accessory outside the picture: no draw, its shadow volume registered (%d draws, "
+          "%d volumes)",
+          fd.n, s_shadowVolumes);
+    CHECK(f->cullDropCount == 1 && f->cullDrops[0].rule == 2 && f->cullDrops[0].part == -1 &&
+              strcmp(f->cullDrops[0].model, "test_prelit") == 0,
+          "the object's box dropped noted as rule 2 part -1 (%u notes)", f->cullDropCount);
+}
+
+/* ---- VIS-RULES items 2 and 3, with the disc: every model's boxes hold
+ * the vertices its strips draw.
+ *
+ * Every *.p2o member of every pack goes through PObj.c's own loader
+ * (AllocPObj, the relocation and MakeBoundingBox, its image copied into the
+ * EE word arena as the game's heap has it): for each part, each vertex a
+ * strip record names (a head with the count, then a record per vertex with
+ * its index at +4: the display strips and the shadow silhouettes alike) is
+ * one of the part's vertices and lies inside the part's box (model->boxes,
+ * the part cull's, RegistPacket.c) and the whole object's (model->box, the
+ * object cull's).  Then one model through InitPObj with a model-table
+ * offset (the one the PAL table has, shinkan_a's y 105): the object's box
+ * moves with the vertices (the PS2 left it where it was, PObj.c). */
+PObjMdl modelData[2];
+
+PObjModel *AllocPObj(void *buf, char *name, int id);
+PObjModel *InitPObj(void *buf, char *name, int id);
+void PObj_FreeImageTables(void);
+
+#define BOX_IMAGE_AT (1u << 20) /* the image's place in the arena */
+
+static int inBox(const float (*b)[4], const float *v)
+{
+    float lo[3] = {b[0][0], b[0][1], b[0][2]}, hi[3] = {b[0][0], b[0][1], b[0][2]};
+    for (int i = 1; i < 8; i++) {
+        for (int k = 0; k < 3; k++) {
+            lo[k] = b[i][k] < lo[k] ? b[i][k] : lo[k];
+            hi[k] = b[i][k] > hi[k] ? b[i][k] : hi[k];
+        }
+    }
+    return v[0] >= lo[0] && v[0] <= hi[0] && v[1] >= lo[1] && v[1] <= hi[1] && v[2] >= lo[2] &&
+           v[2] <= hi[2];
+}
+
+/* the model's parts' strips against its boxes: the vertices checked, the
+   ones outside (or past the part's list) counted into *bad */
+static long boxCheckModel(const PObjModel *m, const unsigned char *lo, const unsigned char *hi,
+                          long *bad)
+{
+    long n = 0;
+    for (int j = 0; j < m->partCount; j++) {
+        const PObjPart *pt = &m->parts[j];
+        const float (*pb)[4] = (const float (*)[4])(const void *)(m->boxes + j * 128);
+        for (unsigned int s = 0; s < pt->stripCount; s++) {
+            const unsigned char *r = ((unsigned char *const *)pt->strips)[s];
+            for (;;) {
+                short cnt;
+                if (r < lo || r + 16 > hi) {
+                    break;
+                }
+                memcpy(&cnt, r, 2);
+                if (cnt <= 0 || r + 16 + (size_t)cnt * 16 > hi) {
+                    break;
+                }
+                for (int k = 0; k < cnt; k++) {
+                    short vi;
+                    memcpy(&vi, r + 16 + k * 16 + 4, 2);
+                    n++;
+                    if (vi < 0 || (unsigned int)vi >= pt->vtxCount) {
+                        (*bad)++;
+                        continue;
+                    }
+                    const float *v = (const float *)(const void *)(pt->vtx + vi * 16);
+                    if (!inBox(pb, v) || !inBox((const float (*)[4])m->box, v)) {
+                        if (*bad < 5) {
+                            printf("  boxes: %s part %d vertex %d (%g %g %g) outside\n", m->name, j,
+                                   vi, (double)v[0], (double)v[1], (double)v[2]);
+                        }
+                        (*bad)++;
+                    }
+                }
+                r += 16 + (size_t)cnt * 16;
+            }
+        }
+    }
+    return n;
+}
+
+static void boxDiscChecks(const char *disc)
+{
+    IcoVfs *vfs = disc ? ico_vfs_mount(&ico_vfs_iso9660, disc) : NULL;
+    if (!vfs) {
+        printf("  boxes: SKIP the disc's models (no disc image)\n");
+        return;
+    }
+    IcoDfMember m;
+    ico_df_find_member(vfs, "object/none.p2o", &m); /* builds the index */
+    const int members = ico_df_index_members();
+    unsigned char *img = ico_arena_base() + BOX_IMAGE_AT;
+    const size_t room = sizeof(s_arena) - BOX_IMAGE_AT;
+    long models = 0, verts = 0, bad = 0, tooBig = 0;
+    int offsetDone = 0;
+    for (int i = 0; i < members; i++) {
+        const char *name = ico_df_member_name(i);
+        const size_t len = name ? strlen(name) : 0;
+        if (len < 4 || name[len - 4] != '.' || (name[len - 3] | 0x20) != 'p' ||
+            name[len - 2] != '2' || (name[len - 1] | 0x20) != 'o' || ico_df_member(i, &m) != 0) {
+            continue;
+        }
+        if (m.size > room) {
+            tooBig++;
+            continue;
+        }
+        if (ico_df_read_member(vfs, &m, img) != 0) {
+            CHECK(0, "boxes: %s from the disc", name);
+            continue;
+        }
+        /* the model's name as the game's names fit PObjModel's 32 bytes:
+           the file's, without its folders */
+        char nm[32];
+        const char *base = strrchr(name, '/');
+        snprintf(nm, sizeof(nm), "%s", base ? base + 1 : name);
+        const size_t heapAt = s_heapAt;
+        if (!offsetDone) {
+            /* the offset: shinkan_a's, through InitPObj; table kind 4
+               builds no packets (PObj.c MakePacket) */
+            memset(modelData, 0, sizeof(modelData));
+            modelData[1].offset[1] = 105.0f;
+            modelData[1].pktKind = 4;
+            PObjModel *pm = InitPObj(img, nm, 1);
+            long ob = 0;
+            const long on = boxCheckModel(pm, img, img + m.size, &ob);
+            CHECK(on > 0 && ob == 0,
+                  "boxes: %s with a y offset of 105: %ld of %ld vertices outside its boxes", name,
+                  ob, on);
+            PObj_FreeImageTables();
+            s_heapAt = heapAt;
+            offsetDone = 1;
+            if (ico_df_read_member(vfs, &m, img) != 0) {
+                continue;
+            }
+        }
+        PObjModel *pm = AllocPObj(img, nm, 0);
+        verts += boxCheckModel(pm, img, img + m.size, &bad);
+        models++;
+        PObj_FreeImageTables();
+        s_heapAt = heapAt;
+    }
+    ico_vfs_unmount(vfs);
+    printf("  boxes: %ld models, %ld strip vertices, %ld outside their boxes, %ld too big for "
+           "the arena\n",
+           models, verts, bad, tooBig);
+    CHECK(models > 100 && verts > 0 && bad == 0 && tooBig == 0,
+          "boxes: every strip vertex of the disc's %ld models inside its part's and its object's "
+          "box (%ld outside, %ld models not loaded)",
+          models, bad, tooBig);
+}
+
 static void setup(void)
 {
     gif_HostSetTex0Resolver(texResolve);
@@ -1995,6 +2215,7 @@ static void recordingChecks(void)
     stripTableChecks();
     stripPacketChecks();
     modelPackChecks();
+    visRuleChecks();
 }
 
 int main(int argc, char **argv)
@@ -2009,6 +2230,7 @@ int main(int argc, char **argv)
     buildModels();
     recordingChecks();
     stripDiscChecks(argc > 1 ? argv[1] : NULL);
+    boxDiscChecks(argc > 1 ? argv[1] : NULL);
     rd_shutdown();
     if (failures) {
         printf("rd_mesh_test: %d failures\n", failures);

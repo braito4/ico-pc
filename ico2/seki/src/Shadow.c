@@ -866,8 +866,9 @@ static inline float clipVolumeEdge(VECTOR *pa, VECTOR *pb, float sgn) /* derived
 
     /* PC port: the edge clip at +-gsFrame.w about the centre across (FRAME:
        the PS2's +-ScreenWidth, 512, at 4:3), so a shadow at a wide frame's
-       sides is not cut (GsBase.c; at most 2047 pixels, inside the 16-bit
-       GS window) */
+       sides is not cut (GsBase.c; at most GSB_SHADOW_CLIP_MAX, 2046 pixels,
+       so a clipped end passes volumeVertsOutOfRange below: VIS-RULES item
+       17, v0.6.1) */
     fw = gsb_HostShadowClipX();
     rate[0] = rate[1] = 1.0f;
     /* a wholly visible edge returns at once */

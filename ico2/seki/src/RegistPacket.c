@@ -193,6 +193,18 @@ static void regHostMesh(PacHeader *pk, int pass)
     }
 }
 
+/* PC port (v0.6.1, VIS-RULES): a box cull's drop, named for F12's log
+   line (rd.h rd_note_cull_drop): rule 2 the object's box (part -1), rule 3
+   a part's box, with the cameras the cull tested (item 5 when more than
+   one) */
+static void regHostCullDrop(Sub15C *o, int part, int rule)
+{
+    rd_note_cull_drop(o->model != 0 ? o->model->name : 0, part, rule, gsb_HostCullViewsUsed());
+}
+
+#define REG_CULL_DROP(o, part, rule) regHostCullDrop((o), (part), (rule))
+#else
+#define REG_CULL_DROP(o, part, rule) ((void)0)
 #endif
 
 /* the scissor switch reg_SetScissorSw sets and reg_Init clears */
@@ -400,6 +412,18 @@ static void reg_dispBoxLine(PacHeader *pk)
     gif_EndPacket();
 }
 
+/* PC port (v0.6.1, VIS-RULES item 4): a packet of a part that passed its
+   cull is never dropped on its own box.  The PS2 dropped a packet whose
+   box (Packet.c pac_makeBoundingBox, its strips' vertices) gsb_ClipBox
+   culled; the box decides nothing the part's did not already, except
+   where it is wrong (a box that does not hold its triangles drops them in
+   view) or where the float test tosses a corner on a plane.  So a box
+   that fails picks the clip code instead: 2, the program that clips every
+   triangle (code 36), so the GPU clips what the PS2 dropped, and a packet
+   wholly outside draws nothing.  A few more clipped packets a frame; the
+   box still picks 34 (-1: inside) and 32 / 36 as on the PS2. */
+#define REG_PACKET_CLIPPED 2
+
 static int reg_clipPacketBoundingBox(PacHeader *pk)
 {
     int ret = 1;
@@ -417,14 +441,20 @@ static int reg_clipPacketBoundingBox(PacHeader *pk)
         if (ret == 2) {
             ret = 1;
         }
+        if (ret == 0) {
+            ret = REG_PACKET_CLIPPED; /* PC port: clipped, not dropped (above) */
+        }
         break;
     case 2:
         ret = gsb_ClipBox(pk->box[0]);
+        if (ret == 0) {
+            ret = REG_PACKET_CLIPPED; /* PC port: clipped, not dropped (above) */
+        }
         break;
     case 3:
         ret = gsb_ClipBox(pk->box[0]);
-        if (ret == 1) {
-            ret = 2;
+        if (ret == 1 || ret == 0) {
+            ret = 2; /* PC port: 0 clipped, not dropped (above) */
         }
         break;
     default:
@@ -561,7 +591,13 @@ static char *reg_setNMatrixPacket(Sub15C *o, int idx)
     gsb_HostCullCameraLocked(0);
     box = o->model->box[0];
     _SetCurrentMatrix(matrixptr + 0x300);
+    /* VIS-RULES item 2 (v0.6.1): the object's box, the vertex extent of
+       every part (PObj.c MakeBoundingBox), a drop only past the margin
+       (GsBase.c gsbHostDropFlags); item 7: a dropped caster's light matrix
+       is still made and reg_dispNObj still registers its shadow volume
+       alone (the PS2's own rule; Shadow.c clips the volume) */
     if (gsb_ClipBox(box) == 0) {
+        REG_CULL_DROP(o, -1, 2);
         if (o->shadow != 0) {
             light_MakeLightMatrix(o, idx);
         }
@@ -743,7 +779,14 @@ static char *reg_setMMatrixPacket(Sub15C *o, int idx)
     gsb_HostCullCameraLocked((w->flags.ll & 2) != 0);
     box = o->model->box[0];
     _SetCurrentMatrix(matrixptr + 0x300);
+    /* VIS-RULES items 2 and 6 (v0.6.1): the object's box at the node's
+       matrix (it holds every part's vertices, so the node's own), a drop
+       only past the margin; a node locked to the camera is tested with the
+       tick's camera alone (it moves with it); item 7: a dropped caster's
+       light matrix is still made and its shadow still registered by the
+       caller (reg_dispMObj) */
     if (gsb_ClipBox(box) == 0) {
+        REG_CULL_DROP(o, idx, 2);
         if (o->shadow != 0) {
             light_MakeLightMatrix(o, idx);
         }
@@ -1104,7 +1147,11 @@ static void reg_dispNObj(Sub15C *o)
         for (j = 0; j < mdl->partCount; j++, grp++) {
             box = (float *)(j * 128 + (ICO_WORD)o->model->boxes);
             _SetCurrentMatrix(matrixptr + 0x300);
-            if (gsb_ClipBox(box) != 0) {
+            /* VIS-RULES item 3 (v0.6.1): the part's box, its vertex extent
+               (PObj.c MakeBoundingBox), a drop only past the margin */
+            if (gsb_ClipBox(box) == 0) {
+                REG_CULL_DROP(o, j, 3);
+            } else {
                 pkt = grp->packets;
 #ifdef ICO_RD
                 regKeyPart(o, grp, j); /* R7d: the draws' keys */
@@ -1841,7 +1888,19 @@ static char *reg_setNMatrixPacketNoLightCalc(Sub15C *o, Sub15C *src, int idx)
     gsb_HostCullCameraLocked(0);
     box = o->model->box[0];
     _SetCurrentMatrix(matrixptr + 0x300);
+    /* VIS-RULES item 2 (v0.6.1): as reg_setNMatrixPacket's */
     if (gsb_ClipBox(box) == 0) {
+        REG_CULL_DROP(o, -1, 2);
+        /* PC port (VIS-RULES item 7): the accessory's shadow is still
+           drawn (reg_DispAccessoryWithShadow), from the light its owner
+           lends it, as the drawn path below copies it */
+        if (mode != 0 && mode != 3) {
+            o->model->shadowLength = src->model->shadowLength;
+            _CopyVector(ICO_RAWP(char *, o, 0x860, (char *)o->shadowDir),
+                        ICO_RAWP(char *, src, 0x860, (char *)src->shadowDir));
+            _CopyMatrix((char *)o->lightMtx, (char *)src->lightMtx);
+            _CopyMatrix((char *)o->lightMtx + 64, (char *)src->lightMtx + 64);
+        }
         return 0;
     }
     pkt = PacketBufferStruct.ptr.c;
@@ -1905,7 +1964,11 @@ void reg_DispAccessoryWithShadow(Sub15C *o, Sub15C *src)
         for (j = 0; j < mdl->partCount; j++, grp++) {
             box = (float *)(j * 128 + (ICO_WORD)o->model->boxes);
             _SetCurrentMatrix(matrixptr + 0x300);
-            if (gsb_ClipBox(box) != 0) {
+            /* VIS-RULES item 3 (v0.6.1): the part's box, its vertex extent
+               (PObj.c MakeBoundingBox), a drop only past the margin */
+            if (gsb_ClipBox(box) == 0) {
+                REG_CULL_DROP(o, j, 3);
+            } else {
                 pkt = grp->packets;
 #ifdef ICO_RD
                 regKeyPart(o, grp, j); /* R7d: the draws' keys */
@@ -1957,6 +2020,18 @@ void reg_DispAccessoryWithShadow(Sub15C *o, Sub15C *src)
         if (o->shadow != 0) {
             shadow_RenderVolume(o);
         }
+    } else if (o->shadow != 0) {
+        /* PC port (v0.6.1, VIS-RULES item 7): the PS2 drew an accessory's
+           shadow only with the accessory, so the shadow it casts into the
+           picture vanished while the accessory itself was outside it (the
+           caster just past the picture's edge, its shadow on the floor in
+           view).  Every other caster's volume is registered whether or not
+           its object is culled (reg_dispNObj, reg_dispMObj, reg_dispSObj,
+           reg_dispCObj); the accessory's now is too, with the light
+           reg_setNMatrixPacketNoLightCalc copied from its owner.
+           clipVolumeEdge (Shadow.c) drops the edges wholly off the screen,
+           so a shadow out of view draws nothing. */
+        shadow_RenderVolume(o);
     }
 }
 
@@ -2160,7 +2235,12 @@ void reg_DispMultiPri(Sub15C *o, int pri)
         }
         pk = reg_setMMatrixPacket(o, i);
         if (pk == 0) {
-            return;
+            /* PC port (v0.6.1, VIS-RULES item 20): the next node.  The PS2
+               returned here, so every node after a culled one went
+               undrawn, in view or not (enemyParts.c's priority 10 pass);
+               each node has its own cull (reg_setMMatrixPacket), as
+               reg_dispMObj walks them */
+            continue;
         }
         prilist = 1 << pri;
         for (j = 0; j < 13; j++) {
@@ -2263,6 +2343,9 @@ extern int ico_title_logo_skip(const char *model);
    stretch only draws more of it. */
 extern int ico_title_fullframe_model(const char *model);
 
+/* VIS-RULES item 1 (v0.6.1), kept: an object reaches here only while it is
+   active and its scripts show it (scpDispOff*, model->disp): authored, the
+   original's picture at every aspect */
 void reg_DispObj(Sub15C *o)
 {
 #ifdef ICO_RD

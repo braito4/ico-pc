@@ -1618,14 +1618,17 @@ void gsb_SetVSMatrix(int w, int h, float d)
    The gameplay matrices +0x80 and +0xC0 (IsPointIsInScreen and the screen
    tests) never change.  puddle.c and pool.c call gsb_SetVSMatrix for their
    reflection views too, so the reflections' cull is as wide and carries
-   the same margin: it only ever adds objects to a reflection.  A part the
+   the same margin: it only ever adds objects to a reflection (VIS-RULES
+   item 8, v0.6.1: kept).  A part the
    frustum holds whole but that crosses the 4:3 screen's edge is drawn by
    the VU program for parts inside (code 34) instead of the one with the
    per-triangle region test (code 32); its vertices are well inside the
    GS's 0..4094 window, which is all that test drops.  With the Original
    framerate the matrices are left exactly as computed (at 4:3 the
-   PS2's). */
-#define GSB_CULL_MARGIN 0.12f
+   PS2's).  The number is RD_CULL_MARGIN (rd_camera_blend.h), which the
+   presenter's test of a draw of the tick before alone shares (rd_interp.c
+   prevAlone). */
+#define GSB_CULL_MARGIN RD_CULL_MARGIN
 
 static void gsbHostCullMargin(float *projHalf)
 {
@@ -1840,6 +1843,7 @@ static struct {
     unsigned int gen; /* the gsbCullGen they were built under; 0 never */
     float cur[16];    /* the +0x280 they were built for */
     int views;        /* 1: this tick's camera only; 2: and R_prev; 3: and R_mid */
+    int keepAll;      /* 1: the step is past half the limits: nothing culled */
     double r[2][16];  /* R_prev, R_mid */
     double c[2][16];  /* C_prev, C_mid (the water dots test world points) */
     /* per camera (this tick's, the tick before's, the half-way one), the
@@ -1905,8 +1909,27 @@ static void gsbHostLoad16(const float *f, double *d)
     }
 }
 
-/* The cameras a box is culled against now (1, 2 or 3), gsbCullR built
-   for the +0x280 in force when it was not yet */
+/* PC port (v0.6.1, VIS-RULES item 5): the span the three cameras are
+   trusted over.  The three cameras and the eye's sweep hold the in-between
+   pictures of a step up to the presenter's limits only as far as the
+   tests sample them (gsb_cull_test "moving": t 0.25, 0.5, 0.75); past half
+   the limits an in-between camera is more than a quarter of the turn from
+   both of its neighbours, and the corners of a wide picture swing by the
+   turn times the frame's half-width.  So for a step of more than
+   RD_INTERP_CAMERA_TURN / 2 degrees or RD_INTERP_CAMERA_MOVE / 2 units that
+   the presenter still blends over (not a cut, rdcb_camera_jump), nothing is
+   culled for the tick: gsbHostCullViews returns 0, and gsb_ClipBox keeps
+   every box (1, or 2 when a corner is closer than the near plane under one
+   of the cameras), so no picture of the step can miss a part.  The cost is
+   one tick's registration of the stage's parts, the ones beside the
+   picture included; such steps are single ticks of a fast swing (a turn of
+   15 degrees in a 30 Hz tick is 450 degrees a second). */
+#define GSB_SPAN_TURN (RD_INTERP_CAMERA_TURN * 0.5f)
+#define GSB_SPAN_MOVE (RD_INTERP_CAMERA_MOVE * 0.5f)
+
+/* The cameras a box is culled against now (1, 2 or 3; 0: none, every box
+   kept, gsbCullR.views the cameras built for the near test), gsbCullR
+   built for the +0x280 in force when it was not yet */
 static int gsbHostCullViews(void)
 {
     const float *cur = (const float *)(matrixptr + 0x280);
@@ -1919,11 +1942,12 @@ static int gsbHostCullViews(void)
         return 1; /* a cut since the flip: the pictures snap to this tick */
     }
     if (gsbCullR.gen == gsbCullGen && memcmp(gsbCullR.cur, cur, sizeof(gsbCullR.cur)) == 0) {
-        return gsbCullR.views;
+        return gsbCullR.keepAll ? 0 : gsbCullR.views;
     }
     gsbCullR.gen = gsbCullGen;
     memcpy(gsbCullR.cur, cur, sizeof(gsbCullR.cur));
     gsbCullR.views = 1;
+    gsbCullR.keepAll = 0;
     if (memcmp(gsbCullPrev.c, cur, sizeof(gsbCullPrev.c)) == 0) {
         return 1; /* the camera stands still */
     }
@@ -1979,15 +2003,46 @@ static int gsbHostCullViews(void)
                 }
             }
             gsbCullR.views = 3;
+            /* past half the limits: nothing culled (above) */
+            gsbCullR.keepAll =
+                rdcb_camera_beyond(gsbCullPrev.v, gsbCullBuilt.v, GSB_SPAN_TURN, GSB_SPAN_MOVE);
         }
     }
-    return gsbCullR.views;
+    return gsbCullR.keepAll ? 0 : gsbCullR.views;
 }
 
 /* gsb_clipCorner's flags for a transformed corner r against |cw| */
 static int gsbHostClipFlags(const float *r, float cw)
 {
     float w = __builtin_fabsf(cw);
+    int f = 0;
+
+    f |= (r[0] > w) << 0;
+    f |= (r[0] < -w) << 1;
+    f |= (r[1] > w) << 2;
+    f |= (r[1] < -w) << 3;
+    f |= (r[2] > w) << 4;
+    f |= (r[2] < -w) << 5;
+    return f;
+}
+
+/* PC port (v0.6.1, VIS-RULES items 2 and 3): the flags a corner must have
+   for the box to be dropped.  In exact arithmetic the eight-corner test is
+   conservative (a plane all eight corners are outside of holds the whole
+   convex box outside), but a corner on a plane is a coin toss of the
+   float rounding of the transform, and a box the toss drops is a hole in
+   the picture.  So a drop needs every corner outside by a relative margin:
+   |c| > |w| (1 + 1/1024) + 1, the rounding of a product of the matrices'
+   magnitudes many times over; the "inside" flags (gsbHostClipFlags, which
+   pick the VU program) stay exact, so a box this keeps is drawn by the
+   program that clips (32 or 36).  At 4:3 it only keeps boxes within the
+   margin of a plane, which the PS2 dropped or kept by the same toss. */
+#define GSB_DROP_REL (1.0f / 1024.0f)
+#define GSB_DROP_ABS 1.0f
+
+static int gsbHostDropFlags(const float *r, float cw)
+{
+    const float w = __builtin_fabsf(cw) * (1.0f + GSB_DROP_REL) + GSB_DROP_ABS;
     int f = 0;
 
     f |= (r[0] > w) << 0;
@@ -2013,8 +2068,9 @@ static void gsbHostApply(float *o, const double *m, const float *r)
    eight corners (at both ends of its sweep) are outside, -1 when no camera
    clips any of them, else 2 when one is closer than the near plane under
    any camera (the presenter's cameras lie between them, so one of the
-   pictures can cross it), 1 when none is */
-static int gsbHostClipBoxViews(const float *p, int views)
+   pictures can cross it), 1 when none is.  With keep (gsbHostCullViews 0)
+   never 0. */
+static int gsbHostClipBoxViews(const float *p, int views, int keep)
 {
     int all[3] = {0x3F, 0x3F, 0x3F};
     int any[3] = {0, 0, 0};
@@ -2047,7 +2103,7 @@ static int gsbHostClipBoxViews(const float *p, int views)
                 s[2] = o[2] + a[2];
                 s[3] = o[3] + a[3];
                 f = gsbHostClipFlags(s, s[3]);
-                all[v] &= f;
+                all[v] &= gsbHostDropFlags(s, s[3]);
                 any[v] |= f;
                 nearCorner |= gsbHostClipFlags(s, 0.99f) & 0x20;
             }
@@ -2057,7 +2113,7 @@ static int gsbHostClipBoxViews(const float *p, int views)
         culled &= (all[v] & 0x2F) != 0;
         inside &= (any[v] & 0x2F) == 0;
     }
-    if (culled) {
+    if (culled && !keep) {
         return 0;
     }
     if (inside) {
@@ -2089,6 +2145,8 @@ static int gsbHostPointIn(const double *c, const float *pos)
     return r[3] > 0.0 && fabs(r[0]) <= r[3] && fabs(r[1]) <= r[3];
 }
 
+/* VIS-RULES item 8 (v0.6.1), kept: the window is the frame's plus a
+   margin and every earlier camera of the blended pictures */
 int gsb_HostDotVisible(const int *ip, const float *pos)
 {
     const int hx = (int)(((float)(gsFrame.w / 2) + GSB_DOT_MARGIN) * 16.0f); /* FRAME */
@@ -2106,6 +2164,9 @@ int gsb_HostDotVisible(const int *ip, const float *pos)
         return 0;
     }
     views = gsbHostCullViews();
+    if (views == 0) {
+        return 1; /* past half the limits: nothing culled (gsbHostCullViews) */
+    }
     for (v = 1; v < views; v++) {
         if (gsbHostPointIn(gsbCullR.c[v - 1], pos)) {
             return 1;
@@ -2128,6 +2189,8 @@ int gsb_HostDotVisible(const int *ip, const float *pos)
    keeps the rest off the picture).  With the Original framerate it is
    gsFrame.w / 2 exactly (256.0f at 4:3).  The widest frame reaches 2048
    +- 1433.6 with the margin, inside the GS's 0..4095. */
+/* VIS-RULES item 8 (v0.6.1), kept: the frame's half-width with the cull's
+   margin while pictures blend */
 float gsb_HostLineHalfWidth(void)
 {
     float hw = (float)gsFrame.w * 0.5f;
@@ -2139,15 +2202,24 @@ float gsb_HostLineHalfWidth(void)
 }
 
 /* PC port: Shadow.c's edge clip: +-ScreenWidth (512) about the centre on
-   the PS2, +-gsFrame.w on the native frame (FRAME; 512 at 4:3), at most
-   2047 pixels so a clipped end stays inside the 16-bit GS window (2048 +-
-   2047): from 48:9 (2048) up the edge clip is 2047, past the picture's
-   side (1024 .. 1280 pixels out), so no shadow in the picture is cut */
+   the PS2, +-gsFrame.w on the native frame (FRAME; 512 at 4:3), so the
+   clip lies a half-width past the picture's side at every width.  At most
+   GSB_SHADOW_CLIP_MAX pixels (v0.6.1, VIS-RULES item 17): a clipped end
+   must pass emitVolumeStrip's range test (volumeVertsOutOfRange: x in
+   0x11 .. 0xFFEF sixteenths, GS 1.0625 .. 4094.9375), or the strip it
+   belongs to is dropped whole, the part of its shadow inside the picture
+   with it.  The old cap, 2047, put a clipped end on GS x 1 or 4095 (16 or
+   65520 sixteenths, both outside that range), so from 48:9 (2048) up every
+   strip with an end clipped at the side vanished: shadows of casters near
+   the side of the picture disappeared before leaving it.  2046 puts a
+   clipped end on GS x 2 or 4094 (32, 65504), inside the range with a pixel
+   for the clip's rounding, and still 766 .. 1022 pixels past the picture's
+   side (1024 .. 1280 out).  GSB_SHADOW_CLIP_MAX is in GsBase.h. */
 float gsb_HostShadowClipX(void)
 {
     float x = (float)gsFrame.w; /* FRAME */
 
-    return x > 2047.0f ? 2047.0f : x;
+    return x > GSB_SHADOW_CLIP_MAX ? GSB_SHADOW_CLIP_MAX : x;
 }
 
 /* Clip a box against the current matrix: transform its eight corners with the
@@ -2161,13 +2233,17 @@ float gsb_HostShadowClipX(void)
  * (cw is the transformed w, or the constant 0.99 of the second pass):
  * +x, -x, +y, -y, +z, -z in bits 0-5.  Only those bits are tested, so the
  * older judgments VU0 keeps above them are left out. */
-static int gsb_clipCorner(const float *v, int useConst) /* derived name */
+static int gsb_clipCorner(const float *v, int useConst, int *drop) /* derived name */
 {
     float r[4];
     float w;
     int f = 0;
 
     ico_apply_matrix_w1(r, (const float (*)[4])ico_current_matrix, v);
+    /* PC port: the flags a drop needs (gsbHostDropFlags) */
+    if (drop != 0) {
+        *drop = gsbHostDropFlags(r, r[3]);
+    }
     w = __builtin_fabsf(useConst ? 0.99f : r[3]);
     f |= (r[0] > w) << 0;
     f |= (r[0] < -w) << 1;
@@ -2187,22 +2263,29 @@ int gsb_ClipBox(float *p)
     int i;
 
     /* PC port: while pictures are blended, the cameras they are drawn
-       with (above) */
+       with (above); none when the step is past half the limits
+       (gsbHostCullViews 0: every box kept) */
     if (!gsbCullLocked) {
         int views = gsbHostCullViews();
 
         gsbCullLastViews = views;
+        if (views == 0) {
+            return gsbHostClipBoxViews(p, gsbCullR.views, 1);
+        }
         if (views > 1) {
-            return gsbHostClipBoxViews(p, views);
+            return gsbHostClipBoxViews(p, views, 0);
         }
     } else {
         gsbCullLastViews = 1;
     }
     for (i = 0; i < 8; q += 4, i++) {
         int cf;
+        int df;
 
-        cf = gsb_clipCorner(q, 0);
-        all &= cf;
+        cf = gsb_clipCorner(q, 0, &df);
+        /* PC port: a drop needs every corner past the plane by the margin
+           (gsbHostDropFlags); the PS2 anded cf */
+        all &= df;
         any |= cf;
     }
     if (all & 0x2F) {
@@ -2214,7 +2297,7 @@ int gsb_ClipBox(float *p)
     for (i = 0; i < 8; p += 4, i++) {
         int cf;
 
-        cf = gsb_clipCorner(p, 1);
+        cf = gsb_clipCorner(p, 1, 0);
         c |= cf;
     }
     return (c & 0x20) ? 2 : 1;

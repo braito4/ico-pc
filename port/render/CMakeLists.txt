@@ -359,6 +359,7 @@ target_link_libraries(rd_boot_present_test PRIVATE ico_render)
 # without one); the title logo's strips Packet.c draws in another order,
 # their geometry from the disc image when there is one.
 add_executable(rd_mesh_test test/rd_mesh_test.c
+    "${CMAKE_SOURCE_DIR}/ico2/common/src/PObj.c"
     "${CMAKE_SOURCE_DIR}/ico2/seki/src/Packet.c"
     "${CMAKE_SOURCE_DIR}/ico2/seki/src/RegistPacket.c"
     "${CMAKE_SOURCE_DIR}/ico2/seki/src/MicroCode.c"
@@ -375,7 +376,8 @@ target_compile_definitions(rd_mesh_test PRIVATE ICO_HOST=1 ICO_RD=1)
 target_compile_options(rd_mesh_test PRIVATE ${ICO_SEMANTIC_OPTIONS} ${ICO_GAME_LAYOUT_OPTIONS}
                        ${ICO_GAME_WARNINGS})
 # the strip order case reads the title logo's models from the disc image
-# (df_pack.h); without it that part is skipped
+# (df_pack.h); without it that part is skipped.  PObj.c: the boxes case loads
+# every model on the disc through the game's own loader (VIS-RULES, v0.6.1)
 target_link_libraries(rd_mesh_test PRIVATE ico_render ico_vu1_ref ico_math ico_port_data)
 
 # modelpack_test: model packs.  The same game files as

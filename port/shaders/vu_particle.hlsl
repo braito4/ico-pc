@@ -43,6 +43,7 @@ VuSprite vu_particle(uint i)
     bool alphaZero = (asuint(b.w) & 0x7F800000u) == 0u;
     o.drawn = !alphaZero && vu_inside(float4(p0, h.w), clipMin, clipMax) &&
               vu_inside(float4(p1, h.w), clipMin, clipMax);
+    // VIS-RULES item 10 (v0.6.1), kept: parity at 4:3, drawn beside it.
     // The port keeps the alpha test and the w window (the particle in
     // front of the eye and before the far limit); a sprite outside the x/y
     // window (1024..3071, prim_InitParticleByPartition) is dropped when its

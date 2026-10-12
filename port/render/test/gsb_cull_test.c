@@ -22,7 +22,10 @@
  *            points the pictures at t = 0.25, 0.5 and 0.75 show (the turn
  *            slerped and the eye lerped, as rd_interp.c camSetup, computed
  *            here on their own), many of them at the picture's edges and
- *            corners: none is culled (gsb_ClipBox 0).  The worst miss (how
+ *            corners: none is culled (gsb_ClipBox 0).  A step past half
+ *            those limits (v0.6.1, VIS-RULES item 5) culls nothing (0
+ *            cameras): every box is kept, those outside every frustum too;
+ *            within half of them three cameras cull.  The worst miss (how
  *            far inside the in-between picture the shown point of a culled
  *            box was, as a share of the half-width or half-height) is
  *            printed, 0 when there is none, with how many boxes only an
@@ -32,7 +35,7 @@
  *            plane of each of the three cull frustums are culled; -1 (no
  *            per-triangle test) only for a box every corner of which is
  *            inside all three cull frustums.
- *   corner   the case three cameras alone miss: the eye moving 300 units
+ *   corner   the case three cameras alone miss: the eye moving 149 units
  *            along the view's +x and +y together, a box in the picture's
  *            -x, +y corner (left, and down on the screen) at t = 0.25, 300
  *            units out, outside the three cameras' frustums: kept by the
@@ -40,9 +43,14 @@
  *   cut      a cut the presenter does not blend over: the eye moved 2000
  *            units and the view turned 90 degrees, or a hard cut the game
  *            signalled (ico_video_camera_cut) since the flip: one camera,
- *            every result the PS2's.  At the limits: a step of 299 units or
- *            a turn of 29 degrees three cameras, 301 units or 31 degrees
+ *            every result the PS2's.  At the limits: a step of 149 units or
+ *            a turn of 14 degrees three cameras, 151 to 299 units or 16 to
+ *            29 degrees none (every box kept), 301 units or 31 degrees
  *            one.
+ *   margin   (VIS-RULES items 2 and 3) a box every corner of which is past
+ *            a plane by less than |w| / 1024 + 1 is kept (the PS2 dropped
+ *            it), one past it by more is dropped; "every result the PS2's"
+ *            above is the PS2's test with this margin.
  *   still    the camera the same matrix bitwise as the tick before: one
  *            camera, every result the PS2's single-camera test.
  *   first    a stage's first tick (gsb_InitGSSystem) and after
@@ -64,7 +72,9 @@
  *            the same after a reflection's gsb_SetVSMatrix(230, 230) (the
  *            frame's width, not vsWidth).
  *   shadows  Shadow.c's edge clip (gsb_HostShadowClipX): W pixels, at most
- *            2047 (2560 at the widest would leave the 16-bit window).
+ *            2046 (GSB_SHADOW_CLIP_MAX, VIS-RULES item 17): a clipped end
+ *            at 2048 -+ the clip packs into Shadow.c's range test (0x11 ..
+ *            0xFFEF sixteenths); 2047 did not.
  */
 #include <math.h>
 #include <stdio.h>
@@ -676,8 +686,10 @@ static int clipBox(Box *b)
     return gsb_ClipBox(&b->v[0][0]);
 }
 
-/* the PS2's test (gsb_ClipBox's own code) on the current matrix: the
-   reference for the cases with one camera */
+/* the PS2's test (gsb_ClipBox's own code) on the current matrix, with the
+   port's drop margin (v0.6.1, VIS-RULES items 2 and 3: a box is dropped
+   only when every corner is past a plane by |w| / 1024 + 1): the reference
+   for the cases with one camera */
 static int refClip(const Box *b)
 {
     int all = 0x3F, any = 0, nearC = 0;
@@ -685,14 +697,21 @@ static int refClip(const Box *b)
         float r[4];
         ico_apply_matrix_w1(r, (const float (*)[4])ico_current_matrix, b->v[i]);
         const float w = fabsf(r[3]);
-        int f = 0;
+        const float wd = w * (1.0f + 1.0f / 1024.0f) + 1.0f;
+        int f = 0, d = 0;
         f |= (r[0] > w) << 0;
         f |= (r[0] < -w) << 1;
         f |= (r[1] > w) << 2;
         f |= (r[1] < -w) << 3;
         f |= (r[2] > w) << 4;
         f |= (r[2] < -w) << 5;
-        all &= f;
+        d |= (r[0] > wd) << 0;
+        d |= (r[0] < -wd) << 1;
+        d |= (r[1] > wd) << 2;
+        d |= (r[1] < -wd) << 3;
+        d |= (r[2] > wd) << 4;
+        d |= (r[2] < -wd) << 5;
+        all &= d;
         any |= f;
         nearC |= r[2] < -0.99f;
     }
@@ -762,6 +781,18 @@ static double stepOf(const Cam *a, const Cam *b)
     return sqrt(x * x + y * y + z * z);
 }
 
+/* the camera a tick after a, within half the limits (three cameras): the
+   view turned 10 degrees from (yaw0, pitch0), the eye 100 units on */
+static Cam smallStep(const Cam *a, double yaw0, double pitch0)
+{
+    Cam b = *a;
+    camTurn(&b, yaw0 + 10.0 * DEG, pitch0);
+    b.e[0] += 60.0;
+    b.e[1] += 20.0;
+    b.e[2] += 77.0;
+    return b;
+}
+
 /* ------------------------------------------------------------ moving */
 
 #define PAIRS 240
@@ -774,7 +805,8 @@ static void checkMoving(const char *what, int winW, int winH, int wantW)
     const int fw = gsFrame.w;
     CHECK(fw == wantW, "moving %s: the native width %d, want %d", what, fw, wantW);
     int tested = 0, missed = 0, between = 0, sweepNeeded = 0, outside = 0, outsideKept = 0;
-    int minusBad = 0, threeViews = 0;
+    int outsideSpan = 0, outsideSpanCulled = 0;
+    int minusBad = 0, threeViews = 0, keepViews = 0, oneViews = 0;
     double worst = 0.0;
 
     for (int pair = 0; pair < PAIRS; pair++) {
@@ -822,6 +854,8 @@ static void checkMoving(const char *what, int winW, int winH, int wantW)
             }
             const int res = clipBox(&bx);
             threeViews += gsb_HostCullViewsUsed() == 3;
+            keepViews += gsb_HostCullViewsUsed() == 0;
+            oneViews += gsb_HostCullViewsUsed() == 1;
             tested++;
             /* shown at the ends? needed the eye's sweep? */
             int ends = drawnDepth(&a, p) >= 0.0 || drawnDepth(&b, p) >= 0.0;
@@ -872,8 +906,15 @@ static void checkMoving(const char *what, int winW, int winH, int wantW)
                 continue;
             }
             Box bx = boxOf(centre, h);
+            const int res = clipBox(&bx);
+            if (gsb_HostCullViewsUsed() == 0) {
+                /* a step past half the limits: every box kept (item 5) */
+                outsideSpan++;
+                outsideSpanCulled += res == 0;
+                continue;
+            }
             outside++;
-            outsideKept += clipBox(&bx) != 0;
+            outsideKept += res != 0;
         }
     }
     printf("gsb_cull_test: %s (W %d): %d boxes the in-between pictures show, %d of them "
@@ -884,16 +925,23 @@ static void checkMoving(const char *what, int winW, int winH, int wantW)
           missed, worst);
     CHECK(tested > PAIRS * BOXES / 2 && between > 0,
           "moving %s: %d boxes tested, %d only in between", what, tested, between);
-    CHECK(threeViews > tested / 2, "moving %s: three cameras for %d of %d boxes", what, threeViews,
-          tested);
+    /* within half the limits three cameras, past them none (item 5) */
+    CHECK(threeViews > 0 && keepViews > 0 && threeViews + keepViews + oneViews == tested,
+          "moving %s: three cameras for %d, none (every box kept) for %d, one for %d of %d boxes",
+          what, threeViews, keepViews, oneViews, tested);
     CHECK(outside > 0 && outsideKept == 0,
           "moving %s: %d of %d boxes outside every cull frustum kept", what, outsideKept, outside);
+    CHECK(outsideSpan > 0 && outsideSpanCulled == 0,
+          "moving %s: %d of %d boxes outside every cull frustum culled on a step past half the "
+          "limits",
+          what, outsideSpanCulled, outsideSpan);
     CHECK(minusBad == 0, "moving %s: %d boxes -1 with a corner outside a cull frustum", what,
           minusBad);
 }
 
-/* the eye moving 300 units along the view's +x and +y together, a box in
-   the picture's -x, +y corner at t = 0.25, 300 units out: outside the three
+/* the eye moving 149 units (just inside half the limits, where three
+   cameras cull) along the view's +x and +y together, a box in the
+   picture's -x, +y corner at t = 0.25, 300 units out: outside the three
    cameras' frustums (the tick before's misses it above or below, the
    half-way and this tick's at the side), inside the swept ones */
 static void checkCorner(void)
@@ -903,7 +951,7 @@ static void checkCorner(void)
     camTurn(&a, 0.0, 0.0);
     a.e[0] = a.e[1] = a.e[2] = 0.0;
     b = a;
-    b.e[0] = b.e[1] = 300.0 / sqrt(2.0);
+    b.e[0] = b.e[1] = 149.0 / sqrt(2.0);
     const Cam c = camAt(&a, &b, 0.25), mid = camAt(&a, &b, 0.5);
     setCamera(&a);
     tick();
@@ -999,23 +1047,34 @@ static void checkCut(void)
         checkOneCamera("a cut (2000 units, 90 degrees)", &b);
     }
     /* the limits: RD_INTERP_CAMERA_MOVE 300 units, RD_INTERP_CAMERA_TURN 30
-       degrees */
-    CHECK(viewsAcross(299.0, 0.0) == 3, "cut: a step of 299 units culls against 3 cameras (%d)",
+       degrees (a cut past them: one camera); past half of them nothing is
+       culled (v0.6.1, VIS-RULES item 5: 0 cameras, every box kept) */
+    CHECK(viewsAcross(149.0, 0.0) == 3, "cut: a step of 149 units culls against 3 cameras (%d)",
+          gsb_HostCullViewsUsed());
+    CHECK(viewsAcross(151.0, 0.0) == 0, "cut: a step of 151 units culls nothing (%d)",
+          gsb_HostCullViewsUsed());
+    CHECK(viewsAcross(299.0, 0.0) == 0, "cut: a step of 299 units culls nothing (%d)",
           gsb_HostCullViewsUsed());
     CHECK(viewsAcross(301.0, 0.0) == 1, "cut: a step of 301 units culls against 1 camera (%d)",
           gsb_HostCullViewsUsed());
-    CHECK(viewsAcross(0.0, 29.0) == 3, "cut: a turn of 29 degrees culls against 3 cameras (%d)",
+    CHECK(viewsAcross(0.0, 14.0) == 3, "cut: a turn of 14 degrees culls against 3 cameras (%d)",
+          gsb_HostCullViewsUsed());
+    CHECK(viewsAcross(0.0, 16.0) == 0, "cut: a turn of 16 degrees culls nothing (%d)",
+          gsb_HostCullViewsUsed());
+    CHECK(viewsAcross(0.0, 29.0) == 0, "cut: a turn of 29 degrees culls nothing (%d)",
           gsb_HostCullViewsUsed());
     CHECK(viewsAcross(0.0, 31.0) == 1, "cut: a turn of 31 degrees culls against 1 camera (%d)",
           gsb_HostCullViewsUsed());
-    CHECK(viewsAcross(299.0, 29.0) == 3, "cut: both just inside the limits: 3 cameras (%d)",
+    CHECK(viewsAcross(149.0, 14.0) == 3, "cut: both inside half the limits: 3 cameras (%d)",
+          gsb_HostCullViewsUsed());
+    CHECK(viewsAcross(299.0, 29.0) == 0, "cut: both inside the limits, past half: none (%d)",
           gsb_HostCullViewsUsed());
     /* a hard cut the game signalled: one camera until the next flip */
     {
         Cam a, b;
         camTurn(&a, -0.3, 0.0);
         a.e[0] = a.e[1] = a.e[2] = 0.0;
-        b = nextCam(&a, -0.3, 0.0, 0);
+        b = smallStep(&a, -0.3, 0.0);
         setCamera(&a);
         tick();
         setCamera(&b);
@@ -1048,7 +1107,7 @@ static void checkFirst(void)
     camTurn(&a, yaw, pitch);
     /* a stage's first tick */
     gsb_InitGSSystem();
-    const Cam b = nextCam(&a, yaw, pitch, 0);
+    const Cam b = smallStep(&a, yaw, pitch);
     setCamera(&b);
     checkOneCamera("first tick", &b);
     /* the next tick has the tick before's camera */
@@ -1089,7 +1148,7 @@ static void checkLocked(void)
     setOptions(ICO_FRAMERATE_UNCAPPED, 640, 480);
     Cam a = randomCam();
     camTurn(&a, -0.7, 0.05);
-    const Cam b = nextCam(&a, -0.7, 0.05, 0);
+    const Cam b = smallStep(&a, -0.7, 0.05);
     setCamera(&a);
     tick();
     setCamera(&b);
@@ -1218,6 +1277,73 @@ static void checkShadows(const char *what, int winW, int winH, float want)
     const float x = gsb_HostShadowClipX();
     CHECK(fabsf(x - want) <= 1e-3f * want && 2048.0f + x < 4096.0f,
           "shadows %s: edge clip %g, want %g", what, (double)x, (double)want);
+    /* a clipped end, as emitVolumeStrip packs it (ftoi4), passes its range
+       test (volumeVertsOutOfRange: 0x11 .. 0xFFEF) */
+    const int lo = (int)((2048.0f - x) * 16.0f), hi = (int)((2048.0f + x) * 16.0f);
+    CHECK(lo >= 0x11 && hi <= 0xFFEF, "shadows %s: clipped ends at %d and %d sixteenths", what, lo,
+          hi);
+}
+
+/* ------------------------------------------------------------- margin */
+
+/* VIS-RULES items 2 and 3: gsb_ClipBox drops a box only when every corner
+   is past a plane by the margin.  The current matrix the identity (a
+   corner's clip coordinates are its own, w 1), one camera (locked) */
+static void checkMargin(void)
+{
+    setOptions(ICO_FRAMERATE_ORIGINAL, 640, 480);
+
+    static const struct {
+        float x0, x1;
+        int dropped;
+    } cases[] = {
+        {1.0005f, 1.5f, 0}, /* past x = w by less than the margin: kept */
+        {1.5f, 2.0f, 0},    /* every corner within w (1 + 1/1024) + 1 */
+        {2.01f, 3.0f, 1},   /* past it: dropped */
+        {-1.5f, -1.0005f, 0}, {-3.0f, -2.01f, 1},
+    };
+
+    for (size_t k = 0; k < sizeof(cases) / sizeof(cases[0]); k++) {
+        Box b;
+        for (int i = 0; i < 8; i++) {
+            b.v[i][0] = (i & 1) ? cases[k].x1 : cases[k].x0;
+            b.v[i][1] = (i & 2) ? 0.5f : -0.5f;
+            b.v[i][2] = (i & 4) ? 0.5f : -0.5f;
+            b.v[i][3] = 1.0f;
+        }
+        memset(ico_current_matrix, 0, sizeof(ico_current_matrix));
+        for (int i = 0; i < 4; i++) {
+            ico_current_matrix[i][i] = 1.0f;
+        }
+        gsb_HostCullCameraLocked(1);
+        const int res = gsb_ClipBox(&b.v[0][0]);
+        gsb_HostCullCameraLocked(0);
+        CHECK((res == 0) == cases[k].dropped && (cases[k].dropped || res == 1),
+              "margin: x %g .. %g: %d, want %s", (double)cases[k].x0, (double)cases[k].x1, res,
+              cases[k].dropped ? "0 (dropped)" : "1 (kept, clipped)");
+    }
+}
+
+/* VIS-RULES item 5: a step past half the limits, a box behind the eye of
+   every camera: kept, 2 (a corner closer than the near plane) */
+static void checkSpanNear(void)
+{
+    setOptions(ICO_FRAMERATE_UNCAPPED, 640, 480);
+    Cam a, b;
+    camTurn(&a, 0.0, 0.0);
+    a.e[0] = a.e[1] = a.e[2] = 0.0;
+    b = a;
+    camTurn(&b, 20.0 * DEG, 0.0);
+    setCamera(&a);
+    tick();
+    setCamera(&b);
+    const double behind[3] = {0.0, 0.0, -400.0};
+    Box bx = boxOf(behind, 5.0);
+    const int res = clipBox(&bx);
+    CHECK(gsb_HostCullViewsUsed() == 0 && res == 2,
+          "span: a box behind the eye on a 20 degree step is kept with the clipping program "
+          "(%d, %d cameras)",
+          res, gsb_HostCullViewsUsed());
 }
 
 /* ---------------------------------------------------------------- main */
@@ -1268,8 +1394,10 @@ int main(void)
     checkLines("32:9 Original", ICO_FRAMERATE_ORIGINAL, 3200, 900, 688.0f);
     checkShadows("4:3", 640, 480, 512.0f);
     checkShadows("32:9", 3200, 900, 1376.0f);
-    checkShadows("48:9", 4800, 900, 2047.0f);
-    checkShadows("the widest", 8000, 900, 2047.0f);
+    checkShadows("48:9", 4800, 900, 2046.0f);
+    checkShadows("the widest", 8000, 900, 2046.0f);
+    checkMargin();
+    checkSpanNear();
 
     rd_shutdown();
     if (failures) {

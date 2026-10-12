@@ -193,6 +193,8 @@ static void _setParticleEffect(PEPartRec *out, PEPackage *pkg, char *m, float k)
    (more than 2048 pixels off the centre) as its last update left it,
    frozen.  The particles of an effect drawn near the window's edge are
    cut by the VU program's own window, as on the PS2. */
+/* VIS-RULES item 10 (v0.6.1), kept: the PS2's gate on the GS window,
+   parity (an effect is drawn exactly when it is updated) */
 static inline int particleEffectOffScreen(PEGeo *geo) /* derived name */
 {
     float v[4];

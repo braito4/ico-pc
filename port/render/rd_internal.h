@@ -252,6 +252,13 @@ typedef struct RdCmdList {
  * next is recorded (rd_interp.c). */
 #define RD_FRAME_RING 3
 
+/* one of the game's box cull drops (rd_note_cull_drop) */
+typedef struct RdCullDrop {
+    char model[32];
+    int16_t part;
+    uint8_t rule, views;
+} RdCullDrop;
+
 typedef struct RdFrame {
     RdCmdList lists[RD_LIST_COUNT];
     uint8_t *payload;
@@ -292,6 +299,10 @@ typedef struct RdFrame {
     /* not dumped: RDC_OVERLAY_TEXT items recorded so far (the
      * post passes record their ops only after one) */
     uint32_t textItems;
+    /* not dumped: the game's box cull's drops this tick (rd_note_cull_drop),
+     * the first RD_CULL_DROPS_MAX of cullDropCount */
+    uint32_t cullDropCount;
+    RdCullDrop cullDrops[RD_CULL_DROPS_MAX];
 } RdFrame;
 
 void rd__frame_reset(RdFrame *f);

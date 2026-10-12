@@ -65,8 +65,9 @@
  * with t, or switch at t = 0.5 (unmatchedPass); prev's are inserted into
  * the output.  So do the RDC_OVERLAY_TEXT items (their alpha), as the quads
  * they stand for.  A VU draw of prev only is drawn for the interval through
- * the blended camera when the camera left it behind: its object and part
- * not drawn in cur's list and its bounds outside cur's picture (prevAlone).
+ * the blended camera when the camera may have left it behind: its object
+ * and part not drawn in cur's list and its bounds not wholly inside cur's
+ * cull frustum (prevAlone).
  * Matrices blend element by element, except a normal program's model
  * matrices and a skinned draw's bones, which blend as a slerped rotation
  * and a lerped stretch about a pivot (rotateModel, rotateBone): element by
@@ -1054,7 +1055,8 @@ static ReprojCam s_rp;
 static bool s_rpAnyX;
 
 /* The camera's picture in 12.4 GS X: 1792 .. 2304 (GifPacket.c
- * GIF_PICTURE_X0, X1) */
+ * GIF_PICTURE_X0, X1).  VIS-RULES item 16 (v0.6.1), kept: a primitive is
+ * re-projected all or none, the tick's own picture otherwise (parity) */
 #define RP_PICTURE_X0 28672
 #define RP_PICTURE_X1 36864
 
@@ -3842,12 +3844,14 @@ static uint32_t umPlace(const RdFrame *prev, uint32_t k, int32_t lastOut)
  *   no draw of cur in its list has its object and part (the key without
  *   its last byte, RD_KEY's ordinal: n * 4 + pass at RegistPacket.c), so it
  *   is never drawn beside its own object;
- *   a sphere holding it is wholly outside cur's picture (outsideCur): the
- *   model to world matrix (S^-1 M: qw 4..7 inverted times qw 16..19; a
- *   skinned draw's bones) applied to the farthest of its vertices from the
- *   model's origin (the mesh's stream, a grid's or the particles' copied
- *   stream, a particle's size added), tested against the planes of cur's
- *   world to GS screen (Pc Vc) at the picture's edges.
+ *   a sphere holding it is not wholly inside cur's cull frustum
+ *   (mayBeCulledAtCur): the model to world matrix (S^-1 M: qw 4..7
+ *   inverted times qw 16..19; a skinned draw's bones) applied to the
+ *   farthest of its vertices from the model's origin (the mesh's stream, a
+ *   grid's or the particles' copied stream, a particle's size added),
+ *   tested against the planes of cur's world to GS screen (Pc Vc) at the
+ *   cull's edges (the picture's times 1 + RD_CULL_MARGIN) and cur's near
+ *   plane.
  *
  * It goes in with unmatchedPass's insertion (umPlace, prev's state through
  * stateDiff), with prev's mesh stream (morphDraw); one that cannot be
@@ -3965,16 +3969,29 @@ static bool prevSphere(const RdFrame *prev, const RdCmd *pc, const uint8_t *p, d
     return isfinite(c[0]) && isfinite(c[1]) && isfinite(c[2]) && isfinite(*r);
 }
 
-/* whether the sphere is wholly outside cur's picture: beyond one of the
- * planes of S = Pc Vc (world to GS screen) through the picture's edges,
- * GS 2048 (GsBase.c's centre) +- the half width (gsW / 2: the native
- * frame's) and +- gsH / 2, or behind the eye (w <= 0) */
-static bool outsideCur(const double c[3], double r)
+/* whether the sphere can have been dropped by the game's cull at cur
+ * (v0.6.1, VIS-RULES item 15): it is not wholly inside cur's cull frustum,
+ * the planes of S = Pc Vc (world to GS screen) through GS 2048 (GsBase.c's
+ * centre) +- (1 + RD_CULL_MARGIN) times the half width (gsW / 2: the native
+ * frame's) and the half height (gsH / 2), and the near plane (w = cur's
+ * nearZ).  The game culls against that frustum while pictures are blended
+ * (GsBase.c gsbHostCullMargin, the same RD_CULL_MARGIN; the blend span's
+ * cameras only keep more), so a part wholly inside it that cur does not
+ * draw went for another reason (hidden, replaced) and is not drawn; any
+ * other may have been culled, the blended camera may still show it, and
+ * it is drawn for the interval.  Before v0.6.1 the test was "wholly
+ * outside the picture" without the margin: a culled part whose sphere (it
+ * holds the box loosely) still reached into the picture vanished at the
+ * interval's start while the blended camera showed it, at the edges of the
+ * picture while the camera turned. */
+static bool mayBeCulledAtCur(const double c[3], double r)
 {
     double sc[16];
     mul4d(s_cam.pc, s_cam.vc, sc);
-    const double hw = 0.5 * (double)(s_out.gsW ? s_out.gsW : 512u);
-    const double hh = 0.5 * (double)(s_out.gsH ? s_out.gsH : 448u);
+    const double m = 1.0 + (double)RD_CULL_MARGIN;
+    const double hw = 0.5 * (double)(s_out.gsW ? s_out.gsW : 512u) * m;
+    const double hh = 0.5 * (double)(s_out.gsH ? s_out.gsH : 448u) * m;
+    const double nz = s_out.camera.nearZ > 0.0f ? (double)s_out.camera.nearZ : 0.0;
     double pl[5][4];
     for (int k = 0; k < 4; k++) {
         const double x = sc[k * 4], y = sc[k * 4 + 1], w = sc[k * 4 + 3];
@@ -3984,10 +4001,11 @@ static bool outsideCur(const double c[3], double r)
         pl[3][k] = (2048.0 + hh) * w - y;
         pl[4][k] = w;
     }
+    pl[4][3] -= nz;
     for (int i = 0; i < 5; i++) {
         const double n = sqrt(pl[i][0] * pl[i][0] + pl[i][1] * pl[i][1] + pl[i][2] * pl[i][2]);
         const double d = pl[i][0] * c[0] + pl[i][1] * c[1] + pl[i][2] * c[2] + pl[i][3];
-        if (n > 0.0 && d < -r * n) {
+        if (!(n > 0.0) || d < r * n) {
             return true;
         }
     }
@@ -4029,7 +4047,7 @@ static bool prevAlone(const RdFrame *prev, uint32_t k)
     memcpy(m, p + sizeof(RdVuPayload), sizeof(m));
     double c[3], r = 0.0;
     return camOfUncached((const float (*)[4])m, s_cam.vp, s_cam.pp) != CAM_NONE &&
-           prevSphere(prev, pc, p, c, &r) && outsideCur(c, r) && !partInCur(nd->list, pc);
+           prevSphere(prev, pc, p, c, &r) && mayBeCulledAtCur(c, r) && !partInCur(nd->list, pc);
 }
 
 /* prev's VU block m (its copy in s_out) through the blended camera */
