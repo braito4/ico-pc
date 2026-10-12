@@ -236,8 +236,8 @@ start the game), builds exactly the named targets at `-j4` under `flock` on
 - **Shaders.** Each of the HLSL shader steps lists the headers it includes
   from the compiler itself (`dxc -MD`/`-MF` depfile), so editing one header
   rebuilds only the shaders that include it.
-- **Packages.** `tools/package_win.sh` builds `ico_pc rhi_d3d12_test
-  rd_replay_tool mc_import`, `tools/package_linux.sh` `ico_pc mc_import`; the
+- **Packages.** `tools/package_win.sh` and `tools/package_linux.sh` build
+  `ico_pc mc_import`; the
   Android package goes through Gradle, which builds `ico_pc` and nothing else.
 
 ## Compilers
@@ -762,7 +762,8 @@ Run the same steps locally before pushing.
 `tools/package_win.sh <label>` and `tools/package_linux.sh <label>` build
 the packages for HEAD in a clean worktree (`dist/ico-pc-<label>-win.zip`,
 `dist/ico-pc-<label>-linux.tar.gz`). Neither contains game data; both carry
-the README, the player guides, the licence files and the save importer, and
+the README, the player guides, the licence files and the save importer
+(`x64/tools/mc_import.exe` with its `SDL3.dll` and a short `README.txt`), and
 a make-portable script (`x64/make_portable.cmd` in the zip, `make_portable.sh`
 in the tar; the sources are `tools/portable/`). Each script also writes a
 second archive from the same stage, the portable download:
@@ -773,6 +774,17 @@ program at the first start), the README has a paragraph saying so, and it
 has no make-portable script. Both scripts check each archive's entries
 afterwards, and `tools/test/package_textures_test.sh` (ctest `package_textures`)
 covers the helpers.
+The archives hold no developer files: no link map, `rhi_d3d12_test`,
+`rd_replay_tool` or `compare_backends` (a bundle of programs of that kind
+made browsers and Windows flag the download; the scripts assert their
+absence). The link map stays in `dist/stage` (`ico_pc_x64.map`,
+`ico_pc.map`) to symbolize a crash address from a player's log, and
+`tools/package_win.sh` builds only `ico_pc` and `mc_import`. The Windows
+program carries version information (company, product, file version
+`x.y.z.0`), from `-DICO_VERSION_LABEL=<label>` which `package_win.sh` passes
+(`port/platform/win/ico_pc.rc`; a build without the label says 0.0.0.0).
+It has no icon and no signature. `ico_pc.manifest` has no `dpiAwareness`:
+SDL3 sets the process's DPI awareness itself when the window system starts.
 `tools/package_linux.sh` packages for the host's architecture: on an arm64
 host it builds `linux-arm64` into `dist/ico-pc-<label>-linux-arm64.tar.gz`
 (stage `dist/stage/linux-arm64/`, log `build-host/pkg-linux-arm64-<label>.log`)
@@ -847,6 +859,15 @@ a release build into a function name, run
 `llvm-symbolizer --obj=dist/stage/android/libmain.so <offset>` (from the NDK's
 `toolchains/llvm/prebuilt/linux-x86_64/bin/`) with the stage folder of the same
 build.
+
+Before publishing, scan each desktop archive on [VirusTotal](https://www.virustotal.com/)
+and read the result. The game is unsigned, so a few engines may flag it
+anyway; for a flag from Microsoft Defender or Chrome's Safe Browsing, send
+the file to the false-positive forms: Microsoft
+(https://www.microsoft.com/en-us/wdsi/filesubmission) and Google
+(https://safebrowsing.google.com/safebrowsing/report_error/). Put the
+VirusTotal links in the release notes if you like (the FAQ tells players
+they can check there).
 
 A release uploads the three packages, each desktop one with its portable
 twin (the arm64 pair comes from CI, above):

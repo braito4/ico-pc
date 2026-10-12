@@ -124,6 +124,8 @@ chmod 755 "$stage/ico_pc"
 mkdir -p "$stage/tools"
 cp "$b/port/save/mc_import" "$stage/tools/mc_import"
 chmod 755 "$stage/tools/mc_import"
+# the link map stays in the stage folder (it symbolizes a crash address from a
+# player's log) and is not archived
 [[ -f "$b/ico_pc.map" ]] && cp "$b/ico_pc.map" "$stage/ico_pc.map"
 sdl="$root/tools/toolchain/deps/sdl3/linux-$arch/lib"
 cp -L "$sdl/libSDL3.so.0" "$stage/libSDL3.so.0"
@@ -168,9 +170,6 @@ for variant in normal portable; do
         cp -a "$stage/$f" "$top/$f" || fail "stage: no $f"
     done
     cp -a "$stage/docs" "$top/docs"
-    if [[ -f "$stage/ico_pc.map" ]]; then
-        cp -a "$stage/ico_pc.map" "$top/ico_pc.map"
-    fi
     if [[ "$variant" == portable ]]; then
         pkg_write_ini "$top/ico-pc.ini" linux "$iso" portable
         pkg_portable_readme_note "$top/README.md"
@@ -184,6 +183,7 @@ for variant in normal portable; do
     for r in "${pkg_note_rels[@]}"; do
         pkg_assert_tar_has "$out" "ico-pc-$label/$r/README.txt" || fail "the $variant archive lacks $r/README.txt"
     done
+    pkg_assert_tar_lacks "$out" "ico-pc-$label/ico_pc.map" || fail "the $variant archive has ico_pc.map"
     if [[ "$variant" == portable ]]; then
         pkg_assert_tar_lacks "$out" "ico-pc-$label/make_portable.sh" || fail "the portable archive has make_portable.sh"
         pkg_assert_tar_line "$out" "ico-pc-$label/ico-pc.ini" '^portable=1$' || fail "the portable archive's ico-pc.ini lacks portable=1"

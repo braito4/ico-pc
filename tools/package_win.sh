@@ -43,13 +43,11 @@ fi
 
 export PATH="$wt/.venv/bin:$PATH"
 cd "$wt"
-run cmake --preset "$p" -DICO_LINK_EXE=ON
-run cmake --build "build-host/$p" --target ico_pc rhi_d3d12_test rd_replay_tool mc_import
-for f in ico_pc.exe ico_pc.map SDL3.dll port/rhi/rhi_d3d12_test.exe port/render/rd_replay_tool.exe port/save/mc_import.exe; do
+# ICO_VERSION_LABEL: the program's version information (Details tab)
+run cmake --preset "$p" -DICO_LINK_EXE=ON "-DICO_VERSION_LABEL=$label"
+run cmake --build "build-host/$p" --target ico_pc mc_import
+for f in ico_pc.exe ico_pc.map SDL3.dll port/save/mc_import.exe; do
     [[ -f "build-host/$p/$f" ]] || fail "$p did not produce $f"
-done
-for f in compare_backends.cmd compare_png.ps1; do
-    [[ -f "port/rhi/test/$f" ]] || fail "port/rhi/test/$f is missing from HEAD"
 done
 [[ -f tools/portable/make_portable.cmd ]] || fail "tools/portable/make_portable.cmd is missing from HEAD"
 cd "$root"
@@ -65,33 +63,23 @@ b="$wt/build-host/$p"; d="$stage/$a"
 mkdir -p "$d"
 rm -f "$d"/ico_pc*.exe "$d"/ico_pc*.map
 cp "$b/ico_pc.exe" "$d/ico_pc_$a.exe"
+# the link map stays in the stage folder (it symbolizes a crash address from a
+# player's log) and is not zipped
 cp "$b/ico_pc.map" "$d/ico_pc_$a.map"
 cp "$b/SDL3.dll" "$d/SDL3.dll"
-# the Direct3D 12 backend checks, in their own folder with the SDL3.dll they need beside them
+# the save importer, in its own folder with the SDL3.dll it needs beside it
 rm -rf "$d/tools"; mkdir -p "$d/tools"
-cp "$b/port/rhi/rhi_d3d12_test.exe" "$b/port/render/rd_replay_tool.exe" "$b/port/save/mc_import.exe" "$b/SDL3.dll" "$d/tools/"
-cp "$wt/port/rhi/test/compare_png.ps1" "$d/tools/"
+cp "$b/port/save/mc_import.exe" "$b/SDL3.dll" "$d/tools/"
 cat > "$d/tools/README.txt" <<'TXT'
-Developer tools; playing the game needs none of them.
 mc_import.exe copies ICO's save out of a PS2 memory card file or save
-archive into the game's save folder (see docs\PORTABLE_MODE.md, "Bring a
-PS2 save over").
-The other files are for people who help build the game. They check that the
-picture is drawn the same way with Vulkan and with Direct3D 12.
-rhi_d3d12_test.exe tests the Direct3D 12 drawing against exact expected
-pixels and ends with a message box giving the verdict (log:
-rhi_d3d12_test.log). rd_replay_tool.exe draws a picture file that F12 saved
-in the game (in the dumps folder) and writes it as a PNG.
-compare_backends.cmd, with compare_png.ps1, does that for every saved
-picture in dumps\ with Vulkan and with Direct3D 12 and compares the results
-(log: compare_backends.log). SDL3.dll is a library these tools need beside
-them.
+archive into the game's save folder. Playing the game does not need it.
+To run it, open a Command Prompt in this folder and give it the file.
+Add --to with the folder to copy into, then the file's name, for example:
+  mc_import.exe --to "%APPDATA%\ico-pc\ico-pc\memcard" Mcd001.ps2
+The steps are in docs\PORTABLE_MODE.md, "Bring a PS2 save over".
+SDL3.dll is a library mc_import.exe needs beside it.
 TXT
 sed -i 's/$/\r/' "$d/tools/README.txt"
-# the repository stores the .cmd with LF (it has no labels or goto, so
-# cmd.exe runs it either way); the package gets CRLF, what Notepad and
-# cmd.exe expect of a batch file
-sed 's/$/\r/' "$wt/port/rhi/test/compare_backends.cmd" > "$d/tools/compare_backends.cmd"
 # the make-portable script (stored with LF, CRLF in the package)
 sed 's/$/\r/' "$wt/tools/portable/make_portable.cmd" > "$d/make_portable.cmd"
 # the textures folder, with a note in it (the zip keeps files, so the
@@ -130,9 +118,8 @@ for variant in normal portable; do
     cp -a "$stage/README.md" "$top/README.md"
     cp -a "$stage/docs" "$top/docs"
     cp -a "$stage/VERSION.txt" "$top/VERSION.txt"
-    files=("ico_pc_$a.exe" "ico_pc_$a.map" SDL3.dll ico-pc.ini LICENSE.txt NOTICES.txt
-        tools/rhi_d3d12_test.exe tools/rd_replay_tool.exe tools/mc_import.exe tools/SDL3.dll tools/compare_png.ps1
-        tools/compare_backends.cmd tools/README.txt "$pkg_textures_rel/README.txt" "$pkg_models_rel/README.txt" "$pkg_reshade_rel/README.txt")
+    files=("ico_pc_$a.exe" SDL3.dll ico-pc.ini LICENSE.txt NOTICES.txt
+        tools/mc_import.exe tools/SDL3.dll tools/README.txt "$pkg_textures_rel/README.txt" "$pkg_models_rel/README.txt" "$pkg_reshade_rel/README.txt")
     [[ "$variant" == portable ]] || files+=(make_portable.cmd)
     for f in "${files[@]}"; do
         cp -a "$stage/$a/$f" "$top/$a/$f" || fail "stage: no $a/$f"
@@ -148,6 +135,11 @@ for variant in normal portable; do
     done
     for r in "${pkg_note_rels[@]}"; do
         pkg_assert_zip_has "$out" "ico-pc-$label/$a/$r/README.txt" || fail "the $variant zip lacks $a/$r/README.txt"
+    done
+    # developer files stay out of the player zips
+    for n in "$a/ico_pc_$a.map" "$a/tools/rhi_d3d12_test.exe" "$a/tools/rd_replay_tool.exe" \
+        "$a/tools/compare_backends.cmd" "$a/tools/compare_png.ps1"; do
+        pkg_assert_zip_lacks "$out" "ico-pc-$label/$n" || fail "the $variant zip has $n"
     done
     if [[ "$variant" == portable ]]; then
         pkg_assert_zip_lacks "$out" "ico-pc-$label/$a/make_portable.cmd" || fail "the portable zip has make_portable.cmd"

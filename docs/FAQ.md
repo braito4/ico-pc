@@ -105,6 +105,23 @@ The game then shows in your Steam library, and on a Steam Deck in Game
 Mode. If Steam is open, the game tells you to close it first.
 [Details](OPTIONS.md#extras) and [Steam Deck tips](TROUBLESHOOTING.md#steam-deck).
 
+## My browser or Windows says the download is dangerous
+
+The game is a small new program that is not signed by a company, and
+browsers and Windows warn about any program they have not seen many people
+download. The warning is about the file having no history yet, not about
+anything found inside it.
+
+In Chrome or Edge, open the downloads list, choose the three dots next to
+the file and pick **Keep**, then **Keep anyway** (Edge: **Keep**, then
+**Show more**, **Keep anyway**). If Windows shows "Windows protected your
+PC" when you start the game, choose **More info**, then **Run anyway**.
+
+You can check the files yourself: upload the zip to
+[VirusTotal](https://www.virustotal.com/) and read what its scanners say.
+The whole program is open source, so you can also read what it does or
+build it yourself ([how to build it](BUILDING.md)).
+
 ## Where are my saves?
 
 In a folder the game makes in your user folder, not beside the program.

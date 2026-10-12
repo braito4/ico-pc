@@ -99,9 +99,8 @@ image.
 ## The game closes by itself
 
 If the game closes with an error, the log ends with a block that starts
-with `CRASH:`. Send the log, and with the Windows or Linux version also
-the `ico_pc.map` file from the download (`x64\ico_pc_x64.map` on
-Windows). It helps the developers find where it happened.
+with `CRASH:`. Send the log. The developers can find where it happened
+from the numbers in that block.
 
 If the game stops responding, it closes itself after a while: 30 seconds
 while it is starting, 60 seconds once it is running. The log then has a
