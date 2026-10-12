@@ -120,7 +120,9 @@ static struct {
     uint32_t frame;          /* rd_frame_number() last seen */
     uint32_t presentedFrame; /* the frame of the last present */
     Uint64 tickAt, tickPrev; /* the pace deadlines (simulated time) the last two frames closed at */
-    Uint64 lastPresent;
+    Uint64 lastPresent;      /* the last present's start (the alpha clock's) */
+    Uint64
+        nextPresent;   /* when the next present is due (0: now); the grid pace_next_present keeps */
     Uint64 cost;       /* how long the last rd_present took */
     PaceHist paceHist; /* the last presents' costs (pace_policy.h) */
     bool paceSlow;     /* pace_slow_present after the last present */
@@ -255,6 +257,9 @@ static void video_settings(RdSettings *rs, int w, int h)
         const char *e = getenv("ICO_RD_S2_LEGACY");
 
         s_pres.legacyAlpha = e != NULL && e[0] != '\0' && e[0] != '0';
+    }
+    if (s_pres.framerate != ico_video_framerate()) {
+        s_pres.nextPresent = 0; /* a new limit starts a new grid */
     }
     s_pres.framerate = ico_video_framerate();
     rs->interpolate = (uint8_t)(s_pres.framerate != ICO_FRAMERATE_ORIGINAL);
@@ -2088,7 +2093,7 @@ static void pace_log(Uint64 now)
             "%.1f s: %.1f "
             "presented fps, %.1f game fps; %u vsyncs (%.1f Hz simulated), %u resyncs dropping "
             "%.0f ms; longest replay %.1f ms of %u; %u steps over %.0f ms; framerate %s, present "
-            "%s, display %.1f Hz (%.2f presents a refresh), window %dx%d%s\n",
+            "%s, display %.2f Hz (%.3f presents a refresh), window %dx%d%s\n",
             s_pres.statPresents, movie - s_pres.statMovie, movieFailed, s_pres.statFrames,
             fn - s_pres.statFrameNo, sec, s_pres.statPresents / sec, s_pres.statFrames / sec,
             s_pres.statVsyncs, s_pres.statVsyncs / sec, s_pres.statResyncs,
@@ -2319,9 +2324,19 @@ static void pace(int hz)
            showed for every one it did, which kept a handheld's GPU near its
            limit; a phone also lost the time for the game.  Without vsync
            "uncapped" is back to back (pace_policy.h pace_present_gap) */
+        /* A limit at or above the display's rate (60 on a 59.94 or 60.00
+           screen, 120 on a 119.88) is paced the same way: presents timed
+           from the simulation's own 59.94 Hz clock showed one picture too
+           few or too many each few seconds (issue 74). Under FIFO (D3D12
+           always) too: s_pres.mailbox is the vsync option. */
         gap = pace_present_gap(s_pres.framerate,
-                               s_pres.framerate == ICO_FRAMERATE_UNCAPPED && s_pres.mailbox,
+                               s_pres.mailbox &&
+                                   (s_pres.framerate == ICO_FRAMERATE_UNCAPPED ||
+                                    pace_cap_follows_refresh(s_pres.framerate, refresh)),
                                rhi_present_mailbox(), refresh);
+        if (!gap) {
+            s_pres.nextPresent = 0;
+        }
     }
     Uint64 tick = s_pres.tickPrev ? s_pres.tickAt - s_pres.tickPrev : 2 * period;
     tick = tick < period ? period : (tick > 4 * period ? 4 * period : tick);
@@ -2341,8 +2356,8 @@ static void pace(int hz)
             }
             break;
         }
-        if (gap && s_pres.lastPresent && now - s_pres.lastPresent < gap) {
-            const Uint64 wake = s_pres.lastPresent + gap;
+        if (gap && s_pres.nextPresent && now < s_pres.nextPresent) {
+            const Uint64 wake = s_pres.nextPresent;
 
             if (wake >= s_deadline) {
                 if (now < s_deadline) {
@@ -2389,6 +2404,7 @@ static void pace(int hz)
             break;
         }
         s_pres.lastPresent = t0;
+        s_pres.nextPresent = gap ? pace_next_present(s_pres.nextPresent, t0, gap) : 0;
         s_pres.presentedFrame = s_pres.frame;
         s_pres.statPresents++;
 #ifdef __ANDROID__
