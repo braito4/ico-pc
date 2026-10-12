@@ -74,9 +74,8 @@ int sceGsSyncV(int mode);
 int movie_init(char *name, int imageW, int imageH, int dbx, int dby, int mono, int clearCol);
 void movie_end(void);
 int movie_proc(int (*poll)(void));
-/* the game's pad[16] (common/include/main.h PadState): now, flags are its
-   first two ints */
-extern int pad[];
+/* port/game/gamestate.c: pad[0].now and .flags */
+void ico_game_pad0(int *now, int *flags);
 /* port/input/pad_host.c */
 const char *ico_input_start_source(void);
 
@@ -959,8 +958,10 @@ static int readMpeg(int (*poll)(void))
            pad[0].now and .flags as movie_abort_check last read them) */
         if (mv.vsyncs - mv.padLogAt >= 60) {
             mv.padLogAt = mv.vsyncs;
+            int now, flags;
+            ico_game_pad0(&now, &flags);
             ico_diag_log("fmv: pad now 0x%04x flags 0x%04x (Start is 0x0800), start source %s",
-                         (unsigned)pad[0], (unsigned)pad[1], ico_input_start_source());
+                         (unsigned)now, (unsigned)flags, ico_input_start_source());
         }
         if (mv.pace.abort_pending &&
             ico_movie_pace_check_end(&mv.pace, mv.total, ev == ICO_PACE_FREE)) {
