@@ -1953,6 +1953,12 @@ void reg_DispAccessoryWithShadow(Sub15C *o, Sub15C *src)
     int pri;
     int mode;
 
+    /* PC port (v0.6.1, review B1): no room left in the packet bank, the
+       object is not registered (DmaPacket.c dpk_HostRoom logs it) */
+    if (!dpk_HostRoom()) {
+        return;
+    }
+
     mdl = o->model;
     grp = mdl->groups;
     reg_transMicroCode(o, 0x3B5);
@@ -2049,6 +2055,12 @@ void reg_RenderReflection(Sub15C *o, int pri)
     char *pk;
     int i;
     int r;
+
+    /* PC port (v0.6.1, review B1): no room left in the packet bank, the
+       object is not registered (DmaPacket.c dpk_HostRoom logs it) */
+    if (!dpk_HostRoom()) {
+        return;
+    }
 
     mdl = o->model;
     grp = mdl->groups;
@@ -2165,6 +2177,12 @@ void reg_DispEnemy(void *sub)
     int i;
     int pri;
 
+    /* PC port (v0.6.1, review B1): no room left in the packet bank, the
+       object is not registered (DmaPacket.c dpk_HostRoom logs it) */
+    if (!dpk_HostRoom()) {
+        return;
+    }
+
     mdl = o->model;
     grp = mdl->groups;
     alpha = 1.0f - o->nodes->fade;
@@ -2230,6 +2248,12 @@ void reg_DispMultiPri(Sub15C *o, int pri)
     int mode;
     int prilist;
 
+    /* PC port (v0.6.1, review B1): no room left in the packet bank, the
+       object is not registered (DmaPacket.c dpk_HostRoom logs it) */
+    if (!dpk_HostRoom()) {
+        return;
+    }
+
     mdl = o->model;
     grp = mdl->groups;
     reg_transMicroCode(o, 1 << pri);
@@ -2245,7 +2269,11 @@ void reg_DispMultiPri(Sub15C *o, int pri)
                returned here, so every node after a culled one went
                undrawn, in view or not (enemyParts.c's priority 10 pass);
                each node has its own cull (reg_setMMatrixPacket), as
-               reg_dispMObj walks them */
+               reg_dispMObj walks them.  This changes the 4:3 picture
+               (Original included) only by drawing the enemy nodes the PS2
+               skipped after a culled one, each through its own cull: a
+               hole filled, nothing the original hid (Gate A: name it in
+               the re-baseline) */
             continue;
         }
         prilist = 1 << pri;
@@ -2362,6 +2390,12 @@ void reg_DispObj(Sub15C *o)
     int k;
 #endif
 
+    /* PC port (v0.6.1, review B1): no room left in the packet bank, the
+       object is not registered (DmaPacket.c dpk_HostRoom logs it) */
+    if (!dpk_HostRoom()) {
+        return;
+    }
+
     if (ico_title_logo_skip(o->model->name)) {
         return;
     }
@@ -2415,6 +2449,11 @@ void reg_DispObj(Sub15C *o)
 
 void reg_DispObj2(Sub15C *o, int idx)
 {
+    /* PC port (v0.6.1, review B1): no room left in the packet bank, the
+       object is not registered (DmaPacket.c dpk_HostRoom logs it) */
+    if (!dpk_HostRoom()) {
+        return;
+    }
     reg_dispSObj(o, idx);
 }
 

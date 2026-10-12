@@ -922,7 +922,8 @@ static __inline__ unsigned char boyPrivInsCamInScreen(void) /* derived name */
     if (PrivInsCamChk_Control() == 0) {
         return 0;
     }
-    if (0.0f < IsPointIsInScreen(scr, test_CURRENTROOT(boyGObj))) {
+    /* PC port (VIS-RULES item 19): Ico's looks see the wide picture */
+    if (0.0f < IsPointIsInScreenWide(scr, test_CURRENTROOT(boyGObj))) {
         return 1;
     }
     return 0;
@@ -2111,7 +2112,9 @@ void subBoyCollision(GObj *volatile self)
                     girlLookStarted = 1;
                     if (girlGObj != 0) {
                         girlLookInScreen =
-                            (0.0f < IsPointIsInScreen(scr2, test_CURRENTROOT(girlGObj))) ? 1 : 0;
+                            (0.0f < IsPointIsInScreenWide(scr2, test_CURRENTROOT(girlGObj)))
+                                ? 1
+                                : 0; /* PC port: the wide picture (item 19) */
                     }
                 }
                 if (girlGObj != 0) {
@@ -2227,7 +2230,9 @@ void subBoyCollision(GObj *volatile self)
 
                         if (weaponLookStarted == 0) {
                             weaponLookInScreen =
-                                (0.0f < IsPointIsInScreen(work, test_CURRENTROOT(w))) ? 1 : 0;
+                                (0.0f < IsPointIsInScreenWide(work, test_CURRENTROOT(w)))
+                                    ? 1
+                                    : 0; /* PC port: the wide picture (item 19) */
                         }
                         weaponLookStarted = 1;
                         mode = (int)(sub->flags20.ll >> 24) & 3;

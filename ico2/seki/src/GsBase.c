@@ -1889,10 +1889,15 @@ static void gsbHostCullFlip(void)
     gsbCullGen++;
 }
 
+/* 1 once this stage logged a step past half the limits held back by the
+   packet bank's fill (gsbHostKeepAll) */
+static int gsbCullKeepLogged; /* port */
+
 static void gsbHostCullForget(void)
 {
     gsbCullPrev.valid = 0;
     gsbCullGen++;
+    gsbCullKeepLogged = 0;
 }
 
 void gsb_HostCullCameraLocked(int on)
@@ -1928,9 +1933,38 @@ static void gsbHostLoad16(const float *f, double *d)
    of the cameras), so no picture of the step can miss a part.  The cost is
    one tick's registration of the stage's parts, the ones beside the
    picture included; such steps are single ticks of a fast swing (a turn of
-   15 degrees in a 30 Hz tick is 450 degrees a second). */
+   15 degrees in a 30 Hz tick is 450 degrees a second).  The cost is bounded
+   by the packet bank (review B1): once the bank is past half of the EE's
+   size (DmaPacket.c dpk_HostFill), the rest of the tick is culled against
+   the three cameras again (gsbHostKeepAll; logged once a stage), so the
+   step's registration can never run the bank past what a three-camera tick
+   would add to half a bank; DmaPacket.c's pad and dpk_HostRoom bound the
+   rest. */
 #define GSB_SPAN_TURN (RD_INTERP_CAMERA_TURN * 0.5f)
 #define GSB_SPAN_MOVE (RD_INTERP_CAMERA_MOVE * 0.5f)
+
+/* gsbCullR.keepAll while the packet bank has room for it (above) */
+static int gsbHostKeepAll(void)
+{
+    long fill;
+
+    if (!gsbCullR.keepAll) {
+        return 0;
+    }
+    fill = dpk_HostFill();
+    if (fill <= DPK_EE_SIZE / 2) {
+        return 1;
+    }
+    if (!gsbCullKeepLogged) {
+        gsbCullKeepLogged = 1;
+        fprintf(stderr,
+                "cull: a camera step past half the blend limits found the packet bank at %ld "
+                "bytes, past half of %d: the rest of the tick culls against the three cameras "
+                "(logged once a stage)\n",
+                fill, DPK_EE_SIZE);
+    }
+    return 0;
+}
 
 /* The cameras a box is culled against now (1, 2 or 3; 0: none, every box
    kept, gsbCullR.views the cameras built for the near test), gsbCullR
@@ -1947,7 +1981,7 @@ static int gsbHostCullViews(void)
         return 1; /* a cut since the flip: the pictures snap to this tick */
     }
     if (gsbCullR.gen == gsbCullGen && memcmp(gsbCullR.cur, cur, sizeof(gsbCullR.cur)) == 0) {
-        return gsbCullR.keepAll ? 0 : gsbCullR.views;
+        return gsbHostKeepAll() ? 0 : gsbCullR.views;
     }
     gsbCullR.gen = gsbCullGen;
     memcpy(gsbCullR.cur, cur, sizeof(gsbCullR.cur));
@@ -2013,7 +2047,7 @@ static int gsbHostCullViews(void)
                 rdcb_camera_beyond(gsbCullPrev.v, gsbCullBuilt.v, GSB_SPAN_TURN, GSB_SPAN_MOVE);
         }
     }
-    return gsbCullR.keepAll ? 0 : gsbCullR.views;
+    return gsbHostKeepAll() ? 0 : gsbCullR.views;
 }
 
 /* gsb_clipCorner's flags for a transformed corner r against |cw| */

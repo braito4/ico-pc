@@ -71,6 +71,10 @@
  *            (1 + GSB_CULL_MARGIN, the cull's) while pictures are blended;
  *            the same after a reflection's gsb_SetVSMatrix(230, 230) (the
  *            frame's width, not vsWidth).
+ *   bank     (review B1) a step past half the limits keeps every box
+ *            only while the packet bank is at most half of the EE's 512 KB
+ *            full (DmaPacket.c dpk_HostFill), else three cameras cull;
+ *            dpk_HostRoom refuses an object within 64 KB of the pad's end.
  *   shadows  Shadow.c's edge clip (gsb_HostShadowClipX): W pixels, at most
  *            2046 (GSB_SHADOW_CLIP_MAX, VIS-RULES item 17): a clipped end
  *            at 2048 -+ the clip packs into Shadow.c's range test (0x11 ..
@@ -1298,6 +1302,39 @@ static void checkShadows(const char *what, int winW, int winH, float want)
           hi);
 }
 
+/* ------------------------------------------------------------ bank fill */
+
+/* review B1: a step past half the limits keeps every box only while the
+   packet bank is at most half of the EE's size full; past it the three
+   cameras cull again.  And dpk_HostRoom refuses an object (before any
+   write) once the bank is within its reserve of the host pad's end */
+static void checkBankFill(void)
+{
+    setOptions(ICO_FRAMERATE_UNCAPPED, 640, 480);
+    CHECK(viewsAcross(200.0, 0.0) == 0,
+          "bank: a 200 unit step with an empty bank keeps every box "
+          "(%d)",
+          gsb_HostCullViewsUsed());
+    char *const keep = PacketBufferStruct.ptr.c;
+    char *const base = (char *)PacketBufferStruct.buf[PacketBufferStruct.cur];
+    const double far[3] = {0.0, 0.0, -100000.0};
+    Box bx = boxOf(far, 1.0);
+    PacketBufferStruct.ptr.c = base + DPK_EE_SIZE / 2 + 16;
+    const int res = clipBox(&bx);
+    CHECK(gsb_HostCullViewsUsed() == 3 && res == 0,
+          "bank: past half of the EE's bank the same step culls against three cameras (%d "
+          "cameras, %d)",
+          gsb_HostCullViewsUsed(), res);
+    CHECK(dpk_HostRoom() == 1, "bank: room for an object at half a bank");
+    PacketBufferStruct.ptr.c = base + DPK_EE_SIZE + 0x80000 - 0x10000 + 16;
+    CHECK(dpk_HostRoom() == 0, "bank: no room within the reserve of the pad's end (fill %ld)",
+          dpk_HostFill());
+    PacketBufferStruct.ptr.c = keep;
+    clipBox(&bx);
+    CHECK(gsb_HostCullViewsUsed() == 0, "bank: back under half, every box kept again (%d)",
+          gsb_HostCullViewsUsed());
+}
+
 /* ------------------------------------------------------------- margin */
 
 /* VIS-RULES items 2 and 3: gsb_ClipBox drops a box only when every corner
@@ -1412,6 +1449,7 @@ int main(void)
     checkShadows("the widest", 8000, 900, 2046.0f);
     checkMargin();
     checkSpanNear();
+    checkBankFill();
 
     rd_shutdown();
     if (failures) {

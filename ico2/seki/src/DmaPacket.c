@@ -21,9 +21,25 @@ int used_dma_memory = 0;
    EE's size, and again each time the run's peak grows by another 16 KB.
    The game never reads the size of the allocation, so the pad changes
    nothing else; it comes out of the common partition's host extra
-   (ios.c ICO_HOST_COMMON_EXTRA). */
-#define DPK_EE_SIZE 524288
-#define DPK_HOST_PAD 0x20000
+   (ios.c ICO_HOST_COMMON_EXTRA).
+
+   v0.6.1 (VIS-RULES, review B1): a tick whose camera step is past half the
+   presenter's limits registers every box (GsBase.c gsbHostCullViews), the
+   whole stage at most.  The largest stage pack (st02a: 87 models, 225
+   parts, 862 packets; st20a 303 parts and 773 packets; counted on the PAL
+   disc) registered whole is about 862 packets x 0x80 (texture, material
+   and microcode packets) plus some 200 objects x 0x180 (the matrix packet
+   0xE0, the light packet 0x90, the end tag), under 200 KB.  The pad is
+   512 KB, a full stage two and a half times over on top of a full EE bank.
+   Three guards keep it from being run past: gsbHostCullViews stops keeping
+   every box once the bank is past half of DPK_EE_SIZE (dpk_HostFill), the
+   registrations ask dpk_HostRoom before writing an object (RegistPacket.c),
+   which refuses, with a log line, once the fill is within DPK_HOST_RESERVE
+   of the pad's end, and the pad holds whatever the other builders write
+   after that point.  Both banks: 2 x 512 KB more than the EE's, from
+   ICO_HOST_COMMON_EXTRA. */
+#define DPK_HOST_PAD 0x80000
+#define DPK_HOST_RESERVE 0x10000
 
 static long dpkHostPeak; /* port: the largest fill seen, bytes */
 
@@ -55,6 +71,42 @@ static void dpkHostHighWater(void)
     }
 }
 
+long dpk_HostFill(void)
+{
+    const char *base = (const char *)PacketBufferStruct.buf[PacketBufferStruct.cur];
+
+    if (base == 0 || PacketBufferStruct.ptr.c == 0) {
+        return 0;
+    }
+    return (long)(PacketBufferStruct.ptr.c - base);
+}
+
+/* the frames that refused an object, for the log (one line per 600 of
+   them) */
+static unsigned int dpkHostRefusedFrames; /* port */
+
+static int dpkHostRefusedNow; /* port: this frame refused one */
+
+int dpk_HostRoom(void)
+{
+    const long fill = dpk_HostFill();
+
+    if (fill <= (long)(DPK_EE_SIZE + DPK_HOST_PAD - DPK_HOST_RESERVE)) {
+        return 1;
+    }
+    if (!dpkHostRefusedNow) {
+        dpkHostRefusedNow = 1;
+        if (dpkHostRefusedFrames++ % 600 == 0) {
+            fprintf(stderr,
+                    "dpk: a frame's packets reached %ld bytes, within %d of the host's pad's end "
+                    "(%d): its remaining objects are not registered (frame %u of those; logged "
+                    "per 600)\n",
+                    fill, DPK_HOST_RESERVE, DPK_EE_SIZE + DPK_HOST_PAD, dpkHostRefusedFrames);
+        }
+    }
+    return 0;
+}
+
 void dpk_Init(void)
 {
     PacketBufferStruct.cur = 0;
@@ -70,6 +122,7 @@ void dpk_SwapBuffer(void)
     int i;
 
     dpkHostHighWater();
+    dpkHostRefusedNow = 0;
     i = PacketBufferStruct.cur ^ 1;
     PacketBufferStruct.cur = i;
     PacketBufferStruct.ptr.i = PacketBufferStruct.buf[i];
