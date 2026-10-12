@@ -457,7 +457,10 @@ static bool snapWindow(uint32_t sw, float crop, uint32_t boxW, float *u0, float 
 {
     const float c = crop > 0.0f ? crop : 0.0f;
     if (c > 0.0f && fabsf(((float)sw - 2.0f * c) - (float)boxW) < 0.0625f) {
-        *u0 = floorf(c + 0.5f);
+        /* the tie (crop k + 1/2, as at 1920 across 16:9) rounds up whatever
+         * the float error of the exact width (7.49997 for 16:9 as a float):
+         * the 1/64 is far below the density test's 1/16 */
+        *u0 = floorf(c + 0.5f + 1.0f / 64.0f);
         *u1 = *u0 + (float)boxW;
         return true;
     }
