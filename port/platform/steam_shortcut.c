@@ -450,6 +450,7 @@ int ico_steam_login_users(const char *text, size_t n, uint32_t *ids, int max)
 
 /* --- Steam running ---------------------------------------------------------- */
 
+#ifndef _WIN32
 /* 1 when text holds "steam" in any case */
 static int has_steam(const char *text)
 {
@@ -467,6 +468,7 @@ static int has_steam(const char *text)
     }
     return 0;
 }
+#endif
 
 /* A pid file outlives a Steam that was killed, and its pid can be given to
    another process later, so a live pid counts only when the process is a
