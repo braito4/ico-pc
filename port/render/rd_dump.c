@@ -743,34 +743,79 @@ bool rd_dump_on_demand(const char *dumpPath, const char *pngPath);
  * log line (rd_note_cull_drop): each as model:part, the rule (2 the
  * object's box, 3 the part's) and, when the cull tested the blend span's
  * cameras (item 5), "/5" with their count; "none" when nothing was
- * dropped.  A part is -1 for a whole object (rule 2). */
+ * dropped.  A part is -1 for a whole object (rule 2).  Before the list,
+ * the drops culled with this tick's camera alone counted by why (the
+ * Original frame rate, the camera standing still, a cut, ...), so a drop
+ * without "/5" says whether the pictures between the ticks could show it.
+ * The length written (at most cap - 1). */
+static const char *cullOneWhy(unsigned why)
+{
+    static const char *const kWhy[] = {
+        "reason not noted",           "the Original frame rate",
+        "the stage's first picture",  "a camera cut",
+        "the camera did not move",    "a camera jump past the blend",
+        "a part fixed to the camera", "a camera matrix with no inverse"};
+    return kWhy[why < sizeof(kWhy) / sizeof(kWhy[0]) ? why : 0];
+}
+
+size_t rd__cull_drop_line(const RdFrame *f, char *line, size_t cap)
+{
+    size_t at = 0;
+    uint32_t byWhy[8] = {0};
+    const uint32_t n = f->cullDropCount < RD_CULL_DROPS_MAX ? f->cullDropCount : RD_CULL_DROPS_MAX;
+    if (cap == 0) {
+        return 0;
+    }
+    line[0] = 0;
+#define CULL_PUT(...)                                                                              \
+    do {                                                                                           \
+        const int k_ = at < cap ? snprintf(line + at, cap - at, __VA_ARGS__) : -1;                 \
+        if (k_ > 0) {                                                                              \
+            at = at + (size_t)k_ < cap ? at + (size_t)k_ : cap - 1;                                \
+        }                                                                                          \
+    } while (0)
+    if (f->cullDropCount == 0) {
+        CULL_PUT("frame %u: the box cull dropped none", f->number);
+        return at;
+    }
+    for (uint32_t i = 0; i < n; i++) {
+        if (f->cullDrops[i].views <= 1) {
+            byWhy[f->cullDrops[i].oneWhy < 8 ? f->cullDrops[i].oneWhy : 0]++;
+        }
+    }
+    CULL_PUT("frame %u: the box cull dropped %u%s", f->number, f->cullDropCount,
+             f->cullDropCount > n ? " (the first listed)" : "");
+    {
+        /* first, so a long list cannot cut it off */
+        const char *sep = " (with one camera:";
+        for (unsigned w = 0; w < 8; w++) {
+            if (byWhy[w]) {
+                CULL_PUT("%s %u %s", sep, byWhy[w], cullOneWhy(w));
+                sep = ",";
+            }
+        }
+        if (sep[0] == ',') {
+            CULL_PUT(")");
+        }
+    }
+    CULL_PUT(":");
+    for (uint32_t i = 0; i < n; i++) {
+        const RdCullDrop *d = &f->cullDrops[i];
+        if (d->views > 1) {
+            CULL_PUT(" %s:%d rule %u/5 (%u cameras)", d->model, d->part, d->rule, d->views);
+        } else {
+            CULL_PUT(" %s:%d rule %u", d->model, d->part, d->rule);
+        }
+    }
+#undef CULL_PUT
+    return at;
+}
+
 static void logCullDrops(const RdFrame *f)
 {
-    char line[2048];
-    size_t at = 0;
-    const uint32_t n = f->cullDropCount < RD_CULL_DROPS_MAX ? f->cullDropCount : RD_CULL_DROPS_MAX;
-    line[0] = 0;
-    for (uint32_t i = 0; i < n && at < sizeof(line); i++) {
-        const RdCullDrop *d = &f->cullDrops[i];
-        int k;
-        if (d->views > 1) {
-            k = snprintf(line + at, sizeof(line) - at, " %s:%d rule %u/5 (%u cameras)", d->model,
-                         d->part, d->rule, d->views);
-        } else {
-            k = snprintf(line + at, sizeof(line) - at, " %s:%d rule %u", d->model, d->part,
-                         d->rule);
-        }
-        if (k < 0) {
-            break;
-        }
-        at += (size_t)k;
-    }
-    if (f->cullDropCount == 0) {
-        rd__log("dump: frame %u: the box cull dropped none", f->number);
-    } else {
-        rd__log("dump: frame %u: the box cull dropped %u%s:%s", f->number, f->cullDropCount,
-                f->cullDropCount > n ? " (the first listed)" : "", line);
-    }
+    char line[3072];
+    rd__cull_drop_line(f, line, sizeof(line));
+    rd__log("dump: %s", line);
 }
 
 bool rd_dump_on_demand(const char *dumpPath, const char *pngPath)

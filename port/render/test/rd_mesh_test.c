@@ -109,6 +109,7 @@
 #include "DmaPacket.h"
 #include "GifHost.h"
 #include "GifPacket.h"
+#include "GsBase.h"
 #include "Light.h"
 #include "Matrix.h"
 #include "MicroCode.h"
@@ -2282,6 +2283,42 @@ static void visRuleChecks(void)
           fd.n, f->cullDropCount, f->cullDropCount ? f->cullDrops[0].rule : 0,
           f->cullDropCount ? f->cullDrops[0].part : 0,
           f->cullDropCount ? f->cullDrops[0].model : "");
+    /* with one camera, why (the stub cull's: the camera standing still),
+       and F12's line says it before the list; three cameras print "/5" */
+    CHECK(f->cullDropCount == 1 && f->cullDrops[0].views == 1 &&
+              f->cullDrops[0].oneWhy == GSB_CULL_ONE_STILL,
+          "a drop with one camera notes why (views %u, why %u)",
+          f->cullDropCount ? f->cullDrops[0].views : 0,
+          f->cullDropCount ? f->cullDrops[0].oneWhy : 0);
+    {
+        static RdFrame line3;
+        char line[512];
+        rd__cull_drop_line(f, line, sizeof(line));
+        CHECK(strstr(line, "dropped 1 (with one camera: 1 the camera did not move): "
+                           "test_prelit:0 rule 3") != NULL,
+              "F12's cull line with one camera: %s", line);
+        line3.number = 7;
+        line3.cullDropCount = 2;
+        snprintf(line3.cullDrops[0].model, sizeof(line3.cullDrops[0].model), "st18a_p1");
+        line3.cullDrops[0].part = 3;
+        line3.cullDrops[0].rule = 3;
+        line3.cullDrops[0].views = 3;
+        snprintf(line3.cullDrops[1].model, sizeof(line3.cullDrops[1].model), "isisofa");
+        line3.cullDrops[1].part = -1;
+        line3.cullDrops[1].rule = 2;
+        line3.cullDrops[1].views = 1;
+        line3.cullDrops[1].oneWhy = GSB_CULL_ONE_LOCKED;
+        rd__cull_drop_line(&line3, line, sizeof(line));
+        CHECK(strcmp(line, "frame 7: the box cull dropped 2 (with one camera: 1 a part fixed to "
+                           "the camera): st18a_p1:3 rule 3/5 (3 cameras) isisofa:-1 rule 2") == 0,
+              "F12's cull line with three cameras: %s", line);
+        line3.cullDropCount = 0;
+        rd__cull_drop_line(&line3, line, sizeof(line));
+        CHECK(strcmp(line, "frame 7: the box cull dropped none") == 0, "F12's cull line: %s", line);
+        /* a list past the buffer keeps the reasons and ends in it */
+        rd__cull_drop_line(f, line, 40);
+        CHECK(strlen(line) == 39, "F12's cull line cut at the buffer (%zu)", strlen(line));
+    }
 
     /* shadow, and the object's box noted */
     static PObjModel shadowModel;

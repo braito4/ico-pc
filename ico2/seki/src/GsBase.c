@@ -1874,6 +1874,7 @@ static struct {
     unsigned int gen; /* the gsbCullGen they were built under; 0 never */
     float cur[16];    /* the +0x280 they were built for */
     int views;        /* 1: this tick's camera only; 2: and R_prev; 3: and R_mid */
+    int why;          /* with views 1: GSB_CULL_ONE_STILL, _JUMP or _SINGULAR */
     int keepAll;      /* 1: the step is past half the limits: nothing culled */
     double r[2][16];  /* R_prev, R_mid */
     double c[2][16];  /* C_prev, C_mid (the water dots test world points) */
@@ -1888,6 +1889,12 @@ static int gsbCullLocked; /* port */
 
 /* the cameras the last gsb_ClipBox tested (the tests read it) */
 static int gsbCullLastViews = 1; /* port */
+
+/* why gsbHostCullViews last returned 1 (GsBase.h GSB_CULL_ONE_*), and why
+   the last gsb_ClipBox tested one camera (F12's cull line reads it) */
+static int gsbCullWhy; /* port */
+
+static int gsbCullLastWhy = GSB_CULL_ONE_ORIGINAL; /* port */
 
 static void gsbHostCullBuilt(void)
 {
@@ -1934,6 +1941,11 @@ void gsb_HostCullCameraLocked(int on)
 int gsb_HostCullViewsUsed(void)
 {
     return gsbCullLastViews;
+}
+
+int gsb_HostCullOneWhy(void)
+{
+    return gsbCullLastWhy;
 }
 
 static void gsbHostLoad16(const float *f, double *d)
@@ -2000,31 +2012,46 @@ static int gsbHostCullViews(void)
     const float *cur = (const float *)(matrixptr + 0x280);
     double c[16], ic[16];
 
-    if (!ico_video_interpolate() || !gsbCullPrev.valid) {
+    if (!ico_video_interpolate()) {
+        gsbCullWhy = GSB_CULL_ONE_ORIGINAL;
+        return 1;
+    }
+    if (!gsbCullPrev.valid) {
+        gsbCullWhy = GSB_CULL_ONE_FIRST;
         return 1;
     }
     if (ico_video_cut_serial() != gsbCullCutSerial) {
+        gsbCullWhy = GSB_CULL_ONE_CUT;
         return 1; /* a cut since the flip: the pictures snap to this tick */
     }
     if (gsbCullR.gen == gsbCullGen && memcmp(gsbCullR.cur, cur, sizeof(gsbCullR.cur)) == 0) {
+        gsbCullWhy = gsbCullR.why;
         return gsbHostKeepAll() ? 0 : gsbCullR.views;
     }
     gsbCullR.gen = gsbCullGen;
     memcpy(gsbCullR.cur, cur, sizeof(gsbCullR.cur));
     gsbCullR.views = 1;
     gsbCullR.keepAll = 0;
+    gsbCullR.why = GSB_CULL_ONE_STILL;
+    gsbCullWhy = gsbCullR.why;
     if (memcmp(gsbCullPrev.c, cur, sizeof(gsbCullPrev.c)) == 0) {
         return 1; /* the camera stands still */
     }
+    gsbCullR.why = GSB_CULL_ONE_SINGULAR;
+    gsbCullWhy = gsbCullR.why;
     gsbHostLoad16(cur, c);
     if (!rdcb_invert4d(c, ic)) {
         return 1;
     }
+    gsbCullR.why = GSB_CULL_ONE_JUMP;
+    gsbCullWhy = gsbCullR.why;
     if (gsbCullPrev.hasVP && gsbCullBuilt.valid &&
         memcmp(gsbCullBuilt.c, cur, sizeof(gsbCullBuilt.c)) == 0 &&
         rdcb_camera_jump(gsbCullPrev.v, gsbCullBuilt.v)) {
         return 1; /* past the presenter's limits: the pictures snap */
     }
+    gsbCullR.why = GSB_CULL_ONE_NOT;
+    gsbCullWhy = gsbCullR.why;
     gsbHostLoad16(gsbCullPrev.c, gsbCullR.c[0]);
     rdcb_mul4d(gsbCullR.c[0], ic, gsbCullR.r[0]);
     memset(gsbCullR.sweep, 0, sizeof(gsbCullR.sweep));
@@ -2340,6 +2367,7 @@ int gsb_ClipBox(float *p)
         int views = gsbHostCullViews();
 
         gsbCullLastViews = views;
+        gsbCullLastWhy = views == 1 ? gsbCullWhy : GSB_CULL_ONE_NOT;
         if (views == 0) {
             return gsbHostClipBoxViews(p, gsbCullR.views, 1);
         }
@@ -2348,6 +2376,7 @@ int gsb_ClipBox(float *p)
         }
     } else {
         gsbCullLastViews = 1;
+        gsbCullLastWhy = GSB_CULL_ONE_LOCKED;
     }
     for (i = 0; i < 8; q += 4, i++) {
         int cf;

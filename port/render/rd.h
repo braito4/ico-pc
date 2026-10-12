@@ -586,12 +586,16 @@ void rd_free_camera(void);
  * object (rule 2, RegistPacket.c's object box) or one of its parts (rule 3,
  * the part's box) in the frame being recorded; views is how many cameras
  * the cull tested (gsb_HostCullViewsUsed: 1 the tick's alone, 2 or 3 the
- * blend span's, item 5).  The frame keeps the first RD_CULL_DROPS_MAX with
- * the count of all; F12 (rd_dump_on_demand) writes them to the log as one
- * line, so a report's log names the rule that dropped each part.  Nothing
- * outside an open frame. */
+ * blend span's, item 5) and, with one, why (oneWhy: GsBase.h
+ * GSB_CULL_ONE_*, 1 the Original framerate, 2 a stage's first tick, 3 a
+ * cut, 4 the camera standing still, 5 a step past the presenter's limits,
+ * 6 a part locked to the camera, 7 no inverse; 0 more than one camera).
+ * The frame keeps the first RD_CULL_DROPS_MAX with the count of all; F12
+ * (rd_dump_on_demand) writes them to the log as one line, so a report's
+ * log names the rule that dropped each part and why one camera did.
+ * Nothing outside an open frame. */
 #define RD_CULL_DROPS_MAX 48
-void rd_note_cull_drop(const char *model, int part, int rule, int views);
+void rd_note_cull_drop(const char *model, int part, int rule, int views, int oneWhy);
 
 /* What the last present showed (rd_present's, or with interpolation off
  * rd_end_frame's one present of the frame), for the window's start-up log: the

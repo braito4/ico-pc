@@ -265,6 +265,7 @@ typedef struct RdCullDrop {
     char model[32];
     int16_t part;
     uint8_t rule, views;
+    uint8_t oneWhy; /* with views 1: why (rd.h rd_note_cull_drop) */
 } RdCullDrop;
 
 typedef struct RdFrame {
@@ -1977,6 +1978,9 @@ RhiSampler rd__sampler(RdFilter mag, RdFilter min, RdWrap s, RdWrap t);
  * but replays nothing. */
 bool rd__init_record_only(uint32_t gsW, uint32_t gsH);
 const RdFrame *rd__last_frame(void);
+/* F12's cull line for the frame f (rd_dump.c, rd_note_cull_drop), without
+ * the log's prefix; the length written */
+size_t rd__cull_drop_line(const RdFrame *f, char *line, size_t cap);
 const RdFrame *rd__prev_frame(void);
 /* Reads a target's colour (RGBA8, tightly packed, w * h * 4 bytes). */
 bool rd__read_target(RdTarget t, void *dst, size_t dstSize, uint32_t *w, uint32_t *h);

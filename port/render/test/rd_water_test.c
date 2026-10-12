@@ -341,6 +341,13 @@ int gsb_HostCullViewsUsed(void)
     return 1;
 }
 
+/* GsBase.c: why it tested one camera (the stub's: the camera standing
+   still) */
+int gsb_HostCullOneWhy(void)
+{
+    return GSB_CULL_ONE_STILL;
+}
+
 /* GsBase.c: RegistPacket.c says whether the next part is locked to the
    camera; the stub cull above ignores it */
 void gsb_HostCullCameraLocked(int on)

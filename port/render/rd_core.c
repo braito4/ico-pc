@@ -1841,7 +1841,7 @@ void rd_free_camera(void)
     }
 }
 
-void rd_note_cull_drop(const char *model, int part, int rule, int views)
+void rd_note_cull_drop(const char *model, int part, int rule, int views, int oneWhy)
 {
     RdFrame *f = rd__rec_frame();
     if (!f) {
@@ -1853,6 +1853,7 @@ void rd_note_cull_drop(const char *model, int part, int rule, int views)
         d->part = (int16_t)part;
         d->rule = (uint8_t)rule;
         d->views = (uint8_t)views;
+        d->oneWhy = (uint8_t)(views == 1 ? oneWhy : 0);
     }
     f->cullDropCount++;
 }

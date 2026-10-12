@@ -70,6 +70,22 @@ float gsb_ViewFocus(void);
    (lineManager.c) and the shadow volumes' edge clip (Shadow.c). */
 void gsb_HostCullCameraLocked(int on);
 int gsb_HostCullViewsUsed(void);
+
+/* why the last gsb_ClipBox tested this tick's camera alone
+   (gsb_HostCullViewsUsed 1), for F12's cull line: GSB_CULL_ONE_NOT when it
+   tested more (or kept every box) */
+enum {
+    GSB_CULL_ONE_NOT = 0,
+    GSB_CULL_ONE_ORIGINAL, /* the Original framerate: nothing blended */
+    GSB_CULL_ONE_FIRST,    /* a stage's first tick: no earlier camera */
+    GSB_CULL_ONE_CUT,      /* a cut the game signalled since the flip */
+    GSB_CULL_ONE_STILL,    /* the camera the tick before's, bitwise */
+    GSB_CULL_ONE_JUMP,     /* a step past the presenter's limits: the pictures snap */
+    GSB_CULL_ONE_LOCKED,   /* a part locked to the camera (node flag 2) */
+    GSB_CULL_ONE_SINGULAR  /* this tick's matrix has no inverse */
+};
+
+int gsb_HostCullOneWhy(void);
 int gsb_HostDotVisible(const int *ip, const float *pos);
 float gsb_HostLineHalfWidth(void);
 float gsb_HostShadowClipX(void);

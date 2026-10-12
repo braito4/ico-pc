@@ -202,10 +202,11 @@ static void regHostMesh(PacHeader *pk, int pass)
 /* PC port (v0.6.1, VIS-RULES): a box cull's drop, named for F12's log
    line (rd.h rd_note_cull_drop): rule 2 the object's box (part -1), rule 3
    a part's box, with the cameras the cull tested (item 5 when more than
-   one) */
+   one) and, with one, why */
 static void regHostCullDrop(Sub15C *o, int part, int rule)
 {
-    rd_note_cull_drop(o->model != 0 ? o->model->name : 0, part, rule, gsb_HostCullViewsUsed());
+    rd_note_cull_drop(o->model != 0 ? o->model->name : 0, part, rule, gsb_HostCullViewsUsed(),
+                      gsb_HostCullOneWhy());
 }
 
 #define REG_CULL_DROP(o, part, rule) regHostCullDrop((o), (part), (rule))

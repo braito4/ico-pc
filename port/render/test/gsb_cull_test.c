@@ -57,6 +57,13 @@
  *            gsb_ResetGSSystem: one camera.
  *   original the Original framerate (nothing blended): one camera, while
  *            the camera moves.
+ *   rates    every framerate but Original (30, 60, 120, 144, uncapped, and
+ *            the row changed from uncapped to 60 between ticks): a moving
+ *            camera culls against the three cameras; why one camera was
+ *            used (gsb_HostCullOneWhy, F12's cull line): the Original
+ *            framerate, a step past the limits, the camera standing still
+ *            (a second box too), a signalled cut, no earlier camera, a
+ *            part locked to the camera.
  *   locked   a part locked to the camera (gsb_HostCullCameraLocked, node
  *            flag 2): one camera.
  *   dots     the water dots' window (gsb_HostDotVisible) at W = 512, 1376,
@@ -90,6 +97,10 @@
  *            are left to the tick before's draws (the sweep's control).
  *            The triangles the region rule drops for a vertex behind the
  *            eye at the dump's camera are counted (none reach its picture).
+ *            The owner's v0.7.0 capture at the place (frame 22117, 16:9,
+ *            framerate 60, the camera standing still): one camera, the
+ *            log's drops, and no frame pixel whose nearest st18a surface
+ *            is a dropped part's (checkStageCapture).
  *            --stage DISC --eye (not a ctest, some 40 minutes) also
  *            rasterises every picture between the ticks with and without
  *            the triangles the rule drops for a vertex behind the
@@ -1180,6 +1191,70 @@ static void checkOriginal(void)
     checkOneCamera("Original framerate", &b);
 }
 
+/* v0.7.0 (the owner's capture at the issue 76 place, frame 22117, its cull
+   line without "/5"): the cameras follow "the pictures are blended between
+   ticks" (video_options.c ico_video_interpolate, the window's rule
+   window_host.c rs->interpolate: every framerate but Original), never the
+   framerate row's value: a cap of 30, 60, 120 or 144 presents per second
+   culls a moving camera's step against the three cameras as uncapped does,
+   from the tick after the row changed as on any tick; Original one.  And
+   gsb_HostCullOneWhy names why one camera was used, for F12's line. */
+static void checkFramerates(void)
+{
+    static const int kRates[] = {30, 60, 120, 144, ICO_FRAMERATE_UNCAPPED};
+    for (size_t i = 0; i < sizeof(kRates) / sizeof(kRates[0]); i++) {
+        setOptions(kRates[i], 3840, 2160);
+        CHECK(ico_video_interpolate(), "framerate %d: pictures blended", kRates[i]);
+        const int views = viewsAcross(100.0, 5.0);
+        CHECK(views == 3 && gsb_HostCullOneWhy() == GSB_CULL_ONE_NOT,
+              "framerate %d: a moving camera culls against 3 cameras (%d, why %d)", kRates[i],
+              views, gsb_HostCullOneWhy());
+    }
+    /* the row changed from uncapped to 60 between two ticks */
+    setOptions(ICO_FRAMERATE_UNCAPPED, 3840, 2160);
+    {
+        IcoVideoOptions o;
+        ico_video_get(&o);
+        o.framerate = 60;
+        ico_video_set(&o);
+    }
+    CHECK(viewsAcross(100.0, 5.0) == 3, "framerate uncapped to 60: 3 cameras (%d)",
+          gsb_HostCullViewsUsed());
+    setOptions(ICO_FRAMERATE_ORIGINAL, 3840, 2160);
+    CHECK(viewsAcross(100.0, 5.0) == 1 && gsb_HostCullOneWhy() == GSB_CULL_ONE_ORIGINAL,
+          "framerate Original: one camera, why the Original framerate (%d, why %d)",
+          gsb_HostCullViewsUsed(), gsb_HostCullOneWhy());
+
+    /* why one camera, at 60 */
+    setOptions(60, 3840, 2160);
+    CHECK(viewsAcross(301.0, 0.0) == 1 && gsb_HostCullOneWhy() == GSB_CULL_ONE_JUMP,
+          "why: a step past the limits (%d, why %d)", gsb_HostCullViewsUsed(),
+          gsb_HostCullOneWhy());
+    CHECK(viewsAcross(0.0, 0.0) == 1 && gsb_HostCullOneWhy() == GSB_CULL_ONE_STILL,
+          "why: the camera standing still (%d, why %d)", gsb_HostCullViewsUsed(),
+          gsb_HostCullOneWhy());
+    /* the cached cameras keep their why (a second box under the same
+       +0x280) */
+    {
+        Cam a;
+        camTurn(&a, 0.4, 0.05);
+        a.e[0] = 120.0;
+        a.e[1] = 40.0;
+        a.e[2] = -300.0;
+        CHECK(viewsAhead(&a) == 1 && gsb_HostCullOneWhy() == GSB_CULL_ONE_STILL,
+              "why: the camera standing still, a second box (%d, why %d)", gsb_HostCullViewsUsed(),
+              gsb_HostCullOneWhy());
+        ico_video_camera_cut();
+        CHECK(viewsAhead(&a) == 1 && gsb_HostCullOneWhy() == GSB_CULL_ONE_CUT,
+              "why: a signalled cut (%d, why %d)", gsb_HostCullViewsUsed(), gsb_HostCullOneWhy());
+        gsb_ResetGSSystem();
+        setCamera(&a);
+        CHECK(viewsAhead(&a) == 1 && gsb_HostCullOneWhy() == GSB_CULL_ONE_FIRST,
+              "why: no earlier camera (%d, why %d)", gsb_HostCullViewsUsed(), gsb_HostCullOneWhy());
+        tick();
+    }
+}
+
 static void checkLocked(void)
 {
     setOptions(ICO_FRAMERATE_UNCAPPED, 640, 480);
@@ -1199,11 +1274,13 @@ static void checkLocked(void)
     gsb_HostCullCameraLocked(1);
     const int locked = gsb_ClipBox(&bx.v[0][0]);
     const int lockedViews = gsb_HostCullViewsUsed();
+    const int lockedWhy = gsb_HostCullOneWhy();
     const int ref = refClip(&bx);
     gsb_HostCullCameraLocked(0);
     gsb_ClipBox(&bx.v[0][0]);
-    CHECK(lockedViews == 1 && locked == ref,
-          "locked: one camera, the PS2's result (%d cameras, %d, %d)", lockedViews, locked, ref);
+    CHECK(lockedViews == 1 && locked == ref && lockedWhy == GSB_CULL_ONE_LOCKED,
+          "locked: one camera, the PS2's result (%d cameras, %d, %d, why %d)", lockedViews, locked,
+          ref, lockedWhy);
     CHECK(gsb_HostCullViewsUsed() == 3, "locked: a world part again culls against 3 cameras (%d)",
           gsb_HostCullViewsUsed());
 }
@@ -2595,6 +2672,96 @@ static void checkStageDump(void)
     }
 }
 
+/* v0.7.0, the owner's capture at the same place (user-slit-frame-20261012-
+   162136: frame 22117, 3840 x 2160 at 16:9, Full pixel, framerate 60, the
+   log's cull line without "/5"): its view and zoom from the dump's header.
+   The presented picture is the tick's (the camera stood still: the
+   mirrored present and the tick's frame differ by under half a grey level),
+   so the cull ran with one camera for that reason, not for the framerate.
+   At that tick: one camera, why the camera standing still; the parts
+   dropped are the ones the log names; and st18a rasterised at the native
+   frame's pixels (688 x 448, the nearest surface) has every pixel covered,
+   none of them by a dropped part: the dark strips between the wall slabs
+   in the picture are the stage's own faces, not a part the cull left out */
+static const float kCaptureView[16] = {-0.336689532f, 0.561595857f, -0.755716801f, 0.0f,
+                                       0.0f,          0.802602112f, 0.596437752f,  0.0f,
+                                       0.941583395f,  0.200814337f, -0.2702277f,   0.0f,
+                                       3036.56055f,   -478.052185f, 752.265686f,   1.0f};
+
+#define CAPTURE_ZOOM 382.074646f
+
+static void checkStageCapture(void)
+{
+    static const char *const kWant[3] = {"3 8 10 13 14 15 16 17 18 19 20", "2 3 5 6",
+                                         "0 1 2 3 4 5 6 7 8 11 12 16 17 18 19 20 21"};
+    unsigned char kept[512];
+    int partAt[STAGE_MODELS + 1];
+    setOptions(60, 3840, 2160);
+    CHECK(gsFrame.w == 688, "capture: the native width %d, want 688", gsFrame.w);
+    for (int k = 0; k < 2; k++) {
+        gsb_SetVSMatrix(ScreenWidth, ScreenHeight, distanceFor(CAPTURE_ZOOM));
+        memcpy(matrixptr + 0x80, kCaptureView, sizeof(kCaptureView));
+        gsb_MakeCommonMatrix();
+        if (k == 0) {
+            tick();
+        }
+    }
+    registerStage(kept, 0);
+    CHECK(gsb_HostCullViewsUsed() == 1 && gsb_HostCullOneWhy() == GSB_CULL_ONE_STILL,
+          "capture: one camera, the camera standing still (%d, why %d)", gsb_HostCullViewsUsed(),
+          gsb_HostCullOneWhy());
+    partAt[0] = 0;
+    for (int m = 0; m < s_stageCount; m++) {
+        partAt[m + 1] = partAt[m] + s_stage[m].parts;
+        if (m >= 3) {
+            continue;
+        }
+        char got[256];
+        size_t n = 0;
+        got[0] = 0;
+        for (int j = 0; j < s_stage[m].parts; j++) {
+            if (!kept[partAt[m] + j] && n + 8 < sizeof(got)) {
+                n += (size_t)snprintf(got + n, sizeof(got) - n, n ? " %d" : "%d", j);
+            }
+        }
+        CHECK(strcmp(got, kWant[m]) == 0, "capture: %s drops %s, want the log's %s",
+              s_stage[m].name, got, kWant[m]);
+    }
+    /* the nearest surface of every triangle (s_dAll) and of the registered
+       parts' (s_dNow), at the frame's pixels */
+    double v[16], pr[16], sv[16];
+    for (int i = 0; i < 16; i++) {
+        v[i] = kCaptureView[i];
+        pr[i] = ((const float *)(matrixptr + 0xC0))[i];
+    }
+    rdcb_mul4d(pr, v, sv);
+    const int fw = gsFrame.w, fh = ScreenHeight;
+    const double fx = 2048.0 - fw / 2, fy = 2048.0 - fh / 2;
+    for (int i = 0; i < fw * fh; i++) {
+        s_dAll[i] = s_dNow[i] = 0.0f;
+    }
+    for (int i = 0; i < s_triCount; i++) {
+        double h[12][4];
+        triClip(sv, (const float (*)[3])s_tri[i], h);
+        const int n = cutDepth(h, 3);
+        if (n >= 3) {
+            const int reg = kept[partAt[s_triOf[i][0]] + s_triOf[i][1]];
+            rasterPoly(h, n, fx, fy, fw, 0, 0, fw - 1, fh - 1, reg ? 1 | 4 : 1, i);
+        }
+    }
+    int empty = 0, holes = 0;
+    for (int i = 0; i < fw * fh; i++) {
+        empty += !(s_dAll[i] > 0.0f);
+        holes += farther(s_dAll[i], s_dNow[i]);
+    }
+    printf("gsb_cull_test: capture frame 22117: %d of %d frame pixels without a st18a surface, %d "
+           "whose nearest surface is a dropped part's\n",
+           empty, fw * fh, holes);
+    CHECK(empty == 0 && holes == 0,
+          "capture: %d pixels without a surface, %d whose nearest surface the cull dropped", empty,
+          holes);
+}
+
 static int checkStage(const char *disc)
 {
     if (!loadStage(disc)) {
@@ -2614,6 +2781,7 @@ static int checkStage(const char *disc)
     CHECK(s_stageCount >= 3 && tris > 1000, "stage: st18a from the disc");
     CHECK(flattenStage() > 1000, "stage: st18a's triangles");
     checkStageDump();
+    checkStageCapture();
     if (s_eyeWanted) {
         /* the frame is the picture (S1): the eye sweep only */
         checkStageSweep("4:3", 640, 480, 512);
@@ -2671,6 +2839,7 @@ int main(int argc, char **argv)
     checkStill();
     checkFirst();
     checkOriginal();
+    checkFramerates();
     checkLocked();
 
     checkDotWindow("4:3", 640, 480, 6400);
