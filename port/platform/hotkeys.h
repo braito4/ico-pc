@@ -62,4 +62,10 @@ unsigned long long ico_stats_fast_toggle(unsigned long long now, unsigned long l
 int ico_frame_dump_paths(const char *dir, const char *stamp, unsigned int vsync, char *dump,
                          size_t dump_size, char *png, size_t png_size, char *zip, size_t zip_size);
 
+/* F12's fourth file: the picture as presented (the window's pixels, the
+   port's own UI left out), frame-<stamp>-present.png in dir; the .png above
+   is the whole DISPLAY frame (wider than the picture at 16:9).  0, or -1
+   when the path does not fit (png then ""). */
+int ico_frame_present_path(const char *dir, const char *stamp, char *png, size_t png_size);
+
 #endif /* ICO_PLATFORM_HOTKEYS_H */

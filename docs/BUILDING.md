@@ -497,14 +497,15 @@ settings, and each dump's name, size and SHA-256).
 ## Frame captures (F12)
 
 F12 in the running game saves the frame on the screen, for a bug report or
-for renderer work. Two files go in `dumps/` under the user folder
+for renderer work. Three files go in `dumps/` under the user folder
 (`<pref>/dumps`; [where that is](PORTABLE_MODE.md#where-your-saves-are)),
 named `frame-<yyyymmdd-hhmmss>-v<N>`, where `<N>` is the count of vertical
 syncs since start:
 
 | file | holds |
 | --- | --- |
-| `.png` | the picture on the screen at that moment (optional for a report; large at a high Resolution, so it stays a loose file) |
+| `.png` | the whole frame the game drew at that moment (optional for a report; large at a high Resolution, so it stays a loose file). At 16:9 it is a little wider than the window's picture; `tools/native_frame_check.py` reads this one |
+| `-present.png` | named `frame-<yyyymmdd-hhmmss>-present.png` (no `-v<N>`): the picture as the window showed it, the same pixels, without the port's own popups |
 | `.zip` | the `.rddump` (`port/render/rd_dump.c`, format version 10, `RD_DUMP_VERSION`) and a copy of `logs/ico-pc.log`, for a GitHub issue, which refuses `.rddump` files. With no log file (the program started with `--console`) it holds the dump alone |
 
 The game writes the `.rddump` first, zips it, and deletes the loose file once

@@ -153,6 +153,8 @@ static struct {
     int legacyAlpha; /* ICO_RD_S2_LEGACY=1 (read in video_settings) */
     /* F11, the stats line every second until this time (0: off) */
     Uint64 fastUntil;
+    /* F12's presented-picture PNG while its capture is pending ("": none) */
+    char presentPng[ICO_PATH_MAX];
 } s_pres;
 
 /* resolution "auto" (video_options.h ICO_RES_AUTO): the
@@ -1116,6 +1118,14 @@ static void frame_dump(void)
         return;
     }
     const int ok = rd_dump_on_demand(dump, png);
+    /* the picture as presented, frame-<stamp>-present.png, at the next
+       present (the .png above is the whole DISPLAY frame, which at 16:9 is
+       wider than the window's picture; Gate B reads that one) */
+    if (ico_frame_present_path(dir, stamp, s_pres.presentPng, sizeof(s_pres.presentPng)) == 0 &&
+        !rd_capture_presented(s_pres.presentPng)) {
+        fprintf(stderr, "window: F12: the presented picture could not be armed\n");
+        s_pres.presentPng[0] = '\0';
+    }
     /* the recording up to this moment, for the same report */
     ico_input_record_flush();
     /* the zip is made after the dump is closed; with --console the log
@@ -1346,7 +1356,13 @@ static void photo_pump(void)
 
             base = b2 != NULL && (base == NULL || b2 > base) ? b2 : base;
 #endif
-            ui_photo_capture_done(r > 0, base != NULL ? base + 1 : path);
+            if (s_pres.presentPng[0] != '\0' && strcmp(path, s_pres.presentPng) == 0) {
+                /* F12's presented picture: no photo popup */
+                fprintf(stderr, "window: F12: %s %s\n", r > 0 ? "wrote" : "could not write", path);
+                s_pres.presentPng[0] = '\0';
+            } else {
+                ui_photo_capture_done(r > 0, base != NULL ? base + 1 : path);
+            }
         }
     }
 }

@@ -261,6 +261,11 @@ bool rd__apply_display(void)
         rd__present_box(st->outputWidth, st->outputHeight, aspect, &b);
         const float we = wexactFor(aspect);
         w = we == gw ? (float)b.w : (float)b.w * gw / we;
+        /* a whole texel count: the box's width over the exact width is a
+         * fraction of a texel off at 16:9 (1934.99..), and the presenter
+         * snaps its source window to whole texels only when the scene's
+         * density is the box's (snapWindow) */
+        w = floorf(w + 0.5f);
         h = (float)b.h;
     } else {
         w = gw;
@@ -440,6 +445,27 @@ bool rd__present_acquire(void)
     return g_rd.presentOut.id != 0;
 }
 
+/* The source window of a blit that leaves crop texels out at each side of a
+ * source sw wide, into a box box_w wide: u0 .. u1 (mirrored: swapped by the
+ * caller).  Whole texels (u0 = floor(crop + 1/2), u1 = u0 + box_w, at most
+ * half an output pixel of shift) when the scene's density is the box's, so
+ * every output pixel is one texel and a linear filter blends nothing: the
+ * frame's exact width over the native width is a fraction of a texel at
+ * 16:9 (crop 7.5), where the symmetric window puts every pixel centre on a
+ * texel boundary.  Otherwise (and at 4:3, crop 0) crop .. sw - crop. */
+static bool snapWindow(uint32_t sw, float crop, uint32_t boxW, float *u0, float *u1)
+{
+    const float c = crop > 0.0f ? crop : 0.0f;
+    if (c > 0.0f && fabsf(((float)sw - 2.0f * c) - (float)boxW) < 0.0625f) {
+        *u0 = floorf(c + 0.5f);
+        *u1 = *u0 + (float)boxW;
+        return true;
+    }
+    *u0 = c;
+    *u1 = (float)sw - c;
+    return false;
+}
+
 /* src (sw x sh) into box of dst in a pass of its own, crop texels left out
  * at each side of src (sourceCrop; 0: all of it); keepOpen leaves the pass
  * open for the caller to draw more into dst and end it */
@@ -471,8 +497,8 @@ static void blit(RhiCommandList cl, RhiTexture src, uint32_t sw, uint32_t sh, Rh
          * u0 + t (u1 - u0)): u = sw (1 - t), exact at the box's pixel
          * centres when the scale is a power of two.  A crop narrows it by
          * as much at each side (none at 4:3: the same constants) */
-        const float u0 = crop > 0.0f ? crop : 0.0f;
-        const float u1 = crop > 0.0f ? (float)sw - crop : (float)sw;
+        float u0, u1;
+        snapWindow(sw, crop, box->w, &u0, &u1);
         cb.uvRect[0] = mirror ? u1 : u0;
         cb.uvRect[2] = mirror ? u0 : u1;
         cb.uvRect[3] = (float)sh;
@@ -534,6 +560,10 @@ static bool reduceRecord(RhiCommandList cl, RhiTexture *src, uint32_t *sw, uint3
         return false;
     }
     const float ew = (float)*sw - 2.0f * (crop > 0.0f ? crop : 0.0f);
+    float su0, su1;
+    if (snapWindow(*sw, crop, box->w, &su0, &su1)) {
+        return false; /* a texel a pixel: the box blit's whole-texel window */
+    }
     if (!(ew > (float)box->w && (float)*sh > (float)box->h)) {
         return false; /* one texel a pixel or fewer: the box blit as before */
     }
@@ -717,8 +747,8 @@ static bool depthBlit(RhiCommandList cl, RhiTexture src, uint32_t sw, uint32_t s
         cb.col[i] = 0x80;
     }
     cb.mode[0] = ICO_DF_TEXTURED | ICO_DF_TCC_RGBA;
-    const float u0 = crop > 0.0f ? crop : 0.0f;
-    const float u1 = crop > 0.0f ? (float)sw - crop : (float)sw;
+    float u0, u1;
+    snapWindow(sw, crop, box->w, &u0, &u1);
     cb.uvRect[0] = mirror ? u1 : u0;
     cb.uvRect[2] = mirror ? u0 : u1;
     cb.uvRect[3] = (float)sh;

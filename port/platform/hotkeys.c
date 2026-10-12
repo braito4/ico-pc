@@ -37,6 +37,25 @@ unsigned long long ico_stats_fast_toggle(unsigned long long now, unsigned long l
     return now < fast_until ? 0 : now + ICO_STATS_FAST_SPAN_NS;
 }
 
+int ico_frame_present_path(const char *dir, const char *stamp, char *png, size_t png_size)
+{
+    const size_t n = strlen(dir);
+#ifdef _WIN32
+    const char *sep = n > 0 && (dir[n - 1] == '/' || dir[n - 1] == '\\') ? "" : "\\";
+#else
+    const char *sep = n > 0 && dir[n - 1] == '/' ? "" : "/";
+#endif
+    const int a = snprintf(png, png_size, "%s%sframe-%s-present.png", dir, sep, stamp);
+
+    if (a < 0 || (size_t)a >= png_size) {
+        if (png_size > 0) {
+            png[0] = '\0';
+        }
+        return -1;
+    }
+    return 0;
+}
+
 int ico_frame_dump_paths(const char *dir, const char *stamp, unsigned int vsync, char *dump,
                          size_t dump_size, char *png, size_t png_size, char *zip, size_t zip_size)
 {
