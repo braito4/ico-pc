@@ -79,6 +79,15 @@
  *            2046 (GSB_SHADOW_CLIP_MAX, VIS-RULES item 17): a clipped end
  *            at 2048 -+ the clip packs into Shadow.c's range test (0x11 ..
  *            0xFFEF sixteenths); 2047 did not.
+ *   stage    (--stage DISC, ctest gsb_cull_stage; 77 without the disc image,
+ *            issue 76) st18a's parts from the disc, culled as the game culls
+ *            them, at the camera of the reporter's dump i76 (the parts it
+ *            drops are the ones the dump's log names) and over 768 camera
+ *            steps about it at 16:9 and 48:9 (orbits, the eye alone, the
+ *            view alone, the zoom easing): every part a picture between the
+ *            two ticks shows (t = 1/16 .. 15/16, rdcb_blend_view) is
+ *            registered by this tick; culled with one camera instead, some
+ *            are left to the tick before's draws (the sweep's control).
  */
 #include <math.h>
 #include <stdio.h>
@@ -86,7 +95,10 @@
 #include <string.h>
 #include <eeregs.h>
 #include <libvu0.h>
+#include "rd_camera_blend.h"
 #include "rd_internal.h"
+#include "df_pack.h"
+#include "vfs.h"
 /* the game's side */
 #include "typedef.h"
 #include "main.h"
@@ -1397,6 +1409,684 @@ static void checkSpanNear(void)
           res, gsb_HostCullViewsUsed());
 }
 
+/* ------------------------------------------------- the stage, with the disc
+ *
+ * Issue 76 (v0.6.2): st18a's parts as the game culls them (the object's box,
+ * then each part's: RegistPacket.c reg_setNMatrixPacket and the part cull,
+ * the boxes the vertex extents PObj.c MakeBoundingBox makes at load; the
+ * stage is placed at the identity) against the camera of the reporter's
+ * dump i76 (frame 5553, 16:9 Enhanced, uncapped) and cameras orbiting
+ * about points in front of it, the tick before's and this tick's as the
+ * game sets them.  Every picture the presenter draws between the two
+ * (t = 1/16 .. 15/16, the views blended by rdcb_blend_view, rd_interp.c
+ * camSetup's own function) is tested against every triangle of every part:
+ * a part with a triangle in a picture must have been registered by this
+ * tick, or by the tick before and passed by the presenter's gate for a draw
+ * of the tick before alone (rd_interp.c prevAlone: not wholly inside this
+ * tick's cull frustum, mayBeCulledAtCur). */
+
+typedef struct StagePart {
+    float box[8][4]; /* PObj.c MakeBoundingBox's corners */
+    double reach;    /* the farthest vertex from the model's origin */
+    int tris;
+    float (*tri)[3][3];
+} StagePart;
+
+typedef struct StageModel {
+    char name[16];
+    float bb[8][4]; /* the object's box */
+    int parts;
+    StagePart *part;
+} StageModel;
+
+#define STAGE_MODELS 8
+
+static StageModel s_stage[STAGE_MODELS];
+
+static int s_stageCount;
+
+static uint32_t le32(const unsigned char *f, uint32_t at)
+{
+    return (uint32_t)f[at] | (uint32_t)f[at + 1] << 8 | (uint32_t)f[at + 2] << 16 |
+           (uint32_t)f[at + 3] << 24;
+}
+
+static int le16s(const unsigned char *f, uint32_t at)
+{
+    return (int)(int16_t)(uint16_t)(f[at] | f[at + 1] << 8);
+}
+
+static void boxCorners(float (*out)[4], const float *mn, const float *mx)
+{
+    for (int l = 0; l < 8; l++) {
+        out[l][0] = (l & 1) ? mn[0] : mx[0];
+        out[l][1] = (l & 2) ? mn[1] : mx[1];
+        out[l][2] = (l & 4) ? mn[2] : mx[2];
+        out[l][3] = 1.0f;
+    }
+}
+
+/* a p2o's parts: the vertex table (rec + 0x90) and the strips (rec +
+   0x100: head records, a count then that many 16-byte vertex records whose
+   position index is at +4; a count of -1 ends them; rd_mesh_test.c
+   findStrip); 0 when the file is not one */
+static int loadModel(StageModel *m, const unsigned char *f, uint32_t size)
+{
+    if (size < 0x18 || memcmp(f, "PS2O", 4) != 0) {
+        return 0;
+    }
+    const uint32_t tbl = le32(f, 4), n = le32(f, 8);
+    float gmn[3] = {16777215.0f, 16777215.0f, 16777215.0f};
+    float gmx[3] = {-16777215.0f, -16777215.0f, -16777215.0f};
+    m->part = calloc(n ? n : 1, sizeof(StagePart));
+    if (!m->part) {
+        return 0;
+    }
+    m->parts = (int)n;
+    for (uint32_t o = 0; o < n; o++) {
+        StagePart *sp = &m->part[o];
+        if (tbl + o * 4 + 4 > size) {
+            return 0;
+        }
+        const uint32_t rec = le32(f, tbl + o * 4);
+        if (rec + 0x180 > size || memcmp(f + rec + 0x80, "OBJH", 4) != 0) {
+            return 0;
+        }
+        const uint32_t vtx = le32(f, rec + 0x90), vc = le32(f, rec + 0x94);
+        const uint32_t strips = le32(f, rec + 0x100), sc = le32(f, rec + 0x104);
+        float mn[3] = {16777215.0f, 16777215.0f, 16777215.0f};
+        float mx[3] = {-16777215.0f, -16777215.0f, -16777215.0f};
+        if (vtx + vc * 16 > size) {
+            return 0;
+        }
+        for (uint32_t j = 0; j < vc; j++) {
+            float q[4];
+            memcpy(q, f + vtx + j * 16, sizeof(q));
+            for (int a = 0; a < 3; a++) {
+                mn[a] = q[a] < mn[a] ? q[a] : mn[a];
+                mx[a] = mx[a] < q[a] ? q[a] : mx[a];
+                gmn[a] = q[a] < gmn[a] ? q[a] : gmn[a];
+                gmx[a] = gmx[a] < q[a] ? q[a] : gmx[a];
+            }
+            sp->reach = fmax(sp->reach,
+                             sqrt((double)q[0] * q[0] + (double)q[1] * q[1] + (double)q[2] * q[2]));
+        }
+        boxCorners(sp->box, mn, mx);
+        /* the strips' triangles: every three in a row */
+        for (int pass = 0; pass < 2; pass++) {
+            int t = 0;
+            for (uint32_t s = 0; s < sc && strips + s * 4 + 4 <= size; s++) {
+                uint32_t at = le32(f, strips + s * 4);
+                while (at + 16 <= size && le16s(f, at) != -1) {
+                    const int k = le16s(f, at);
+                    for (int i = 2; i < k && at + 16 + (uint32_t)i * 16 + 16 <= size; i++) {
+                        const int ix[3] = {le16s(f, at + 16 + (uint32_t)(i - 2) * 16 + 4),
+                                           le16s(f, at + 16 + (uint32_t)(i - 1) * 16 + 4),
+                                           le16s(f, at + 16 + (uint32_t)i * 16 + 4)};
+                        if (ix[0] < 0 || ix[1] < 0 || ix[2] < 0 || (uint32_t)ix[0] >= vc ||
+                            (uint32_t)ix[1] >= vc || (uint32_t)ix[2] >= vc) {
+                            continue;
+                        }
+                        if (pass == 1) {
+                            for (int v = 0; v < 3; v++) {
+                                memcpy(sp->tri[t][v], f + vtx + (uint32_t)ix[v] * 16,
+                                       3 * sizeof(float));
+                            }
+                        }
+                        t++;
+                    }
+                    at += 16 + (uint32_t)(k > 0 ? k : 0) * 16;
+                }
+            }
+            if (pass == 0) {
+                sp->tris = t;
+                sp->tri = calloc(t ? (size_t)t : 1u, sizeof(*sp->tri));
+                if (!sp->tri) {
+                    return 0;
+                }
+            }
+        }
+    }
+    boxCorners(m->bb, gmn, gmx);
+    return 1;
+}
+
+/* st18a's models from the disc image: 0 without one */
+static int loadStage(const char *disc)
+{
+    IcoVfs *vfs = disc && disc[0] ? ico_vfs_mount(&ico_vfs_iso9660, disc) : NULL;
+    if (!vfs) {
+        return 0;
+    }
+    for (int k = 1; k <= STAGE_MODELS && s_stageCount < STAGE_MODELS; k++) {
+        char path[64];
+        IcoDfMember mem;
+        unsigned char *f;
+        snprintf(path, sizeof(path), "object/sdf/st18a/model/st18a_p%d.p2o", k);
+        if (ico_df_find_member(vfs, path, &mem) != 0) {
+            continue;
+        }
+        f = malloc(mem.size ? mem.size : 1);
+        if (!f || ico_df_read_member(vfs, &mem, f) != 0) {
+            free(f);
+            continue;
+        }
+        StageModel *m = &s_stage[s_stageCount];
+        snprintf(m->name, sizeof(m->name), "st18a_p%d", k);
+        if (loadModel(m, f, (uint32_t)mem.size)) {
+            s_stageCount++;
+        } else {
+            CHECK(0, "stage: %s is not a model", path);
+        }
+        free(f);
+    }
+    ico_vfs_unmount(vfs);
+    return s_stageCount;
+}
+
+/* the camera of the dump i76 (frame 5553): its view (world to view,
+   column-major) and zoom, from the dump's header (rd_dump.c, RdCamera) */
+static const float kI76View[16] = {0.0271272995f, 0.507210255f,   -0.861343563f, 0.0f,
+                                   0.0f,          0.861662924f,   0.507398367f,  0.0f,
+                                   0.999629378f,  -0.0137643469f, 0.0233745873f, 0.0f,
+                                   2508.62744f,   -922.40686f,    1694.52332f,   1.0f};
+
+#define I76_ZOOM 382.074646f
+
+/* a Cam from a world to view matrix: its rotation (orthonormalised through
+   the quaternion) and its eye */
+static Cam camOfView(const float *v)
+{
+    double r[3][3], q[4];
+    Cam c;
+    for (int row = 0; row < 3; row++) {
+        for (int col = 0; col < 3; col++) {
+            r[col][row] = v[col * 4 + row]; /* camera to world */
+        }
+    }
+    rdcb_quat_from_rot((const double (*)[3])r, q);
+    const double n = sqrt(qdot(q, q));
+    for (int i = 0; i < 4; i++) {
+        c.q[i] = q[i] / n;
+    }
+    for (int j = 0; j < 3; j++) {
+        c.e[j] = -(v[j * 4 + 0] * v[12] + v[j * 4 + 1] * v[13] + v[j * 4 + 2] * v[14]);
+    }
+    return c;
+}
+
+/* c turned by ang radians about the world axis u (unit) through p: the eye
+   carried round, the view turned with it */
+static Cam orbit(const Cam *c, const double *u, const double *p, double ang)
+{
+    const double s = sin(ang / 2), qr[4] = {u[0] * s, u[1] * s, u[2] * s, cos(ang / 2)};
+    double r[3][3], d[3];
+    Cam o;
+    qmul(qr, c->q, o.q);
+    rotOf(qr, r);
+    for (int i = 0; i < 3; i++) {
+        d[i] = c->e[i] - p[i];
+    }
+    for (int i = 0; i < 3; i++) {
+        o.e[i] = p[i] + r[i][0] * d[0] + r[i][1] * d[1] + r[i][2] * d[2];
+    }
+    return o;
+}
+
+/* gsb_SetVSMatrix's distance for the zoom z (vsParam[0], the screen
+   matrix's scale: the distance times the stage's view scale and the
+   game's zoom factors) */
+static float distanceFor(float z)
+{
+    gsb_SetVSMatrix(ScreenWidth, ScreenHeight, 1000.0f);
+    return z * 1000.0f / ((const float *)(matrixptr + 0xC0))[0];
+}
+
+/* the game's camera with the zoom z (camera-root.c MakeCameraMatrix) */
+static void setCameraZoom(const Cam *c, float z)
+{
+    double v[16];
+    float f[16];
+    viewOf(c, v);
+    for (int i = 0; i < 16; i++) {
+        f[i] = (float)v[i];
+    }
+    gsb_SetVSMatrix(ScreenWidth, ScreenHeight, distanceFor(z));
+    memcpy(matrixptr + 0x80, f, sizeof(f));
+    gsb_MakeCommonMatrix();
+}
+
+/* which parts the game registers under the camera in force: the object's
+   box, then the part's (gsb_ClipBox 0 drops); the count kept */
+static int registerStage(unsigned char *kept, int oneCamera)
+{
+    int n = 0, at = 0;
+    /* one camera: the cull of a part locked to the camera (the PS2's
+       test), the control below */
+    gsb_HostCullCameraLocked(oneCamera);
+    for (int m = 0; m < s_stageCount; m++) {
+        memcpy(ico_current_matrix, matrixptr + 0x280, sizeof(ico_current_matrix));
+        const int obj = gsb_ClipBox(&s_stage[m].bb[0][0]) != 0;
+        for (int j = 0; j < s_stage[m].parts; j++, at++) {
+            memcpy(ico_current_matrix, matrixptr + 0x280, sizeof(ico_current_matrix));
+            kept[at] = obj && gsb_ClipBox(&s_stage[m].part[j].box[0][0]) != 0;
+            n += kept[at];
+        }
+    }
+    gsb_HostCullCameraLocked(0);
+    return n;
+}
+
+/* 1 when the triangle has a piece inside the picture of the view v (world
+   to view): view z past DRAWN_NEAR and |x| <= tx z (1 - 1e-6), |y| <= ty z
+   (1 - 1e-6), clipped plane by plane (a touch on an edge is not a piece) */
+static int triInPicture(const double *v, const float (*tri)[3], double tx, double ty)
+{
+    double poly[2][12][3];
+    int n = 3, cur = 0;
+    for (int k = 0; k < 3; k++) {
+        const double p[3] = {tri[k][0], tri[k][1], tri[k][2]};
+        double o[4];
+        xform(v, p, o);
+        poly[0][k][0] = o[0];
+        poly[0][k][1] = o[1];
+        poly[0][k][2] = o[2];
+    }
+    tx *= 1.0 - 1e-6;
+    ty *= 1.0 - 1e-6;
+    for (int pl = 0; pl < 5; pl++) {
+        int m = 0;
+        for (int i = 0; i < n; i++) {
+            const double *a = poly[cur][i], *b = poly[cur][(i + 1) % n];
+            double da, db;
+#define PLANE(q)                                                                                   \
+    (pl == 0   ? (q)[2] - DRAWN_NEAR                                                               \
+     : pl == 1 ? tx * (q)[2] - (q)[0]                                                              \
+     : pl == 2 ? tx * (q)[2] + (q)[0]                                                              \
+     : pl == 3 ? ty * (q)[2] - (q)[1]                                                              \
+               : ty * (q)[2] + (q)[1])
+            da = PLANE(a);
+            db = PLANE(b);
+#undef PLANE
+            if (da >= 0.0 && m < 12) {
+                memcpy(poly[!cur][m++], a, sizeof(poly[0][0]));
+            }
+            if ((da >= 0.0) != (db >= 0.0) && m < 12) {
+                const double s = da / (da - db);
+                for (int c = 0; c < 3; c++) {
+                    poly[!cur][m][c] = a[c] + s * (b[c] - a[c]);
+                }
+                m++;
+            }
+        }
+        n = m;
+        cur = !cur;
+        if (n < 3) {
+            return 0;
+        }
+    }
+    /* a piece with an area */
+    double area = 0.0;
+    for (int i = 1; i + 1 < n; i++) {
+        double e1[3], e2[3], c[3];
+        for (int k = 0; k < 3; k++) {
+            e1[k] = poly[cur][i][k] - poly[cur][0][k];
+            e2[k] = poly[cur][i + 1][k] - poly[cur][0][k];
+        }
+        c[0] = e1[1] * e2[2] - e1[2] * e2[1];
+        c[1] = e1[2] * e2[0] - e1[0] * e2[2];
+        c[2] = e1[0] * e2[1] - e1[1] * e2[0];
+        area += sqrt(c[0] * c[0] + c[1] * c[1] + c[2] * c[2]);
+    }
+    return area > 1e-6;
+}
+
+/* rd_interp.c mayBeCulledAtCur for a part placed at the identity: the
+   sphere about the world's origin holding its vertices is not wholly
+   inside this tick's cull frustum (the screen matrix S = Pc Vc, GS 2048 +-
+   1.12 times the half width and height, the near plane at nearZ) */
+static int gatePasses(const double *sc, double reach, double gsW, double gsH, double nz)
+{
+    const double m = 1.0 + (double)RD_CULL_MARGIN, hw = 0.5 * gsW * m, hh = 0.5 * gsH * m;
+    double pl[5][4];
+    for (int k = 0; k < 4; k++) {
+        const double x = sc[k * 4], y = sc[k * 4 + 1], w = sc[k * 4 + 3];
+        pl[0][k] = x - (2048.0 - hw) * w;
+        pl[1][k] = (2048.0 + hw) * w - x;
+        pl[2][k] = y - (2048.0 - hh) * w;
+        pl[3][k] = (2048.0 + hh) * w - y;
+        pl[4][k] = w;
+    }
+    pl[4][3] -= nz;
+    for (int i = 0; i < 5; i++) {
+        const double n = sqrt(pl[i][0] * pl[i][0] + pl[i][1] * pl[i][1] + pl[i][2] * pl[i][2]);
+        if (!(n > 0.0) || pl[i][3] < reach * n) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+typedef struct SweepStats {
+    int pairs, snapped, keepAll, threeCams, pictures, hidden, gaps, regCur, regOne;
+    double worstT;
+} SweepStats;
+
+static int stagePartCount(void)
+{
+    int n = 0;
+    for (int m = 0; m < s_stageCount; m++) {
+        n += s_stage[m].parts;
+    }
+    return n;
+}
+
+/* the ticks c0, c1, c2 (the game's camera at each) and the pictures between
+   c1 and c2: every part a picture shows registered at c2, or at c1 and
+   passed by the gate */
+static void sweepPair(const char *what, const Cam *c0, const Cam *c1, const Cam *c2, float z1,
+                      float z2, int oneCamera, SweepStats *st)
+{
+    const int np = stagePartCount();
+    unsigned char keptPrev[512], keptCur[512], keptOne[512];
+    float vPrev[16], vCur[16];
+    if (np > 512) {
+        CHECK(0, "stage: %d parts", np);
+        return;
+    }
+    double scPrev[16];
+    setCameraZoom(c0, z1);
+    tick();
+    setCameraZoom(c1, z1);
+    registerStage(keptPrev, oneCamera);
+    memcpy(vPrev, matrixptr + 0x80, sizeof(vPrev));
+    readProjections();
+    memcpy(scPrev, s_screen, sizeof(scPrev));
+    tick();
+    setCameraZoom(c2, z2);
+    readProjections();
+    st->regCur += registerStage(keptCur, oneCamera);
+    const int views = gsb_HostCullViewsUsed();
+    memcpy(vCur, matrixptr + 0x80, sizeof(vCur));
+    st->pairs++;
+    if (rdcb_camera_jump(vPrev, vCur)) {
+        st->snapped++; /* the presenter snaps: no picture between */
+        return;
+    }
+    st->keepAll += views == 0;
+    st->threeCams += views == 3;
+    st->regOne += registerStage(keptOne, 1); /* the PS2's one camera, for the cost */
+    double vp[16], vc[16], sc[16];
+    for (int i = 0; i < 16; i++) {
+        vp[i] = vPrev[i];
+        vc[i] = vCur[i];
+    }
+    rdcb_mul4d(s_screen, vc, sc);
+    for (int k = 1; k < 16; k++) {
+        const double t = k / 16.0;
+        double vt[16], pt[16];
+        if (!rdcb_blend_view(vp, vc, t, vt)) {
+            CHECK(0, "%s: no blended view at t %g", what, t);
+            continue;
+        }
+        /* the projection lerped (camSetup's Pt for the easing zoom) */
+        rdcb_blend_proj(scPrev, s_screen, t, pt);
+        const double tx = (double)gsFrame.wExact * 0.5 / pt[0];
+        const double ty = halfH() / pt[5];
+        st->pictures++;
+        int at = 0;
+        for (int m = 0; m < s_stageCount; m++) {
+            for (int j = 0; j < s_stage[m].parts; j++, at++) {
+                const StagePart *sp = &s_stage[m].part[j];
+                if (keptCur[at]) {
+                    continue;
+                }
+                int shown = 0;
+                for (int q = 0; q < sp->tris && !shown; q++) {
+                    shown = triInPicture(vt, (const float (*)[3])sp->tri[q], tx, ty);
+                }
+                if (!shown) {
+                    continue;
+                }
+                if (keptPrev[at] && gatePasses(sc, sp->reach, gsFrame.w, ScreenHeight, 2.0)) {
+                    st->hidden++; /* drawn as the tick before's */
+                    continue;
+                }
+                st->gaps++;
+                st->worstT = t;
+                if (st->gaps <= 8) {
+                    printf("  %s: %s part %d shown at t %.4f, not registered (%d cameras; "
+                           "the tick before %s it)\n",
+                           what, s_stage[m].name, j, t, views,
+                           keptPrev[at] ? "registered" : "dropped");
+                }
+            }
+        }
+    }
+}
+
+/* a unit vector */
+static void unit3(double *u)
+{
+    const double n = sqrt(u[0] * u[0] + u[1] * u[1] + u[2] * u[2]);
+    for (int i = 0; i < 3; i++) {
+        u[i] /= n;
+    }
+}
+
+/* the pairs of ticks about the dump's camera: it as this tick (the ticks
+   before it on the same path) and as the tick before (the next tick on
+   it); oneCamera culls with the one camera (the control) */
+static void sweepAbout(const char *what, const Cam *prevPrev, const Cam *prev, const Cam *cur,
+                       const Cam *next, float zPrev, int oneCamera, SweepStats *st)
+{
+    sweepPair(what, prevPrev, prev, cur, zPrev, I76_ZOOM, oneCamera, st);
+    sweepPair(what, prev, cur, next, I76_ZOOM, I76_ZOOM, oneCamera, st);
+}
+
+/* the dump's camera and the camera steps around it: orbits about points
+   in front of it (about the world's up, the view's right, both, and the
+   view's axis) with the eye 50 to 400 units on in a tick, the eye moved
+   alone, the view turned alone about the eye (2 to 29 degrees) and an
+   orbit with the zoom easing */
+static void sweepStage(const char *what, int oneCamera, SweepStats *st)
+{
+    const Cam cur = camOfView(kI76View);
+    double r[3][3];
+    rotOf(cur.q, r);
+    const double right[3] = {r[0][0], r[1][0], r[2][0]};
+    const double down[3] = {r[0][1], r[1][1], r[2][1]};
+    const double fwd[3] = {r[0][2], r[1][2], r[2][2]};
+    static const double kDist[] = {150.0, 300.0, 500.0, 800.0};
+    static const double kChord[] = {50.0, 100.0, 149.0, 200.0, 300.0, 400.0};
+    static const double kTurn[] = {2.0, 5.0, 10.0, 14.0, 20.0, 29.0};
+    for (size_t di = 0; di < sizeof(kDist) / sizeof(kDist[0]); di++) {
+        double p[3];
+        for (int i = 0; i < 3; i++) {
+            p[i] = cur.e[i] + fwd[i] * kDist[di];
+        }
+        for (int ax = 0; ax < 5; ax++) {
+            double u[3];
+            for (int i = 0; i < 3; i++) {
+                const double up = i == 1 ? 1.0 : 0.0;
+                u[i] = ax == 0   ? up
+                       : ax == 1 ? right[i]
+                       : ax == 2 ? up + right[i]
+                       : ax == 3 ? up - right[i]
+                                 : fwd[i];
+            }
+            unit3(u);
+            /* the eye's distance from the axis */
+            double d[3], along = 0.0, rad = 0.0;
+            for (int i = 0; i < 3; i++) {
+                d[i] = cur.e[i] - p[i];
+                along += d[i] * u[i];
+            }
+            for (int i = 0; i < 3; i++) {
+                const double e = d[i] - along * u[i];
+                rad += e * e;
+            }
+            rad = sqrt(rad);
+            for (size_t ci = 0; ci < sizeof(kChord) / sizeof(kChord[0]); ci++) {
+                double ang;
+                if (ax == 4) {
+                    ang = kChord[ci] / 400.0 * 8.0 * DEG; /* a roll: 1 to 8 degrees */
+                } else {
+                    if (kChord[ci] >= 2.0 * rad) {
+                        continue;
+                    }
+                    ang = 2.0 * asin(kChord[ci] / (2.0 * rad));
+                }
+                for (int sgn = -1; sgn <= 1; sgn += 2) {
+                    const Cam c0 = orbit(&cur, u, p, 2.0 * sgn * ang);
+                    const Cam c1 = orbit(&cur, u, p, sgn * ang);
+                    const Cam n1 = orbit(&cur, u, p, -sgn * ang);
+                    sweepAbout(what, &c0, &c1, &cur, &n1, I76_ZOOM, oneCamera, st);
+                    if (ax == 0 && ci == 1) {
+                        /* the zoom easing 10 % in the tick */
+                        sweepAbout(what, &c0, &c1, &cur, &n1, I76_ZOOM * 0.9f, oneCamera, st);
+                        sweepAbout(what, &c0, &c1, &cur, &n1, I76_ZOOM * 1.1f, oneCamera, st);
+                    }
+                }
+            }
+        }
+    }
+    /* the eye alone */
+    for (int dir = 0; dir < 7; dir++) {
+        double u[3];
+        for (int i = 0; i < 3; i++) {
+            u[i] = ((dir + 1) & 1 ? right[i] : 0.0) + ((dir + 1) & 2 ? down[i] : 0.0) +
+                   ((dir + 1) & 4 ? fwd[i] : 0.0);
+        }
+        unit3(u);
+        for (size_t ci = 0; ci < sizeof(kChord) / sizeof(kChord[0]); ci++) {
+            for (int sgn = -1; sgn <= 1; sgn += 2) {
+                Cam c0 = cur, c1 = cur, n1 = cur;
+                for (int i = 0; i < 3; i++) {
+                    c1.e[i] -= sgn * kChord[ci] * u[i];
+                    c0.e[i] -= 2.0 * sgn * kChord[ci] * u[i];
+                    n1.e[i] += sgn * kChord[ci] * u[i];
+                }
+                sweepAbout(what, &c0, &c1, &cur, &n1, I76_ZOOM, oneCamera, st);
+            }
+        }
+    }
+    /* the view alone, about the eye */
+    for (int ax = 0; ax < 5; ax++) {
+        double u[3];
+        for (int i = 0; i < 3; i++) {
+            const double up = i == 1 ? 1.0 : 0.0;
+            u[i] = ax == 0   ? up
+                   : ax == 1 ? right[i]
+                   : ax == 2 ? up + right[i]
+                   : ax == 3 ? up - right[i]
+                             : fwd[i];
+        }
+        unit3(u);
+        for (size_t ti = 0; ti < sizeof(kTurn) / sizeof(kTurn[0]); ti++) {
+            for (int sgn = -1; sgn <= 1; sgn += 2) {
+                const double ang = sgn * kTurn[ti] * DEG;
+                const Cam c0 = orbit(&cur, u, cur.e, 2.0 * ang);
+                const Cam c1 = orbit(&cur, u, cur.e, ang);
+                const Cam n1 = orbit(&cur, u, cur.e, -ang);
+                sweepAbout(what, &c0, &c1, &cur, &n1, I76_ZOOM, oneCamera, st);
+            }
+        }
+    }
+}
+
+static void checkStageSweep(const char *what, int winW, int winH, int wantW)
+{
+    setOptions(ICO_FRAMERATE_UNCAPPED, winW, winH);
+    CHECK(gsFrame.w == wantW, "stage %s: the native width %d, want %d", what, gsFrame.w, wantW);
+    SweepStats st, one;
+    memset(&st, 0, sizeof(st));
+    memset(&one, 0, sizeof(one));
+    sweepStage(what, 0, &st);
+    printf("gsb_cull_test: stage %s (W %d): %d camera pairs (%d snapped, %d keeping every "
+           "part, %d on three cameras), %d pictures between; parts registered %d (the PS2's one "
+           "camera %d); parts a picture shows drawn as the tick before's %d, not drawn %d\n",
+           what, gsFrame.w, st.pairs, st.snapped, st.keepAll, st.threeCams, st.pictures, st.regCur,
+           st.regOne, st.hidden, st.gaps);
+    CHECK(st.threeCams > 0 && st.pictures > 0, "stage %s: nothing tested", what);
+    /* this tick's cull alone holds every picture (the gate is not needed) */
+    CHECK(st.gaps == 0 && st.hidden == 0,
+          "stage %s: %d parts a picture between the ticks shows not registered (%d of them not "
+          "drawn)",
+          what, st.gaps + st.hidden, st.gaps);
+    /* the control: the same steps culled with the one camera leave parts
+       the pictures show to the tick before's draws (the sweep sees them) */
+    sweepStage("control", 1, &one);
+    printf("gsb_cull_test: stage %s, culled with one camera: parts a picture shows drawn as the "
+           "tick before's %d, not drawn %d\n",
+           what, one.hidden, one.gaps);
+    CHECK(one.hidden + one.gaps > 0,
+          "stage %s: the one camera's cull leaves nothing the pictures show out", what);
+}
+
+/* the dump's own tick with the camera standing still (one camera, the
+   margin): the parts dropped are the ones its log names (frame 5553:
+   st18a_p1 3, 10, 13 to 20; st18a_p2 1, 2, 3, 5, 6; st18a_p3 2, 3, 7, 10
+   to 13, 17 to 21) and st18a_p1 8, which the game's three cameras kept;
+   this checks the boxes, the placement and the camera against the game */
+static void checkStageDump(void)
+{
+    static const char *const kWant[3] = {"3 8 10 13 14 15 16 17 18 19 20", "1 2 3 5 6",
+                                         "2 3 7 10 11 12 13 17 18 19 20 21"};
+    unsigned char kept[512];
+    setOptions(ICO_FRAMERATE_UNCAPPED, 1920, 1080);
+    for (int k = 0; k < 2; k++) {
+        gsb_SetVSMatrix(ScreenWidth, ScreenHeight, distanceFor(I76_ZOOM));
+        memcpy(matrixptr + 0x80, kI76View, sizeof(kI76View));
+        gsb_MakeCommonMatrix();
+        if (k == 0) {
+            tick();
+        }
+    }
+    registerStage(kept, 0);
+    CHECK(gsb_HostCullViewsUsed() == 1, "stage: the still camera culls with %d cameras",
+          gsb_HostCullViewsUsed());
+    CHECK(fabsf(((const float *)(matrixptr + 0xC0))[0] - I76_ZOOM) < 1e-3f,
+          "stage: the zoom %g, want the dump's %g", (double)((const float *)(matrixptr + 0xC0))[0],
+          (double)I76_ZOOM);
+    int at = 0;
+    for (int m = 0; m < s_stageCount && m < 3; m++) {
+        char got[256];
+        size_t n = 0;
+        got[0] = 0;
+        for (int j = 0; j < s_stage[m].parts; j++, at++) {
+            if (!kept[at] && n + 8 < sizeof(got)) {
+                n += (size_t)snprintf(got + n, sizeof(got) - n, n ? " %d" : "%d", j);
+            }
+        }
+        CHECK(strcmp(got, kWant[m]) == 0, "stage: %s drops %s at the dump's camera, want %s",
+              s_stage[m].name, got, kWant[m]);
+    }
+}
+
+static int checkStage(const char *disc)
+{
+    if (!loadStage(disc)) {
+        printf("gsb_cull_test: SKIP the stage cases (no disc image at %s)\n",
+               disc && disc[0] ? disc : "(none)");
+        return 77;
+    }
+    int parts = 0, tris = 0;
+    for (int m = 0; m < s_stageCount; m++) {
+        for (int j = 0; j < s_stage[m].parts; j++) {
+            tris += s_stage[m].part[j].tris;
+        }
+        parts += s_stage[m].parts;
+    }
+    printf("gsb_cull_test: stage st18a: %d models, %d parts, %d triangles\n", s_stageCount, parts,
+           tris);
+    CHECK(s_stageCount >= 3 && tris > 1000, "stage: st18a from the disc");
+    checkStageDump();
+    checkStageSweep("16:9", 1920, 1080, 688);
+    checkStageSweep("48:9", 4800, 900, 2048);
+    return 0;
+}
+
 /* ---------------------------------------------------------------- main */
 
 static void boot(void)
@@ -1410,7 +2100,7 @@ static void boot(void)
     gsb_InitGSSystem();
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     rd__set_not_implemented_fatal(true);
     if (!rd__init_record_only(512, 448)) {
@@ -1420,6 +2110,21 @@ int main(void)
     boot();
     CHECK(ScreenWidth == 512 && ScreenHeight == 448, "the NTSC frame (%d x %d)", ScreenWidth,
           ScreenHeight);
+
+    if (argc > 2 && strcmp(argv[1], "--stage") == 0) {
+        /* the disc's stage (ctest gsb_cull_stage): 77 without the disc */
+        const int r = checkStage(argv[2]);
+        rd_shutdown();
+        if (r == 77) {
+            return 77;
+        }
+        if (failures) {
+            printf("gsb_cull_test: %d failures\n", failures);
+            return 1;
+        }
+        printf("gsb_cull_test: stage ok\n");
+        return 0;
+    }
 
     checkMoving("4:3", 640, 480, 512);
     checkMoving("32:9", 3200, 900, 1376);

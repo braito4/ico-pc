@@ -281,7 +281,7 @@ target_include_directories(gsb_cull_test PRIVATE ${_ico_seki_incs}
 target_compile_definitions(gsb_cull_test PRIVATE ICO_HOST=1 ICO_RD=1)
 target_compile_options(gsb_cull_test PRIVATE ${ICO_SEMANTIC_OPTIONS} ${ICO_GAME_LAYOUT_OPTIONS}
                        ${ICO_GAME_WARNINGS})
-target_link_libraries(gsb_cull_test PRIVATE ico_render ico_math ico_options)
+target_link_libraries(gsb_cull_test PRIVATE ico_render ico_math ico_options ico_port_data)
 
 # rd_crt_test: the CRT filter (rd_crt.c, crt.hlsl): its [video]
 # options with their config (host_config.c), the modes and overrides, and on
@@ -639,6 +639,10 @@ if(ICO_RUN_TESTS)
     add_test(NAME rd_gsbase COMMAND rd_gsbase_test)
     set_tests_properties(rd_gsbase PROPERTIES SKIP_RETURN_CODE 77)
     add_test(NAME gsb_cull COMMAND gsb_cull_test)
+    # st18a's parts from the disc against the cameras about the dump i76's
+    # (issue 76): 77 without the disc image
+    add_test(NAME gsb_cull_stage COMMAND gsb_cull_test --stage "${ICO_DISC_IMAGE}")
+    set_tests_properties(gsb_cull_stage PROPERTIES SKIP_RETURN_CODE 77)
     add_test(NAME rd_mesh COMMAND rd_mesh_test "${ICO_DISC_IMAGE}")
     set_tests_properties(rd_mesh PROPERTIES SKIP_RETURN_CODE 77)
     add_test(NAME modelpack COMMAND modelpack_test "${CMAKE_CURRENT_BINARY_DIR}")
