@@ -190,6 +190,7 @@
 #include "shader_consts.h"
 #include "rd_mesh.h"
 #include "rd_tex.h"
+#include "texpack.h"
 #include "vk/rhi_vk.h"
 
 static int failures;
@@ -1630,6 +1631,120 @@ static void testSheetOverlay(RdTex sheet, RdTex ref)
     CHECK(worst <= 2, "sheet overlay magnified: worst %d off the RGBA8 reference (2 allowed)",
           worst);
     CHECK(inked > sw * sh / 4, "sheet overlay: %d pixels inked", inked);
+}
+
+/* Texture packs and the overlay (issue 82): the overlay's UVs address the
+ * original's texels, so a 2x or 4x replacement of a glyph sheet must show
+ * the same rectangle as the 1x sheet. */
+#define REPL_W 32
+#define REPL_H 16
+#define REPL_CELL 4
+
+static void replCell(int cx, int cy, uint8_t o[4])
+{
+    const uint32_t h = (uint32_t)(cx * 73 + cy * 151 + 29) * 2654435761u;
+    o[0] = (uint8_t)(0x30 + ((h >> 8) & 0xBF));
+    o[1] = (uint8_t)(0x30 + ((h >> 16) & 0xBF));
+    o[2] = (uint8_t)(0x30 + ((h >> 24) & 0x7F));
+    o[3] = 0x80;
+}
+
+/* the 1x sheet's texels scaled by nearest, k times, as a pack image */
+static TexpackImage replImage(uint32_t k)
+{
+    TexpackImage img;
+    memset(&img, 0, sizeof(img));
+    const uint32_t w = REPL_W * k, h = REPL_H * k;
+    uint8_t *p = malloc((size_t)w * h * 4);
+    for (uint32_t y = 0; p && y < h; y++) {
+        for (uint32_t x = 0; x < w; x++) {
+            replCell((int)(x / k / REPL_CELL), (int)(y / k / REPL_CELL),
+                     p + ((size_t)y * w + x) * 4);
+        }
+    }
+    img.fmt = RD_TEXEL_RGBA8;
+    img.w = w;
+    img.h = h;
+    img.levels = 1;
+    img.lv[0].data = p;
+    img.lv[0].w = w;
+    img.lv[0].h = h;
+    img.lv[0].pitch = w * 4;
+    img.lv[0].size = (size_t)w * h * 4;
+    img.blob = p;
+    img.bytes = img.lv[0].size;
+    return img;
+}
+
+typedef struct ReplOv {
+    RdTex t[3];
+} ReplOv;
+
+/* texels (8,0)-(24,16) of the 1x sheet at 4 output pixels a texel */
+static void replOvCallback(const RdOverlayCtx *ctx, void *user)
+{
+    const ReplOv *o = user;
+    static const uint8_t c[4] = {0x80, 0x80, 0x80, 0x80};
+    (void)ctx;
+    for (int i = 0; i < 3; i++) {
+        const int x = 10 + i * 100, y = 20;
+        RdScreenVtx v[2] = {vtx(x * 16, y * 16, 0, c, 8.0f * 16, 0.0f),
+                            vtx((x + 64) * 16, (y + 64) * 16, 0, c, 24.0f * 16, 16.0f * 16)};
+        rd_overlay_prims(RD_PRIM_SPRITES, v, 2, o->t[i], RD_BLEND_LERP_AS);
+    }
+}
+
+static void testOverlayReplacement(void)
+{
+    uint8_t rgba[REPL_W * REPL_H * 4];
+    for (int y = 0; y < REPL_H; y++) {
+        for (int x = 0; x < REPL_W; x++) {
+            replCell(x / REPL_CELL, y / REPL_CELL, &rgba[(y * REPL_W + x) * 4]);
+        }
+    }
+    static ReplOv ov;
+    memset(&ov, 0, sizeof(ov));
+    ov.t[0] = rd_create_texture(REPL_W, REPL_H, rgba, RD_TEXA_80_80, "glyph sheet 1x");
+    for (uint32_t k = 2; k <= 4; k += 2) {
+        TexpackImage img = replImage(k);
+        ov.t[k / 2] =
+            rdtex_create_replacement(&img, REPL_W, REPL_H, k == 2 ? "glyph 2x" : "glyph 4x");
+        CHECK(ov.t[k / 2].id != 0, "overlay replacement: %ux created", k);
+    }
+    rd_set_present_overlay(replOvCallback, &ov);
+    CHECK(rd_present_blank(), "overlay replacement: rd_present_blank");
+    static uint8_t out[640 * 480 * 4];
+    uint32_t ow = 0, oh = 0;
+    const bool ok = rd_read_presented(out, &ow, &oh) && ow == 640 && oh == 480;
+    rd_set_present_overlay(NULL, NULL);
+    CHECK(ok, "overlay replacement: the presented output (%ux%u)", ow, oh);
+    if (ok) {
+        /* the centre of each 16 x 16 output block (a 4 texel cell) */
+        for (int k = 1; k < 3; k++) {
+            int worst = 0, bad = 0;
+            for (int cy = 0; cy < 4; cy++) {
+                for (int cx = 0; cx < 4; cx++) {
+                    const size_t a =
+                        ((size_t)(20 + cy * 16 + 8) * ow + (size_t)(10 + cx * 16 + 8)) * 4;
+                    const size_t b =
+                        ((size_t)(20 + cy * 16 + 8) * ow + (size_t)(10 + k * 100 + cx * 16 + 8)) *
+                        4;
+                    for (int ch = 0; ch < 3; ch++) {
+                        const int d = abs((int)out[a + (size_t)ch] - (int)out[b + (size_t)ch]);
+                        worst = d > worst ? d : worst;
+                    }
+                    bad += out[a] == 0 && out[a + 1] == 0 && out[a + 2] == 0;
+                }
+            }
+            printf("  overlay replacement %dx: worst %d off the 1x sheet\n", k * 2, worst);
+            CHECK(worst <= 2 && bad == 0,
+                  "overlay: the %dx replacement shows the 1x rectangle (worst %d, %d blank)", k * 2,
+                  worst, bad);
+        }
+    }
+    for (int i = 0; i < 3; i++) {
+        rd_destroy_texture(ov.t[i]);
+    }
 }
 
 /* scale: the scene's (1 in Original); dir: the dump's directory (scale 1) */
@@ -4184,6 +4299,7 @@ int main(int argc, char **argv)
     testTexa();
     testFont(dir);
     testSheetText("Original 1x", 1, dir);
+    testOverlayReplacement();
     testStq();
     testGsLod();
     testAa1();

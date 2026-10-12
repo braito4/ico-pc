@@ -3487,6 +3487,12 @@ void rd__overlay_draw(RhiCommandList cl, RhiFormat fmt, RdUniform frame, uint8_t
         t = r->rhi;
         tw = r->w;
         th = r->h;
+        if (r->replacement && r->uvW && r->uvH) {
+            /* a texture pack's replacement: the UVs address the original's
+             * texels (replacementUv's rule) */
+            tw = r->uvW;
+            th = r->uvH;
+        }
         tfmt = r->src;
         textured = 1;
     }
