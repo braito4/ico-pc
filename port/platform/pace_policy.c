@@ -6,6 +6,7 @@
 #include "pace_policy.h"
 
 #include <stddef.h>
+#include <stdio.h>
 
 uint64_t pace_slow_threshold(uint64_t refreshNs, uint64_t periodNs, bool injector)
 {
@@ -36,6 +37,11 @@ uint64_t pace_present_gap(int cap, bool uncappedVsync, bool mailbox, uint64_t re
         return r - r / 16;
     }
     return cap > 0 ? 1000000000ull / (uint64_t)cap : 0;
+}
+
+bool pace_gap_as_uncapped(bool uncapped, bool lockDropped, bool wanted, bool mailboxNow)
+{
+    return wanted && (uncapped || (lockDropped && mailboxNow));
 }
 
 bool pace_cap_equals_refresh(int cap, uint64_t refreshNs)
@@ -272,13 +278,75 @@ PaceLockVerdict pace_lock_judge(PaceLock *L, uint64_t returnNs, unsigned *vblank
            measure of the refresh */
         return PACE_LOCK_UNJUDGED;
     }
-    L->hist[L->histNext] = iv;
-    L->histNext = (L->histNext + 1) % PACE_LOCK_HIST;
-    if (L->histCount < PACE_LOCK_HIST) {
-        L->histCount++;
+    if (L->settled < PACE_LOCK_SETTLE) {
+        /* the first second after a (re)start: the queue and the work
+           settle; nothing summed */
+        L->settled++;
+        return PACE_LOCK_HIT;
     }
-    return pace_lock_rate_ok(median_of(L->hist, L->histCount), r) ? PACE_LOCK_HIT
-                                                                  : PACE_LOCK_MISS_RATE;
+    /* the rate: the mean over a window of intervals, whose sum is the
+       window's last return less its first, so a change of the work (which
+       moves every return after a vblank) changes it by that change over the
+       window, not by that change an interval */
+    L->rateSumNs += iv;
+    if (++L->rateCount < PACE_LOCK_RATE_WINDOW) {
+        return PACE_LOCK_HIT;
+    }
+    L->rateMeanNs = L->rateSumNs / L->rateCount;
+    L->rateSumNs = 0;
+    L->rateCount = 0;
+    if (pace_lock_rate_ok(L->rateMeanNs, r)) {
+        L->rateOut = 0;
+        return PACE_LOCK_HIT;
+    }
+    L->rateOut++;
+    return PACE_LOCK_MISS_RATE;
+}
+
+/* the trace: a present's interval and letter */
+static void lock_trace(PaceLock *L, uint64_t ivNs, char v)
+{
+    const uint64_t us = ivNs / 1000u;
+    const uint32_t u = us > 0xffffffffu ? 0xffffffffu : (uint32_t)us;
+
+    if (L->traceFirstCount < PACE_LOCK_TRACE_FIRST) {
+        L->traceFirstUs[L->traceFirstCount] = u;
+        L->traceFirstV[L->traceFirstCount++] = v;
+    }
+    L->traceLastUs[L->traceLastNext] = u;
+    L->traceLastV[L->traceLastNext] = v;
+    L->traceLastNext = (L->traceLastNext + 1) % PACE_LOCK_TRACE_LAST;
+    if (L->traceLastCount < PACE_LOCK_TRACE_LAST) {
+        L->traceLastCount++;
+    }
+}
+
+unsigned pace_lock_trace_text(const PaceLock *L, bool last, char *buf, unsigned len)
+{
+    const unsigned count = last ? L->traceLastCount : L->traceFirstCount;
+    const unsigned first =
+        last ? (L->traceLastNext + PACE_LOCK_TRACE_LAST - L->traceLastCount) % PACE_LOCK_TRACE_LAST
+             : 0;
+    unsigned at = 0, i;
+
+    if (len == 0) {
+        return 0;
+    }
+    buf[0] = '\0';
+    for (i = 0; i < count; i++) {
+        const unsigned k = last ? (first + i) % PACE_LOCK_TRACE_LAST : i;
+        const uint32_t us = last ? L->traceLastUs[k] : L->traceFirstUs[k];
+        const char v = last ? L->traceLastV[k] : L->traceFirstV[k];
+        const int w = snprintf(buf + at, len - at, "%s%u.%02u%c", i ? " " : "", us / 1000u,
+                               (us % 1000u + 5u) / 10u > 99u ? 99u : (us % 1000u + 5u) / 10u, v);
+
+        if (w < 0 || (unsigned)w >= len - at) {
+            buf[at] = '\0';
+            break;
+        }
+        at += (unsigned)w;
+    }
+    return i;
 }
 
 /* a step at dueNs: counted, and the rate block's */
@@ -356,28 +424,48 @@ uint64_t pace_lock_vsync(PaceLock *L, const PaceLockIo *io, bool newFrame)
         }
         now = io->now(io->user);
         L->presents++;
+        const uint64_t iv = L->lastReturn != 0 && now > L->lastReturn ? now - L->lastReturn : 0;
+
         if (io->shown != NULL && !io->shown(io->user)) {
             /* not on the screen (minimised, occluded): not judged, the
                grid; the next interval spans it */
             L->unshown++;
             L->lastReturn = now;
+            lock_trace(L, iv, 'n');
             return lock_grid(L, io, now);
         }
+        const bool measured = L->onVblank && !L->unjudged;
         const PaceLockVerdict v = pace_lock_judge(L, now, &vb);
 
         if (v == PACE_LOCK_MISS_AT_ONCE && L->filling && ++atOnce < PACE_LOCK_FILL_PRESENTS) {
             /* the queue is filling: present again, now */
             L->fillPresents++;
+            lock_trace(L, iv, 'f');
             continue;
         }
-        if (v == PACE_LOCK_MISS_AT_ONCE || v == PACE_LOCK_MISS_RATE) {
+        lock_trace(L, iv,
+                   v == PACE_LOCK_MISS_AT_ONCE      ? 'a'
+                   : v == PACE_LOCK_MISS_RATE       ? 'r'
+                   : v == PACE_LOCK_STALL           ? 's'
+                   : v == PACE_LOCK_HIT && measured ? 'h'
+                                                    : 'u');
+        if (v == PACE_LOCK_MISS_AT_ONCE) {
+            L->missesTotal++;
             if (++L->misses >= PACE_LOCK_MISSES) {
-                L->dropped =
-                    v == PACE_LOCK_MISS_AT_ONCE ? PACE_LOCK_DROP_AT_ONCE : PACE_LOCK_DROP_RATE;
+                L->dropped = PACE_LOCK_DROP_AT_ONCE;
             }
             return lock_grid(L, io, now);
         }
-        if (v == PACE_LOCK_HIT) {
+        if (v == PACE_LOCK_MISS_RATE) {
+            /* a window's mean off the refresh: this vsync is still a
+               vblank's; a run of such windows drops the lock */
+            L->missesTotal++;
+            if (L->rateOut >= PACE_LOCK_RATE_WINDOWS) {
+                L->dropped = PACE_LOCK_DROP_RATE;
+                return lock_grid(L, io, now);
+            }
+        }
+        if (v == PACE_LOCK_HIT || v == PACE_LOCK_MISS_RATE) {
             L->misses = 0;
             L->filling = false; /* the queue is full: an at-once return is a miss */
         }

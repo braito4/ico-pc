@@ -346,6 +346,90 @@ static void testLimiterGrid(void)
     }
 }
 
+/* After the vsync lock drops (cap 60 on a 60.00 Hz screen, mailbox and a
+   timer): the refreshes of a mailbox display that get no new picture, the
+   presents on the limiter's grid as simulate() makes them (a step at each
+   59.94 Hz deadline, a present skipped when it would end past one), each
+   shown at the first vblank after it ends.  A gap of exactly one refresh
+   (rc2's timer after the drop: "0.97 presents a refresh") repeats a picture
+   whenever a step pushes a present past its vblank, which happens for
+   seconds at a time as the 59.94 Hz steps slide across the 60 Hz presents,
+   and a present's cost varies (here by up to 4 ms); the gap of "uncapped"
+   (a sixteenth of a refresh less, which the same session showed without
+   complaint) repeats fewer. */
+static unsigned mailboxRepeats(uint64_t gap, uint64_t stepNs, uint64_t costNs, uint64_t jitterNs,
+                               double seconds, uint64_t phase)
+{
+    uint32_t rng = 777u;
+    const uint64_t period = 16683333ull, refresh = 16666667ull;
+    const uint64_t start = 1000000000ull, end = start + (uint64_t)(seconds * 1e9);
+    uint64_t t = start, deadline = t, next = 0, lastShownVb = 0;
+    unsigned repeats = 0;
+
+    while (t < end) {
+        int shown = 0;
+
+        deadline += period;
+        t += stepNs;
+        for (;;) {
+            if (shown && t + costNs > deadline) {
+                break;
+            }
+            if (next && t < next) {
+                if (next >= deadline) {
+                    break;
+                }
+                t = next;
+                continue;
+            }
+            next = pace_next_present(next, t, gap);
+            rng = rng * 1664525u + 1013904223u;
+            t += costNs + (jitterNs ? (rng >> 8) % jitterNs : 0);
+            shown = 1;
+            /* the vblank this present is shown at */
+            const uint64_t vb = (t - phase + refresh - 1) / refresh;
+
+            if (lastShownVb != 0 && vb > lastShownVb + 1) {
+                repeats += (unsigned)(vb - lastShownVb - 1);
+            }
+            if (vb > lastShownVb) {
+                lastShownVb = vb;
+            }
+        }
+        if (t < deadline) {
+            t = deadline;
+        }
+    }
+    return repeats;
+}
+
+static void testDroppedLockGap(void)
+{
+    const uint64_t r = 16666667ull;
+    unsigned exact = 0, under = 0;
+
+    /* the helper: "uncapped"'s gap after a drop, only where the swapchain is
+       in mailbox (D3D12's FIFO keeps the cap's own gap) */
+    CHECK(pace_gap_as_uncapped(true, false, true, true));
+    CHECK(pace_gap_as_uncapped(false, true, true, true));
+    CHECK(!pace_gap_as_uncapped(false, true, true, false));
+    CHECK(!pace_gap_as_uncapped(false, false, true, true));
+    CHECK(!pace_gap_as_uncapped(true, false, false, false));
+    CHECK(pace_present_gap(60, pace_gap_as_uncapped(false, true, true, true), true, r) ==
+          r - r / 16);
+    for (uint64_t ph = 0; ph < r; ph += r / 8) {
+        exact += mailboxRepeats(pace_present_gap(60, false, true, r), 2000000ull, 3000000ull,
+                                4000000ull, 20.0, ph);
+        under += mailboxRepeats(pace_present_gap(60, true, true, r), 2000000ull, 3000000ull,
+                                4000000ull, 20.0, ph);
+    }
+    printf("mailbox after a dropped lock, 8 phases x 20 s: %u refreshes repeated with the cap's "
+           "gap, %u with uncapped's\n",
+           exact, under);
+    CHECK(exact > 300);           /* 433: 4.5 % of the refreshes */
+    CHECK(under * 3 < exact * 2); /* 251: 2.6 % */
+}
+
 /* The vsync lock's n (presents a simulated vsync) for the caps a display
    runs at, under NTSC (59.94) and PAL (50); 0: no whole multiple, the
    window steps on the game's timer.  The k-th vblank's alpha after a frame
@@ -394,6 +478,8 @@ static void testLockTable(void)
 int main(void)
 {
     PaceHist h = {0};
+
+    testDroppedLockGap();
     int i, flips;
     bool last;
 

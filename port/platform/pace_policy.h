@@ -52,6 +52,20 @@ bool pace_slow_present(PaceHist *h, uint64_t costNs, uint64_t refreshNs, uint64_
  * 0 (no gap: back to back) otherwise, i.e. "uncapped" without vsync. */
 uint64_t pace_present_gap(int cap, bool uncappedVsync, bool mailbox, uint64_t refreshNs);
 
+/* Whether the window takes "uncapped"'s gap (pace_present_gap's
+ * uncappedVsync) rather than the cap's: "uncapped" with vsync on (wanted:
+ * the window asked for mailbox, s_pres.mailbox), and a cap equal to the
+ * refresh once the vsync lock was dropped (lockDropped) while the swapchain
+ * really is in mailbox (mailboxNow: rhi_present_mailbox).  A mailbox
+ * present on a timer of exactly one refresh lands at a fixed place against
+ * the vblanks; each time a game step delays one past its vblank the
+ * display shows the picture before again (the rc2 log after the drop:
+ * "0.97 presents a refresh"), for seconds at a time as the 59.94 Hz steps
+ * slide across the 60 Hz presents.  A sixteenth of a refresh less gives
+ * every refresh a new picture, as at "uncapped".  Under FIFO (D3D12, or no
+ * mailbox offered) a present past the refresh would block: the cap's gap. */
+bool pace_gap_as_uncapped(bool uncapped, bool lockDropped, bool wanted, bool mailboxNow);
+
 /* True when a numeric frame rate limit (cap > 0) equals the display's rate:
  * within 0.5 Hz (60 on a 59.94 or 60.00 Hz screen, 120 on 119.88 or 120.00),
  * and up to 1.0 Hz above a reported rate of 100 Hz or more that is a whole
@@ -88,31 +102,61 @@ bool pace_cap_equals_refresh(int cap, uint64_t refreshNs);
  * The guard: every present's return is judged against the last one
  * (pace_lock_judge).  One that returned in under half a refresh did not
  * wait for a vblank (a compositor or driver that does not block): a miss.
- * The median of the last PACE_LOCK_HIST intervals outside 2 % of the
- * nominal refresh (a display running at another rate than it reports): a
- * miss.  But a FIFO present only blocks once the swapchain's queue is full
- * (three images, two frames in flight; NVIDIA's acquire does not wait), so
- * from an empty queue (the lock's start, after a stall, a sleep or a
- * swapchain rebuild) the first presents return at once: while the queue
- * fills (L->filling, until the first hit) an at-once return presents again
- * at once, the same picture, up to PACE_LOCK_FILL_PRESENTS presents in the
- * vsync, before it counts as a miss.  Only an interval that starts at a
- * return on a vblank (one that ended an interval of half a refresh or more)
- * measures the refresh: one from the first return, a return after a sleep,
- * an at-once return or a stall counts one vblank and is not judged.  A present that never blocks still misses every vsync.
+ * But a FIFO present only blocks once the swapchain's queue is full (three
+ * images, two frames in flight; NVIDIA's acquire does not wait), so from an
+ * empty queue (the lock's start, after a stall, a sleep or a swapchain
+ * rebuild) the first presents return at once: while the queue fills
+ * (L->filling, until the first hit) an at-once return presents again at
+ * once, the same picture, up to PACE_LOCK_FILL_PRESENTS presents in the
+ * vsync, before it counts as a miss.  PACE_LOCK_MISSES at-once misses in a
+ * row drop the lock (a present that never blocks).
+ *
+ * The rate: a present's return is not the vblank.  On NVIDIA the replay
+ * waits at its start for the GPU to finish the frame two before, and the
+ * GPU draws into an image only once the display let go of it, so a return
+ * comes the GPU's time and the replay's CPU time after a vblank; when the
+ * work changes (a menu closing, the scene drawn again) every return moves
+ * with it, and for a few vsyncs each interval is that change longer or
+ * shorter than a refresh.  The rc2 guard (the median of the last 8
+ * intervals within 2 %) took a rise of the work by 0.5 ms a vsync over 12
+ * vsyncs for a display off its rate and dropped the lock in 13 vsyncs
+ * (pace_loop_test testNvMenuClose; the v0.7.0 rc2 log on an RTX 3090).
+ * The intervals' sum over a run of returns is the last return less the
+ * first, so the mean over PACE_LOCK_RATE_WINDOW intervals moves by the
+ * change of the work over the window divided by the window (a few ms over
+ * 120 refreshes: well inside 2 %), while a display off its rate is off in
+ * every interval.  Only intervals between two returns on a vblank are
+ * summed (one that ended an interval of half a refresh to 1.5 refreshes;
+ * one from the first return, a return after a sleep, an at-once return or
+ * a stall counts one vblank and is not summed), none in the first
+ * PACE_LOCK_SETTLE intervals after a reset (the queue and the GPU's work
+ * settling after a (re)start).  A window's mean outside 2 % of the nominal
+ * refresh is a rate miss (the vsync is still stepped on its vblank);
+ * PACE_LOCK_RATE_WINDOWS such windows in a row drop the lock, a window
+ * inside 2 % clears the count.
+ *
  * A present the window reports as not shown (PaceLockIo.shown: minimised,
  * hidden, occluded, a 0x0 surface) is not judged: the vsync runs on the
- * grid, no miss.  A miss times that vsync's step on the simulation's own grid (the
- * last step's due time + the period, as without the lock); PACE_LOCK_MISSES
- * misses in a row drop the lock (the window goes back to the timer and
- * mailbox until the next settings apply).  An interval of 1.5 refreshes or
- * more is a stall (a slow step or replay): the vblanks it spanned count, so
- * the simulation steps for them without presenting (never more than
- * PACE_LOCK_DEBT_VSYNCS vsyncs of them; the rest is dropped and counted), and
- * it is neither a hit nor a miss.  The interval after a sleep is not judged.
+ * grid, no miss.  An at-once miss times that vsync's step on the
+ * simulation's own grid (the last step's due time + the period, as without
+ * the lock); a dropped lock sends the window back to the timer and mailbox
+ * until the next settings apply.  An interval of 1.5 refreshes or more is a
+ * stall (a slow step or replay): the vblanks it spanned count, so the
+ * simulation steps for them without presenting (never more than
+ * PACE_LOCK_DEBT_VSYNCS vsyncs of them; the rest is dropped and counted),
+ * and it is neither a hit nor a miss.  The interval after a sleep is not
+ * judged.
+ *
+ * For the log: the first PACE_LOCK_TRACE_FIRST presents after a reset and
+ * the last PACE_LOCK_TRACE_LAST are kept with their interval and what the
+ * lock made of it (pace_lock_trace_text).
  */
-#define PACE_LOCK_HIST 8
 #define PACE_LOCK_MISSES 3
+#define PACE_LOCK_RATE_WINDOW 120
+#define PACE_LOCK_RATE_WINDOWS 2
+#define PACE_LOCK_SETTLE 60
+#define PACE_LOCK_TRACE_FIRST 48
+#define PACE_LOCK_TRACE_LAST 16
 #define PACE_LOCK_DEBT_VSYNCS 6
 #define PACE_LOCK_FILL_PRESENTS 4
 /* a measured rate block for the audio needs this many steps */
@@ -122,9 +166,9 @@ bool pace_cap_equals_refresh(int cap, uint64_t refreshNs);
 enum { PACE_LOCK_HELD = 0, PACE_LOCK_DROP_AT_ONCE = 1, PACE_LOCK_DROP_RATE = 2 };
 
 typedef enum PaceLockVerdict {
-    PACE_LOCK_HIT,          /* one refresh, the rate within 2 % */
+    PACE_LOCK_HIT,          /* one refresh (half a refresh to 1.5) from a return on a vblank */
     PACE_LOCK_MISS_AT_ONCE, /* returned in under half a refresh */
-    PACE_LOCK_MISS_RATE,    /* the median interval outside 2 % of the refresh */
+    PACE_LOCK_MISS_RATE,    /* one refresh that closed a rate window outside 2 % */
     PACE_LOCK_STALL,        /* 1.5 refreshes or more: the vblanks spanned count */
     PACE_LOCK_UNJUDGED      /* the first present, or the first after a sleep */
 } PaceLockVerdict;
@@ -145,10 +189,15 @@ typedef struct PaceLock {
     bool filling;   /* the swapchain's queue may be filling: at-once returns present again */
     bool onVblank;  /* the last return ended an interval of about a refresh (it waited for
                          a vblank): only an interval from such a return is a measure */
-    uint64_t hist[PACE_LOCK_HIST]; /* the judged intervals */
-    unsigned histCount, histNext;
-    unsigned misses; /* in a row */
-    int dropped;     /* PACE_LOCK_HELD or why it was dropped */
+    /* the rate window: summed intervals between returns on a vblank */
+    uint64_t rateSumNs;
+    unsigned rateCount;   /* intervals in the window */
+    unsigned settled;     /* vblank intervals since the reset, up to PACE_LOCK_SETTLE */
+    unsigned rateOut;     /* windows in a row outside 2 % */
+    uint64_t rateMeanNs;  /* the last window's mean (0: none yet) */
+    unsigned misses;      /* at-once misses in a row */
+    unsigned missesTotal; /* at-once and rate misses since the reset */
+    int dropped;          /* PACE_LOCK_HELD or why it was dropped */
     /* counts since pace_lock_reset */
     unsigned presents, steps, debtSteps, gridSteps, resyncs;
     unsigned fillPresents; /* at-once presents made again while the queue filled */
@@ -158,6 +207,12 @@ typedef struct PaceLock {
     uint64_t rateFirst, rateLast;
     unsigned rateSteps;
     bool rateClean; /* no miss, nothing dropped, nothing unpresented since rateFirst */
+    /* the log's trace: each present's interval from the return before
+       (0: none) and a letter (pace_lock_trace_text) */
+    uint32_t traceFirstUs[PACE_LOCK_TRACE_FIRST], traceLastUs[PACE_LOCK_TRACE_LAST];
+    char traceFirstV[PACE_LOCK_TRACE_FIRST], traceLastV[PACE_LOCK_TRACE_LAST];
+    unsigned traceFirstCount, traceLastCount, traceLastNext;
+    bool traceLogged; /* the caller logged the first ones */
 } PaceLock;
 
 /* n for a cap equal to the refresh: round(cap * periodNs / 1e9) when the cap
@@ -182,6 +237,15 @@ void pace_lock_reset(PaceLock *L, unsigned n, uint64_t refreshNs, uint64_t perio
  * history: lastReturn, the intervals, unjudged).  *vblanks: the display
  * refreshes it stands for (1, a stall's count, 0 at once). */
 PaceLockVerdict pace_lock_judge(PaceLock *L, uint64_t returnNs, unsigned *vblanks);
+
+/* The trace as text, "16.67h 4.10f ..." (ms from the return before, then
+ * h one refresh measured, u one refresh not measured (the first return,
+ * after a sleep, or from a return not on a vblank), f at once while the
+ * queue filled (presented again), a at once (a miss), s a stall, r one
+ * refresh that closed a rate window outside 2 %, n not shown): the first
+ * PACE_LOCK_TRACE_FIRST presents since the reset (last false) or the last
+ * PACE_LOCK_TRACE_LAST, oldest first.  Returns the presents written. */
+unsigned pace_lock_trace_text(const PaceLock *L, bool last, char *buf, unsigned len);
 
 /* What the loop needs from the window (a fake one in pace_loop_test). */
 typedef struct PaceLockIo {

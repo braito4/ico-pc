@@ -2257,7 +2257,7 @@ static void pace_log(Uint64 now)
        simulation runs at the display's rate over n (0.1 % fast on a 60.00
        Hz screen), and the audio plays the samples that much faster, so its
        queue neither grows nor runs dry; 1 otherwise */
-    char lock[128];
+    char lock[192];
     double ratio = 1.0;
 
     if (s_pres.lockN > 0) {
@@ -2266,8 +2266,11 @@ static void pace_log(Uint64 now)
         const double r = pace_lock_rate_ratio(&s_pres.lock);
 
         ratio = r > 0.0 ? r : (s_pres.audioRatio > 0.0 ? s_pres.audioRatio : 1.0);
-        snprintf(lock, sizeof(lock), "lock held (%u present%s a vsync, audio rate x%.4f)",
-                 s_pres.lockN, s_pres.lockN == 1 ? "" : "s", ratio);
+        snprintf(lock, sizeof(lock),
+                 "lock held (%u present%s a vsync, audio rate x%.4f, refresh measured %.3f ms, "
+                 "%u misses)",
+                 s_pres.lockN, s_pres.lockN == 1 ? "" : "s", ratio,
+                 (double)s_pres.lock.rateMeanNs / 1e6, s_pres.lock.missesTotal);
     } else if (s_pres.fifoLock) {
         /* fifo with a cap that is not a whole multiple of the game's rate
            (144 on 59.94): nothing is locked */
@@ -2589,11 +2592,44 @@ static void pace_locked(unsigned n, Uint64 period)
     s_pres.statDropped += s_pres.lock.droppedNs - s_pres.lockDroppedNs;
     s_pres.lockResyncs = s_pres.lock.resyncs;
     s_pres.lockDroppedNs = s_pres.lock.droppedNs;
+    /* the trace for the log: the first presents of each lock (a few
+       locks a session), and the last ones when it drops */
+    if (!s_pres.lock.traceLogged &&
+        (s_pres.lock.traceFirstCount >= PACE_LOCK_TRACE_FIRST || s_pres.lock.dropped)) {
+        static unsigned s_traces;
+
+        s_pres.lock.traceLogged = true;
+        if (s_traces++ < 8) {
+            char t[PACE_LOCK_TRACE_FIRST * 10];
+            const unsigned k = pace_lock_trace_text(&s_pres.lock, false, t, sizeof t);
+
+            fprintf(stderr,
+                    "window: vsync lock, the first %u presents (ms since the one before: h a "
+                    "refresh, u a refresh not measured, f at once while the queue filled, a at "
+                    "once, s late, r a refresh that ended a measure off the rate, n not "
+                    "shown): %s\n",
+                    k, t);
+        }
+    }
     if (s_pres.lock.dropped) {
-        fprintf(stderr,
-                "window: vsync lock dropped (%s, %u misses in a row); presenting on a timer "
-                "until the display settings change\n",
-                lock_drop_reason(s_pres.lock.dropped), PACE_LOCK_MISSES);
+        char t[PACE_LOCK_TRACE_LAST * 10];
+
+        if (s_pres.lock.dropped == PACE_LOCK_DROP_AT_ONCE) {
+            fprintf(stderr,
+                    "window: vsync lock dropped (%s, %u in a row); presenting on a timer "
+                    "until the display settings change\n",
+                    lock_drop_reason(s_pres.lock.dropped), PACE_LOCK_MISSES);
+        } else {
+            fprintf(stderr,
+                    "window: vsync lock dropped (%s: %.3f ms a refresh over the last %u "
+                    "refreshes, %.3f ms expected, %u times in a row); presenting on a timer "
+                    "until the display settings change\n",
+                    lock_drop_reason(s_pres.lock.dropped), (double)s_pres.lock.rateMeanNs / 1e6,
+                    PACE_LOCK_RATE_WINDOW, (double)s_pres.lock.refreshNs / 1e6,
+                    PACE_LOCK_RATE_WINDOWS);
+        }
+        (void)pace_lock_trace_text(&s_pres.lock, true, t, sizeof t);
+        fprintf(stderr, "window: vsync lock, the last presents before it dropped: %s\n", t);
         s_pres.lockDropped = s_pres.lock.dropped;
         s_pres.lockDropApply = 1;
         s_pres.lockN = 0;
@@ -2704,11 +2740,17 @@ static void pace(int hz)
            gap: FIFO's blocking present is the timer (s_pres.fifoLock).
            Any other cap is its own gap, on the drift-free grid
            (pace_policy.h pace_present_gap, pace_next_present) */
-        gap = s_pres.fifoLock
-                  ? 0
-                  : pace_present_gap(s_pres.framerate,
-                                     s_pres.framerate == ICO_FRAMERATE_UNCAPPED && s_pres.mailbox,
-                                     rhi_present_mailbox(), refresh);
+        /* after a dropped vsync lock the cap equals the refresh: in
+           mailbox mode "uncapped"'s gap, not one of exactly a refresh,
+           which repeats pictures (pace_policy.h pace_gap_as_uncapped) */
+        gap =
+            s_pres.fifoLock
+                ? 0
+                : pace_present_gap(s_pres.framerate,
+                                   pace_gap_as_uncapped(s_pres.framerate == ICO_FRAMERATE_UNCAPPED,
+                                                        s_pres.lockDropped != 0,
+                                                        s_pres.mailbox != 0, rhi_present_mailbox()),
+                                   rhi_present_mailbox(), refresh);
         if (!gap) {
             s_pres.nextPresent = 0;
         }
@@ -2731,7 +2773,10 @@ static void pace(int hz)
            back (to the next vsync) at most once and never once the deadline
            has passed, so a game behind still shows each frame
            (pace_policy.h pace_fifo_hold) */
-        if (s_pres.fifoLock && refresh < period &&
+        /* also after a dropped lock on a backend without mailbox (D3D12:
+           still FIFO), where the cap's gap is a hair under the period */
+        if ((s_pres.fifoLock || (s_pres.lockDropped && !rhi_present_mailbox())) &&
+            refresh < period &&
             pace_fifo_hold(now, s_pres.lastReturn, refresh, s_deadline,
                            s_pres.presentedFrame == s_pres.frame,
                            s_pres.heldFrame == s_pres.frame + 1u)) {

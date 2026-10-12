@@ -33,11 +33,20 @@
  * A window minimised or occluded for 10 s (presents return at once and are
  * reported not shown) keeps the lock; judged, the same presents drop it.
  * The first frame after a reset has the alphas 1/2, 1 (not 1, 1).
+ * NVIDIA's FIFO as the v0.7.0 rc2 log shows it (Fake.nv: the acquire and
+ * the present return at once, the replay waits for the GPU's frame two
+ * before, the GPU for the display to free an image; a return is the GPU's
+ * and the CPU's time after a vblank): the work rising by 5.8 ms over 12
+ * vsyncs (a menu closing) dropped the rc2 lock 13 vsyncs in ("the display
+ * did not keep its refresh rate"); the rate measured over windows holds at
+ * any speed of change either way, and still drops a display 2.5 % off.
+ * The log's trace (pace_lock_trace_text) of the first and last presents.
  * Without the lock, under FIFO at 144 Hz with the game behind (a step
  * longer than the period), every new frame is still presented
  * (pace_fifo_hold), where the rc1 guard presented none.
  */
 #include <stdio.h>
+#include <string.h>
 #include "pace_policy.h"
 
 static int fails;
@@ -76,6 +85,25 @@ typedef struct Fake {
     uint64_t rebuildNs;
     unsigned presents;
     uint64_t lastVblank; /* the vblank the last present returned on */
+    /* NVIDIA's FIFO (nv): the acquire and the present return at once; the
+       replay waits at its start for the GPU to finish the frame two before
+       (RHI_FRAMES_IN_FLIGHT 2, vk_cmd.c's timeline wait: the log's "fence
+       waits"), and the GPU draws a frame into its image only when the
+       display has let go of it (three images: frame i's image is free once
+       frame i - 2 is on the screen).  So a present returns the GPU's time
+       (gpu) and the CPU's tail (tail) after a vblank, never on it, and a
+       change in either moves every later return. */
+    int nv;
+    uint64_t pre, tail, gpu; /* the replay before the wait, after it; the GPU's time */
+    uint64_t tailJitter;     /* the tail varies by up to this */
+    /* the work ramps by rampTail and rampGpu over rampLen vsyncs from
+       rampAt (a menu closing, the scene drawn again) */
+    unsigned rampAt, rampLen;
+    int64_t rampTail, rampGpu; /* below 0: the work falls */
+    uint64_t firstExtra;       /* the first present's extra time (a swapchain rebuild) */
+#define NV_RING 8
+    uint64_t gpuDone[NV_RING], showAt[NV_RING];
+    unsigned nvCount; /* frames since the queue was empty */
     /* the alphas since the last frame closed */
     float alpha[ALPHA_LOG];
     unsigned nAlpha;
@@ -107,10 +135,74 @@ static void f_drain(Fake *f)
     f->vbIdx = cur;
 }
 
+/* the ramp's share at this vsync (0 .. full) added to base */
+static uint64_t f_ramp(const Fake *f, uint64_t base, int64_t full)
+{
+    int64_t add = 0;
+
+    if (f->rampLen != 0 && f->vsync >= f->rampAt) {
+        add = f->vsync >= f->rampAt + f->rampLen
+                  ? full
+                  : full * (int64_t)(f->vsync - f->rampAt) / (int64_t)f->rampLen;
+    }
+    return (uint64_t)((int64_t)base + add);
+}
+
+/* the first vblank at or after t */
+static uint64_t f_vblank_at(const Fake *f, uint64_t t)
+{
+    const uint64_t k = (t - f->phase + f->display - 1) / f->display;
+
+    return f->phase + k * f->display;
+}
+
+static void f_present_nv(Fake *f)
+{
+    const unsigned i = f->nvCount;
+    uint64_t start;
+
+    f->now += f->pre;
+    if (i == 0) {
+        f->now += f->firstExtra;
+        f->firstExtra = 0;
+    }
+    if (i >= 2 && f->now < f->gpuDone[(i - 2) % NV_RING]) {
+        f->now = f->gpuDone[(i - 2) % NV_RING]; /* the fence wait */
+    }
+    f->now += f_ramp(f, f->tail, f->rampTail) +
+              (f->tailJitter ? f_rand(f) % f->tailJitter : 0); /* then submit and present */
+    start = f->now;
+    if (i >= 1 && start < f->gpuDone[(i - 1) % NV_RING]) {
+        start = f->gpuDone[(i - 1) % NV_RING];
+    }
+    if (i >= 3 && start < f->showAt[(i - 2) % NV_RING]) {
+        start = f->showAt[(i - 2) % NV_RING]; /* the image is free */
+    }
+    f->gpuDone[i % NV_RING] = start + f_ramp(f, f->gpu, f->rampGpu);
+    /* on the screen at the first vblank after it is drawn, a vblank after
+       the frame before at the earliest */
+    uint64_t show = f_vblank_at(f, f->gpuDone[i % NV_RING]);
+
+    if (i >= 1 && show <= f->showAt[(i - 1) % NV_RING]) {
+        show = f->showAt[(i - 1) % NV_RING] + f->display;
+    }
+    f->showAt[i % NV_RING] = show;
+    f->nvCount++;
+    f->lastVblank = f->now; /* never on a vblank: no late measure */
+}
+
 static bool f_present(void *u, float a)
 {
     Fake *f = u;
 
+    if (f->nv) {
+        f->presents++;
+        if (f->nAlpha < ALPHA_LOG) {
+            f->alpha[f->nAlpha++] = a;
+        }
+        f_present_nv(f);
+        return true;
+    }
     f->now += f->cost;
     f->presents++;
     if (f->nAlpha < ALPHA_LOG) {
@@ -194,6 +286,7 @@ static Run run(Fake *f, unsigned n, uint64_t refreshNominal, uint64_t stepNs, do
             f->now += f->rebuildNs;
             f_drain(f);
             f->queued = 0;
+            f->nvCount = 0;
         }
         if (newFrame) {
             /* the frame that just closed: its alphas were 1 / (2n) .. 1 */
@@ -602,6 +695,132 @@ static void testNominalRatio(void)
     CHECK(pace_lock_nominal_ratio(&L) == 1.0);
 }
 
+/* The v0.7.0 rc2 log (RTX 3090, Vulkan, 3840x2160, 60.00 Hz): the frame
+   rate from uncapped to 60, the swapchain made again in FIFO (the first
+   present 143 ms), the game paused in a menu (GPU 7.9 ms, the replay's CPU
+   3.6 ms after a fence wait of 9 ms, acquire 0); the lock held 10 s, then
+   the menu closed and the work rose to the game's (GPU 11 ms, the replay's
+   CPU 6.3 ms) and the lock dropped: "the display did not keep its refresh
+   rate, 3 misses in a row". */
+static Fake nvFake(void)
+{
+    Fake f = fake(16666667ull);
+
+    f.nv = 1;
+    f.pre = 450000ull;
+    f.tail = 3600000ull;
+    f.tailJitter = 1000000ull;
+    f.gpu = 7900000ull;
+    f.firstExtra = 143 * MS;
+    return f;
+}
+
+static Run nvRun(unsigned rampLen, int64_t rampTail, int64_t rampGpu, double seconds)
+{
+    Fake f = nvFake();
+
+    f.rampAt = 600;
+    f.rampLen = rampLen;
+    f.rampTail = rampTail;
+    f.rampGpu = rampGpu;
+    return run(&f, 1, 16666667ull, 800000ull, seconds, 0, 0);
+}
+
+static void testNvMenuClose(void)
+{
+    /* the menu closing over 12 vsyncs (0.2 s): the work rises 5.8 ms, half
+       a millisecond a vsync; rc2 dropped the lock 13 vsyncs in */
+    Run r = nvRun(12, 2700000, 3100000, 30.0);
+
+    printf("nv, menu closed over 0.2 s: dropped %d at vsync %u, %u presents, %u steps\n", r.dropped,
+           r.dropVsync, r.presents, r.steps);
+    CHECK(r.dropped == 0);
+    /* a step a vblank, less the 143 ms first present's (its vblanks owed
+       past PACE_LOCK_DEBT_VSYNCS were dropped) */
+    CHECK(r.steps >= 1785 && r.steps <= 1801);
+    /* any speed of change, either way, holds: a step (1 vsync) to 2 s */
+    static const unsigned lens[] = {1, 2, 4, 8, 12, 20, 30, 60, 120};
+
+    for (unsigned k = 0; k < sizeof lens / sizeof lens[0]; k++) {
+        r = nvRun(lens[k], 2700000, 3100000, 20.0);
+        CHECK(r.dropped == 0);
+        /* the scene back to the menu's: the work falls */
+        Fake f = nvFake();
+
+        f.tail += 2700000ull;
+        f.gpu += 3100000ull;
+        f.rampAt = 600;
+        f.rampLen = lens[k];
+        f.rampTail = -2700000;
+        f.rampGpu = -3100000;
+        r = run(&f, 1, 16666667ull, 800000ull, 20.0, 0, 0);
+        CHECK(r.dropped == 0);
+        if (r.dropped) {
+            printf("  ramp of %u vsyncs dropped %d at vsync %u\n", lens[k], r.dropped, r.dropVsync);
+        }
+    }
+    /* a rise of 12 ms (the GPU past a refresh) over 6 vsyncs */
+    r = nvRun(6, 4000000, 8000000, 20.0);
+    CHECK(r.dropped == 0);
+}
+
+/* under the same model a display 2.5 % slower or faster than it reports
+   still drops the lock, after the first second and two windows (the 143
+   ms first present's vblanks are stepped without a present) */
+static void testNvSlowDisplay(void)
+{
+    Fake f = nvFake();
+    Run r;
+
+    f.display = 17083333ull;
+    r = run(&f, 1, 16666667ull, 800000ull, 15.0, 0, 0);
+    printf("nv, 2.5 %% slow: dropped %d at vsync %u\n", r.dropped, r.dropVsync);
+    CHECK(r.dropped == PACE_LOCK_DROP_RATE);
+    CHECK(r.dropVsync > PACE_LOCK_SETTLE + PACE_LOCK_RATE_WINDOWS * PACE_LOCK_RATE_WINDOW);
+    CHECK(r.dropVsync < PACE_LOCK_SETTLE + PACE_LOCK_RATE_WINDOWS * PACE_LOCK_RATE_WINDOW + 20);
+    f = nvFake();
+    f.display = 16250000ull;
+    r = run(&f, 1, 16666667ull, 800000ull, 15.0, 0, 0);
+    CHECK(r.dropped == PACE_LOCK_DROP_RATE);
+    f = nvFake();
+    f.display = 16666667ull * 101 / 100;
+    r = run(&f, 1, 16666667ull, 800000ull, 15.0, 0, 0);
+    CHECK(r.dropped == 0);
+}
+
+/* The log's trace: the first presents after a reset and the last ones, as
+   "ms letter" */
+static void testTrace(void)
+{
+    Fake f = fake(16666667ull);
+    PaceLock L;
+    const PaceLockIo io = {&f, f_now, f_present, f_sleep, NULL};
+    char buf[512];
+    unsigned k;
+
+    f.depth = 3;
+    f_drain(&f);
+    pace_lock_reset(&L, 1, 16666667ull, NTSC, f.now);
+    for (unsigned v = 0; v < 100; v++) {
+        f.vsync = v;
+        (void)pace_lock_vsync(&L, &io, v % 2 == 0);
+        f.now += 2 * MS;
+    }
+    k = pace_lock_trace_text(&L, false, buf, sizeof buf);
+    printf("trace, first: %s\n", buf);
+    CHECK(k == PACE_LOCK_TRACE_FIRST);
+    CHECK(buf[0] == '0' && buf[1] == '.' && buf[4] == 'u'); /* the first: no interval */
+    CHECK(strstr(buf, "f ") != NULL);                       /* the queue filled */
+    CHECK(strstr(buf, "16.67h") != NULL);
+    k = pace_lock_trace_text(&L, true, buf, sizeof buf);
+    printf("trace, last: %s\n", buf);
+    CHECK(k == PACE_LOCK_TRACE_LAST);
+    CHECK(strcmp(buf + strlen(buf) - 6, "16.67h") == 0);
+    /* a short buffer: whole entries only */
+    k = pace_lock_trace_text(&L, true, buf, 15);
+    CHECK(k == 2 && strlen(buf) == 13);
+}
+
 int main(void)
 {
     test60();
@@ -625,6 +844,9 @@ int main(void)
     testFirstFrame();
     testFifoHold();
     testNominalRatio();
+    testNvMenuClose();
+    testNvSlowDisplay();
+    testTrace();
     if (fails) {
         printf("pace_loop_test: %d failures\n", fails);
         return 1;
