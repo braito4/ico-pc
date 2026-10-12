@@ -76,6 +76,7 @@ float center_X = 2048.0f, center_Y = 2048.0f;
 int screenOffsetX, screenOffsetY;
 int fbKeep;
 int kanbanBootEnd;
+int ico_stage_change_to;
 int fadeStatus;
 float fadeSpeed;
 unsigned char fadeColor[4];
@@ -675,6 +676,11 @@ static void checkTitleCover(int fw)
     CHECK(n == 0, "cover %d: none during the boot (%d batches)", fw, n);
 
     kanbanBootEnd = 1;
+    ico_stage_change_to = 5;
+    n = coverFrame(fw, &v);
+    CHECK(n == 0, "cover %d: none for a change to another stage (%d batches)", fw, n);
+
+    ico_stage_change_to = 1;
     fadeStatus = 2; /* End Game's fade-out: 0.025 never shows */
     fadeSpeed = 0.025f;
     fadeColor[3] = 0;

@@ -157,6 +157,12 @@ static void stage_initialize(void)
 
 /*SW-END*/
 
+#ifdef ICO_RD
+
+int ico_stage_change_to; /* PC port: the stage a change in flight goes to */
+
+#endif
+
 static void exit_stage(int stage)
 {
     gamesysStageExitTimeSet(stage_no);
@@ -432,6 +438,9 @@ void StageManager(void)
         }
         stagePreLoadMgrEntry = 0;
         if (msg->stage <= 0xFFFF) {
+#ifdef ICO_RD
+            ico_stage_change_to = msg->stage; /* PC port: kanbanTitleCover's target */
+#endif
             exit_stage(msg->stage);
             lt_switch_layout(0x35);
             systemStatus[6] = 1;

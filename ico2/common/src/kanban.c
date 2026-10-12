@@ -466,8 +466,10 @@ static void display_layout(Kanban *k)
    and above the kept frame (a keep frame replays lists 11 and 12), full
    frame at every aspect, alpha 128 of the GS's 0x80 scale: opaque.  Not
    during the boot (kanbanBootEnd 0): the boot signs have their own
-   backdrop. */
+   backdrop.  Only for a change whose target is the title (stage 1): an
+   in-game area change keeps its look. */
 extern int kanbanBootEnd;
+extern int ico_stage_change_to; /* StageManager.c: set before systemStatus[6] */
 
 #include "Basic.h" /* fadeStatus, fadeSpeed, fadeColor */
 
@@ -488,7 +490,7 @@ void kanbanTitleCover(void)
         titleCoverOn = 0;
         return;
     }
-    if (systemStatus[6] != 0) {
+    if (systemStatus[6] != 0 && ico_stage_change_to == 1) {
         titleCoverOn = 1;
     } else if (titleCoverOn != 0 &&
                ((fadeColor[3] >= 128 && fadeSpeed < 0.0f) || fadeStatus == 0)) {
