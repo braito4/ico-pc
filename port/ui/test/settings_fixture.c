@@ -649,8 +649,10 @@ void checkPageFits(UiSettingsPage page, const char *what)
     for (int i = 0; i < n; i++) {
         shown += !lt_ext_prop(labels[i])->defaultMask;
     }
-    const int gap = shown > 13 ? 11 : 13;
-    const int top = shown > 13 ? 30 : 34;
+    /* Controls is the page that grows past the others (pagePitch) */
+    const int tall = page == UI_PAGE_CONTROLS ? 12 : 13;
+    const int gap = shown > 15 && page == UI_PAGE_CONTROLS ? 10 : shown > tall ? 11 : 13;
+    const int top = shown > tall ? 30 : 34;
     for (int i = 0; i < n; i++) {
         const LtProperty *r = lt_ext_prop(labels[i]);
         if (r->defaultMask) {

@@ -2069,9 +2069,10 @@ static void buildGalleryBar(void)
      Main         from 40: up to 8 rows 19 apart, 9 rows 17, 10 rows 15,
                   11 rows 14, 12 rows 13, 13 or more 12 (thirteen rows:
                   Back at 184, its box to 224)
-     Controls     from 40, up to 9 rows 18 apart, 10 or 11 rows 16, 12 or
-                  13 rows 13 (Back at 183, its box to 219); 14 or more from
-                  30, 11 apart (Back at 184, its box to 220)
+     Controls     from 40, up to 9 rows 18 apart, 10 or 11 rows 16, 12 rows
+                  13 (Back at 183, its box to 219); 13 to 15 from
+                  30, 11 apart (Back at 184, its box to 220);
+                  16 rows 10 apart (Back at 180, its box to 216)
      Effects      from 40, 18 apart, ten rows 16 (Back at 184, its box to 220);
                   eleven or twelve rows 13 (twelve: Back at 183); thirteen
                   (the pause menu's, with Brightness) from 34, 13 apart
@@ -2112,7 +2113,12 @@ static int pagePitch(int page, int n, int *y0)
     if (page == UI_PAGE_CONTROLS && n > 9) {
         /* the touch rows, the mouse rows and the game's pause-menu rows
            make the page longer than the others (the table above) */
-        if (n > 13) {
+        if (n > 15) {
+            /* sixteen: Back at 180, its box to 216, clear of the note */
+            *y0 = 30;
+            return 10;
+        }
+        if (n > 12) {
             *y0 = 30;
             return 11;
         }
@@ -2249,6 +2255,7 @@ static void buildOptionPage(int id, int header, const int *opts, const int *strs
     case UI_PAGE_CONTROLS:
         addNote(pg, UI_OPT_BUTTON_CONFIG, UI_STR_BUTTON_CONFIG_NOTE);
         addNote(pg, UI_OPT_HOLD_TYPE, UI_STR_HOLD_TYPE_NOTE);
+        addNote(pg, UI_OPT_STICK_FIX, UI_STR_STICK_FIX_ALSO_NOTE);
         addNote(pg, UI_OPT_CIRCLE_BACK, UI_STR_CIRCLE_BACK_NOTE);
         addNote(pg, UI_OPT_TOUCH_MODE, UI_STR_TOUCH_NOTE);
         break;
@@ -2268,6 +2275,7 @@ static void buildOptionPage(int id, int header, const int *opts, const int *strs
             }
         }
         addNote(pg, UI_OPT_EXTRAS_CREDITS, UI_STR_EXTRAS_LOCKED_NOTE);
+        addNote(pg, UI_OPT_ACH_POPUPS, UI_STR_ACH_POPUPS_ALSO_NOTE);
         break;
     case UI_PAGE_CHARACTERS: {
         /* a swatch right of each colour row's arrows, then one note row
@@ -2685,13 +2693,18 @@ static void build(void)
                                  UI_STR_BACK};
     /* Characters after Credits (from both entries; the other three
        from the title only) */
-    static const int extrasOpts[] = {UI_OPT_EXTRAS_MUSIC,   UI_OPT_EXTRAS_MODELS,
-                                     UI_OPT_EXTRAS_CREDITS, UI_OPT_LINK,
-                                     UI_OPT_EXTRAS_STEAM,   UI_OPT_BACK};
-    static const int extrasStrs[] = {UI_STR_EXTRAS_MUSIC,   UI_STR_EXTRAS_MODELS,
-                                     UI_STR_EXTRAS_CREDITS, UI_STR_SECTION_CHARACTERS,
-                                     UI_STR_EXTRAS_STEAM,   UI_STR_BACK};
-    static const int extrasLinks[] = {-1, -1, -1, UI_PAGE_CHARACTERS, -1, -1};
+    static const int extrasOpts[] = {
+        UI_OPT_EXTRAS_MUSIC, UI_OPT_EXTRAS_MODELS, UI_OPT_EXTRAS_CREDITS,
+        UI_OPT_LINK,         UI_OPT_EXTRAS_STEAM,  UI_OPT_ACH_POPUPS,
+        UI_OPT_BACK};
+    static const int extrasStrs[] = {UI_STR_EXTRAS_MUSIC,
+                                     UI_STR_EXTRAS_MODELS,
+                                     UI_STR_EXTRAS_CREDITS,
+                                     UI_STR_SECTION_CHARACTERS,
+                                     UI_STR_EXTRAS_STEAM,
+                                     UI_STR_OPT_ACH_POPUPS,
+                                     UI_STR_BACK};
+    static const int extrasLinks[] = {-1, -1, -1, UI_PAGE_CHARACTERS, -1, -1, -1};
     /* the characters' colours, one row per IcoAppPart; Switch shows
        only inside the model viewer */
     static const int charOpts[] = {UI_OPT_CHAR_ICO_SKIN,
@@ -2746,19 +2759,21 @@ static void build(void)
        Remap, from the pause menu; the touch overlay's three rows before
        Back, with a touch screen; the mouse camera's rows (not on
        Android) */
-    static const int ctlOpts[] = {UI_OPT_LINK,         UI_OPT_BUTTON_CONFIG, UI_OPT_VIBRATION,
-                                  UI_OPT_HOLD_TYPE,    UI_OPT_MOUSE_CAMERA,  UI_OPT_MOUSE_SENS,
-                                  UI_OPT_MOUSE_INVERT, UI_OPT_MOUSE_SPEED,   UI_OPT_MOUSE_RANGE,
-                                  UI_OPT_MOUSE_RETURN, UI_OPT_CIRCLE_BACK,   UI_OPT_TOUCH_MODE,
-                                  UI_OPT_TOUCH_SIZE,   UI_OPT_TOUCH_OPACITY, UI_OPT_BACK};
-    static const int ctlStrs[] = {
-        UI_STR_OPT_REMAP,        UI_STR_OPT_BUTTON_CONFIG, UI_STR_OPT_VIBRATION,
-        UI_STR_OPT_HOLD_TYPE,    UI_STR_OPT_MOUSE_CAMERA,  UI_STR_OPT_MOUSE_SENS,
-        UI_STR_OPT_MOUSE_INVERT, UI_STR_OPT_MOUSE_SPEED,   UI_STR_OPT_MOUSE_RANGE,
-        UI_STR_OPT_MOUSE_RETURN, UI_STR_OPT_CIRCLE_BACK,   UI_STR_OPT_TOUCH_MODE,
-        UI_STR_OPT_TOUCH_SIZE,   UI_STR_OPT_TOUCH_OPACITY, UI_STR_BACK};
+    static const int ctlOpts[] = {
+        UI_OPT_LINK,        UI_OPT_BUTTON_CONFIG, UI_OPT_VIBRATION,     UI_OPT_HOLD_TYPE,
+        UI_OPT_STICK_FIX,   UI_OPT_MOUSE_CAMERA,  UI_OPT_MOUSE_SENS,    UI_OPT_MOUSE_INVERT,
+        UI_OPT_MOUSE_SPEED, UI_OPT_MOUSE_RANGE,   UI_OPT_MOUSE_RETURN,  UI_OPT_CIRCLE_BACK,
+        UI_OPT_TOUCH_MODE,  UI_OPT_TOUCH_SIZE,    UI_OPT_TOUCH_OPACITY, UI_OPT_BACK};
+    static const int ctlStrs[] = {UI_STR_OPT_REMAP,         UI_STR_OPT_BUTTON_CONFIG,
+                                  UI_STR_OPT_VIBRATION,     UI_STR_OPT_HOLD_TYPE,
+                                  UI_STR_OPT_STICK_FIX,     UI_STR_OPT_MOUSE_CAMERA,
+                                  UI_STR_OPT_MOUSE_SENS,    UI_STR_OPT_MOUSE_INVERT,
+                                  UI_STR_OPT_MOUSE_SPEED,   UI_STR_OPT_MOUSE_RANGE,
+                                  UI_STR_OPT_MOUSE_RETURN,  UI_STR_OPT_CIRCLE_BACK,
+                                  UI_STR_OPT_TOUCH_MODE,    UI_STR_OPT_TOUCH_SIZE,
+                                  UI_STR_OPT_TOUCH_OPACITY, UI_STR_BACK};
     static const int ctlLinks[] = {
-        UI_PAGE_REMAP, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
+        UI_PAGE_REMAP, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
     /* the game's Film effect and Players, once the game is cleared */
     static const int gameOpts[] = {
         UI_OPT_YORDA,       UI_OPT_STICK_FIX, UI_OPT_DOOR_FIX, UI_OPT_NATURAL_CHAINS,

@@ -369,6 +369,8 @@ const char *const ui_strings_en[UI_STR_COUNT] = {
     [UI_STR_VAL_HOLD_B] = "B (toggle)",
     [UI_STR_HOLD_TYPE_NOTE] =
         "A: Yorda’s hand stays held while R1 is held down. B: press R1 to let go of her hand.",
+    [UI_STR_STICK_FIX_ALSO_NOTE] = "Also under Gameplay.",
+    [UI_STR_ACH_POPUPS_ALSO_NOTE] = "Also under Achievements.",
     [UI_STR_PLAYERS_NOTE] = "2: a second controller controls Yorda.",
     [UI_STR_BUTTON_CONFIG_NOTE] =
         "The game’s button layout, kept in your save. It applies on top of Remap controls.",

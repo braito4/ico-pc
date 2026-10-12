@@ -374,6 +374,8 @@ const char *const ui_strings_de[UI_STR_COUNT] = {
     [UI_STR_VAL_HOLD_B] = "B (umschalten)",
     [UI_STR_HOLD_TYPE_NOTE] =
         "A: Yordas Hand bleibt gehalten, solange R1 gedrückt bleibt. B: R1 drücken, um ihre Hand loszulassen.",
+    [UI_STR_STICK_FIX_ALSO_NOTE] = "Auch unter Spiel.",
+    [UI_STR_ACH_POPUPS_ALSO_NOTE] = "Auch unter Erfolge.",
     [UI_STR_PLAYERS_NOTE] = "2: Ein zweiter Controller steuert Yorda.",
     [UI_STR_BUTTON_CONFIG_NOTE] =
         "Die Tasten-Konfiguration des Spiels, im Spielstand gespeichert. Sie gilt zusätzlich zur Tastenbelegung.",

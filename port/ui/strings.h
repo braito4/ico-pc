@@ -422,6 +422,8 @@ typedef enum UiStrId {
     UI_STR_VAL_HOLD_A,
     UI_STR_VAL_HOLD_B,
     UI_STR_HOLD_TYPE_NOTE,
+    UI_STR_STICK_FIX_ALSO_NOTE,  /* Controls: this row is also under Gameplay */
+    UI_STR_ACH_POPUPS_ALSO_NOTE, /* Extras: this row is also under Achievements */
     UI_STR_PLAYERS_NOTE,
     UI_STR_BUTTON_CONFIG_NOTE,
     /* texture packs: Settings > Display, "Texture pack" (On/Off, or "None

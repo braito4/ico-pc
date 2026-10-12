@@ -373,6 +373,8 @@ const char *const ui_strings_fr[UI_STR_COUNT] = {
     [UI_STR_VAL_HOLD_B] = "B (bascule)",
     [UI_STR_HOLD_TYPE_NOTE] =
         "A : la main de Yorda reste tenue tant que R1 est maintenu. B : appuyez sur R1 pour lâcher sa main.",
+    [UI_STR_STICK_FIX_ALSO_NOTE] = "Aussi dans Jeu.",
+    [UI_STR_ACH_POPUPS_ALSO_NOTE] = "Aussi dans Succès.",
     [UI_STR_PLAYERS_NOTE] = "2 : une deuxième manette dirige Yorda.",
     [UI_STR_BUTTON_CONFIG_NOTE] =
         "La disposition des touches du jeu, gardée dans la sauvegarde. Elle s’applique en plus de Configurer les touches.",

@@ -226,7 +226,8 @@ pictures:
   stick. Slide your thumb to walk. Slide it out to the ring around the
   stick to run.
   As with a real stick, running between the eight main directions
-  needs **Options > Gameplay > Analogue stick fix**.
+  needs **Options > Controls > Analogue stick fix** (it is also under
+  Gameplay).
 - **The D-pad** is above the stick, beside the L1 and L2 buttons in the
   top left corner, with L2 at the top. It moves around the menus.
 - **Cross, Circle, Square and Triangle** are in the lower right corner.

@@ -180,6 +180,9 @@ A change takes effect the next time you start the game.
 - **Hold type** is **A (hold)**, where Yorda's hand stays held while you
   keep R1 down, or **B (toggle)**, where you press R1 once to let go of her
   hand. Pause menu only.
+- **Analogue stick fix** is the same switch as the one on the Gameplay
+  page, shown here too so you find it with the other controls. Turn it on
+  in either place and it is on in both.
 - **Mouse camera** lets the mouse move the camera while you play, with
   the pointer hidden. It is on unless you turn it off.
   [More about the mouse camera](CONTROLS.md#look-around-with-the-mouse).
@@ -210,7 +213,8 @@ The first four are off unless you turn them on, on a phone too.
 - **Shadows never take Yorda** makes the game gentler. A few scenes in the
   story still show her being taken.
 - **Analogue stick fix** lets Ico run in any direction you push the stick,
-  not only the eight the original game knows.
+  not only the eight the original game knows. It is also on the Controls
+  page, and it is the same switch.
   [Why this is needed](FAQ.md#ico-walks-instead-of-running).
 - **East Reflector door fix** lets Ico lead Yorda by the hand through a doorway that
   the original game sends you both back out of, such as the one at the top
@@ -244,13 +248,15 @@ on.
 
 **Achievement pop-ups**, the first row of the list, is on until you turn
 it off. Off stops the pop-up when you earn an achievement. You still earn
-them, and the list shows them.
+them, and the list shows them. The same switch is also on the Extras
+page, and it is the same setting in both places.
 
 ## Extras
 
 On the title screen's Options this page has Music, Models, Credits,
-Character Customization and, on Windows and Linux, Add to Steam. In the
-pause menu's Options it has only Character Customization.
+Character Customization, on Windows and Linux Add to Steam, and Achievement
+pop-ups. In the pause menu's Options it has only Character Customization
+and Achievement pop-ups.
 
 - **Music:** listen to the game's music and sound effects.
 - **Models:** the model viewer. Look closely at the characters and some
@@ -258,6 +264,8 @@ pause menu's Options it has only Character Customization.
 - **Credits:** watch the ending credits again. It unlocks once you have
   finished the game.
 - **Character Customization:** change the colours of Ico and Yorda. [Details below](#character-customization).
+- **Achievement pop-ups** is the switch that is also the first row of the
+  [Achievements](#achievements) list. Turn it on or off in either place.
 - **Add to Steam** (Windows and Linux, including the Steam Deck; on the
   title screen's Extras page only): adds the
   game to your Steam library as a non-Steam game, so you can start it from

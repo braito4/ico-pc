@@ -92,17 +92,19 @@ static void testBuild(void)
                                     UI_OPT_OUTPUT, UI_OPT_DEVICE, UI_OPT_BACK};
     static const int audioStrs[] = {UI_STR_OPT_VOLUME, UI_STR_OPT_MUSIC_VOL, UI_STR_OPT_EFFECTS_VOL,
                                     UI_STR_OPT_OUTPUT, UI_STR_OPT_DEVICE,    UI_STR_BACK};
-    static const int ctlOpts[] = {UI_OPT_LINK,         UI_OPT_BUTTON_CONFIG, UI_OPT_VIBRATION,
-                                  UI_OPT_HOLD_TYPE,    UI_OPT_MOUSE_CAMERA,  UI_OPT_MOUSE_SENS,
-                                  UI_OPT_MOUSE_INVERT, UI_OPT_MOUSE_SPEED,   UI_OPT_MOUSE_RANGE,
-                                  UI_OPT_MOUSE_RETURN, UI_OPT_CIRCLE_BACK,   UI_OPT_TOUCH_MODE,
-                                  UI_OPT_TOUCH_SIZE,   UI_OPT_TOUCH_OPACITY, UI_OPT_BACK};
-    static const int ctlStrs[] = {
-        UI_STR_OPT_REMAP,        UI_STR_OPT_BUTTON_CONFIG, UI_STR_OPT_VIBRATION,
-        UI_STR_OPT_HOLD_TYPE,    UI_STR_OPT_MOUSE_CAMERA,  UI_STR_OPT_MOUSE_SENS,
-        UI_STR_OPT_MOUSE_INVERT, UI_STR_OPT_MOUSE_SPEED,   UI_STR_OPT_MOUSE_RANGE,
-        UI_STR_OPT_MOUSE_RETURN, UI_STR_OPT_CIRCLE_BACK,   UI_STR_OPT_TOUCH_MODE,
-        UI_STR_OPT_TOUCH_SIZE,   UI_STR_OPT_TOUCH_OPACITY, UI_STR_BACK};
+    static const int ctlOpts[] = {
+        UI_OPT_LINK,        UI_OPT_BUTTON_CONFIG, UI_OPT_VIBRATION,     UI_OPT_HOLD_TYPE,
+        UI_OPT_STICK_FIX,   UI_OPT_MOUSE_CAMERA,  UI_OPT_MOUSE_SENS,    UI_OPT_MOUSE_INVERT,
+        UI_OPT_MOUSE_SPEED, UI_OPT_MOUSE_RANGE,   UI_OPT_MOUSE_RETURN,  UI_OPT_CIRCLE_BACK,
+        UI_OPT_TOUCH_MODE,  UI_OPT_TOUCH_SIZE,    UI_OPT_TOUCH_OPACITY, UI_OPT_BACK};
+    static const int ctlStrs[] = {UI_STR_OPT_REMAP,         UI_STR_OPT_BUTTON_CONFIG,
+                                  UI_STR_OPT_VIBRATION,     UI_STR_OPT_HOLD_TYPE,
+                                  UI_STR_OPT_STICK_FIX,     UI_STR_OPT_MOUSE_CAMERA,
+                                  UI_STR_OPT_MOUSE_SENS,    UI_STR_OPT_MOUSE_INVERT,
+                                  UI_STR_OPT_MOUSE_SPEED,   UI_STR_OPT_MOUSE_RANGE,
+                                  UI_STR_OPT_MOUSE_RETURN,  UI_STR_OPT_CIRCLE_BACK,
+                                  UI_STR_OPT_TOUCH_MODE,    UI_STR_OPT_TOUCH_SIZE,
+                                  UI_STR_OPT_TOUCH_OPACITY, UI_STR_BACK};
     static const int gameOpts[] = {
         UI_OPT_YORDA,       UI_OPT_STICK_FIX, UI_OPT_DOOR_FIX, UI_OPT_NATURAL_CHAINS,
         UI_OPT_FILM_EFFECT, UI_OPT_PLAYERS,   UI_OPT_BACK};
@@ -128,18 +130,23 @@ static void testBuild(void)
     {
         /* Characters (a link), then Add to Steam (hidden without a host
            handler) before Back */
-        static const int extrasOpts[] = {UI_OPT_EXTRAS_MUSIC,   UI_OPT_EXTRAS_MODELS,
-                                         UI_OPT_EXTRAS_CREDITS, UI_OPT_LINK,
-                                         UI_OPT_EXTRAS_STEAM,   UI_OPT_BACK};
-        static const int extrasStrs[] = {UI_STR_EXTRAS_MUSIC,   UI_STR_EXTRAS_MODELS,
-                                         UI_STR_EXTRAS_CREDITS, UI_STR_SECTION_CHARACTERS,
-                                         UI_STR_EXTRAS_STEAM,   UI_STR_BACK};
-        CHECK(labelsAre(UI_PAGE_EXTRAS, extrasOpts, extrasStrs, 6), "Extras page rows");
+        static const int extrasOpts[] = {
+            UI_OPT_EXTRAS_MUSIC, UI_OPT_EXTRAS_MODELS, UI_OPT_EXTRAS_CREDITS,
+            UI_OPT_LINK,         UI_OPT_EXTRAS_STEAM,  UI_OPT_ACH_POPUPS,
+            UI_OPT_BACK};
+        static const int extrasStrs[] = {UI_STR_EXTRAS_MUSIC,
+                                         UI_STR_EXTRAS_MODELS,
+                                         UI_STR_EXTRAS_CREDITS,
+                                         UI_STR_SECTION_CHARACTERS,
+                                         UI_STR_EXTRAS_STEAM,
+                                         UI_STR_OPT_ACH_POPUPS,
+                                         UI_STR_BACK};
+        CHECK(labelsAre(UI_PAGE_EXTRAS, extrasOpts, extrasStrs, 7), "Extras page rows");
     }
     CHECK(labelsAre(UI_PAGE_DISPLAY, dispOpts, dispStrs, 11),
           "display rows (Frame rate without a framerate key)");
     CHECK(labelsAre(UI_PAGE_AUDIO, audioOpts, audioStrs, 6), "audio rows");
-    CHECK(labelsAre(UI_PAGE_CONTROLS, ctlOpts, ctlStrs, 15), "controls rows");
+    CHECK(labelsAre(UI_PAGE_CONTROLS, ctlOpts, ctlStrs, 16), "controls rows");
     CHECK(labelsAre(UI_PAGE_GAMEPLAY, gameOpts, gameStrs, 7), "gameplay rows");
     /* the pop-ups switch is an item of the list (first, before the achievements), not a row of its own */
     CHECK(labelsAre(UI_PAGE_ACHIEVEMENTS, listOpts, listStrs, 8), "achievement slots");
@@ -164,7 +171,7 @@ static void testBuild(void)
     CHECK(yorda >= 0, "the Yorda row");
     /* the Gameplay page holds the stick fix beside Yorda's */
     CHECK(ui_settings_row_of(UI_PAGE_GAMEPLAY, UI_OPT_STICK_FIX) >= 0, "the stick fix row");
-    CHECK(ui_settings_row_of(UI_PAGE_CONTROLS, UI_OPT_STICK_FIX) < 0, "not on Controls");
+    CHECK(ui_settings_row_of(UI_PAGE_CONTROLS, UI_OPT_STICK_FIX) >= 0, "also on Controls");
     /* no Menu text or Font row (one behaviour: the game's
        words are the table's text, the port's own Arimo) */
     {
@@ -2449,7 +2456,7 @@ static void testGameOptions(void)
         press(0x4000);
         CHECK(lt_ext_layout(ctlL)->curItem ==
                   ui_settings_row_of(UI_PAGE_CONTROLS,
-                                     title ? UI_OPT_MOUSE_CAMERA : UI_OPT_BUTTON_CONFIG),
+                                     title ? UI_OPT_STICK_FIX : UI_OPT_BUTTON_CONFIG),
               "title %d: down from Remap", title);
         press(0x10);
         CHECK(settle(mainL, 60), "Controls: back");
@@ -2580,8 +2587,7 @@ static void testGameOptions(void)
     CHECK(lt_ext_layout(ctlL)->curItem == remap && lt_ext_layout(ctlL)->defaultItem == remap,
           "title: off the hidden row (%d)", lt_ext_layout(ctlL)->curItem);
     CHECK(lt_ext_prop(bc)->upItem == remap &&
-              lt_ext_prop(bc)->downItem ==
-                  ui_settings_row_of(UI_PAGE_CONTROLS, UI_OPT_MOUSE_CAMERA),
+              lt_ext_prop(bc)->downItem == ui_settings_row_of(UI_PAGE_CONTROLS, UI_OPT_STICK_FIX),
           "title: the hidden row's links lead to shown rows (%d, %d)", lt_ext_prop(bc)->upItem,
           lt_ext_prop(bc)->downItem);
     for (int i = 0; i < 12; i++) {

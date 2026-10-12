@@ -571,7 +571,8 @@ static void testAddToSteam(void)
         int el[8];
         const int en = ui_settings_page_rows(UI_PAGE_EXTRAS, el, NULL, NULL, 8);
 
-        CHECK(en == 6 && el[4] == row, "six rows, Add to Steam before Back (%d)", en);
+        CHECK(en == 7 && el[4] == row, "seven rows, Add to Steam then the pop-ups and Back (%d)",
+              en);
     }
 
     /* Cross: the handler once, its answer as the popup */
@@ -787,16 +788,19 @@ static void testMouseCamera(void)
             }
             const int remap = ui_settings_row_of(UI_PAGE_CONTROLS, UI_OPT_LINK);
             const int below = lt_ext_prop(remap)->downItem;
-            const UiSettingsOpt want = android
-                                           ? (title ? UI_OPT_CIRCLE_BACK : UI_OPT_BUTTON_CONFIG)
-                                           : (title ? UI_OPT_MOUSE_CAMERA : UI_OPT_BUTTON_CONFIG);
+            const UiSettingsOpt want = android ? (title ? UI_OPT_STICK_FIX : UI_OPT_BUTTON_CONFIG)
+                                               : (title ? UI_OPT_STICK_FIX : UI_OPT_BUTTON_CONFIG);
             CHECK(below == ui_settings_row_of(UI_PAGE_CONTROLS, want),
                   "android %d, title %d: down from Remap (%d)", android, title, below);
             if (!title && !android) {
                 const int hold = ui_settings_row_of(UI_PAGE_CONTROLS, UI_OPT_HOLD_TYPE);
                 CHECK(lt_ext_prop(hold)->downItem ==
-                          ui_settings_row_of(UI_PAGE_CONTROLS, UI_OPT_MOUSE_CAMERA),
-                      "pause: Mouse camera after Hold type");
+                          ui_settings_row_of(UI_PAGE_CONTROLS, UI_OPT_STICK_FIX),
+                      "pause: Stick fix after Hold type");
+                CHECK(
+                    lt_ext_prop(ui_settings_row_of(UI_PAGE_CONTROLS, UI_OPT_STICK_FIX))->downItem ==
+                        ui_settings_row_of(UI_PAGE_CONTROLS, UI_OPT_MOUSE_CAMERA),
+                    "pause: Mouse camera after Stick fix");
             }
             if (!android) {
                 /* Invert, then Speed, Range, Swings back, then Circle back */
@@ -816,7 +820,7 @@ static void testMouseCamera(void)
     }
     ico_video_set_android(0);
 
-    /* fifteen rows with a touch screen from the pause menu: 11 lines apart
+    /* sixteen rows with a touch screen from the pause menu: 10 lines apart
        from 30, the last box inside the 226 lines */
     s_i17aTouch = 1;
     ui_settings_set_touch_query(i17aTouch);
@@ -832,15 +836,15 @@ static void testMouseCamera(void)
         if (r->defaultMask) {
             continue;
         }
-        CHECK(prev < 0 ? r->dispY >= 28 : r->dispY >= prev + 11,
-              "fifteen rows: row %d at y %d (the one above at %d)", i, r->dispY, prev);
+        CHECK(prev < 0 ? r->dispY >= 28 : r->dispY >= prev + 10,
+              "sixteen rows: row %d at y %d (the one above at %d)", i, r->dispY, prev);
         prev = r->dispY;
         last = labels[i];
         n++;
     }
-    CHECK(n == 15, "fifteen rows shown (%d)", n);
+    CHECK(n == 16, "sixteen rows shown (%d)", n);
     CHECK(last >= 0 && lt_ext_prop(last)->dispY + lt_ext_prop(last)->dispH <= 226,
-          "fifteen rows: the last box ends at %d",
+          "sixteen rows: the last box ends at %d",
           last >= 0 ? lt_ext_prop(last)->dispY + lt_ext_prop(last)->dispH : -1);
     press(0x10);
     CHECK(settle(mainL, 60), "Controls: back");
@@ -1392,6 +1396,171 @@ static void testAchievementPopups(void)
     ico_ach_set_popups(1);
 }
 
+/* a touch screen for the 16-row Controls page */
+static int rowsFakeTouch(void)
+{
+    return 1;
+}
+
+/* the value of the row of `opt` on `page`: its text */
+static const char *rowsValueOf(UiSettingsPage page, UiSettingsOpt opt)
+{
+    int labels[16], opts[16], values[16];
+    const int n = ui_settings_page_rows(page, labels, opts, values, 16);
+    for (int i = 0; i < n; i++) {
+        if (opts[i] == (int)opt) {
+            return lt_ext_row_text(values[i]);
+        }
+    }
+    return "";
+}
+
+/* Analogue stick fix is on Controls (after Hold type) and on Gameplay,
+   Achievement pop-ups on Extras and first on the Achievements list: each a
+   second row of the one option, so the value, the config key and the save
+   are the same from either page */
+static void testDuplicatedRows(void)
+{
+    static const UiLang kLangs[5] = {UI_LANG_EN, UI_LANG_DE, UI_LANG_ES, UI_LANG_FR, UI_LANG_IT};
+    int labels[16], opts[16];
+    char p[1100];
+    IcoToml *t;
+
+    gFlagGameClear = 0;
+    for (int title = 1; title >= 0; title--) {
+        stage_no = title ? 1 : 11;
+        useConfig("version = 1\n");
+        ico_opt_set_stick_fix(0);
+        ico_ach_set_popups(1);
+        const int mainL = enterMain(title);
+
+        /* Controls: after Hold type (hidden on the title: after Remap) */
+        const int ctlL = openPage(mainL, 4, UI_PAGE_CONTROLS);
+        const int sf = ui_settings_row_of(UI_PAGE_CONTROLS, UI_OPT_STICK_FIX);
+        CHECK(sf >= 0 && an22bShown(UI_PAGE_CONTROLS, UI_OPT_STICK_FIX),
+              "title %d: stick fix is on Controls", title);
+        const int n = ui_settings_page_rows(UI_PAGE_CONTROLS, labels, opts, NULL, 16);
+        int at = -1;
+        for (int i = 0; i < n; i++) {
+            at = opts[i] == UI_OPT_STICK_FIX ? i : at;
+        }
+        CHECK(at > 0 && opts[at - 1] == UI_OPT_HOLD_TYPE, "title %d: stick fix follows Hold type",
+              title);
+        CHECK(noteStarting(UI_PAGE_CONTROLS, "Also under Gameplay") >= 0,
+              "title %d: the Controls row says it is also under Gameplay", title);
+        lt_ext_layout(ctlL)->curItem = sf;
+        press(LT_PAD_RIGHT);
+        CHECK(ico_opt_stick_fix() == 1 &&
+                  strcmp(rowsValueOf(UI_PAGE_CONTROLS, UI_OPT_STICK_FIX), "On") == 0,
+              "title %d: Right on Controls turns stick fix on", title);
+        press(LT_PAD_TRIANGLE);
+        CHECK(settle(mainL, 60), "title %d: Controls: back", title);
+        path(p, sizeof(p), "settings_test.toml");
+        t = ico_toml_load(p);
+        CHECK(t != NULL && ico_toml_get_bool(t, "gameplay.stick_fix", 0) == 1,
+              "title %d: leaving Controls saved gameplay.stick_fix", title);
+        if (t) {
+            ico_toml_free(t);
+        }
+
+        /* Gameplay: the same value, stepped from there */
+        const int gameL = openPage(mainL, 5, UI_PAGE_GAMEPLAY);
+        CHECK(an22bShown(UI_PAGE_GAMEPLAY, UI_OPT_STICK_FIX) &&
+                  strcmp(rowsValueOf(UI_PAGE_GAMEPLAY, UI_OPT_STICK_FIX), "On") == 0,
+              "title %d: Gameplay shows the value set on Controls", title);
+        lt_ext_layout(gameL)->curItem = ui_settings_row_of(UI_PAGE_GAMEPLAY, UI_OPT_STICK_FIX);
+        press(LT_PAD_LEFT);
+        CHECK(ico_opt_stick_fix() == 0, "title %d: Left on Gameplay turns it off", title);
+        press(LT_PAD_TRIANGLE);
+        CHECK(settle(mainL, 60), "title %d: Gameplay: back", title);
+        openPage(mainL, 4, UI_PAGE_CONTROLS);
+        CHECK(strcmp(rowsValueOf(UI_PAGE_CONTROLS, UI_OPT_STICK_FIX), "Off") == 0,
+              "title %d: Controls shows the value set on Gameplay", title);
+        press(LT_PAD_TRIANGLE);
+        CHECK(settle(mainL, 60), "title %d: Controls: back again", title);
+
+        /* Extras: the pop-ups before Back, the same value as the list's */
+        const int exL = openPage(mainL, 8, UI_PAGE_EXTRAS);
+        const int en = ui_settings_page_rows(UI_PAGE_EXTRAS, labels, opts, NULL, 16);
+        CHECK(en >= 2 && opts[en - 2] == UI_OPT_ACH_POPUPS && opts[en - 1] == UI_OPT_BACK,
+              "title %d: Extras ends with the pop-ups and Back (%d rows)", title, en);
+        CHECK(an22bShown(UI_PAGE_EXTRAS, UI_OPT_ACH_POPUPS), "title %d: pop-ups shown on Extras",
+              title);
+        CHECK(noteStarting(UI_PAGE_EXTRAS, "Also under Achievements") >= 0,
+              "title %d: the Extras row says it is also under Achievements", title);
+        lt_ext_layout(exL)->curItem = ui_settings_row_of(UI_PAGE_EXTRAS, UI_OPT_ACH_POPUPS);
+        press(LT_PAD_RIGHT);
+        CHECK(ico_ach_popups_enabled() == 0 &&
+                  strcmp(rowsValueOf(UI_PAGE_EXTRAS, UI_OPT_ACH_POPUPS), "Off") == 0,
+              "title %d: Right on Extras turns the pop-ups off", title);
+        press(LT_PAD_TRIANGLE);
+        CHECK(settle(mainL, 60), "title %d: Extras: back", title);
+        t = ico_toml_load(p);
+        CHECK(t != NULL && ico_toml_has(t, "game.achievements") &&
+                  ico_toml_get_bool(t, "game.achievements", 1) == 0,
+              "title %d: leaving Extras saved game.achievements", title);
+        if (t) {
+            ico_toml_free(t);
+        }
+        const int achL =
+            openPage(mainL, i17bMainIndex(UI_STR_SECTION_ACHIEVEMENTS), UI_PAGE_ACHIEVEMENTS);
+        int al[16], av[16];
+        ui_settings_page_rows(UI_PAGE_ACHIEVEMENTS, al, NULL, av, 16);
+        CHECK(lt_ext_layout(achL)->curItem == al[0] &&
+                  strcmp(lt_ext_row_text(al[0]), ui_str(UI_STR_OPT_ACH_POPUPS)) == 0 &&
+                  strcmp(lt_ext_row_text(av[0]), "Off") == 0,
+              "title %d: the Achievements list still starts with the pop-ups, Off", title);
+        press(LT_PAD_TRIANGLE);
+        CHECK(settle(mainL, 60), "title %d: Achievements: back", title);
+        CHECK(ui_settings_row_of(UI_PAGE_GAMEPLAY, UI_OPT_ACH_POPUPS) < 0,
+              "title %d: pop-ups are not on Gameplay", title);
+    }
+
+    /* the first match, where an option stands on a page more than once */
+    {
+        const int n = ui_settings_page_rows(UI_PAGE_MAIN, labels, opts, NULL, 16);
+        int first = -1;
+        for (int i = 0; i < n && first < 0; i++) {
+            first = opts[i] == UI_OPT_LINK ? labels[i] : first;
+        }
+        CHECK(first >= 0 && ui_settings_row_of(UI_PAGE_MAIN, UI_OPT_LINK) == first,
+              "row_of returns the first of several rows of one option");
+    }
+
+    /* the fullest Controls page (pause menu, mouse and touch): sixteen rows
+       fit in every language */
+    useConfig("version = 1\n");
+    ico_video_set_android(0);
+    ui_settings_set_touch_query(rowsFakeTouch);
+    stage_no = 11;
+    for (int i = 0; i < 5; i++) {
+        ui_set_language(kLangs[i]);
+        const int mainL = enterMain(0);
+        openPage(mainL, 4, UI_PAGE_CONTROLS);
+        for (int k = 0; k < 4; k++) {
+            frame(0);
+        }
+        int shown = 0;
+        const int n = ui_settings_page_rows(UI_PAGE_CONTROLS, labels, opts, NULL, 16);
+        for (int j = 0; j < n; j++) {
+            shown += !lt_ext_prop(labels[j])->defaultMask;
+        }
+        CHECK(shown == 16, "language %d: Controls shows sixteen rows (%d)", i, shown);
+        CHECK(strcmp(lt_ext_row_text(ui_settings_row_of(UI_PAGE_CONTROLS, UI_OPT_STICK_FIX)),
+                     ui_str(UI_STR_OPT_STICK_FIX)) == 0,
+              "language %d: the stick fix label", i);
+        checkPageFits(UI_PAGE_CONTROLS, "Controls, sixteen rows");
+        press(0x10);
+        CHECK(settle(mainL, 60), "language %d: Controls: back", i);
+    }
+    ui_set_language(UI_LANG_EN);
+    ui_settings_set_touch_query(NULL);
+    ui_settings_reset();
+    useConfig("version = 1\n");
+    ico_opt_set_stick_fix(0);
+    ico_ach_set_popups(1);
+}
+
 /* Remap controls: giving a source to a held target swaps the two rows
    (through the capture flow), device by device. Square clears a row outright,
    and a cleared row takes a source back with nothing to swap. */
@@ -1936,6 +2105,7 @@ int main(int argc, char **argv)
     testSaveSlotPointer();
     /* Gameplay > Achievement pop-ups */
     testAchievementPopups();
+    testDuplicatedRows();
     /* Remap controls: swap on conflict, the menu note */
     testRemapSwap();
     testRemapMenuNote();

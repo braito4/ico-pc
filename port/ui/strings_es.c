@@ -372,6 +372,8 @@ const char *const ui_strings_es[UI_STR_COUNT] = {
     [UI_STR_VAL_HOLD_B] = "B (alternar)",
     [UI_STR_HOLD_TYPE_NOTE] =
         "A: la mano de Yorda sigue cogida mientras mantienes R1. B: pulsa R1 para soltar su mano.",
+    [UI_STR_STICK_FIX_ALSO_NOTE] = "También en Juego.",
+    [UI_STR_ACH_POPUPS_ALSO_NOTE] = "También en Logros.",
     [UI_STR_PLAYERS_NOTE] = "2: un segundo mando controla a Yorda.",
     [UI_STR_BUTTON_CONFIG_NOTE] =
         "La disposición de botones del juego, guardada en la partida. Se suma a Configurar controles.",
