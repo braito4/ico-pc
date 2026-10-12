@@ -299,8 +299,8 @@ static void drawFrame(int W, RdTex tex, const RdMesh *meshes)
 
     if (s_grain) {
         /* gsb_filmNoise: the noise texture bound, then the post (no source
-           target: it uses the bound texture), alpha 0x40, repeat 4.5: 4.5 texels per pixel, so no pixel centre
-           falls on a texel boundary (at 4.0 every centre does, 4x + 2, and
+           target: it uses the bound texture), alpha 0x40, repeat 4.5: 4.5 texels per pixel, so no
+           pixel centre falls on a texel boundary (at 4.0 every centre does, 4x + 2, and
            the nearest filter then picks by float rounding, which differs
            with the column's absolute position) */
         RdPostParams gp;
