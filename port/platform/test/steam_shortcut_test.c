@@ -597,6 +597,7 @@ static void test_running(void)
         if (self != NULL) {
             own[fread(own, 1, sizeof(own) - 1, self)] = '\0';
             fclose(self);
+            own[strcspn(own, "\n")] = '\0';
         }
 
         p(link, sizeof(link), "steamd");
@@ -625,6 +626,9 @@ static void test_running(void)
                     n = fread(c, 1, sizeof(c) - 1, f);
                     fclose(f);
                     c[n] = '\0';
+                    if (n > 0 && c[n - 1] == '\n') {
+                        c[n - 1] = '\0'; /* comm ends in a newline; own was cut before it */
+                    }
                     if (strcmp(c, own) != 0) { /* this program's name: not yet */
                         break;
                     }
