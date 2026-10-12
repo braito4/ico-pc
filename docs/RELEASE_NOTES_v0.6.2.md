@@ -11,6 +11,5 @@
 - The MSAA choices no longer disappear from the Anti-aliasing row at some window sizes.
 - Photo mode's button pictures show correctly with a texture pack.
 - The stray shapes beside the picture for a few frames when you return to the main menu are gone.
-- <<BLEND-EYE line>>
-- <<FP-LINES line>>
+- Walls and floors right next to the camera no longer flicker out for a moment while the camera moves.
 - Windows: the program now carries version information, and the download no longer includes developer tools.
