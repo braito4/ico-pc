@@ -288,6 +288,9 @@ void ExecIcoMisc(void)
         }
     }
     kanbanExec();
+#ifdef ICO_RD
+    kanbanTitleCover(); /* PC port (TITLE-COVER) */
+#endif
     if (graphics_ready != 0) {
         return;
     }

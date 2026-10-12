@@ -449,6 +449,72 @@ static void display_layout(Kanban *k)
     }
 }
 
+#ifdef ICO_RD
+
+/* PC port (v0.6.2, TITLE-COVER): the whole frame black while a stage change
+   is in flight, from the stage manager setting systemStatus[6]
+   (StageManager.c, after exit_stage) until the next fade has reached full
+   black.  The End Game and game over exits switch with a fade-out so slow it
+   never shows (stgmgrForceSwitchWithFade(1, 0.025, 4)), so the half-freed
+   stage was drawn, with the loading layout's near-black over the 4:3 box
+   only; on a wide frame the pieces of it that fail the region test beside
+   the box were GPU-clipped away on the PS2 and show here.  The title's own
+   fade then starts at level 144 (gsb_fade), already black, so the cover
+   ends when fadeColor[3] has reached 128 on that fade (fadeSpeed < 0), or
+   when no fade is running.  Same mechanism as kanbanExec's backdrop: list
+   11, recorded after the loading layout and the signs, so it is above them
+   and above the kept frame (a keep frame replays lists 11 and 12), full
+   frame at every aspect, alpha 128 of the GS's 0x80 scale: opaque.  Not
+   during the boot (kanbanBootEnd 0): the boot signs have their own
+   backdrop. */
+extern int kanbanBootEnd;
+
+#include "Basic.h" /* fadeStatus, fadeSpeed, fadeColor */
+
+static int titleCoverOn; /* port: the cover is up */
+
+int kanbanTitleCoverActive(void)
+{
+    return titleCoverOn;
+}
+
+void kanbanTitleCover(void)
+{
+    static const unsigned char black[4] = {0, 0, 0, 128};
+    unsigned char col[4];
+    Pkt16 pkt;
+
+    if (kanbanBootEnd == 0) {
+        titleCoverOn = 0;
+        return;
+    }
+    if (systemStatus[6] != 0) {
+        titleCoverOn = 1;
+    } else if (titleCoverOn != 0 &&
+               ((fadeColor[3] >= 128 && fadeSpeed < 0.0f) || fadeStatus == 0)) {
+        titleCoverOn = 0;
+    }
+    if (titleCoverOn == 0) {
+        return;
+    }
+    memcpy(col, black, sizeof(col));
+    gif_StartPacketPri(11);
+    gif_SetZTest(0);
+    gif_SetZWrite(0);
+    gif_SetAlpha(1, 7, 0);
+    pkt = kanbanSprite;
+    KANBAN_FULL_BEGIN();
+    KANBAN_HOST_KEY(&titleCoverOn, 0);
+    gif_SpriteSensitive(pkt.i, 0xFFFFFFFFu, 0, col, 1);
+    KANBAN_HOST_KEY(0, 0);
+    KANBAN_FULL_END();
+    gif_SetZWrite(1);
+    gif_SetZTest(1);
+    gif_EndPacket();
+}
+
+#endif
+
 inline void kanbanExec(void)
 {
     Kanban *k;

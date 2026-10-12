@@ -32,6 +32,14 @@ void kanbanReqDelFade(Kanban *self);
 void kanbanReqAllDel(void);
 void kanbanReqAllDelFade(void);
 void kanbanExec(void);
+
+#ifdef ICO_RD
+
+void kanbanTitleCover(void); /* PC port: kanban.c */
+int kanbanTitleCoverActive(void);
+
+#endif
+
 void kanbanInit(int no);
 Kanban *kanbanReqAdd(int no, int pri);
 /* kanban.o's .sdata global */

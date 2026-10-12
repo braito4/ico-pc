@@ -192,7 +192,8 @@ add_executable(rd_layout_test test/rd_layout_test.c
 ico_include_dirs(seki _ico_seki_incs)
 target_include_directories(rd_layout_test PRIVATE ${_ico_seki_incs}
                            "${CMAKE_SOURCE_DIR}/port/shaders" "${CMAKE_SOURCE_DIR}/port/math"
-                           "${CMAKE_SOURCE_DIR}/port/rhi" "${CMAKE_SOURCE_DIR}/port/ui")
+                           "${CMAKE_SOURCE_DIR}/port/rhi" "${CMAKE_SOURCE_DIR}/port/ui"
+                           "${CMAKE_SOURCE_DIR}/port/include")
 target_compile_definitions(rd_layout_test PRIVATE ICO_HOST=1 ICO_RD=1)
 target_compile_options(rd_layout_test PRIVATE ${ICO_SEMANTIC_OPTIONS} ${ICO_GAME_LAYOUT_OPTIONS}
                        ${ICO_GAME_WARNINGS})

@@ -53,6 +53,7 @@
 #include "GifPacket.h"
 #include "layout_texture.h"
 #include "kanban.h"
+#include "ico_frame.h"
 #include "main.h"
 #include "charFileManager.h"
 #include "Texture.h"
@@ -74,6 +75,10 @@ int ScreenWidth = 512, ScreenHeight = 512;
 float center_X = 2048.0f, center_Y = 2048.0f;
 int screenOffsetX, screenOffsetY;
 int fbKeep;
+int kanbanBootEnd;
+int fadeStatus;
+float fadeSpeed;
+unsigned char fadeColor[4];
 void *ios_partition_common;
 void *dmaVif;
 
@@ -614,6 +619,102 @@ static void checkKanbanBackdrop(int fw)
           "kanban %d: untextured, ALPHA 0x44", fw);
 }
 
+/* ------------------------------------------ the title exit's cover */
+
+/* kanbanTitleCover (common/src/kanban.c, PC port v0.6.2) records one frame
+   at a native width fw and returns the walk of it: the screen batches it
+   drew, and the first one's vertices in *vtx. */
+static int last_scr_space;
+
+static int coverFrame(int fw, const RdScreenVtx **vtx)
+{
+    static const uint8_t black[4] = {0, 0, 0, 0x80};
+    static Walk w;
+    const RdFrame *f;
+
+    gif_HostSetFrameWidth(fw);
+    dl_SetDLPriority(0);
+    rd_set_target(rd_target(RD_TARGET_SCENE), rd_target(RD_TARGET_SCENE), 512, 512, 1);
+    rd_clear_target(rd_target(RD_TARGET_SCENE), black, 1, 0);
+    kanbanTitleCover();
+    dl_Swap();
+    gif_HostSetFrameWidth(512);
+    memset(&w, 0, sizeof(w));
+    *vtx = NULL;
+    f = rd__last_frame();
+    if (!f) {
+        return -1;
+    }
+    RdStateBlock s = f->startState;
+    rd__walk(f, 0, &s, collect, &w);
+    if (w.screens > 0) {
+        *vtx = (const RdScreenVtx *)(f->payload + w.scr[0]->u[0]);
+        last_scr_space = w.scr[0]->b[1];
+    }
+    return w.screens;
+}
+
+/* the cover is up from systemStatus[6] until the next fade is at 128 and
+   falling, in the frame it records, and only then; the boot has none */
+static void checkTitleCover(int fw)
+{
+    const RdScreenVtx *v;
+    int n;
+
+    systemStatus[6] = 0;
+    kanbanBootEnd = 1;
+    fadeStatus = 0;
+    fadeSpeed = 0.0f;
+    fadeColor[3] = 0;
+    n = coverFrame(fw, &v);
+    CHECK(n == 0, "cover %d: none with no stage change (%d batches)", fw, n);
+
+    systemStatus[6] = 1;
+    kanbanBootEnd = 0;
+    n = coverFrame(fw, &v);
+    CHECK(n == 0, "cover %d: none during the boot (%d batches)", fw, n);
+
+    kanbanBootEnd = 1;
+    fadeStatus = 2; /* End Game's fade-out: 0.025 never shows */
+    fadeSpeed = 0.025f;
+    fadeColor[3] = 0;
+    n = coverFrame(fw, &v);
+    CHECK(n == 1, "cover %d: one batch while the stage change is in flight (%d)", fw, n);
+    if (n == 1 && v) {
+        const int c0 = 0x8000, half = fw / 2 * 16;
+        const int y0 = c0 - 1792 * 512 / 224, y1 = y0 + 3584 * 512 / 224;
+        CHECK(last_scr_space == RD_SPACE_FULLFRAME, "cover %d: full-frame tagged", fw);
+        CHECK(v[0].x == gs16(c0 - half) && v[1].x == gs16(c0 + half),
+              "cover %d: spans the native width, GS 2048 -+ %d (%d, %d, want %d, %d)", fw, fw / 2,
+              v[0].x, v[1].x, gs16(c0 - half), gs16(c0 + half));
+        CHECK(v[0].y == gs16(y0) && v[1].y == gs16(y1), "cover %d: the grid's 224 lines (%d, %d)",
+              fw, v[0].y, v[1].y);
+        CHECK(v[1].rgba[0] == 0 && v[1].rgba[1] == 0 && v[1].rgba[2] == 0 && v[1].rgba[3] == 128,
+              "cover %d: opaque black, alpha 128 (%u,%u,%u,%u)", fw, v[1].rgba[0], v[1].rgba[1],
+              v[1].rgba[2], v[1].rgba[3]);
+    }
+
+    /* the load ends: the title's fade has not started yet, the cover stays */
+    systemStatus[6] = 0;
+    n = coverFrame(fw, &v);
+    CHECK(n == 1, "cover %d: stays until the title's fade is black (%d)", fw, n);
+
+    /* the title's fade: level 144, so fadeColor[3] 128 and falling */
+    fadeStatus = 2;
+    fadeSpeed = -4.0f;
+    fadeColor[3] = 128;
+    n = coverFrame(fw, &v);
+    CHECK(n == 0 && kanbanTitleCoverActive() == 0, "cover %d: ends at the title's fade (%d)", fw,
+          n);
+
+    n = coverFrame(fw, &v);
+    CHECK(n == 0, "cover %d: stays off afterwards (%d)", fw, n);
+    fadeStatus = 0;
+    fadeSpeed = 0.0f;
+    fadeColor[3] = 0;
+    kanbanBootEnd = 0;
+}
+
 /* ------------------------------------------------- keyed layout rows */
 
 /* display_texture's row sprite under gif_HostDrawKey (layout_texture.c's
@@ -709,6 +810,9 @@ int main(void)
     checkSparkleWide();
     checkKanbanBackdrop(2048);
     checkKanbanBackdrop(512);
+    checkTitleCover(ico_frame_width_for(16.0f / 9.0f));
+    checkTitleCover(ico_frame_width_for(48.0f / 9.0f));
+    checkTitleCover(512);
     rd_shutdown();
     if (failures) {
         printf("rd_layout_test: %d failures\n", failures);
