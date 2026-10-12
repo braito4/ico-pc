@@ -55,15 +55,19 @@ How the picture looks.
   The game draws the whole width of the picture natively, so on a wider
   picture you see more of the world to the sides, and it looks the way the
   original did. Menus, subtitles and movies stay in a 4:3 box in the middle.
-- **Anti-aliasing** smooths jagged edges. Off draws the picture as it is.
-  **2x supersampling** and **4x supersampling** draw the picture at a larger
-  size and shrink it back, which smooths everything (including the insides of
-  textures) but needs more from your graphics card. **MSAA 2x**, **4x** and
-  **8x** smooth the edges of shapes and are lighter to run; they only appear
-  when your graphics card supports them. This row only works with the
-  Enhanced preset. It always shows what is in use: **Off** under the
-  Original preset, and **Off** when your graphics card cannot do the choice
-  you saved.
+- **Anti-aliasing** smooths jagged edges. The choices go in this order:
+  **Off**, **MSAA 2x**, **MSAA 4x**, **MSAA 8x**, **2x supersampling** and
+  **4x supersampling**. Off draws the picture as it is. MSAA smooths the
+  edges of shapes and is lighter to run; a choice your graphics card cannot
+  do is skipped when you step through the row. Supersampling draws the
+  picture at a larger size and shrinks it back, which smooths everything
+  (including the insides of textures) but needs more from your graphics
+  card. MSAA works the same with Full pixel on or off, at any window size.
+  This row only works with the Enhanced preset (it is **Off** under
+  Original). The row shows your saved choice. When the game is not using it,
+  because your graphics card cannot do it, or cannot do it with the fog
+  effect, it says **(off: not available)** after the name and the picture is
+  drawn without it.
 - **Window mode** is **Windowed** (a normal window), **Borderless** (a
   window without a frame that fills the whole screen, so switching to
   another program is quick) or **Fullscreen**. In Steam Deck Game Mode the

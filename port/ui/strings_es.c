@@ -509,6 +509,7 @@ const char *const ui_strings_es[UI_STR_COUNT] = {
     [UI_STR_AA_MSAA2] = "MSAA 2x",
     [UI_STR_AA_MSAA4] = "MSAA 4x",
     [UI_STR_AA_MSAA8] = "MSAA 8x",
+    [UI_STR_AA_UNAVAILABLE] = " (desactivado: no disponible)",
     [UI_STR_EXTRAS_STEAM] = "Añadir a Steam",
     [UI_STR_STEAM_ADDED] = "Añadido a Steam",
     [UI_STR_STEAM_ADDED_BODY] = "Abrir Steam y buscar ICO\nen la biblioteca.",

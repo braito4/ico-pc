@@ -865,6 +865,43 @@ if(ICO_RUN_TESTS)
                      -DFOG_PATH=buffer
                      "-DRESULTS=inplace fail [0-9]+, copy fail [0-9]+, buffer ok [0-2]"
                      -P "${CMAKE_CURRENT_SOURCE_DIR}/test/rd_fog_selftest.cmake")
+    # issue 79: odd texel counts under MSAA (1935x1080 is 645x360 at scale 3;
+    # 2341x1080 at scale 1) and the big scenes: in place passes as at an even
+    # width.  Sample counts the device lacks are skipped.  With the buffer path
+    # forced (it cannot read multisampled depth) MSAA is off while the mask
+    # still lists it
+    set(_odd_msaa)
+    macro(ico_fog_selftest_msaa tw th aa)
+      set(_n rd_fog_selftest_${tw}_aa${aa})
+      add_test(NAME ${_n}
+               COMMAND "${CMAKE_COMMAND}" -DTOOL=$<TARGET_FILE:rd_fog_selftest_test>
+                       -DFOG_PATH=inplace "-DARGS=688|448|1|${aa}|${tw}|${th}"
+                       "-DRESULTS=inplace ok [0-2], copy not tried, buffer not tried"
+                       -P "${CMAKE_CURRENT_SOURCE_DIR}/test/rd_fog_selftest.cmake")
+      list(APPEND _odd_msaa ${_n})
+    endmacro()
+    foreach(_aa 3 4 5)
+      ico_fog_selftest_msaa(1935 1080 ${_aa})
+      ico_fog_selftest_msaa(2341 1080 ${_aa})
+    endforeach()
+    ico_fog_selftest_msaa(3870 2160 4)
+    ico_fog_selftest_msaa(7740 4320 4)
+    add_test(NAME rd_fog_selftest_7740
+             COMMAND "${CMAKE_COMMAND}" -DTOOL=$<TARGET_FILE:rd_fog_selftest_test>
+                     -DFOG_PATH=inplace "-DARGS=688|448|1|0|7740|4320"
+                     "-DRESULTS=inplace ok [0-2], copy not tried, buffer not tried"
+                     -P "${CMAKE_CURRENT_SOURCE_DIR}/test/rd_fog_selftest.cmake")
+    add_test(NAME rd_fog_selftest_msaa_fallback
+             COMMAND "${CMAKE_COMMAND}" -DTOOL=$<TARGET_FILE:rd_fog_selftest_test>
+                     -DFOG_PATH=buffer "-DARGS=688|448|1|4|1935|1080"
+                     "-DRESULTS=buffer ok [0-2], inplace not tried, copy not tried"
+                     -P "${CMAKE_CURRENT_SOURCE_DIR}/test/rd_fog_selftest.cmake")
+    set_tests_properties(${_odd_msaa} rd_fog_selftest_7740 rd_fog_selftest_msaa_fallback
+                         PROPERTIES SKIP_REGULAR_EXPRESSION "SKIP:")
+    set_tests_properties(rd_fog_selftest_msaa_fallback PROPERTIES ENVIRONMENT "${_env};ICO_RD_FOG_PATH=buffer")
+    if(_env)
+      set_tests_properties(${_odd_msaa} rd_fog_selftest_7740 PROPERTIES ENVIRONMENT "${_env}")
+    endif()
     set_tests_properties(rd_fog_selftest rd_fog_selftest_all rd_fog_selftest_fallback
                          PROPERTIES SKIP_REGULAR_EXPRESSION "SKIP:")
     set(_env_sab ${_env} "ICO_RD_FOG_SABOTAGE=inplace,copy")

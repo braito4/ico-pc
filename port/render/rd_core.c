@@ -1451,8 +1451,10 @@ uint32_t rd_aa_supported_mask(void)
         const RhiLimits *l = rhi_limits();
 
         /* the fog reads the multisampled depth (per sample) or its shader
-           resolve: both sample the depth, which the buffer path cannot */
-        if (!l->depthSampled || g_rd.fogPath == RD_FOG_BUFFER) {
+           resolve: both sample the depth.  The device's capability only: a
+           fog path that cannot is found by the self-test on the MSAA scene
+           (rd__fog_aa_reconcile), never read from here */
+        if (!l->depthSampled) {
             return mask;
         }
         for (int aa = RD_AA_MSAA2; aa <= RD_AA_MSAA8; aa++) {
@@ -1467,7 +1469,7 @@ uint32_t rd_aa_supported_mask(void)
     return mask;
 }
 
-int rd__aa_mode(void)
+int rd__aa_requested(void)
 {
     const int aa = g_rd.settings.antiAlias;
 
@@ -1475,6 +1477,18 @@ int rd__aa_mode(void)
         return RD_AA_OFF;
     }
     return (rd_aa_supported_mask() & (1u << aa)) != 0u ? aa : RD_AA_OFF;
+}
+
+int rd__aa_mode(void)
+{
+    const int aa = rd__aa_requested();
+
+    return g_rd.msaaBlocked && rd_aa_samples(aa) > 1u ? RD_AA_OFF : aa;
+}
+
+bool rd_aa_msaa_blocked(void)
+{
+    return g_rd.msaaBlocked && rd_aa_samples(rd__aa_requested()) > 1u;
 }
 
 uint32_t rd__aa_ssaa_factor(int mode)
@@ -1582,6 +1596,12 @@ static void recreateTargets(void *arg)
     rd__fog_scene_remade();       /* a new SCENE size: the fog's probe and self-test */
 }
 
+static void fogAaReconcile(void *arg)
+{
+    (void)arg;
+    rd__fog_aa_reconcile();
+}
+
 static void fogProbeFinish(void *arg)
 {
     (void)arg;
@@ -1643,6 +1663,11 @@ void rd_begin_frame(void)
              * now and the next are the first pair interpolated */
             g_rd.interpFloor = g_rd.frameCounter + 1;
             recreated = true;
+        }
+        /* the sample count may have changed without a new scene size: the
+         * fog's self-test on the MSAA scene, or the block lifted */
+        if (g_rd.hasDevice) {
+            rd__on_host(fogAaReconcile, NULL);
         }
     }
     /* A scene-sized texture made since the last frame did not fit

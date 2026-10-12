@@ -79,8 +79,9 @@ static struct {
 } s_probe;
 
 static struct {
-    bool armed;   /* rd_fog_selftest ran: a new SCENE size runs it again */
-    bool running; /* its replays: no probe */
+    bool armed;       /* rd_fog_selftest ran: a new SCENE size runs it again */
+    bool running;     /* its replays: no probe */
+    uint32_t samples; /* the MSAA sample count it last ran under (1: none) */
     uint32_t w, h, tw, th;
 } s_st;
 
@@ -275,8 +276,12 @@ static void probePoints(uint32_t w, uint32_t h, uint32_t xs[PROBE_POINTS],
 {
     const uint32_t x0 = w > 16 ? 8 : 0, x1 = w > 16 ? w - 9 : (w ? w - 1 : 0);
     const uint32_t y0 = h > 16 ? 8 : 0, y1 = h > 16 ? h - 9 : (h ? h - 1 : 0);
-    const uint32_t px[PROBE_POINTS] = {w / 2, x0, x1, x0, x1};
-    const uint32_t py[PROBE_POINTS] = {h / 2, y0, y0, y1, y1};
+    /* an odd count: the middle texel's centre is exactly the middle of the
+       picture, a cell edge of the self-test's grid (texel 967 of 1935),
+       where a multisampled pixel resolves to a mix of two cells; one
+       texel on is clear of it */
+    const uint32_t px[PROBE_POINTS] = {w / 2 + ((w & 1u) && w > 2 ? 1u : 0u), x0, x1, x0, x1};
+    const uint32_t py[PROBE_POINTS] = {h / 2 + ((h & 1u) && h > 2 ? 1u : 0u), y0, y0, y1, y1};
     memcpy(xs, px, sizeof(px));
     memcpy(ys, py, sizeof(py));
 }
@@ -715,8 +720,14 @@ static bool stRun(const RdFrame *f, RdTargetRec *t, int *maxErr, int *worst)
     int m = 0;
     *worst = 0;
     for (int k = 0; k < ST_SAMPLES; k++) {
-        /* the closest of the cells the texel may lie in */
+        /* the closest of the cells the texel may lie in; for a texel
+           within one texel of an edge (the candidates differ) also a
+           mix of them: under MSAA the pixel's samples straddle the two
+           cells and the resolve averages them, so per channel any value
+           between the candidates' expected ones is right */
         int best = 256;
+        int lo[4] = {255, 255, 255, 255}, hi[4] = {0, 0, 0, 0};
+        bool differ = false;
         for (int j = 0; j < ST_CANDIDATES; j++) {
             uint8_t lut[4], cd[4];
             stLut(cell[k][j], lut);
@@ -731,6 +742,18 @@ static bool stRun(const RdFrame *f, RdTargetRec *t, int *maxErr, int *worst)
             int e = 0;
             for (int ch = 0; ch < 4; ch++) {
                 const int d = abs((int)px[k * 4 + ch] - want[ch]);
+                e = d > e ? d : e;
+                lo[ch] = want[ch] < lo[ch] ? want[ch] : lo[ch];
+                hi[ch] = want[ch] > hi[ch] ? want[ch] : hi[ch];
+            }
+            best = e < best ? e : best;
+            differ = differ || cell[k][j] != cell[k][0];
+        }
+        if (differ) {
+            int e = 0;
+            for (int ch = 0; ch < 4; ch++) {
+                const int v = (int)px[k * 4 + ch];
+                const int d = v < lo[ch] ? lo[ch] - v : (v > hi[ch] ? v - hi[ch] : 0);
                 e = d > e ? d : e;
             }
             best = e < best ? e : best;
@@ -755,6 +778,10 @@ static bool runSelftest(void)
     s_st.h = t->h;
     s_st.tw = t->tw;
     s_st.th = t->th;
+    /* the scene as the settings ask for it: the replays below draw it
+       multisampled when MSAA is asked for, and the paths are tried on that */
+    g_rd.msaaBlocked = false;
+    s_st.samples = rd_aa_samples(rd__aa_requested());
     static RdFrame f;
     if (!stBuildFrame(&f, rd_target(RD_TARGET_SCENE).id, t->w, t->h)) {
         rd__frame_free(&f);
@@ -823,6 +850,12 @@ static bool runSelftest(void)
         chosen = rd__fog_path_supported(RD_FOG_BUFFER) ? RD_FOG_BUFFER : before;
     }
     rd__set_fog_path(chosen);
+    /* the reconciliation: the sampled paths were tried first on the MSAA
+       scene; the buffer path cannot read multisampled depth, so if it is
+       all that passed there is no MSAA on this device */
+    if (s_st.samples > 1u && chosen == RD_FOG_BUFFER) {
+        g_rd.msaaBlocked = true;
+    }
     char res[160];
     size_t n = 0;
     res[0] = '\0';
@@ -860,6 +893,9 @@ static bool runSelftest(void)
                 "the fog may cover the whole picture (%s kept)",
                 rd__fog_path_name(chosen));
     }
+    if (g_rd.msaaBlocked) {
+        rd__log("msaa: off: no depth path reads multisampled depth on this device");
+    }
     for (int i = 0; i < RD_FOG_PATH_COUNT; i++) {
         const int p = order[i];
         if (result[p] == ST_FAIL) {
@@ -880,6 +916,25 @@ bool rd_fog_selftest(void)
     }
     s_st.armed = true;
     return runSelftest();
+}
+
+void rd__fog_aa_reconcile(void)
+{
+    if (!g_rd.hasDevice || !s_st.armed || s_st.running) {
+        return;
+    }
+    const uint32_t n = rd_aa_samples(rd__aa_requested());
+    if (n == s_st.samples) {
+        return;
+    }
+    if (n <= 1u) {
+        /* no MSAA asked for: nothing to read multisampled; the path in force
+           stays */
+        g_rd.msaaBlocked = false;
+        s_st.samples = n;
+        return;
+    }
+    (void)runSelftest();
 }
 
 void rd__fog_scene_remade(void)

@@ -413,11 +413,16 @@ typedef enum RdAntiAlias {
 
 /* The RdAntiAlias values this device can draw, a bit (1u << value) each:
  * RD_AA_OFF and the supersampling values always; RD_AA_MSAAn when the RHI
- * reports n samples for every SCENE format (RhiLimits.msaaCounts) and the
- * fog reads the scene depth as a texture (not the buffer path,
- * rd_fog_path.c); MSAA8 never on a tile-based GPU.  Before rd_init (no
- * device): OFF and the supersampling values only. */
+ * reports n samples for every SCENE format (RhiLimits.msaaCounts) and can
+ * sample depth (RhiLimits.depthSampled); MSAA8 never on a tile-based GPU.
+ * The device's capability only: the fog's path never changes it (see
+ * rd_aa_msaa_blocked).  Before rd_init (no device): OFF and the
+ * supersampling values only. */
 uint32_t rd_aa_supported_mask(void);
+/* True when an MSAA value is asked for and can be drawn by the device, but
+ * no way of reading the multisampled depth passed the fog's self-test on
+ * the MSAA scene: the renderer draws without MSAA (rd__aa_mode). */
+bool rd_aa_msaa_blocked(void);
 /* The sample count of an RdAntiAlias value: 2, 4 or 8 for MSAA, else 1 */
 uint32_t rd_aa_samples(int antiAlias);
 

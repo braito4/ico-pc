@@ -103,6 +103,11 @@ void ui_settings_set_window_mode_query(int (*fn)(void));
    renderer's own answer (a build without it: Off and the supersampling
    values). */
 void ui_settings_set_aa_mask_query(unsigned (*fn)(void));
+/* Whether the renderer has switched MSAA off (rd_aa_msaa_blocked: no way of
+   reading the multisampled depth works on this device); the row then shows
+   the stored value with " (off: not available)".  Without a query the
+   renderer's own answer (no renderer: never). */
+void ui_settings_set_aa_blocked_query(int (*fn)(void));
 /* Display > Texture pack reads fn (texpack_count, the replacements
    found at start) to tell an installed pack from none ("None installed",
    the row then does not step); NULL, or none installed, is none. */

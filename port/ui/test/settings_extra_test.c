@@ -1568,6 +1568,13 @@ static unsigned fakeAaMask(void)
     return s_aaMask;
 }
 
+static int s_aaBlocked;
+
+static int fakeAaBlocked(void)
+{
+    return s_aaBlocked;
+}
+
 static int rowDimmed(UiSettingsPage page, UiSettingsOpt opt)
 {
     const int row = ui_settings_row_of(page, opt);
@@ -1580,6 +1587,8 @@ static void testAntiAlias(void)
     char p[1100];
 
     ui_settings_set_aa_mask_query(fakeAaMask);
+    ui_settings_set_aa_blocked_query(fakeAaBlocked);
+    s_aaBlocked = 0;
     s_aaMask =
         (1u << ICO_AA_OFF) | (1u << ICO_AA_SSAA2) | (1u << ICO_AA_SSAA4) | (1u << ICO_AA_MSAA4);
 
@@ -1658,9 +1667,9 @@ static void testAntiAlias(void)
         int aa;
         const char *text;
         const char *name;
-    } kUp[] = {{ICO_AA_SSAA2, "2x supersampling", "ssaa2"},
+    } kUp[] = {{ICO_AA_MSAA4, "MSAA 4x", "msaa4"},
+               {ICO_AA_SSAA2, "2x supersampling", "ssaa2"},
                {ICO_AA_SSAA4, "4x supersampling", "ssaa4"},
-               {ICO_AA_MSAA4, "MSAA 4x", "msaa4"},
                {ICO_AA_OFF, "Off", "off"}};
 
     for (unsigned i = 0; i < sizeof(kUp) / sizeof(kUp[0]); i++) {
@@ -1680,32 +1689,47 @@ static void testAntiAlias(void)
             ico_toml_free(t);
         }
     }
-    /* Left from Off wraps to the last listed value, skipping the clear bits */
+    /* the order is Off, MSAA 2x, 4x, 8x, 2x supersampling, 4x supersampling
+       (not the numbers'); Left from Off wraps to the last listed value */
     ui_settings_step(UI_OPT_ANTI_ALIAS, -1);
     ico_video_get(&o);
-    CHECK(o.antiAlias == ICO_AA_MSAA4, "Left from Off is MSAA 4x (%d)", o.antiAlias);
+    CHECK(o.antiAlias == ICO_AA_SSAA4, "Left from Off is 4x supersampling (%d)", o.antiAlias);
     ui_settings_step(UI_OPT_ANTI_ALIAS, -1);
     ico_video_get(&o);
-    CHECK(o.antiAlias == ICO_AA_SSAA4, "Left from MSAA 4x is 4x supersampling (%d)", o.antiAlias);
+    CHECK(o.antiAlias == ICO_AA_SSAA2, "Left from 4x supersampling is 2x supersampling (%d)",
+          o.antiAlias);
     /* a mask that lists everything: all six in order; MSAA 8x included */
     s_aaMask = (1u << ICO_AA_COUNT) - 1;
-    for (int aa = ICO_AA_MSAA2; aa <= ICO_AA_MSAA8; aa++) {
-        ui_settings_step(UI_OPT_ANTI_ALIAS, 1);
+    static const int kDown[] = {ICO_AA_MSAA8, ICO_AA_MSAA4, ICO_AA_MSAA2, ICO_AA_OFF};
+    for (unsigned i = 0; i < sizeof(kDown) / sizeof(kDown[0]); i++) {
+        ui_settings_step(UI_OPT_ANTI_ALIAS, -1);
         ico_video_get(&o);
-        CHECK(o.antiAlias == aa, "full mask: Right gives %d (%d)", aa, o.antiAlias);
+        CHECK(o.antiAlias == kDown[i], "full mask: Left gives %d (%d)", kDown[i], o.antiAlias);
+        if (kDown[i] == ICO_AA_MSAA8) {
+            CHECK(strcmp(ui_settings_value_text(UI_OPT_ANTI_ALIAS), "MSAA 8x") == 0,
+                  "MSAA 8x reads so");
+        }
     }
-    CHECK(strcmp(ui_settings_value_text(UI_OPT_ANTI_ALIAS), "MSAA 8x") == 0, "MSAA 8x reads so");
-    /* a mask with only the always-there values: the stored 8x is drawn
-       without (rd__aa_mode), so the row reads Off and steps from Off */
+    ui_settings_step(UI_OPT_ANTI_ALIAS, 1);
+    ui_settings_step(UI_OPT_ANTI_ALIAS, 1);
+    ico_video_get(&o);
+    CHECK(o.antiAlias == ICO_AA_MSAA4, "full mask: Right twice from Off is MSAA 4x (%d)",
+          o.antiAlias);
+    /* a mask with only the always-there values: the stored MSAA 4x is drawn
+       without (rd__aa_mode), so the row shows it with the note, and steps
+       from it, not from Off */
     s_aaMask = (1u << ICO_AA_OFF) | (1u << ICO_AA_SSAA2) | (1u << ICO_AA_SSAA4);
-    CHECK(strcmp(ui_settings_value_text(UI_OPT_ANTI_ALIAS), "Off") == 0,
-          "no MSAA listed: the stored 8x reads Off (%s)",
+    CHECK(strcmp(ui_settings_value_text(UI_OPT_ANTI_ALIAS), "MSAA 4x (off: not available)") == 0,
+          "no MSAA listed: the stored 4x reads so with the note (%s)",
           ui_settings_value_text(UI_OPT_ANTI_ALIAS));
     ui_settings_step(UI_OPT_ANTI_ALIAS, 1);
     ico_video_get(&o);
     CHECK(o.antiAlias == ICO_AA_SSAA2,
-          "no MSAA listed: Right from the shown Off is 2x supersampling (%d)", o.antiAlias);
+          "no MSAA listed: Right from the stored MSAA 4x is 2x supersampling (%d)", o.antiAlias);
     ui_settings_step(UI_OPT_ANTI_ALIAS, -1);
+    ico_video_get(&o);
+    CHECK(o.antiAlias == ICO_AA_OFF, "no MSAA listed: Left from 2x supersampling is Off (%d)",
+          o.antiAlias);
     ui_settings_step(UI_OPT_ANTI_ALIAS, -1);
     ico_video_get(&o);
     CHECK(o.antiAlias == ICO_AA_SSAA4, "no MSAA listed: Left from Off is 4x supersampling (%d)",
@@ -1715,8 +1739,8 @@ static void testAntiAlias(void)
        actually used (Off) when it does not, the file kept (issue 43) */
     useConfig("version = 1\n[video]\npreset = \"enhanced\"\nanti_aliasing = \"msaa2\"\n");
     enterMainKeep(1);
-    CHECK(strcmp(ui_settings_value_text(UI_OPT_ANTI_ALIAS), "Off") == 0,
-          "msaa2 from the file, not offered: reads Off (%s)",
+    CHECK(strcmp(ui_settings_value_text(UI_OPT_ANTI_ALIAS), "MSAA 2x (off: not available)") == 0,
+          "msaa2 from the file, not offered: reads so with the note (%s)",
           ui_settings_value_text(UI_OPT_ANTI_ALIAS));
     ico_video_get(&o);
     CHECK(o.antiAlias == ICO_AA_MSAA2, "msaa2 from the file, not offered: kept (%d)", o.antiAlias);
@@ -1724,6 +1748,17 @@ static void testAntiAlias(void)
     CHECK(strcmp(ui_settings_value_text(UI_OPT_ANTI_ALIAS), "MSAA 2x") == 0,
           "msaa2 from the file, offered: reads MSAA 2x (%s)",
           ui_settings_value_text(UI_OPT_ANTI_ALIAS));
+    /* offered by the device but no depth path works with it (the renderer
+       draws without): the stored value with the note, never plain */
+    s_aaBlocked = 1;
+    CHECK(strcmp(ui_settings_value_text(UI_OPT_ANTI_ALIAS), "MSAA 2x (off: not available)") == 0,
+          "msaa2 blocked by the renderer: reads so with the note (%s)",
+          ui_settings_value_text(UI_OPT_ANTI_ALIAS));
+    ui_settings_step(UI_OPT_ANTI_ALIAS, 1);
+    ico_video_get(&o);
+    CHECK(o.antiAlias == ICO_AA_SSAA2, "msaa2 blocked: Right steps the stored value (%d)",
+          o.antiAlias);
+    s_aaBlocked = 0;
 
     /* Original: Off, greyed, no step.  Loading preset "original" applies the
        Original shortcut, which puts the stored option off too (options_test
@@ -1755,6 +1790,7 @@ static void testAntiAlias(void)
         press(0x10);
     }
     ui_settings_set_aa_mask_query(NULL);
+    ui_settings_set_aa_blocked_query(NULL);
 }
 
 /* Gameplay > East Reflector door fix ([gameplay] door_fix): a row from the title and

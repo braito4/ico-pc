@@ -10,8 +10,12 @@
 #   cells of the self-test's grid; the centre texel can sit on the edge of
 #   cells 7 and 8 across or down, so the centre is 119, 120, 135 or 136).
 # -DTOOL=<rd_fog_selftest_test> -DFOG_PATH=<inplace|copy|buffer>
+# -DARGS=<w|h|scale|aa> (optional: the scene's GS size, scale and RdAntiAlias)
 # -DRESULTS=<regex of the self-test's results>
-execute_process(COMMAND "${TOOL}" "${FOG_PATH}" RESULT_VARIABLE rc OUTPUT_VARIABLE out
+if(ARGS)
+  string(REPLACE "|" ";" ARGS "${ARGS}")
+endif()
+execute_process(COMMAND "${TOOL}" "${FOG_PATH}" ${ARGS} RESULT_VARIABLE rc OUTPUT_VARIABLE out
                 ERROR_VARIABLE err)
 message(STATUS "${out}")
 if(rc EQUAL 77)

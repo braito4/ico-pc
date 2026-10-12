@@ -795,16 +795,42 @@ static int aaLocked(void)
     return ico_video_preset(&o) == ICO_VIDEO_ORIGINAL;
 }
 
-/* the value in force, which the row shows and steps from: the stored one
-   (Off under Original, ico_video_anti_alias), Off when the device does not
-   offer it (the renderer draws without: rd__aa_mode) */
-static int aaInForce(void)
+/* the order the row steps through (the numbers are the enum's, shared with
+   the renderer and the saved options, and do not follow it) */
+static const int kAaOrder[ICO_AA_COUNT] = {ICO_AA_OFF,   ICO_AA_MSAA2, ICO_AA_MSAA4,
+                                           ICO_AA_MSAA8, ICO_AA_SSAA2, ICO_AA_SSAA4};
+
+static int (*s_aaBlockedQuery)(void);
+
+static int aaBlocked(void)
+{
+    if (s_aaBlockedQuery) {
+        return s_aaBlockedQuery();
+    }
+#ifdef ICO_RD
+    return rd_aa_msaa_blocked();
+#else
+    return 0;
+#endif
+}
+
+/* the value the row shows and steps from: the stored one (Off under
+   Original, ico_video_anti_alias), whether the renderer draws it or not */
+static int aaStored(void)
 {
     const int aa = ico_video_anti_alias();
-    if (aa <= ICO_AA_OFF || aa >= ICO_AA_COUNT || !(aaMask() & (1u << aa))) {
-        return ICO_AA_OFF;
+    return aa <= ICO_AA_OFF || aa >= ICO_AA_COUNT ? ICO_AA_OFF : aa;
+}
+
+/* whether the stored value is the one drawn: not when the device cannot
+   do it, or can but no depth path works with it (MSAA) */
+static int aaInForce(void)
+{
+    const int aa = aaStored();
+    if (aa != ICO_AA_OFF && !(aaMask() & (1u << aa))) {
+        return 0;
     }
-    return aa;
+    return !(aa >= ICO_AA_MSAA2 && aa <= ICO_AA_MSAA8 && aaBlocked());
 }
 
 void ui_settings_set_models_handler(int (*fn)(void))
@@ -1090,7 +1116,12 @@ static const char *rawValue(int opt, char *buf, unsigned size)
     case UI_OPT_ANTI_ALIAS: {
         static const int aaStr[ICO_AA_COUNT] = {UI_STR_AA_OFF,   UI_STR_AA_SSAA2, UI_STR_AA_SSAA4,
                                                 UI_STR_AA_MSAA2, UI_STR_AA_MSAA4, UI_STR_AA_MSAA8};
-        return ui_str(aaStr[aaInForce()]);
+        const int aa = aaStored();
+        if (aaInForce()) {
+            return ui_str(aaStr[aa]);
+        }
+        snprintf(buf, size, "%s%s", ui_str(aaStr[aa]), ui_str(UI_STR_AA_UNAVAILABLE));
+        return buf;
     }
     case UI_OPT_WINDOW_MODE: {
         /* the window's own answer when the host installed one */
@@ -1452,13 +1483,20 @@ void ui_settings_step(UiSettingsOpt opt, int dir)
         if (aaLocked()) {
             return; /* Off under Original */
         }
-        /* Off, then the values the device can draw, around, from the
-           value the row shows */
+        /* the display order, around, from the stored value, over the values
+           the device can draw at all */
         const unsigned m = aaMask();
-        int a = aaInForce();
+        int pos = 0;
         for (int k = 0; k < ICO_AA_COUNT; k++) {
-            a = stepIndex(a, ICO_AA_COUNT, dir);
-            if (m & (1u << a)) {
+            if (kAaOrder[k] == aaStored()) {
+                pos = k;
+            }
+        }
+        int a = kAaOrder[pos];
+        for (int k = 0; k < ICO_AA_COUNT; k++) {
+            pos = stepIndex(pos, ICO_AA_COUNT, dir);
+            if (m & (1u << kAaOrder[pos])) {
+                a = kAaOrder[pos];
                 break;
             }
         }
@@ -2991,6 +3029,11 @@ void ui_settings_set_window_mode_query(int (*fn)(void))
 void ui_settings_set_aa_mask_query(unsigned (*fn)(void))
 {
     s_aaMaskQuery = fn;
+}
+
+void ui_settings_set_aa_blocked_query(int (*fn)(void))
+{
+    s_aaBlockedQuery = fn;
 }
 
 void ui_settings_set_model_pack_count(int (*fn)(void))

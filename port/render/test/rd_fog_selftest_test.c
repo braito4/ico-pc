@@ -1,6 +1,14 @@
 /* rd_fog_selftest_test.c: the fog's self-test and probe (rd_fog_path.c).
  *
- *   rd_fog_selftest test/rd_fog_selftest_test <path> [<w> <h>]
+ *   rd_fog_selftest test/rd_fog_selftest_test <path> [<w> <h> [<scale> [<aa> [<texels w> <texels h>]]]]
+ *
+ * <texels w> <texels h> a scene of exactly that many texels (scale 0), as
+ * the window's size gives; <aa> an RdAntiAlias value (default 0, off); with an MSAA count the device
+ * lacks the test is skipped (77).  A scene of an odd texel count under MSAA
+ * (1935x1080 for the PS2's 688x448) puts the probe's centre on a cell edge
+ * (issue 79): in place must still pass, and MSAA stays in force; with the
+ * in-place and copy reads sabotaged (buffer taken) MSAA is off, and
+ * rd_aa_supported_mask still lists it.
  *
  * On a Vulkan device (77 without one), at a wide scene (16:9, scale 2,
  * Full pixel) so the self-test runs on a SCENE whose texels are not its GS
@@ -181,11 +189,18 @@ int main(int argc, char **argv)
     CHECK(want >= 0, "path %s", argv[1]);
     const uint32_t w = argc > 3 ? (uint32_t)atoi(argv[2]) : 640;
     const uint32_t h = argc > 3 ? (uint32_t)atoi(argv[3]) : 448;
+    const float scale = argc > 4 ? (float)atof(argv[4]) : 2.0f;
+    const int aa = argc > 5 ? atoi(argv[5]) : 0;
+    const uint32_t sceneW = argc > 7 ? (uint32_t)atoi(argv[6]) : 0;
+    const uint32_t sceneH = argc > 7 ? (uint32_t)atoi(argv[7]) : 0;
     RdSettings st;
     memset(&st, 0, sizeof(st));
     st.preset = RD_PRESET_ENHANCED;
     st.aspect = 16.0f / 9.0f;
-    st.sceneScale = 2.0f;
+    st.sceneScale = sceneW ? 0.0f : scale;
+    st.sceneWidth = sceneW;
+    st.sceneHeight = sceneH;
+    st.antiAlias = (uint8_t)aa;
     st.fullPixel = 1;
     st.outputWidth = 1280;
     st.outputHeight = 720;
@@ -194,8 +209,13 @@ int main(int argc, char **argv)
         return 77;
     }
     const RdTargetRec *t = rd__target_rec(rd_target(RD_TARGET_SCENE).id);
-    CHECK(t && t->tw != t->w, "a scaled, wide SCENE (%ux%u texels for %ux%u)", t ? t->tw : 0,
-          t ? t->th : 0, w, h);
+    CHECK(t && (scale <= 1.0f || t->tw != t->w), "a scaled, wide SCENE (%ux%u texels for %ux%u)",
+          t ? t->tw : 0, t ? t->th : 0, w, h);
+    if (aa > RD_AA_OFF && (rd_aa_supported_mask() & (1u << aa)) == 0u) {
+        printf("rd_fog_selftest_test: SKIP: anti-aliasing %d is not offered here\n", aa);
+        rd_shutdown();
+        return 77;
+    }
 
     /* 1. the self-test */
     const bool passed = rd_fog_selftest();
@@ -205,6 +225,16 @@ int main(int argc, char **argv)
     CHECK(g_rd.fogPath == want, "path %s, %s expected", rd__fog_path_name(g_rd.fogPath),
           rd__fog_path_name(want));
     CHECK(g_rd.depthCopy == (g_rd.fogPath != RD_FOG_INPLACE), "the depth copy with the path");
+    /* the anti-aliasing and the path agree: MSAA drawn with a path that
+       reads the multisampled depth, else off with the mask unchanged */
+    CHECK((rd_aa_supported_mask() & (1u << aa)) != 0u, "the mask lists %d whatever the path", aa);
+    if (rd_aa_samples(aa) > 1u) {
+        const bool msaa = want != RD_FOG_BUFFER;
+        CHECK(rd__aa_mode() == (msaa ? aa : RD_AA_OFF), "anti-aliasing in force %d, %d expected",
+              rd__aa_mode(), msaa ? aa : RD_AA_OFF);
+        CHECK(rd_aa_msaa_blocked() == !msaa, "blocked %d, %d expected", (int)rd_aa_msaa_blocked(),
+              (int)!msaa);
+    }
 
     /* 2. a recorded fog frame: the probe and the pixels */
     recordFogFrame(w, h);

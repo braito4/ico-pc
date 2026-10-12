@@ -1389,6 +1389,9 @@ typedef struct RdContext {
      * rd_init from the platform and the overrides, then by the fog's
      * self-test (rd_fog_selftest) */
     uint8_t fogPath;
+    /* MSAA is requested but no way of reading the multisampled depth passed
+     * the fog's self-test (rd__fog_aa_reconcile): rd__aa_mode gives Off */
+    bool msaaBlocked;
     RhiSampler samplers[RD_SAMPLER_COUNT * RD_SAMPLER_SETS]; /* [set * 16 + index] */
     RhiTexture dummy;
     RhiState dummyState;
@@ -1789,6 +1792,13 @@ bool rd__fog_probe_pending(void);
 /* rd_core.c, after the named targets were made again: a new SCENE size arms
  * the probe and, once rd_fog_selftest has run, runs the self-test again. */
 void rd__fog_scene_remade(void);
+/* rd_begin_frame, after the settings applied: when the sample count asked
+ * for differs from the one the self-test last ran under, runs it again on
+ * the MSAA scene (sampled paths first); sets or clears g_rd.msaaBlocked. */
+void rd__fog_aa_reconcile(void);
+/* The anti-aliasing the settings ask for and the device can draw, whatever
+ * the fog path (rd__aa_mode without g_rd.msaaBlocked). */
+int rd__aa_requested(void);
 /* rd__gpu_shutdown: the probe's and the buffer path's objects. */
 void rd__fog_path_shutdown(void);
 

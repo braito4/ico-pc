@@ -579,6 +579,7 @@ typedef enum UiStrId {
     UI_STR_AA_MSAA2,
     UI_STR_AA_MSAA4,
     UI_STR_AA_MSAA8,
+    UI_STR_AA_UNAVAILABLE, /* appended to a value that is not in force: " (off: not available)" */
     /* Extras > Add to Steam: the row and the popups (title, then body) */
     UI_STR_EXTRAS_STEAM,
     UI_STR_STEAM_ADDED,
