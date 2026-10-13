@@ -13,4 +13,6 @@
 - Photo mode's button pictures show correctly with a texture pack.
 - The stray shapes beside the picture for a few frames when you return to the main menu are gone.
 - Walls and floors right next to the camera no longer flicker out for a moment while the camera moves.
+- The wall pieces above the courtyard doorways no longer vanish as the camera turns.
+- Changing the Frame rate setting no longer blacks out the screen or skips ahead.
 - Windows: the program now carries version information, and the download no longer includes developer tools.
