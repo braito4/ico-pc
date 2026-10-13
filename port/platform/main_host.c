@@ -134,6 +134,16 @@ extern int ScreenHeight; /* ico2/seki/include/GsBase.h */
 #if defined(__ANDROID__) && !defined(ICO_HEADLESS)
 #define ICO_ANDROID_UI 1
 #endif
+
+#if defined(__linux__) && !defined(__ANDROID__) && !defined(ICO_HEADLESS)
+/* Linux's end of a hung run (diag_host.c finish): SDL's box from the
+   watchdog thread, which needs no main thread (zenity, or an X11 box on
+   its own display connection) */
+static void linux_fatal_box(const char *text)
+{
+    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "ICO PC", text, NULL);
+}
+#endif
 /* Vsyncs without a Main tick after which the loop warns once (the game's
    tick hook may be missing, and then ticks= never ends). */
 #define NO_TICK_WARN_VSYNCS 3000u
@@ -1599,6 +1609,9 @@ static int host_main(int argc, char **argv)
     /* A crash or the watchdog ends the run with a box and the C
        library's last words in the log, not by the game just going */
     ico_diag_set_fatal_ui(ico_android_fatal_box, ico_android_log_mirror_try_flush);
+#elif defined(__linux__) && !defined(ICO_HEADLESS)
+    /* the watchdog's end shows a box too (a crash does not: diag_host.c finish) */
+    ico_diag_set_fatal_ui(linux_fatal_box, NULL);
 #endif
     timestamp(stamp, sizeof(stamp), "%Y-%m-%d %H:%M:%S");
     fprintf(stderr, "ico_pc: started %s in %s\n", stamp, exe_dir);

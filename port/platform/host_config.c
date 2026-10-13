@@ -32,9 +32,7 @@
 
 #include <SDL3/SDL_filesystem.h>
 #include <SDL3/SDL_stdinc.h>
-#ifdef ICO_IOS
 #include <SDL3/SDL_messagebox.h>
-#endif
 
 #endif
 #ifdef _WIN32
@@ -1010,8 +1008,18 @@ void ico_host_message_box(const char *text, int error)
         MessageBoxA(NULL, text, "ICO PC", MB_OK | (error ? MB_ICONERROR : MB_ICONINFORMATION));
     }
 #else
-    (void)error;
+    /* Linux and macOS: the line (the log, or the terminal), then SDL's box
+       in the window build (callable before SDL_Init and without a window;
+       with no display it fails and the line is all there is). The headless
+       build has no SDL here: the line only. */
     fprintf(stderr, "%s\n", text);
+    fflush(stderr);
+#ifdef ICO_HOST_SDL_PREFPATH
+    SDL_ShowSimpleMessageBox(error ? SDL_MESSAGEBOX_ERROR : SDL_MESSAGEBOX_INFORMATION, "ICO PC",
+                             text, NULL);
+#else
+    (void)error;
+#endif
 #endif
 }
 
@@ -1046,6 +1054,9 @@ void ico_host_fatal(const char *log_path, const char *fmt, ...)
         ico_host_message_box(box, 1);
     }
 #else
+    /* Linux and macOS: the line on the terminal the game was started from
+       (when there is one), then the box (ico_host_message_box: the window
+       build only) */
     if (console_fd >= 0) {
         char line[2304];
         int n = snprintf(line, sizeof(line), "ico_pc: error: %s (log: %s)\n", msg,
@@ -1056,6 +1067,14 @@ void ico_host_fatal(const char *log_path, const char *fmt, ...)
             /* nowhere left to report it */
         }
     }
+#ifdef ICO_HOST_SDL_PREFPATH
+    {
+        char box[3072];
+
+        snprintf(box, sizeof(box), "%s\n\nLog: %s", msg, log_path ? log_path : "(none)");
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "ICO PC", box, NULL);
+    }
+#endif
 #endif
     exit(1);
 }

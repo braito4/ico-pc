@@ -81,7 +81,10 @@ void ico_diag_set_exit_hook(void (*fn)(const char *reason));
    the process wrote to stderr just before (the C library's abort message,
    "FORTIFY: ..." or "stack corruption detected"), without waiting on a lock
    for long. Both run on the watchdog thread (ico_diag_start), the crashing
-   thread waiting for them for a bounded time; either may be NULL. */
+   thread waiting for them for a bounded time; either may be NULL.
+   Linux: box only, for the watchdog's end (on the watchdog thread); a
+   crash there ends in its signal handler and shows none. Windows shows
+   its own box; macOS and iOS none. */
 void ico_diag_set_fatal_ui(void (*box)(const char *text), void (*flush)(void));
 /* The process's resident memory and its peak in KB (/proc/self/status:
    Linux, Android); 0, or -1 where unknown. Async-signal-safe. */

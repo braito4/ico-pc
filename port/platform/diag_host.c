@@ -121,8 +121,9 @@ static volatile int effects_program;
 static void (*exit_hook)(const char *reason);
 
 #ifndef _WIN32
-/* Android: ico_diag_set_fatal_ui's box and flush, and the
-   requests the crashing thread leaves for the watchdog thread (fatal_ui_*) */
+/* ico_diag_set_fatal_ui's box and flush (Android: both ends; Linux: the
+   watchdog's box), and the requests an Android crashing thread leaves for
+   the watchdog thread (fatal_ui_*) */
 static void (*fatal_box)(const char *text);
 static void (*fatal_flush)(void);
 static volatile sig_atomic_t ui_flush_req, ui_flush_done, ui_box_req, ui_box_done;
@@ -1302,6 +1303,12 @@ static void driver_crash_plan(void)
 
 /* --- The fatal end ------------------------------------------------------------------- */
 
+#if defined(__linux__) && !defined(__ANDROID__)
+/* 1 once watchdog_fire (the watchdog thread) heads for finish: the end that
+   may show a box on Linux; a crash's finish runs in a signal handler */
+static int watchdog_ending;
+#endif
+
 static void finish(const char *reason, const char *box_text, int code)
 {
     flog("ico_pc: the run ended: %s", reason);
@@ -1345,11 +1352,28 @@ static void finish(const char *reason, const char *box_text, int code)
         fatal_ui_box(box);
     }
 #else
-    (void)box_text;
     if (relaunch_value[0] != '\0') {
         relaunch_now(relaunch_value); /* returns only when it failed */
         flog("ico_pc: could not start the game again");
     }
+#if defined(__linux__)
+    /* Linux: the watchdog's end shows the box (ico_diag_set_fatal_ui, the
+       window build) from the watchdog thread, after the log is written. A
+       crash ends here inside the signal handler on the crashing thread,
+       where showing a box is not safe: no box, the log only. */
+    if (watchdog_ending && fatal_box != NULL) {
+        static char box[1536];
+        snprintf(box, sizeof box,
+                 "%s\n\nPlease report it at github.com/nathanialf/ico-pc/issues and attach "
+                 "the logs folder. The log is:\n%s",
+                 box_text, ico_diag_log_path());
+        fatal_box(box);
+    }
+#else
+    /* macOS (and iOS): a box can only be shown on the main thread, which is
+       the one that crashed or hung, so neither end shows one; the log has it */
+    (void)box_text;
+#endif
 #endif
     _exit(code);
 #endif
@@ -1626,6 +1650,9 @@ static void watchdog_fire(const char *reason)
     snprintf(box, sizeof box, "ICO stopped responding, so it has to close.");
 #else
     snprintf(box, sizeof box, "ICO PC stopped responding, so it was closed.");
+#ifdef __linux__
+    watchdog_ending = 1;
+#endif
 #endif
     finish("watchdog", box, EXIT_WATCHDOG);
 }
