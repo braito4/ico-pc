@@ -47,24 +47,27 @@ comment):
 
 The decode thread, the interrupt and [DMA](ARCHITECTURE.md#terms) handlers, the
 [GS](ARCHITECTURE.md#terms) register setup and the read-starved pause (`sceCdStStat` never runs low
-on the host) have no host counterpart.
+on the host) have no host counterpart (`port/fmv/movie.c`, header comment).
 
 ### movie_init
 
 `movie_init` records the display size and the mono flag, clears the display to the given colour
 (`rd_video_set_display`, `rd_video_clear`), finds the base name in DATA.DF's directory, starts the
 `sceCdSt*` stream over a 576-sector [IOP](ARCHITECTURE.md#terms) ring, creates the decoder, and
-opens the PCM side as `audioDecCreate` did: `SgStPcmInit`, channel 0 and channel 1 opened on the
-IOP buffer (0x200 apart) with `0x10400` (0x400 bytes a callback, step shift 1: 512-byte
-interleave blocks), then `SgStPcmSetEffect(8)` (`port/fmv/movie.c`, `movie_init`). A name
-missing from the directory or a failed stream start returns -1, logged as `fmv: <name> is not in
-DATA.DF's directory` or `fmv: sceCdStStart(<lsn>) failed`. `ICO_FMV_DECODE=0` in the environment
-skips decoding; the timing is unchanged.
+opens the PCM side as `audioDecCreate` did: `SgStPcmInit`, channel 0 and channel 1 opened on the IOP
+buffer (0x200 apart) with `0x10400` (0x400 bytes a callback, step shift 1: 512-byte interleave
+blocks), then `SgStPcmSetEffect(8)` (`port/fmv/movie.c` (`movie_init`)). A name missing from the
+directory, a failed stream start or a PCM channel that does not open returns -1, logged as
+`fmv: <name> is not in DATA.DF's directory` or `fmv: sceCdStStart(<lsn>) failed`. A decoder that
+cannot be created (`fmv: the MPEG-2 decoder could not be created; pictures are dropped`) or no IOP
+memory for the PCM buffer (`fmv: no IOP memory for the PCM buffer`) is logged and the movie plays on
+without pictures or without sound (`port/fmv/movie.c` (`movie_init`)). `ICO_FMV_DECODE=0` in the
+environment skips decoding; the timing is unchanged.
 
 ### movie_proc
 
 `movie_proc` runs the whole movie inside one call, inside one [Main tick](ARCHITECTURE.md#terms),
-then calls `movie_end` itself (`port/fmv/movie.c`, `movie_proc`, `readMpeg`):
+then calls `movie_end` itself (`port/fmv/movie.c` (`movie_proc`, `readMpeg`)):
 
 1. Preroll: fill the display ring and preset the IOP buffer full. Reads are immediate on the
    host, so no [vsync](ARCHITECTURE.md#terms) passes unless the ring and buffer are not yet full.
@@ -82,7 +85,7 @@ then calls `movie_end` itself (`port/fmv/movie.c`, `movie_proc`, `readMpeg`):
 Because the movie runs inside one tick, the watchdog hears from it through the progress count
 instead: `ico_diag_set_movie(1)` for the duration, a progress note each preroll vsync and each
 shown picture (`IcoMoviePace.on_show` is `ico_diag_note_progress`) (`port/fmv/movie.c`,
-`readMpeg`; [PLATFORM.md](PLATFORM.md) "Diagnostics").
+`readMpeg`; [PLATFORM.md](PLATFORM.md#diagnostics)).
 
 The summary line names what happened:
 
@@ -110,11 +113,11 @@ time stamps), something else, or the end code; 0 means more data is needed, -1 l
 (`ico_pss_resync` finds the next pack header). The MPEG-1 pack and PES forms are accepted too
 (`port/fmv/pss.c`, header comment). `ico_pss_es_unit_end` cuts the video elementary stream into
 access units: a picture with the sequence and GOP headers in front of it. Pure functions over byte
-buffers: no I/O, no allocation.
+buffers: no I/O, no allocation (`port/fmv/pss.h`, header comment).
 
 `movie.c` logs the audio header (`fmv: audio SShd type ..., ... Hz, ... channels, interleave ...,
 ... bytes`) and, when it is not 16-bit little-endian 48 kHz stereo in 512-byte blocks, says the
-audio is sent as is, as on the PS2 (`port/fmv/movie.c`, `audio_put`).
+audio is sent as is, as on the PS2 (`port/fmv/movie.c` (`audio_put`)).
 
 ### The MPEG-2 decoder
 
@@ -203,24 +206,24 @@ is compiled there with `ICO_RD` (`port/fmv/CMakeLists.txt`), and without either 
   odd one, its own rows from the picture and the other rows filled by `yuv_field_ps` from the field
   and the pictures before and after it. The field pass converts at the picture's size into an
   RGBA8 target, which the box pass then scales. A progressive picture, or a field pass that cannot
-  be set up, goes out whole (`rd_video_frame`) (`port/fmv/movie.c`, `show_field`;
+  be set up, goes out whole (`rd_video_frame`) (`port/fmv/movie.c` (`show_field`);
   `port/render/rd_video.c`, header comment). The log says it once: `fmv: interlaced pictures (top
   field first): a field a vsync, deinterlaced`.
 - **CRT filter**: under the CRT filter the picture is drawn into a target of the display area's
   size and then through the CRT pass into the same box, on the film's grid (the game's 512 triads,
   the film's field lines); clear frames take the same road (`port/render/rd_video.c`, header
-  comment). [DISPLAY.md](DISPLAY.md) has the filter.
+  comment). [DISPLAY.md](DISPLAY.md#the-crt-filter) has the filter.
 - **Mirror**: the films follow the renderer's mirror mode (`rd_set_mirror`, `RdSettings.mirror`)
-  (`port/render/rd_video.c`, `rd__mirror_on`).
+  (`port/render/rd_video.c` (`rd__mirror_on`)).
 - **Overlay**: the presentation overlay (the touch controls, the popups) is drawn over the film in
-  its box (`port/render/rd_video.c`, `rd__overlay_collect_film`; `rd_video_test`, overlay).
+  its box (`port/render/rd_video.c` (`rd__overlay_collect_film`); `rd_video_test`, overlay).
 
 Each call waits for its [frame slot](ARCHITECTURE.md#terms), records, submits and presents on its
 own, as `rd_end_frame` does for a game frame, on the simulation thread between game frames; the game
 draws no frame while a movie plays (`port/render/rd_video.c`, header comment). `rd_video_presents`
 counts the pictures put on screen and the ones that could not be (no device, no swapchain image);
 the window's 10 s statistics line and the `movie_proc` summary take differences, the only record in
-a log that a movie reached the screen (`port/fmv/rd_video.h`, `rd_video_presents`).
+a log that a movie reached the screen (`port/fmv/rd_video.h` (`rd_video_presents`)).
 
 ## Android
 
@@ -244,9 +247,9 @@ it the CPU through `next_vsync`'s rotate and spin. A skip is logged with its sou
 
 where the source is `gamepad`, `keyboard`, `mouse`, `escape`, `touch` or a `+` combination, or
 `pad script` while a [pad script](ARCHITECTURE.md#terms) drives the pad
-(`port/input/pad_host.c`, `ico_input_start_source`; [INPUT.md](INPUT.md)). Once a
-second the player also logs what the pad delivered to the poll: `fmv: pad now 0x.... flags 0x....
-(Start is 0x0800), start source ...` (`port/fmv/movie.c`, `readMpeg`).
+(`port/input/pad_host.c`, `ico_input_start_source`; [INPUT.md](INPUT.md)). Every 60
+vsyncs the player also logs what the pad delivered to the poll: `fmv: pad now 0x.... flags 0x....
+(Start is 0x0800), start source ...` (`port/fmv/movie.c` (`readMpeg`)).
 
 `port/platform/test/movie_pad_test.c` runs that path with the game's own code: `keyInput.c`
 (`InitKeyInput`, `ExecKeyInput`), `pad.c` (the pad manager thread and `iosPadRead`),
@@ -260,14 +263,9 @@ the skip's log line (`port/platform/test/movie_pad_test.c`, header comment).
 
 ## Tests
 
-| test | checks |
-| --- | --- |
-| `fmv` (`fmv_test.c`) | a synthetic PSS through `ico_pss_next` in every split, access-unit cutting, a hand-built MPEG-2 intra stream decoded to known values, the pacing state machine; with the PAL image, `pal_advertise.pss` demuxed whole and its first 60 pictures decoded |
-| `fmv_fields` (`fmv_fields_test.c`) | a report on the disc's movies field by field (scan headers, line differences, comb measures), and `field_match.c` on a synthetic telecined film; skipped (77) without the image |
-| `rd_video`, `rd_video_mali` (`rd_video_test.c`) | `rd_video.c` on [rd](ARCHITECTURE.md#terms)'s headless device: flat and ramp pictures against a CPU model of the IPU CSC, bit for bit at 1:1; mirror; the CRT pass; a 576-line picture fitted into a 480-line area; fields woven and deinterlaced; the overlay; the second run under Mali-G68 limits (`ICO_VK_FAKE_LIMITS=mali`) |
-| `rd_video_window` (`rd_video_window_test.c`) | on an SDL offscreen window, the output follows a swapchain the backend rebuilt at another size on its own, and the surface poll |
-| `movie_pad` (`port/platform/test/movie_pad_test.c`) | the pad as a movie's skip sees it (above) |
-
-The `fmv*` tests are registered in `port/fmv/CMakeLists.txt` (the `rd_video*` ones only with
-`ico_render`, and the window test only with Vulkan and SDL3), `movie_pad` in
-`port/platform/CMakeLists.txt`.
+The ctests `fmv`, `fmv_fields`, `rd_video`, `rd_video_mali` and `rd_video_window`
+(`port/fmv/test/`) cover the player's parts, the display and the window path;
+[TESTING.md](TESTING.md#portfmvtest) describes each. `movie_pad`
+(`port/platform/test/movie_pad_test.c`) is the pad test above. The `fmv*` and `rd_video*` tests are
+registered in `port/fmv/CMakeLists.txt` (the `rd_video*` ones only with `ico_render`, and the
+window test only with Vulkan and SDL3), `movie_pad` in `port/platform/CMakeLists.txt`.

@@ -60,37 +60,40 @@ xxHash's own sanity vectors (`port/render/xxh3.c`, header comment;
 
 `open_texture_pack` fills a `TexpackConfig` from the display options and the
 [RHI](ARCHITECTURE.md#terms)'s limits and calls `texpack_init` once at start
-(`port/platform/main_host.c`, `open_texture_pack`). The game's side is `texHostPack`, called after a
-texture is decoded: it builds the TIM2's `TexpackSource` (every level, the CLUT in CSM1 order), asks
-for the candidates, and queues the first name the index has; with `[video] dump_textures` it writes
-the level as drawn (`ico2/seki/src/Texture.c`, `texHostPack`). It runs only with a pack indexed and
-the option on, or the dump on.
+(`port/platform/main_host.c` (`open_texture_pack`)). The game's side is `texHostPack`, called after
+a texture is decoded: it builds the TIM2's `TexpackSource` (every level, the CLUT in CSM1 order),
+asks for the candidates, and queues the first name the index has; with `[video] dump_textures` it
+writes the level as drawn (`ico2/seki/src/Texture.c` (`texHostPack`)). It runs only with a pack
+indexed and the option on, or the dump on.
 
 ### Folders
 
 `texpack_init` walks, in order, in the [user folder](ARCHITECTURE.md#terms) and the program folder:
 `<user folder>/textures/SCES-50760/replacements`, then
-`<program folder>/textures/SCES-50760/replacements`, then the tolerant layouts of both
-(`textures/replacements`, and files directly under `textures/`). The walk is recursive, up to 16
-folders deep, matches `png` and `dds` in any case, and does not follow folder links. The first file
+`<program folder>/textures/SCES-50760/replacements`, then for each of the two
+`textures/replacements` and the loose files directly in `textures/` (a root that is both, in
+portable mode, is walked once). The two `replacements` folders are walked with every folder below
+them, up to 16 deep; `textures/` itself gives only its own files, since below it are the serial
+folders and the dumps (`port/render/texpack.c` (`texpack_init`, `walkFolder`)). The walk matches
+`png` and `dds` in any case and does not follow folder links. The first file
 of a name wins and later ones are counted as duplicates; `-mipN` files are counted and skipped,
 because an RGBA8 image gets its own mip chain; region names are counted, never matched
-(`port/render/texpack.h`, folders; `port/render/texpack.c`, `TEXPACK_WALK_DEPTH`).
+(`port/render/texpack.h`, folders; `port/render/texpack.c` (`TEXPACK_WALK_DEPTH`)).
 
 ### The loader thread and the RAM cache
 
 `texpack_request` queues a file for the loader thread; `texpack_pump`, run on the game
 [fiber](ARCHITECTURE.md#terms) once a frame beside `rdtex_frame_tick` (from `tex_ResetVram`),
 installs what finished through `rdtex_create_replacement` and `rdtex_replace`, provided the texture
-still has the generation it was requested for. With `[video] texture_pack_precache` (default on) the
-thread also reads every indexed file into a RAM cache from start, the PNGs first (subtitles and
-menus) and then the DDS files, up to `[video] texture_pack_cache_mb` (0: half the computer's memory;
-Android: an eighth, at most 512 MB); a file that does not fit is skipped. A request for a cached
-file is installed at once inside the hook, so a texture shown for one frame is replaced from its
-first (`port/render/texpack.h`, loading). Without SDL the same work runs inside `texpack_pump`, one
-request a call (`port/render/texpack.c`, header comment). When the system reports low memory
-(Android), the cache lets go of every image not being copied and stops reading ahead
-(`texpack_low_memory`).
+still has the generation it was requested for. With `[video] texture_pack_precache` (default on) and
+the pack switched on (`[video] texture_pack`), the thread also reads every indexed file into a RAM
+cache from start, the PNGs first (subtitles and menus) and then the DDS files, up to
+`[video] texture_pack_cache_mb` (0: half the computer's memory; Android: an eighth, at most 512 MB);
+a file that does not fit is skipped. A request for a cached file is installed at once inside the
+hook, so a texture shown for one frame is replaced from its first (`port/render/texpack.h`,
+loading). Without SDL the same work runs inside `texpack_pump`, one request a call
+(`port/render/texpack.c`, header comment). When the system reports low memory (Android), the cache
+lets go of every image not being copied and stops reading ahead (`texpack_low_memory`).
 
 ### The budget
 
@@ -105,7 +108,7 @@ graphics card refused is not offered again in the run (`texpack_budget_release`)
 A pack image carries at most 16 levels (`TEXPACK_IMAGE_LEVELS`): a DDS file's own mips, or, for
 an RGBA8 image with one level, the box chain `rdtex_replacement_mips` adds; the device never gets
 more than the full chain. A compressed file without mips is drawn without them, logged once
-(`port/render/rd_tex.c`, `rdtex_create_replacement`). The loaders refuse an image wider or higher
+(`port/render/rd_tex.c` (`rdtex_create_replacement`)). The loaders refuse an image wider or higher
 than the device's largest texture when its header is read (`texpack_set_max_side`).
 
 ### Formats
@@ -123,6 +126,16 @@ than the device's largest texture when its header is read (`texpack_set_max_side
 - **The image** (`port/render/texpack_image.c`): one allocation holding every level, freed by
   `texpack_free_image`; its size is what the image costs in RAM and on the GPU
   (`TexpackImage.bytes`).
+
+A new format is: a `TexpackKind` value (`port/render/texpack.h`), its extension in `fileKind` and
+its loader call in `loadEntry` (`port/render/texpack.c`), and its place in the precache's order
+(`texpack.c`, the loop over `TEXPACK_KIND_PNG` .. `TEXPACK_KIND_DDS`). The loader is a
+`texpack_load_*` in `texpack.h` that fills a `TexpackImage` (`fmt` an `RD_TEXEL_*` the texture
+cache uploads, every level in one `blob`) and logs a refusal as
+`textures: %s: %s; the game's texture is kept`; its source joins the `ico_render` sources in
+`port/render/CMakeLists.txt`. The name parser (`texpack_parse_name`) needs no change: it reads the
+name up to the first `.` after it. The loaders' file cases live in the ctest `texpack_load`
+(`port/render/test/texpack_load_test.c`).
 
 ### Log lines
 
@@ -148,7 +161,7 @@ The loaders write these lines to the log, exactly (`%` fields filled in). From `
 
 `texpack_png.c` and `texpack_dds.c` write `textures: %s: %s; the game's texture is kept` for a
 file they refuse, with the reason. The renderer's own lines carry its `rd: ` prefix
-(`port/render/rd_core.c`, `rd__log`): `rd: textures: "%s" is %ux%u, larger than this graphics
+(`port/render/rd_core.c` (`rd__log`)): `rd: textures: "%s" is %ux%u, larger than this graphics
 card takes (%u)` and `rd: textures: compressed textures without mipmaps are drawn without them
 ("%s" is the first)` (`port/render/rd_tex.c`), `rd: textures: the graphics card refused "%s"
 (%ux%u); the game's own texture is shown instead` and `rd: textures: no room for the %llu MB upload
@@ -158,8 +171,8 @@ of "%s" (%ux%u); it waits for a later frame (reported once)` (`port/render/rd_re
 
 The release packages stage three folders with a `README.txt` in each, because a zip keeps only
 files and the note is what keeps the folder: `textures/SCES-50760/replacements/`,
-`models/SCES-50760/replacements/` and `reshade/` (`tools/package_textures_lib.sh`,
-`pkg_stage_folder_notes`, `pkg_note_rels`). The textures note says the folder is for texture
+`models/SCES-50760/replacements/` and `reshade/` (`tools/package_textures_lib.sh`
+(`pkg_stage_folder_notes`, `pkg_note_rels`)). The textures note says the folder is for texture
 packs and playing needs nothing in it; to copy a pack keeping its own folders so its files end up
 under `textures/SCES-50760/replacements/` next to the program, a pack one level too high being
 found too; that Options > Display > Texture pack then reads On and `logs/ico-pc.log` says how many
@@ -183,8 +196,10 @@ tagless VU stream, written as 16 lower-case hex digits.
 ### Folders and names
 
 The folders are those of texture packs with `models` for `textures`:
-`<user folder>/models/SCES-50760/replacements`, then the program folder's, then the tolerant
-layouts of both; walked recursively, `.gltf` and `.glb` in any case. The first file of a hash wins
+`<user folder>/models/SCES-50760/replacements`, then the program folder's, then for each of the two
+`models/replacements` and the loose files directly in `models/`; the `replacements` folders with
+every folder below them, `.gltf` and `.glb` in any case (`port/render/modelpack.c`
+(`modelpack_init`, `walkFolder`)). The first file of a hash wins
 and later ones are duplicates; other files (the `.bin` beside a `.gltf`, readmes, pictures) are
 passed over quietly. A model file is named `<hash16>.gltf` or `.glb`, or `<anything>-<hash16>`
 with the extension (the last 16 characters before it); any other `.gltf` or `.glb` is counted as
@@ -193,8 +208,8 @@ not a model name (`port/render/modelpack.h`, folders and names).
 ### Loading and conversion
 
 `modelpack_init` reads and converts every file at start, with no thread, before the game loads a
-model, because meshes made at load look their parts up (`port/platform/main_host.c`,
-`open_model_pack`). Each primitive becomes VU strips drawing in place of the original's batch of
+model, because meshes made at load look their parts up (`port/platform/main_host.c`
+(`open_model_pack`)). Each primitive becomes VU strips drawing in place of the original's batch of
 the same index: strips joined greedily on a shared last edge (VU meshes draw without culling, so
 winding is free), equal vertices merged and degenerate triangles dropped; ST from `TEXCOORD_0`;
 colour as the raw GS byte (128 normal brightness, alpha 127, (128, 128, 128) without `COLOR_0`);
@@ -215,10 +230,11 @@ entry when turned on, so the next draw builds the other one (`modelpack_set_enab
 
 ### Static and skinned replacements, and what cannot change
 
-`modelpack_create` checks, in order, that the part hashes to the entry's hash, that the layouts
-agree, that the file has no more primitives than the original has batches, and that every bone it
-uses is below `min(boneCount, 60)`; a mismatch declines the entry for that part with one log line
-(`port/render/modelpack.c`, `modelpack_create`, `decline`). So a replacement:
+`modelpack_create` first checks that the part hashes to the entry's hash (a different part gets
+nothing, silently); then that the layouts agree, that the file has no more primitives than the
+original has batches, that every bone it uses is below `min(boneCount, 60)` and that its pieces fit
+its vertices, a mismatch declining the entry for that part with one log line
+(`port/render/modelpack.c` (`modelpack_create`, `decline`)). So a replacement:
 
 - keeps its part's kind: a skinned part takes only a skinned file and a static part only a static
   one; a lit part needs normals; a lit file may serve a prelit part, its normals dropped (Blender
@@ -242,12 +258,12 @@ From `port/render/modelpack.c` unless named:
 | `models: skipped %u files named like another, %u files whose names are not model names` | duplicates or bad names at the walk |
 | `models: %s skipped: %s` | a file `gltf_read` or the conversion refused, with the reason |
 | `models: %s skipped: the model pack is over %llu MB` | the 512 MB cap reached |
-| `models: %d replacements, model pack %s, dump models %s` | once at start (`port/platform/main_host.c`, `open_model_pack`) |
+| `models: %d replacements, model pack %s, dump models %s` | once at start (`port/platform/main_host.c` (`open_model_pack`)) |
 | `models: %s not used for %s: %s` | the first decline of a file for a part (`decline`); the reasons follow |
 | `models: %s has its own inverse bind matrices, which differ from the game's; the game's are used` | once per file (`modelpack_note_skeleton`) |
 | `models: %s: the game could not build %s just now; trying again later` | the mesh could not be made, once per file |
 | `models: %s replaced by %s` | every replacement, developer mode only |
-| `models: model %s part %d changes shape every frame; the original is used` | a morphing part with an entry (`ico2/seki/src/Packet.c`, `pac_HostRefreshFor`); without the model's name, `models: a model part (mesh %016llx) changes shape every frame; the original is used` |
+| `models: model %s part %d changes shape every frame; the original is used` | a morphing part with an entry (`ico2/seki/src/Packet.c` (`pac_HostRefreshFor`)); without the model's name, `models: a model part (mesh %016llx) changes shape every frame; the original is used` |
 | `models: writing model dumps to %s` | the first dump |
 | `models: cannot make %s; no model dumps` | the dumps folder cannot be made |
 | `models: cannot write the dump of %s: %s` | `gltf_write` failed |
@@ -281,22 +297,22 @@ matrix verbatim.
 
 ## Dumping
 
-Both dumps need developer mode as well as their key (`port/platform/window_host.c`, `dumpTextures`,
-`dumpModels`; the Settings rows appear only in developer mode, `port/ui/settings.c`):
+Both dumps need developer mode as well as their key (`port/platform/window_host.c` (`dumpTextures`,
+`dumpModels`); the Settings rows appear only in developer mode, `port/ui/settings.c`):
 
 - **`[video] dump_textures`** writes the bound level of each texture the game decodes as PNG under
   every name a pack would give it at that level, one per TEXA mode when the name depends on TEXA,
   into `<user folder>/textures/SCES-50760/dumps/<name>.png`; a file already there is kept. The
   texels are the decoded, padded RGBA8 with raw GS alpha, what a PCSX2 dump holds
-  (`port/render/texpack.h`, `texpack_dump`). It works without a pack.
+  (`port/render/texpack.h` (`texpack_dump`)). It works without a pack.
 - **`[video] dump_models`** writes each part drawn, once per hash a session, as
   `<user folder>/models/SCES-50760/dumps/<hash16>.gltf` and `.bin`, and appends a line to
   `dumps/models.txt` (hash, model, part, ordinal, layout, vertices, batches, bones); a file on disk
-  is kept (`port/render/modelpack.h`, `modelpack_dump`). The dump's layout is the contract with
+  is kept (`port/render/modelpack.h` (`modelpack_dump`)). The dump's layout is the contract with
   pack makers: node 0 the mesh with the node matrix, joints named `bone_00`, `bone_01`, ...,
   `inverseBindMatrices` the game's cluster matrices verbatim, an `extras` block with the part's
   normal word, bone count, box and `colorScale` 128 (`port/render/gltf.h`, what `gltf_write`
-  writes).
+  writes; `port/render/modelpack.c`, `modelpack_dump`, the extras).
 
 The model viewer's save button arms a one-shot dump of every part of the object on screen, dumping
 on or off, rewriting files already there (`modelpack_dump_object_once`,
@@ -311,6 +327,7 @@ in CRLF and the textures note has at least 7 lines, stages them for Linux and ch
 that the zip and tar assertions pass on a present entry and fail on a wrong path or a missing one,
 and goes on to the portable archives, `make_portable.sh`, the developer files kept out of the player
 archives, and the version information (`tools/test/package_textures_test.sh`, the `ok` lines;
-`CMakeLists.txt`, `package_textures`). The loaders and names have their own C tests, listed in
-[TESTING.md](TESTING.md#test-programs-by-area): `texpack_name`, `texpack_load`, `texpack`,
+`CMakeLists.txt` (`package_textures`)). The loaders and names have their own C tests, listed in
+[TESTING.md](TESTING.md#test-programs-by-area): `texpack_name`, `texpack_load`,
+`texpack_pack_files` (`texpack_load_test --pack` on the files of `ICO_TEXPACK_DIR`), `texpack`,
 `texpack_disc`, `texpack_e2e`, `gltf`, `modelpack`.

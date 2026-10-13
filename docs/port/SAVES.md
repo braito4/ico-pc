@@ -26,18 +26,18 @@ only when a folder is configured for it, and is empty otherwise, as on a PS2 wit
 (`port/save/mc_host.c`, header comment, `slot_ok`). Slot 0 is the only slot. `sceMcGetInfo`
 reports a PS2 card (type 2), formatted, with its free space in 1 KB clusters: 8000 less the
 clusters the folder's tree takes, each file rounded up to whole clusters and each directory one
-cluster (`port/save/mc_host.c`, `sceMcGetInfo`, `used_clusters`; `port/save/mc_host.h`,
-`ICO_MC_HOST_CLUSTERS`). The first `sceMcGetInfo` after `sceMcInit` answers
+cluster (`port/save/mc_host.c` (`sceMcGetInfo`, `used_clusters`); `port/save/mc_host.h`
+(`ICO_MC_HOST_CLUSTERS`)). The first `sceMcGetInfo` after `sceMcInit` answers
 `sceMcResChangedCard` once, a card freshly inserted, as the game's card check expects
-(`port/save/mc_host.c`, `sceMcInit`).
+(`port/save/mc_host.c` (`sceMcInit`)).
 
 The files are stored byte for byte as the card holds them, in PCSX2's folder-card layout:
 `<card>/BESCES-50760ico/` holding `icon.sys`, `boy_blk.ico`, the product file `BESCES-50760ico`
 and the save files `game.000` onward, the names the game itself uses (`port/save/mc_host.c`,
-header comment; `ico2/fumi/ios/mcard.c`, `iOSMcSaveSeg`). Nothing else is written, and nothing at
+header comment; `ico2/fumi/ios/mcard.c` (`iOSMcSaveSeg`)). Nothing else is written, and nothing at
 all before the game's first `sceMcMkdir`: until then a card folder that does not exist is an
 empty card, and `sceMcMkdir` creates the card folder and any missing parent
-(`port/save/mc_host.c`, `sceMcGetDir`, `sceMcMkdir`, `make_root`). The PC-only facts about a
+(`port/save/mc_host.c` (`sceMcGetDir`, `sceMcMkdir`, `make_root`)). The PC-only facts about a
 save, the mirror-mode flag of each slot and the achievements' run state, live outside the card,
 in `config.toml`'s `[mirror]` and `achievements.toml`, keyed by the slot and the save block's
 checksum ([CONFIG.md](CONFIG.md); `port/game/options.h`, `ico_mirror_slot_saved`;
@@ -45,19 +45,19 @@ checksum ([CONFIG.md](CONFIG.md); `port/game/options.h`, `ico_mirror_slot_saved`
 
 Names follow the card's rules: at most 31 bytes, none of `\ : * ? " < > |` or a control
 character, at most 8 directories deep; `.` and `..` resolve against each port's current directory
-(`port/save/mc_host.c`, `valid_name`, `resolve`). A subdirectory's `sceMcGetDir` lists `.` and
+(`port/save/mc_host.c` (`valid_name`, `resolve`)). A subdirectory's `sceMcGetDir` lists `.` and
 `..` first, as a card does, and the entries are sorted by name; a pattern takes `*` and `?`
-(`port/save/mc_host.c`, `sceMcGetDir`, `list_dir`, `wild`). Dates in the directory entries are
-the host file's modification time in UTC (`port/save/mc_host.c`, `fill_entry`, `fill_date`).
+(`port/save/mc_host.c` (`sceMcGetDir`, `list_dir`, `wild`)). Dates in the directory entries are
+the host file's modification time in UTC (`port/save/mc_host.c` (`fill_entry`, `fill_date`)).
 
 On Linux and on Android's app folder, where the file system tells case apart, a path component
 that does not exist as spelled takes the name of the one entry in its directory that differs only
 in ASCII case, so a card folder copied in as `besces-50760ICO` is still the game's; Windows and
-macOS ignore case themselves (`port/save/mc_host.c`, `fold_case`).
+macOS ignore case themselves (`port/save/mc_host.c` (`fold_case`)).
 
 `sceMcFormat` never wipes the folder, which may hold other games' saves; `sceMcUnformat` only
-marks the port unformatted until the next `sceMcFormat` (`port/save/mc_host.c`, `sceMcFormat`,
-`sceMcUnformat`).
+marks the port unformatted until the next `sceMcFormat` (`port/save/mc_host.c` (`sceMcFormat`,
+`sceMcUnformat`)).
 
 ## The calls
 
@@ -89,9 +89,9 @@ function, `MC_HANDLES`, `unusable`.)
 A file opened for writing is written to a hidden copy, `<dir>/.<name>.tmp`, which `sceMcClose`
 syncs to the disk and moves over the file; a crash, a power cut or a full disk during a save leaves
 the previous file whole. A new file is on the card, empty, from the open, as on the PS2
-(`port/save/mc_host.c`, `McHandle`, `close_handle`, `copy_to`, `sceMcOpen`). Opening or writing
+(`port/save/mc_host.c` (`McHandle`, `close_handle`, `copy_to`, `sceMcOpen`)). Opening or writing
 a save file (`game.*`) logs one `mc: reading ...` or `mc: writing ...` line, so a log that stops
-there says so (`port/save/mc_host.c`, `game_file`, `sceMcOpen`).
+there says so (`port/save/mc_host.c` (`game_file`, `sceMcOpen`)).
 
 ## Completion at the next vsync
 
@@ -103,7 +103,7 @@ is done at once (`port/save/mc_host.c`, header comment, `begin`, `vsync`, `sceMc
 
 The same callback signals the game's card lock semaphore, `IosMcLock`, when it exists: the game's
 `iosMcMgrSync` waits on it between its `sceMcSync` polls, so each poll happens once per vsync, the
-rate it has on the PS2 (`port/save/mc_host.c`, `vsync`; `ico2/fumi/ios/mcard.c`, `IosMcLock`).
+rate it has on the PS2 (`port/save/mc_host.c` (`vsync`); `ico2/fumi/ios/mcard.c` (`IosMcLock`)).
 `ico_mc_host_pending` reports whether a request is waiting for its `sceMcSync`
 (`port/save/mc_host.h`). The callback is registered by the first `sceMcInit`
 (`ico_host_on_vsync_register`; [PLATFORM.md](PLATFORM.md) has the host loop).
@@ -113,49 +113,33 @@ rate it has on the PS2 (`port/save/mc_host.c`, `vsync`; `ico2/fumi/ios/mcard.c`,
 The first `sceMcInit` reads the folders unless a caller set them first with
 `ico_mc_host_set_root` or `ico_mc_host_set_port_root` (the tests do); setting either port stops
 `sceMcInit` reading the configuration for both (`port/save/mc_host.h`;
-`port/save/mc_host.c`, `sceMcInit`, `ico_mc_host_set_port_root`).
+`port/save/mc_host.c` (`sceMcInit`, `ico_mc_host_set_port_root`)).
 
 - Port 0: `saves=` in `ico-pc.ini`, else `[paths] saves` in `config.toml`, a relative path taken
   from the executable's folder; with neither, `memcard/` in the
-  [user folder](ARCHITECTURE.md#terms) (`port/platform/host_config.c`, `ico_host_saves_dir`,
-  `card_dir_key`). A path too long for the buffer falls back to `memcard` in the working folder,
-  with a log line (`port/save/mc_host.c`, `sceMcInit`).
+  [user folder](ARCHITECTURE.md#terms) (`port/platform/host_config.c` (`ico_host_saves_dir`,
+  `card_dir_key`)). A path too long for the buffer falls back to `memcard` in the working folder,
+  with a log line (`port/save/mc_host.c` (`sceMcInit`)).
 - Port 1: `saves2=` in `ico-pc.ini`, else `[paths] saves2`, relative paths likewise; absent or
   empty, port 1 has no card. With two cards the log says `mc: two cards: port 0 ..., port 1 ...`
-  (`port/platform/host_config.c`, `ico_host_saves2_dir`; `port/save/mc_host.c`, `sceMcInit`).
+  (`port/platform/host_config.c` (`ico_host_saves2_dir`); `port/save/mc_host.c` (`sceMcInit`)).
 
-Both functions are a plain read of `ico-pc.ini` over `config.toml` (`ico_ini_load_layered`) with
-no environment variable set and no folder made, so they can run on the game's
+Both functions read the game's own `ico-pc.ini` (`ico_host_ini_path`: the executable's folder, or
+the user folder in a macOS app bundle) over `config.toml` (`ico_ini_load_layered`), set no
+environment variable and make no folder, so they can run on the game's
 [fiber](ARCHITECTURE.md#terms) inside `sceMcInit` (`port/platform/host_config.c`, the comment
-above `card_dir_key`). They read the `ico-pc.ini` in the executable's folder, and
-`ico_ini_load_layered` adds the `config.toml` keys only when that path is the ini layer's own
-(`ico_host_ini_path`); in the macOS app bundle, whose ini layer is in the user folder, neither the
-user folder's `ico-pc.ini` nor `[paths] saves` is consulted, and the card is `memcard/` in the user
-folder unless the bundle's own folder holds an `ico-pc.ini` naming one
-(`port/platform/host_config.c`, `ico_ini_load_layered`, `ico_host_ini_path`).
+above `card_dir_key`). A relative `saves` or `saves2` path is taken from the executable's folder on
+every platform (`card_dir_key`).
 
-The default folder per platform, `<user folder>/memcard/`:
-
-| platform | default card folder |
-| --- | --- |
-| Windows | `%APPDATA%\ico-pc\ico-pc\memcard\` (SDL's pref path) |
-| Linux | `~/.local/share/ico-pc/ico-pc/memcard/` (SDL's pref path) |
-| macOS | `memcard/` in SDL's pref path for `ico-pc` |
-| portable mode | `userdata/memcard/` beside the executable |
-| Android | `<files>/memcard/`, the app's files folder |
-| iOS | `memcard/` in the app's Documents folder |
-| [headless build](ARCHITECTURE.md#terms), tests | `memcard/` beside the executable |
-
-(`port/platform/host_config.c`, `ico_host_pref_dir`, `ico_host_saves_dir`;
-`tools/package_docs_lib.sh`, `pkg_write_ini`, for the Windows and Linux folders;
-`port/platform/android/android_paths.h`.) [PLATFORM.md](PLATFORM.md) has the user folder and
-portable mode, [CONFIG.md](CONFIG.md) the keys.
+The default is `memcard/` in the user folder (`port/platform/host_config.c`
+(`ico_host_saves_dir`)); [PLATFORM.md](PLATFORM.md#folders-ico-pcini-and-the-user-folder) has where
+the user folder is on each platform and in portable mode, [CONFIG.md](CONFIG.md#paths) the keys.
 
 ## Importing a PS2 save
 
 `ico_mc_import` copies the game's save directory, `BESCES-50760ico`, out of a PS2 memory card
-image or a save archive into a card folder (`port/save/mc_import.h`, `ico_mc_import`). The
-format is told by the file's contents, not its name (`port/save/mc_import.c`, `detect`):
+image or a save archive into a card folder (`port/save/mc_import.h` (`ico_mc_import`)). The
+format is told by the file's contents, not its name (`port/save/mc_import.c` (`detect`)):
 
 | format | recognised by | read |
 | --- | --- | --- |
@@ -176,9 +160,9 @@ Only the game's directory is imported; every other entry is counted and the firs
 the result (`IcoMcImport.skipped`, `skippedName`). Every file is read before any is written, an
 existing file of the same name is refused unless `ICO_MC_IMPORT_OVERWRITE` is passed, and each
 file is written to a dot-file copy that is synced and moved over its name, as the card writes
-(`port/save/mc_import.c`, `write_files`). The result is 0 imported, 1 when the source holds no
+(`port/save/mc_import.c` (`write_files`)). The result is 0 imported, 1 when the source holds no
 ICO save or an empty one, -1 on an error with the reason in `IcoMcImport.why`
-(`port/save/mc_import.h`, `ico_mc_import`).
+(`port/save/mc_import.h` (`ico_mc_import`)).
 
 The command-line tool runs it on each file it is given:
 
@@ -188,9 +172,9 @@ mc_import [--overwrite] --to SAVES_FOLDER FILE...
 
 `SAVES_FOLDER` is the card folder (`[paths] saves` or `saves2`); each file prints its format and
 either the files imported or the reason, then the skipped entries. The exit status is 0 when every
-file gave a save, 1 when one held none, 2 on an error (`tools/mc_import.c`, `main`, `usage`). The
-tool is built by `port/save/CMakeLists.txt` and kept in every build (`cmake/IcoTests.cmake`,
-`ICO_KEEP_IN_ALL`). The program itself does not call the importer.
+file gave a save, 1 when one held none, 2 on an error (`tools/mc_import.c` (`main`, `usage`)). The
+tool is built by `port/save/CMakeLists.txt` and kept in every build (`cmake/IcoTests.cmake`
+(`ICO_KEEP_IN_ALL`)). The program itself does not call the importer.
 
 ## Tests
 
@@ -210,3 +194,6 @@ header comment; `port/save/CMakeLists.txt`):
   `.psu`, the game's files read back through the folder card byte for byte, other games' entries
   skipped and named; the `mc_import` tool (its path is the test's argument) on the same files; and
   the second card in port 1.
+
+Run it with `ctest --preset linux-x64 -R '^save$'`; it needs the `mc_import` target, which every
+build keeps (`cmake/IcoTests.cmake` (`ICO_KEEP_IN_ALL`)).

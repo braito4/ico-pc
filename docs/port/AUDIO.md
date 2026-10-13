@@ -81,13 +81,13 @@ register offsets).
 `spu2_write_reg` queues a write to take effect before the frame rendered at its time; writes with
 equal times apply in call order, and a time already rendered means "before the next frame".
 `spu2_read_reg` returns the state as of the last rendered frame; ENVX, VOLX, MVOLX, NAX, LSAX,
-ENDX and STATX read live state (`port/audio/spu2.h`, `spu2_write_reg`, `spu2_read_reg`). Writes
+ENDX and STATX read live state (`port/audio/spu2.h` (`spu2_write_reg`, `spu2_read_reg`)). Writes
 and transfers wait in a time-ordered event queue of 16384 entries; a full queue runs its oldest
-event at once (`port/audio/spu2.c`, `ev_push`, `ev_run_due`).
+event at once (`port/audio/spu2.c` (`ev_push`, `ev_run_due`)).
 
 A write to NAX moves the voice to that block and reloads it; a write to the DATA port stores the
 halfword at TSA and advances TSA (the manual transfer); KON and KOFF key the voices whose bits are
-set (`port/audio/spu2.c`, `reg_apply`).
+set (`port/audio/spu2.c` (`reg_apply`)).
 
 ### One frame
 
@@ -104,13 +104,13 @@ The reference renderer, `frame`, renders one output frame (`port/audio/spu2.c`, 
 The write-back areas follow the PCSX2 wiki's description: each core writes its voice 1 and voice
 3 outputs (core 0 at halfword 0x400 and 0x600, core 1 at 0xC00 and 0xE00), core 0 its output
 (0x800, 0xA00), and each core its four voice buses (core 0 from 0x1000, core 1 from 0x1800), every
-area a ring of 0x200 samples indexed by the frame count (`port/audio/spu2.c`, `core_finish`).
+area a ring of 0x200 samples indexed by the frame count (`port/audio/spu2.c` (`core_finish`)).
 
 ### Voices
 
 `key_on` latches SSA as the voice's address, clears the decoder history and the interpolator,
 starts the attack phase from level 0, clears the voice's ENDX bit and loads the first block
-(`port/audio/spu2.c`, `key_on`). `key_off` moves a sounding voice to release.
+(`port/audio/spu2.c` (`key_on`)). `key_off` moves a sounding voice to release.
 
 A voice decodes one 16-byte ADPCM block at a time (`voice_load_block`). A block with the loop
 start flag sets LSAX to its own address. At the end of a block with the loop end flag the voice
@@ -119,13 +119,13 @@ and the envelope drops to 0 in release (`voice_fetch`). A block may start in the
 sound RAM and then wraps to address 0, as every access does (`ram_block`).
 
 NAX reads as the halfword the next sample comes from: the block's address plus 1 (the header
-halfword) plus the sample position over 4 (`port/audio/spu2.c`, `voice_nax`). The driver's
+halfword) plus the sample position over 4 (`port/audio/spu2.c` (`voice_nax`)). The driver's
 stream scheduler reads it to tell which half of a ring a voice is playing (below).
 
 The pitch counter follows psx-spx's "Pitch Counter": the PITCH register is added each frame (capped
 at 0x4000, four times the output rate), whole samples are shifted into the interpolator, and a
 voice in PMON has its step scaled by the previous voice's output of the same frame
-(`port/audio/spu2.c`, `voice_frame`). Interpolation is the 4-point Gaussian of `spu2_gauss`
+(`port/audio/spu2.c` (`voice_frame`)). Interpolation is the 4-point Gaussian of `spu2_gauss`
 indexed by the counter's fraction (`interpolate`). The noise generator steps by each core's ATTR
 noise clock (`noise_tick`).
 
@@ -135,58 +135,58 @@ noise clock (`noise_tick`).
 rate (shift and step), linear or exponential, increasing or decreasing, with psx-spx's special
 cases (an exponential increase above 0x6000 slows, an exponential decrease scales the step by the
 level) and the "all rate bits set" case that neither steps nor saturates. `spu2_env_tick` exposes
-it to the tests (`port/audio/spu2_internal.h`, `spu2_env_tick`; `port/audio/spu2.c`,
-`env_tick`).
+it to the tests (`port/audio/spu2_internal.h` (`spu2_env_tick`); `port/audio/spu2.c`
+(`env_tick`)).
 
 `adsr_tick` runs a voice's ADSR from ADSR1 and ADSR2: attack until the level reaches 0x7FFF,
 decay (exponential) while the level is above the sustain level (SL + 1) x 0x800, sustain at its
 own rate and direction, release until the level reaches 0 and the voice goes off
-(`port/audio/spu2.c`, `adsr_run`, `adsr_tick`).
+(`port/audio/spu2.c` (`adsr_run`, `adsr_tick`)).
 
 A voice or master volume register with bit 15 clear is a fixed level (bits 0-14, the volume over
 2); with bit 15 set it sweeps from the current level through `env_tick` (bit 14 exponential, 13
-decrease, 12 negative phase, bits 0-6 the rate) (`port/audio/spu2.c`, `vol_write`, `vol_tick`).
+decrease, 12 negative phase, bits 0-6 the rate) (`port/audio/spu2.c` (`vol_write`, `vol_tick`)).
 
 ### Reverb
 
 `reverb_step` is one 24 kHz step of psx-spx's "Reverb Formula" over the core's work area, from
 ESA to the end address (EEA << 16 | 0xFFFF); `rv_plan_build` reduces every address offset modulo
-the area's size once per chunk, so a step needs no division (`port/audio/spu2.c`, `reverb_step`,
-`rv_plan_build`). The work area is written only with ATTR's effect bit set
+the area's size once per chunk, so a step needs no division (`port/audio/spu2.c` (`reverb_step`,
+`rv_plan_build`)). The work area is written only with ATTR's effect bit set
 (`SPU2_ATTR_EFFECT`).
 
 `reverb_frame` runs the reverb every second frame: the wet input goes through the 39-tap
 resampling filter `spu2_reverb_fir` down to 24 kHz, and the output through the same filter back
 up to 48 kHz (zero-stuffed, gain 2). The filter is half-band and symmetric, so only its non-zero
-taps are summed, in pairs, with the same integer result (`port/audio/spu2.c`, `fir_even`,
-`reverb_frame`).
+taps are summed, in pairs, with the same integer result (`port/audio/spu2.c` (`fir_even`,
+`reverb_frame`)).
 
 The ten reverb presets are libsd's effect modes (off, room, studio small, medium and large, hall,
 space echo, echo, delay, pipe): a work area size in bytes and the 32 register values in psx-spx's
-PS1 order (`port/audio/spu2.h`, `spu2_reverb_preset`). `spu2_reverb_apply_preset` writes one as
+PS1 order (`port/audio/spu2.h` (`spu2_reverb_preset`)). `spu2_reverb_apply_preset` writes one as
 libsd's `sceSdSetEffectAttr` does: the work area is the last size/2 halfwords below the core's end
 address, the address registers take the preset's 8-byte units times 4, the coefficients go in
-unchanged (`port/audio/spu2.h`, `spu2_reverb_apply_preset`).
+unchanged (`port/audio/spu2.h` (`spu2_reverb_apply_preset`)).
 
 ### Transfers, the AutoDMA input and IRQ
 
 `spu2_dma_write` and `spu2_dma_read` copy at once. `spu2_voice_trans` is a timed transfer on DMA
-channel 0 or 1 (libsd's channel is the core): the data is copied at its time, the channel stays
-busy for the transfer's duration, then the channel's callback runs; a call on a busy channel
-returns -1, libsd's busy check (`port/audio/spu2.h`, `spu2_voice_trans`). The duration is the
-length over the rate set by `spu2_set_dma_rate`, rounded up; at rate 0, the default, a transfer
-completes one frame after it starts (`port/audio/spu2.c`, `dma_duration`). The port never sets a
-rate, so every transfer takes one frame. `spu2_voice_trans_wait` finishes a transfer at once
-(libsd's blocking status wait, which cannot advance render time).
+channel 0 or 1 (libsd's channel is the core): the data is copied at its time, the channel stays busy
+for the transfer's duration, then the channel's callback runs; a call on a busy channel returns -1,
+libsd's busy check (`port/audio/spu2.h` (`spu2_voice_trans`)). The duration is the length over the
+rate set by `spu2_set_dma_rate`, rounded up; at rate 0, the default, a transfer completes one frame
+after it starts (`port/audio/spu2.c` (`dma_duration`)). Nothing outside `port/audio/spu2.c` and the
+tests calls `spu2_set_dma_rate`, so every transfer takes one frame. `spu2_voice_trans_wait` finishes
+a transfer at once (libsd's blocking status wait, which cannot advance render time).
 
 The AutoDMA input reads a host ring of 0x800 bytes as libsd's looping block transfer lays it out:
 two halves of 0x400 bytes, each 256 left samples then 256 right. One stereo sample is consumed per
 frame, and each finished half calls the callback, which refills that half in place
-(`port/audio/spu2.h`, `spu2_memin_start`; `port/audio/spu2.c`, `memin_sample`, `memin_advance`).
+(`port/audio/spu2.h` (`spu2_memin_start`); `port/audio/spu2.c` (`memin_sample`, `memin_advance`)).
 
 A core with ATTR's IRQ bit set raises its IRQ when a voice reads the ADPCM block holding IRQA, a
 transfer or a DATA-port write stores to it, or a write-back stores to it; the flag stays set until
-`spu2_irq_clear` (`port/audio/spu2.c`, `irq_check`; `port/audio/spu2.h`, Interrupts). The driver
+`spu2_irq_clear` (`port/audio/spu2.c` (`irq_check`); `port/audio/spu2.h`, Interrupts). The driver
 sets no IRQ callback.
 
 ### Chunked rendering
@@ -201,7 +201,7 @@ block from sound RAM the chunk's frames write (a write-back or reverb work area)
 the voices are put back and the stretch renders frame by frame. `spu2_get_stats` counts the
 chunks, the chunked and exact frames and the hazards; `ico_audio_host_shutdown` logs them
 (`audio: SPU2 rendered ...`). `spu2_set_exact(1)` forces the reference renderer, for the tests
-that compare the two (`port/audio/spu2_internal.h`, `spu2_set_exact`).
+that compare the two (`port/audio/spu2_internal.h` (`spu2_set_exact`)).
 
 ### Determinism
 
@@ -234,16 +234,16 @@ from psx-spx's description, integer only (`port/audio/adpcm.c`, header comment).
 
 What the sources state as unknown or approximate:
 
-- Filters 5-7 are not documented and decode as filter 0 (`port/audio/adpcm.h`, `adpcm_filter`);
-  shifts 13-15 are reserved and act as 9 (`port/audio/adpcm.c`, `adpcm_decode_block`).
-- `spu2_sd_set_effect_attr` ignores the delay and feedback fields (`port/audio/spu2_sd.h`,
-  `spu2_sd_set_effect_attr`), and the S/PDIF mode does nothing (`port/audio/spu2_sd.c`,
-  `spu2_sd_set_core_attr`).
+- Filters 5-7 are not documented and decode as filter 0 (`port/audio/adpcm.h` (`adpcm_filter`));
+  shifts 13-15 are reserved and act as 9 (`port/audio/adpcm.c` (`adpcm_decode_block`)).
+- `spu2_sd_set_effect_attr` ignores the delay and feedback fields (`port/audio/spu2_sd.h`
+  (`spu2_sd_set_effect_attr`)), and the S/PDIF mode does nothing (`port/audio/spu2_sd.c`
+  (`spu2_sd_set_core_attr`)).
 - Transfer durations are one frame (above): the real DMA rate is not modelled.
 - Without the disc's tables the reverb presets are psx-spx's and the pitch table is a formula that
   is 1 off in 32 entries (below).
 - Whether the game ever indexes the pitch table outside its 608 entries is not known
-  (`port/audio/sndn2_host.c`, `ico_sndn2_pitch_compute`).
+  (`port/audio/sndn2_host.c` (`ico_sndn2_pitch_compute`)).
 
 ## The libsd front end
 
@@ -256,8 +256,8 @@ header comments).
 
 Every write is stamped with the time set by `spu2_sd_set_time` (never behind `spu2_time`). The
 driver stamps each RPC with the current SPU2 time, so its writes take effect at the start of the
-next rendered block: timing is block-accurate, one vsync per block (`port/audio/sndn2_host.c`,
-`ico_sndn2_host_serve`).
+next rendered block: timing is block-accurate, one vsync per block (`port/audio/sndn2_host.c`
+(`ico_sndn2_host_serve`)).
 
 The calls:
 
@@ -271,7 +271,7 @@ The calls:
   base), the mode-0 effect area placed below each core's end address; then the idle block written
   at byte 0x5000 with the 16 bytes that follow it (zero), every voice's volumes zeroed, pitch
   0x3FFF and SSA at the idle block, all voices keyed on and off, ENDX of core 0 cleared, and the
-  core volumes set as `InitCoreVolume` does (`port/audio/spu2_sd.c`, `spu2_sd_init`).
+  core volumes set as `InitCoreVolume` does (`port/audio/spu2_sd.c` (`spu2_sd_init`)).
 - `spu2_sd_set_effect_attr` loads the mode's preset, sets EVOL to the depths and ESA from the
   core's EEA, and with `SPU2_SD_EFFECT_MODE_CLEAR` zeroes the work area; a mode above 9 returns
   -1.
@@ -289,7 +289,7 @@ from the player's disc at start-up (`port/audio/libsd_irx.h`, `port/audio/sndn2_
 (`ICO_LIBSD_IRX_SIZE`, 26285 bytes), finds the `.data` section by name and reads three tables at
 the module addresses found through the code that reads them: the ten work area sizes at 0x41C8,
 the ten 0x44-byte presets at 0x41F0 (both read by `sceSdSetEffectAttr`), and the 16-byte idle
-voice block at 0x4A60 (written by `InitVoices`) (`port/audio/libsd_irx.h`, `ICO_LIBSD_*`).
+voice block at 0x4A60 (written by `InitVoices`) (`port/audio/libsd_irx.h` (`ICO_LIBSD_*`)).
 `ico_libsd_parse` refuses a table that fails its structural checks (every preset's flags word 0,
 its address registers inside its work area, the input volumes of modes 1-9 0x8000, the idle
 block's loop flags).
@@ -304,7 +304,7 @@ On any failure the built-in values stay and one line says why:
     libsd: <reason>; using the built-in reverb presets (psx-spx) and idle block (ps2sdk)
 
 The built-in idle block is ps2sdk's `VoiceDataInit`, sixteen 0x07 bytes, the same as the disc's
-(`port/audio/spu2_sd.c`, `idle_block`).
+(`port/audio/spu2_sd.c` (`idle_block`)).
 
 ### SNDN2DRV.IRX's pitch table
 
@@ -312,8 +312,8 @@ The driver turns a note into a PITCH value through a table of 608 u16 entries in
 steps, entry 208 = 0x1000. `ico_sndn2_pitch_load` reads it from `SNDN2DRV.IRX` on the disc (file
 offset 0x3900, 0x4C0 bytes) after checking the file's size against the PAL disc's (20941 bytes);
 a table without 0x1000 at entry 208 is refused. The table is not checked for order: the disc's has
-two entries below their predecessors (64 and 172) (`port/audio/sndn2_host.c`,
-`ico_sndn2_pitch_load`). The log line on success:
+two entries below their predecessors (64 and 172) (`port/audio/sndn2_host.c`
+(`ico_sndn2_pitch_load`)). The log line on success:
 
     sndn2: pitch table: 608 entries from the disc's SNDN2DRV.IRX
 
@@ -335,7 +335,7 @@ counts it (`ico_sndn2_pitch_clamps`) and logs the first one:
 `ico_sndn2_host_register` is called by the sequencer's `SgSndn2RemoteInit` before it binds. The
 first call powers the SPU2 on (`spu2_reset`), loads the pitch table and LIBSD.IRX's values, and
 registers `ico_sndn2_host_serve` under the IRX's server id `ICO_SNDN2_SERVER_ID` ("sndn"); later
-calls register again only (`port/audio/sndn2_host.c`, `ico_sndn2_host_register`). Every command
+calls register again only (`port/audio/sndn2_host.c` (`ico_sndn2_host_register`)). Every command
 and its libsd calls are as read off the code of the player's SNDN2DRV.IRX (PAL disc); the comments
 name the IRX's handler addresses (`port/audio/sndn2_host.c`, header comment).
 
@@ -349,7 +349,7 @@ name the IRX's handler addresses (`port/audio/sndn2_host.c`, header comment).
 ### The packets
 
 A packet is four little-endian words: the command, an id (a voice slot, core * 24 + voice, or a
-mask), and two arguments (`port/audio/sndn2_host.c`, `dispatch`):
+mask), and two arguments (`port/audio/sndn2_host.c` (`dispatch`)):
 
 | command | effect |
 | --- | --- |
@@ -370,7 +370,7 @@ mask), and two arguments (`port/audio/sndn2_host.c`, `dispatch`):
 | 0x22 | the channel 0 status into the return word (never sent by the EE) |
 | 0x28 | a core's master volume |
 | 0x32 | sub-command 8: a core's noise clock; 10: the S/PDIF mode (nothing on the host); others logged once |
-| 0x3C-0x43 | the ADPCM streams: init, open, close, volume, pitch, play, stop |
+| 0x3C-0x43 | the ADPCM streams: 0x3C init, 0x3D nothing, 0x3E open, 0x3F close, 0x40 volume, 0x41 pitch, 0x42 play, 0x43 stop |
 | 0x46-0x4F | the PCM channels: init, quit, open, close, volume, play, stop, seek, effect, buffer mode |
 
 Any other command is logged once (`sndn2: command 0x.. ignored (not one the IRX handles)`) and does
@@ -379,7 +379,7 @@ line per kind of anomaly, then silence (`port/audio/sndn2_internal.h`).
 
 ### The reply page
 
-Each tick fills one of two alternating 0x200-byte pages (`port/audio/sndn2_host.c`, `fill_page`;
+Each tick fills one of two alternating 0x200-byte pages (`port/audio/sndn2_host.c` (`fill_page`);
 offsets in `port/audio/sndn2_host.h`):
 
 | offset | content |
@@ -418,7 +418,7 @@ stream voice plays an SPU ring (16 KB in the game) as one loop in two halves
 The queue holds 128 events; a full queue drops the new event (`sndn2: ADPCM stream event queue
 full: the new event is dropped`), as the IRX does. Closing a stream forgets its pending fill,
 zeroes its queued FILLs and removes its bit from a queued KEYON; for a core 0 voice the IRX clears
-the same bit in both cores' masks, and so does the port (`port/audio/stream.c`, `cancel`). A fill
+the same bit in both cores' masks, and so does the port (`port/audio/stream.c` (`cancel`)). A fill
 that reads outside IOP RAM writes zeros and is logged once.
 
 ### PCM channels
@@ -426,8 +426,8 @@ that reads outside IOP RAM writes zeros and is logged once.
 The movie player's PCM reaches the driver through 16 PCM channels whose buffers the game fills by
 SIF DMA ([FMV.md](FMV.md)). Core 1's AutoDMA input reads the staging buffer as a 2 x 0x400 ring;
 at each half-done interrupt the finished half is zeroed and the 16 channels are mixed into it with
-16-bit wrapping adds, each channel's volume scaled by the film gain (`port/audio/stream.c`,
-`pcm_half_done`, `pcm_mix`). A channel's control word holds the bytes per callback and the
+16-bit wrapping adds, each channel's volume scaled by the film gain (`port/audio/stream.c`
+(`pcm_half_done`, `pcm_mix`)). A channel's control word holds the bytes per callback and the
 sample-step shift; a stop offset (buffer mode 1) ends it. `st_pcm_effect` sets MMIX on both cores
 for the two effect ids the IRX knows (4 and 8).
 
@@ -450,33 +450,34 @@ registers by the category of what the voice plays (`port/audio/mix_gain.h`, head
   100 %); the game's voice volumes are all fixed levels.
 - The film category scales the PCM mixer's channel volumes (`ico_audio_gain_pcm`). Nothing sets
   it: the Settings menu and the `[audio]` keys set music and effects only
-  (`port/ui/settings.c`; `port/audio/audio_host.c`, `ico_audio_host_init`).
+  (`port/ui/settings.c`; `port/audio/audio_host.c` (`ico_audio_host_init`)).
 - A gain change re-issues the cached volumes of the slots it covers, so it is heard at once
   (`ico_audio_set_gain`).
 
 Gains are 0.0 to 1.0, clamped (NaN as 0), stored in 1/4096 steps (`ICO_AUDIO_GAIN_ONE`); the
-scaling rounds the signed 15-bit level (`port/audio/mix_gain.c`, `ico_audio_gain_scale`). The
+scaling rounds the signed 15-bit level (`port/audio/mix_gain.c` (`ico_audio_gain_scale`)). The
 driver's init (0x1E) and reset forget the cache (`ico_audio_gain_forget`).
 
 ### Output volume
 
-`[audio] volume` is a 0..256 gain in 1/256 steps (`ico_audio_set_volume`), applied by
-`ico_audio_scale` with integer rounding and clamping to the SDL device's blocks only; a WAV dump
-stays unscaled (`port/audio/volume.c`; `port/audio/audio_host.h`, `ico_audio_set_volume`). The
+`[audio] volume` (0.0 to 1.0) is stored by `ico_audio_set_volume` as a 0..256 gain in 1/256
+steps and applied by `ico_audio_scale` with integer rounding and clamping to the SDL device's
+blocks only; a WAV dump stays unscaled (`port/audio/volume.c`; `port/audio/audio_host.h`
+(`ico_audio_set_volume`)). The
 value is read on every push, so a change from the Settings menu is heard within two vsyncs.
 
 ### Mirror mode
 
 While the mirror option is on (`ico_opt_mirror`, `port/game/options.h`),
 `ico_audio_host_vsync` swaps left and right in each rendered block, so the device and the WAV dump
-hear the mirrored pan; the SPU2 and the driver are untouched (`port/audio/audio_host.c`,
-`ico_audio_pan_mirror`).
+hear the mirrored pan; the SPU2 and the driver are untouched (`port/audio/audio_host.c`
+(`ico_audio_pan_mirror`)).
 
 ## The audio host
 
 `ico_audio_host_init` reads the environment `port/platform/host_config.c` sets from the ini and
-config, powers the driver on and opens the sinks (`port/audio/audio_host.h`,
-`ico_audio_host_init`):
+config, powers the driver on and opens the sinks (`port/audio/audio_host.h`
+(`ico_audio_host_init`)):
 
 | variable | from | effect |
 | --- | --- | --- |
@@ -485,17 +486,17 @@ config, powers the driver on and opens the sinks (`port/audio/audio_host.h`,
 | `ICO_AUDIO_VOLUME`, `ICO_AUDIO_MUSIC`, `ICO_AUDIO_EFFECTS` | `[audio] volume`, `music`, `effects` | the output volume and the two gains |
 | `ICO_AUDIO_DEVICE` | `[audio] device` | the SDL output device by name |
 
-Its log lines: `audio: writing the mixed output to <path> (48 kHz stereo)`, `audio: audio=0: no
-audio device (the driver still runs)` in the [window build](ARCHITECTURE.md#terms), and in the
-[headless build](ARCHITECTURE.md#terms) `audio:
-headless build: the driver runs, the output is only dumped` (or `discarded`). Shutdown runs at
-exit on the desktop and through `ico_host_at_shutdown` on Android and iOS, and logs the chunk
+Its log lines: `audio: writing the mixed output to <path> (48 kHz stereo)`,
+`audio: audio=0: no audio device (the driver still runs)` in the [window
+build](ARCHITECTURE.md#terms), and in the [headless build](ARCHITECTURE.md#terms)
+`audio: headless build: the driver runs, the output is only dumped` (or `discarded`). Shutdown runs
+at exit on the desktop and through `ico_host_at_shutdown` on Android and iOS, and logs the chunk
 statistics and the dump's length, peak and first sound (`ico_audio_host_shutdown`).
 
 `ico_audio_host_vsync(hz)` renders `ico_audio_host_frames(hz, n)` frames: 960 every vsync at 50
 Hz; at 59.94 Hz 800.8 on average, spread exactly over every five vsyncs as 800 801 801 801 801
-(48000 x 1001 / 60000 per vsync, rounded by the running total) (`port/audio/audio_host.c`,
-`ico_audio_host_frames`). The count depends on the rate and the vsync count alone.
+(48000 x 1001 / 60000 per vsync, rounded by the running total) (`port/audio/audio_host.c`
+(`ico_audio_host_frames`)). The count depends on the rate and the vsync count alone.
 
 ## The output
 
@@ -513,11 +514,12 @@ Hz; at 59.94 Hz 800.8 on average, spread exactly over every five vsyncs as 800 8
   (`ico_audio_sdl_push`, `ico_audio_sdl_close`).
 - Under the window's [vsync lock](ARCHITECTURE.md#terms) the display is the simulation's clock, so
   the simulation runs a little off 59.94 Hz. The window measures that rate every 10 s and hands the
-  ratio to `ico_audio_set_rate_ratio` (`port/platform/window_host.c`), and the stream plays at it
+  ratio to `ico_audio_set_rate_ratio` (`port/platform/window_host.c` (`pace_log`); the nominal
+ratio at lock start in `pace_locked`), and the stream plays at it
   (`SDL_SetAudioStreamFrequencyRatio`); ratios outside 0.5..2 are taken as 1. While more than two
   vsyncs wait before a push, the stream plays `ICO_AUDIO_TRIM` (0.25 %) faster on top, which drains
-  latency the 10 s measurement left behind without an audible pitch change (`port/audio/volume.c`,
-  `ico_audio_play_ratio`; `port/audio/audio_host.h`, `ICO_AUDIO_TRIM`).
+  latency the 10 s measurement left behind without an audible pitch change (`port/audio/volume.c`
+  (`ico_audio_play_ratio`); `port/audio/audio_host.h` (`ICO_AUDIO_TRIM`)).
 - The device is the one `[audio] device` names, or SDL's default (which follows the system's)
   when the name is empty or no device has it (`audio: no output device called "..."; using the
   default`). A name cut to the Settings list's buffer matches a device whose name starts with it
@@ -536,14 +538,15 @@ Without SDL output (the headless build) the device functions are stubs: no devic
 `port/audio/wav.c` writes 16-bit stereo RIFF/WAVE at 48 kHz. The header's sizes are patched every
 second of audio and at the close, so a run that is killed still leaves a playable file
 (`port/audio/wav.c`, header comment). The dump takes the blocks after the mirror swap and before
-the output volume (`port/audio/audio_host.c`, `ico_audio_host_vsync`).
+the output volume (`port/audio/audio_host.c` (`ico_audio_host_vsync`)).
 
 ## The sequencer
 
-`sce/libsndn2/sound.c` is the EE side: the `_Sg` family and the 61 `Sg` entry points of Sony's
-`libsndn2.a(sound.o)`, reconstructed by the decomp and compiled as game code (the game's warning
-set and `ICO_HOST`) inside `ico_sndn2` (`port/audio/CMakeLists.txt`). Its host seams, under
-`ICO_HOST`, are listed in its head comment (`sce/libsndn2/sound.c`, "Host seams for the PC port"):
+`sce/libsndn2/sound.c` is the EE side: the `_Sg` family and the `Sg` entry points of Sony's
+`libsndn2.a(sound.o)`, reconstructed in this repository's `sce/` tree and compiled as game code (the
+game's warning set and `ICO_HOST`) inside `ico_sndn2` (`port/audio/CMakeLists.txt`). Its host seams,
+under `ICO_HOST`, are listed in its head comment (`sce/libsndn2/sound.c`, "Host seams for the PC
+port"):
 
 - The EE kept addresses in 32-bit words of its context blocks and of the loaded `.hd` header. On
   the host the head context (the five pointers the event decoder shares) is an array of pointers;
@@ -576,3 +579,11 @@ voices with reverb; `--print` and `--trace-crc` print CRCs to compare builds. `s
 same harness over an SPU2 built with `SPU2_PROFILE`, printing per-stage times
 (`port/audio/test/spu2_bench.c`, header comment). All are registered in
 `port/audio/CMakeLists.txt`.
+
+A deliberate change to what the SPU2 renders changes the golden CRCs: `spu2_bench --print` prints
+the named scenes' frame-by-frame CRCs, which replace the golden table `scene_golden` in
+`port/audio/test/spu2_bench.c` (`port/audio/test/spu2_bench.c`, header comment).
+
+Run the set with
+`ctest --preset linux-x64 -R '^(adpcm|spu2|spu2_render_crc|volume|mix_gain|adpcm_slots|sndn2|libsd_irx|audio_pan)$'`
+([TESTING.md](TESTING.md) has the presets and labels).
