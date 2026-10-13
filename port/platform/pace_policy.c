@@ -564,19 +564,13 @@ uint64_t pace_lock_vsync(PaceLock *L, const PaceLockIo *io, bool newFrame)
             L->skipped++;
             continue;
         }
-        /* FIFO: a present that would return on a vblank past the next
-           step, judged from the last present when it waited for one (it
-           took a quarter of a slot or more: the queue was full; one that
-           returned at once says nothing of the vblanks) */
-        if (!L->mailbox && L->lastBlocked &&
-            pace_fifo_hold(now, L->lastReturn, (uint64_t)L->slotNs, next, L->framePresented,
-                           L->frameHeld)) {
-            if (!L->framePresented) {
-                L->frameHeld = true;
-            }
-            L->held++;
-            continue;
-        }
+        /* FIFO: no hold (pace_fifo_hold) under the lock. The hold judged
+           the next vblank from the last present's return, and on NVIDIA's
+           Vulkan a return is not a vblank (and present_once's time holds
+           the replay's fence waits): rc8 held 9-10 presents a 10 s at cap
+           60, each a repeated picture. A present that returns past the
+           next step makes that step late by less than a slot, and its
+           pictures keep their exact grid alphas, so nothing is seen. */
         if (!io->present(io->user, a)) {
             continue; /* nothing presented */
         }

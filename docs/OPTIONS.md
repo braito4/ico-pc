@@ -90,7 +90,9 @@ How the picture looks.
   follows the screen, so motion stays smooth, and the 144 and 240 limits
   reach their rate. On Android it starts at 60.
   If motion ever looks uneven, check that this limit matches your
-  screen's refresh rate (see your system's display settings).
+  screen's refresh rate (see your system's display settings). If a faint
+  trailing image stays while you move, try another limit, or on Windows
+  the Direct3D 12 renderer ([Choosing the renderer on Windows](#choosing-the-renderer-on-windows)).
 - **Video mode** is PAL 50 Hz or 60 Hz. The normal choice is 60 Hz. This
   row is only on the title screen's Options.
 
@@ -463,4 +465,4 @@ The game draws with Vulkan unless you tell it otherwise. To try Direct3D 12 inst
 backend=d3d12
 ```
 
-Start the game; the first lines of `logs/ico-pc.log` then say Direct3D 12. Delete the line to go back to Vulkan.
+Start the game; the first lines of `logs/ico-pc.log` then say `D3D12` instead of `Vulkan`. Delete the line to go back to Vulkan.

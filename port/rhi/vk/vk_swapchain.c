@@ -442,6 +442,11 @@ uint32_t vkr_test_retired_swapchain(void)
     return g_vkr.retired != VK_NULL_HANDLE;
 }
 
+uint64_t vkr_test_swapchain_handle(bool retired)
+{
+    return (uint64_t)(retired ? g_vkr.retired : g_vkr.swapchain);
+}
+
 void vkr_swapchain_destroy(void)
 {
     if (!g_vkr.device) {
@@ -672,10 +677,16 @@ bool vkr_swapchain_create(uint32_t w, uint32_t h, bool vsync)
     vkr_destroy_swap_resources();
     /* the old swapchain stays until the first present on the new one
      * succeeds (rhi_present): the screen keeps its last picture through the
-     * rebuild and the first replay instead of going black (a retired one
-     * already held is long off the screen: destroyed now) */
-    vkr_destroy_retired();
-    g_vkr.retired = old;
+     * rebuild and the first replay instead of going black. A retired one
+     * still held means no present reached `old`: the retired one is the one
+     * on the screen, so it stays and `old` (never shown) goes instead
+     * (a second rebuild before a present, as a frame-rate change that
+     * also changes the present mode) */
+    if (g_vkr.retired) {
+        vkDestroySwapchainKHR(g_vkr.device, old, NULL);
+    } else {
+        g_vkr.retired = old;
+    }
     g_vkr.swapchain = sc;
     g_vkr.mailbox = vsync && ci.presentMode == VK_PRESENT_MODE_MAILBOX_KHR;
     g_vkr.presentMode = ci.presentMode;

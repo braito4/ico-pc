@@ -4,6 +4,7 @@
 #define PORT_RHI_VK_RHI_VK_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
 #ifdef __cplusplus
 
@@ -29,6 +30,8 @@ uint32_t vkr_test_swapchain_creations(void);
 /* 1 while a swapchain retired by a recreation is still held (until the
  * first present on the new one succeeds), else 0 */
 uint32_t vkr_test_retired_swapchain(void);
+/* the current (or the retired) swapchain's handle, 0 for none (the tests) */
+uint64_t vkr_test_swapchain_handle(bool retired);
 
 /* For rhi_vk_swapchain_test: the display's timing of presents
  * (rhi_present_timing) on a stand-in for vkWaitForPresentKHR, which

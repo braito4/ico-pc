@@ -446,6 +446,29 @@ static int run(SDL_Window *win)
                 failures++;
                 break;
             }
+            /* a second rebuild before any present (a frame-rate change that
+               also changes the present mode): the swapchain on the screen is
+               still the first one, so it stays held and the unshown middle
+               one goes; the screen never shows the rebuild's gap */
+            const uint64_t onScreen = vkr_test_swapchain_handle(true);
+            const uint64_t middle = vkr_test_swapchain_handle(false);
+            SDL_SetWindowSize(win, 120, 90);
+            SDL_SyncWindow(win);
+            if (!rhi_resize_swapchain(120, 90, true)) {
+                printf("FAIL the second rhi_resize_swapchain\n");
+                failures++;
+                break;
+            }
+            rhi_get_stats(&s1);
+            if (s1.swapchains != s0.swapchains + 2 || vkr_test_swapchain_handle(true) != onScreen ||
+                vkr_test_swapchain_handle(false) == middle) {
+                printf("FAIL two rebuilds before a present: %llu made, the held one %s the one on "
+                       "the screen\n",
+                       (unsigned long long)(s1.swapchains - s0.swapchains),
+                       vkr_test_swapchain_handle(true) == onScreen ? "is" : "is not");
+                failures++;
+                break;
+            }
         }
         failures += frame(win, fmt, n);
         rhi_get_stats(&s1);
