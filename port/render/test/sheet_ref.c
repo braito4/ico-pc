@@ -138,7 +138,8 @@ static uint32_t thresholdAt(const RdSheetStyle *s, int32_t x, int32_t y)
     if (!s->dither) {
         return ICO_SHEET_T_OFF;
     }
-    /* 256 + (2 rank + 1 - 256) * GRAIN / 64, rounded down */
+    /* 256 + (2 rank + 1 - 256) * GRAIN / 64, rounded to nearest (+ 32,
+       then down) */
     const int32_t r = (int32_t)sheetref_noise(x, y);
     const int32_t num = (2 * r + 1 - 256) * ICO_SHEET_GRAIN + 32;
     const int32_t fl = num >= 0 ? num / 64 : -((-num + 63) / 64);

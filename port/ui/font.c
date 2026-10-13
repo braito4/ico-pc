@@ -631,7 +631,8 @@ static uint32_t pageTexture(SizeSet *z, int page)
         free(gs);
         if (!p->tex) {
             static int s_logged; /* once a session: the page is asked for again at each draw */
-            if (!s_logged++) {
+            if (!s_logged) {
+                s_logged = 1;
                 fprintf(stderr,
                         "ui: text: a menu texture could not be uploaded (no texture slot "
                         "or memory: \"%s\"); text drawn from it is missing\n",

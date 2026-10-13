@@ -155,8 +155,10 @@ enum { ICO_TEXFMT_RGBA32 = 0, ICO_TEXFMT_RGB24 = 1, ICO_TEXFMT_RGBA16 = 2 };
  * (ICO_SHEET_LEVELS, ICO_SHEET_GRAIN, ICO_SHEET_T_OFF: SHEET_* in
  * sheet_text.hlsli, the same values; port/render/test/sheet_ref.c
  * static-asserts each pair and the tables' shapes).  The style reaches the
- * shader in DrawCB.param: the halo's weight times its language gain (0 off,
- * 64 full), rimLevel, fillLevel, dither (rd_replay.c sheetParam).
+ * shader in DrawCB.param: the halo's weight times its language gain, in
+ * 64ths (0 off, 64 the plain halo; up to 255: the French and German
+ * sheets' gains take it past 64), rimLevel, fillLevel, dither (rd_replay.c
+ * sheetParam).
  *
  * The halo is a blur of the coverage: a separable weighted sum over
  * ICO_SHEET_RX sheet texels across and ICO_SHEET_RY down (a sheet texel is
@@ -195,12 +197,18 @@ enum { ICO_TEXFMT_RGBA32 = 0, ICO_TEXFMT_RGB24 = 1, ICO_TEXFMT_RGBA16 = 2 };
    sheets' 16 colours hold a few antialiasing steps between none and full) */
 #define ICO_SHEET_LEVELS 6
 /* the grain: the quantiser's threshold, in 512ths of a step, is
-   256 + (2 rank + 1 - 256) * ICO_SHEET_GRAIN / 64 (rounded down) with rank
-   the texel's entry of the 32 x 32 blue-noise tile (sheet_noise.hlsli,
-   0..255), so the threshold spreads ICO_SHEET_GRAIN / 64 of a step round
-   the half (0.60); ICO_SHEET_T_OFF, a half, with dither off */
+   256 + (2 rank + 1 - 256) * ICO_SHEET_GRAIN / 64 (rounded to nearest:
+   + 32, then down) with rank the texel's entry of the 32 x 32 blue-noise
+   tile (sheet_noise.hlsli, 0..255), so the threshold spreads
+   ICO_SHEET_GRAIN / 64 of a step round the half (0.60); ICO_SHEET_T_OFF, a
+   half, with dither off */
 #define ICO_SHEET_GRAIN 38
 #define ICO_SHEET_T_OFF 256
+/* the tile's slot: a uniform buffer of its 256 words (rd_tex.c
+   rd__sheet_noise_binding) at group 1, slot 4 (register b4, space1:
+   sheet_text.hlsli SheetNoiseCB), in every draw group (rd_replay.c
+   dynamicGroup) */
+#define ICO_SHEET_NOISE_SLOT 4
 /* A strip rasterised at s strip texels a sheet texel across and down (the
  * scene's or the output's scale, port/ui/menu_font.c), 1..ICO_SHEET_SCALE_MAX:
  * the letters are the strip's texels and the halo is the blur at the strip's

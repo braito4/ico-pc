@@ -286,10 +286,12 @@ program under an environment switch ([Environment switches](#environment-switche
   composite against the CPU B-spline within 2 LSB and a row across the shadow falling and rising
   once, the softening's AA0 (work scale 2) the area box of SCENE and its composite back the
   B-spline (`checkComposite4x`, `checkSoftening4x`).
-- `rd_state_test.c`: the recording half of rd without a GPU: list order, defaults, state leakage
+- `rd_state_test.c`: the recording half of rd without a GPU: list order, defaults, state leakage,
+  and an older dump's menu text sheets loading with their halo made again (`testDumpSheetV10`)
   (`rd_state`).
 - `rd_tex_test.c`: the texture cache and `Texture.c` on synthetic TIM2 files, and the menu text's
-  halo against its CPU reference at scales 1 to 4 (`testSheetRim`), and a text texture that could
+  halo against its CPU reference at scales 1 to 4 (`testSheetRim`; its time on three strip sizes
+  printed, not checked: `timeSheetRim`), and a text texture that could
   not be uploaded named once in the log, the game's own textures never (`textUploadLogChecks`)
   (`rd_tex`).
 - `rd_water_test.c`: the surfaces that render to and sample from textures (`rd_water`).
