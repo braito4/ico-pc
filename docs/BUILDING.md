@@ -12,7 +12,7 @@ developer documents: start at [port/README.md](port/README.md) for the index and
 ```sh
 sudo apt-get install build-essential curl xz-utils python3 python3-venv \
     libx11-dev libxext-dev libxrandr-dev libxi-dev libxcursor-dev \
-    libxfixes-dev libxrender-dev libasound2-dev
+    libxfixes-dev libxrender-dev libasound2-dev libdbus-1-dev libxss-dev
 python3 -m venv .venv && .venv/bin/pip install -r tools/requirements.txt
 tools/fetch_toolchain.sh          # about 1.6 GB under tools/toolchain/, no root
 CMAKE=tools/toolchain/cmake/bin
@@ -81,6 +81,7 @@ packages it needs the Wayland and KMSDRM headers and `wayland-scanner`:
 sudo apt-get install build-essential gcc-14 g++ git curl xz-utils python3 python3-venv \
     libx11-dev libxext-dev libxrandr-dev libxi-dev libxcursor-dev \
     libxfixes-dev libxrender-dev libasound2-dev libpulse-dev \
+    libdbus-1-dev libxss-dev \
     libwayland-dev wayland-protocols libxkbcommon-dev libdecor-0-dev \
     libdrm-dev libgbm-dev libegl-dev
 python3 -m venv .venv && .venv/bin/pip install -r tools/requirements.txt
@@ -107,7 +108,7 @@ What differs from an x86-64 host:
   Wayland and KMSDRM video backends as well as X11 (it stops when SDL's
   configure leaves either out), writes the Wayland protocol files' notices
   beside it for the package's `NOTICES.txt`, and takes the arm64 builds of
-  the pinned Debian packages (the X11 and audio headers when the host has
+  the pinned Debian packages (the X11, audio and D-Bus headers when the host has
   none, the validation layer). SDL picks the backend at run time.
 - Microsoft publishes no aarch64 Linux DXC, so `tools/fetch_deps.sh` builds
   the pinned release's tag from source (the commit id and the SHA-256 of its

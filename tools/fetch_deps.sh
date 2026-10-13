@@ -16,7 +16,9 @@
 #                          with the pinned CMake and the host gcc, installed
 #                          as a CMake package (lib/cmake/SDL3); X11 video and
 #                          ALSA (and PulseAudio when the host has libpulse)
-#                          audio backends, loaded with dlopen
+#                          audio backends, D-Bus and the X11 screensaver
+#                          extension (the desktop's sleep inhibit), all
+#                          loaded with dlopen
 #   deps/sdl3/linux-arm64/ the same on an arm64 (aarch64) host, with the
 #                          Wayland and KMSDRM video backends as well (the
 #                          handhelds run a Wayland compositor or none)
@@ -68,9 +70,10 @@ source "$ROOT/tools/fetch_common.sh"
 # unpack_debs <dest> "<pool path> <sha256>"...: fetch pinned Debian packages
 # (fetch_deb, tools/fetch_common.sh) into <dest>. Their lib*.so development
 # links, relative to their own lib dir,
-# are pointed at the host's runtime libraries (dangling when the host has
-# none, so CMake does not find them). DEB_ARCH and DEB_MULTIARCH
-# (tools/fetch_common.sh) are the host's.
+# are pointed at the host's runtime libraries, else at a runtime package
+# unpacked into <dest> with them (dangling when neither has one, so CMake
+# does not find them). DEB_ARCH and DEB_MULTIARCH (tools/fetch_common.sh)
+# are the host's.
 unpack_debs() {
     local dest="$1" entry so tgt
     shift
@@ -88,6 +91,8 @@ unpack_debs() {
         rm -f "$so"
         if [[ -e "/usr/lib/$DEB_MULTIARCH/$tgt" ]]; then
             ln -s "/usr/lib/$DEB_MULTIARCH/$tgt" "$so"
+        elif [[ -e "$dest/usr/lib/$DEB_MULTIARCH/$tgt" ]]; then
+            ln -s "$tgt" "$so"
         fi
     done
 }
@@ -150,7 +155,9 @@ SDL3_LINUX="$DEST/sdl3/linux-$ICO_HOST_ARCH"
 # stamped by an older run of this script (X11 only, no audio backend) is
 # rebuilt. "+wayland+kmsdrm": the arm64 build's video backends;
 # "+wlnotices": the Wayland protocols' notices are copied beside it.
-SDL3_LINUX_ID="SDL3-${SDL3_VERSION}+audio$(by_arch "" "+wayland+kmsdrm+wlnotices")"
+# "+dbus+xss": D-Bus and the X11 screensaver extension, how SDL keeps the
+# desktop from locking or sleeping while the game runs (issue 86).
+SDL3_LINUX_ID="SDL3-${SDL3_VERSION}+audio$(by_arch "" "+wayland+kmsdrm+wlnotices")+dbus+xss"
 SDL3_LINUX_VIDEO=()
 if [[ "$ICO_HOST_ARCH" == "arm64" ]]; then
     SDL3_LINUX_VIDEO=(-DSDL_X11=ON -DSDL_WAYLAND=ON -DSDL_KMSDRM=ON)
@@ -220,6 +227,70 @@ else
         declare -n AUDIO_DEBS="AUDIO_DEBS_$DEB_ARCH"
         unpack_debs "$X11DEV" "${AUDIO_DEBS[@]}"
     fi
+    # The desktop's sleep inhibit: SDL stops the screensaver and idle sleep
+    # while its window is open (SDL_DisableScreenSaver), on Linux through
+    # D-Bus (org.freedesktop.ScreenSaver / the portal's Inhibit), the
+    # Wayland idle-inhibit protocol or the X11 screensaver extension. Without
+    # D-Bus a desktop such as KDE Plasma sleeps while a controller is the
+    # only input (issue 86). SDL compiles its D-Bus code only when
+    # pkg-config finds dbus-1 (SDL's CMakeLists.txt, pkg_search_module) and
+    # dlopens libdbus-1.so.3 and libXss.so.1 at run time, so the package
+    # gains no dependency. Pinned Debian 13 packages, the SHA-256s from the
+    # trixie main/binary-amd64 and main/binary-arm64 Packages indexes (their
+    # InRelease signature checked with the Debian archive keyring,
+    # 2026-10-13); libxss1 comes along so the libXss.so link resolves on a
+    # host without the library, and pkgconf when the host has no pkg-config.
+    if ! [[ -f /usr/include/dbus-1.0/dbus/dbus.h ]]; then
+        DBUS_DEBS_amd64=(
+            "pool/main/d/dbus/libdbus-1-dev_1.16.2-2_amd64.deb 83767cf52f88de6d6f370cee30e717828c6fd22cb55d1fb84b38a3e911742887"
+        )
+        DBUS_DEBS_arm64=(
+            "pool/main/d/dbus/libdbus-1-dev_1.16.2-2_arm64.deb 305788b468ae2daba9074e59906a26df34d3f6f347d3191f13043f5a9224f90b"
+        )
+        declare -n DBUS_DEBS="DBUS_DEBS_$DEB_ARCH"
+        unpack_debs "$X11DEV" "${DBUS_DEBS[@]}"
+    fi
+    if ! [[ -f /usr/include/X11/extensions/scrnsaver.h ]]; then
+        XSS_DEBS_amd64=(
+            "pool/main/libx/libxss/libxss-dev_1.2.3-1+b3_amd64.deb 81d21bf2c9afff27392faba0d52d4b0dec7246f6146eaa05e7c461be620b21cc"
+            "pool/main/libx/libxss/libxss1_1.2.3-1+b3_amd64.deb 302d4a97800429fa0d67ae2e0e8e3adc1228b12d25d3d3cca6c9d24eeff40a6c"
+        )
+        XSS_DEBS_arm64=(
+            "pool/main/libx/libxss/libxss-dev_1.2.3-1+b3_arm64.deb 8d31f61ffd55afd5f373bcedd1a495a595c040ac643f8b14a1b30ded1c01a868"
+            "pool/main/libx/libxss/libxss1_1.2.3-1+b3_arm64.deb ffbdfe7ee0644984dfe7577a22edee74f1e3b2dd76721417c8e45aed9388a220"
+        )
+        declare -n XSS_DEBS="XSS_DEBS_$DEB_ARCH"
+        unpack_debs "$X11DEV" "${XSS_DEBS[@]}"
+    fi
+    pkgconf=()
+    if ! command -v pkg-config >/dev/null 2>&1; then
+        PKGCONF_DEBS_amd64=(
+            "pool/main/p/pkgconf/pkgconf-bin_1.8.1-4_amd64.deb 54efef2aef4db5fcb5e0f5b7746465000c6a779b06f3686d0ec3d2a901b20aeb"
+            "pool/main/p/pkgconf/libpkgconf3_1.8.1-4_amd64.deb 85087cd04e57fd4ab7d6e816d348c335047823ab60c78878336b74f07b352ca1"
+        )
+        PKGCONF_DEBS_arm64=(
+            "pool/main/p/pkgconf/pkgconf-bin_1.8.1-4_arm64.deb bce0638102650b61224901da320c2f867a91cfc133532a5fb526d2ce05465fe6"
+            "pool/main/p/pkgconf/libpkgconf3_1.8.1-4_arm64.deb 8a9477ed7af47d7ddefa1fe02bf9f87d6778e8cc59062064f1b076880a7a14a5"
+        )
+        declare -n PKGCONF_DEBS="PKGCONF_DEBS_$DEB_ARCH"
+        unpack_debs "$X11DEV" "${PKGCONF_DEBS[@]}"
+        mkdir -p "$X11DEV/bin"
+        cat >"$X11DEV/bin/pkg-config" <<PKGCONF
+#!/bin/sh
+LD_LIBRARY_PATH="$X11DEV/usr/lib/$DEB_MULTIARCH\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}" exec "$X11DEV/usr/bin/pkgconf" "\$@"
+PKGCONF
+        chmod +x "$X11DEV/bin/pkg-config"
+        pkgconf=(-DPKG_CONFIG_EXECUTABLE="$X11DEV/bin/pkg-config")
+    fi
+    # dbus-1.pc from the scratch tree, in a directory of its own (the other
+    # unpacked .pc files stay out of SDL's probes): its prefix moved to the
+    # tree and libsystemd (Requires.private, never linked: SDL dlopens
+    # libdbus) dropped
+    mkdir -p "$X11DEV/pkgconfig"
+    if [[ -f "$X11DEV/usr/lib/$DEB_MULTIARCH/pkgconfig/dbus-1.pc" ]]; then
+        sed -e "s|^prefix=.*|prefix=$X11DEV/usr|" -e '/^Requires.private:/d' \
+            "$X11DEV/usr/lib/$DEB_MULTIARCH/pkgconfig/dbus-1.pc" >"$X11DEV/pkgconfig/dbus-1.pc"
+    fi
     mkdir -p "$X11DEV/usr/include" "$X11DEV/usr/lib/$DEB_MULTIARCH"
     gen=()
     if command -v ninja >/dev/null 2>&1 || [[ -x "$ROOT/.venv/bin/ninja" ]]; then
@@ -227,10 +298,12 @@ else
         PATH="$ROOT/.venv/bin:$PATH"
     fi
     rm -rf "$SDL3_LINUX"
-    "$CMAKE_BIN" -S "$TMP/SDL3-${SDL3_VERSION}" -B "$TMP/sdl3-build" "${gen[@]}" \
+    PKG_CONFIG_PATH="$X11DEV/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" \
+        "$CMAKE_BIN" -S "$TMP/SDL3-${SDL3_VERSION}" -B "$TMP/sdl3-build" "${gen[@]}" \
+        "${pkgconf[@]}" \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_C_COMPILER=gcc \
-        -DCMAKE_C_FLAGS="-I$X11DEV/usr/include" \
+        -DCMAKE_C_FLAGS="-I$X11DEV/usr/include -I$X11DEV/usr/lib/$DEB_MULTIARCH/dbus-1.0/include" \
         -DCMAKE_INCLUDE_PATH="$X11DEV/usr/include" \
         -DCMAKE_LIBRARY_PATH="$X11DEV/usr/lib/$DEB_MULTIARCH" \
         -DCMAKE_INSTALL_PREFIX="$SDL3_LINUX" \
@@ -238,9 +311,9 @@ else
         -DSDL_SHARED=ON -DSDL_STATIC=OFF \
         -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF -DSDL_TEST_LIBRARY=OFF \
         -DSDL_INSTALL_DOCS=OFF \
-        -DSDL_X11_XSCRNSAVER=OFF -DSDL_X11_XTEST=OFF \
+        -DSDL_X11_XSCRNSAVER=ON -DSDL_X11_XTEST=OFF \
         "${SDL3_LINUX_VIDEO[@]}" \
-        -DSDL_ALSA=ON -DSDL_ALSA_SHARED=ON | tee "$TMP/sdl3-configure.log"
+        -DSDL_ALSA=ON -DSDL_ALSA_SHARED=ON -DSDL_DBUS=ON | tee "$TMP/sdl3-configure.log"
     # the audio backends this build has (the configure summary)
     grep -E "SDL_(ALSA|PULSEAUDIO|PIPEWIRE|JACK|SNDIO|OSS)\b.*: *(ON|OFF)" "$TMP/sdl3-configure.log" || true
     if ! grep -qE "SDL_ALSA\b.*: *ON *$" "$TMP/sdl3-configure.log"; then
@@ -257,6 +330,15 @@ else
                 exit 1
             fi
         done
+    fi
+    # the desktop's sleep inhibit (D-Bus is required: KDE Plasma and GNOME
+    # take the inhibit there on X11 and Wayland alike)
+    grep -E "SDL_(DBUS|X11_XSCRNSAVER|WAYLAND)\b.*: *(ON|OFF)" "$TMP/sdl3-configure.log" || true
+    if ! grep -qE "SDL_DBUS\b.*: *ON *$" "$TMP/sdl3-configure.log"; then
+        echo "fetch_deps: SDL3 configured without D-Bus: the desktop may sleep while the" \
+            "game runs; install libdbus-1-dev and pkg-config (or let this script fetch" \
+            "Debian's libdbus-1-dev and pkgconf)" >&2
+        exit 1
     fi
     "$CMAKE_BIN" --build "$TMP/sdl3-build" --parallel
     "$CMAKE_BIN" --install "$TMP/sdl3-build"

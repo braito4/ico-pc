@@ -188,6 +188,11 @@ file window, or from the small program `zenity`. If no window shows up,
 put the image beside `ico_pc` named `Ico_PAL.iso` (or `Ico_PAL.chd`,
 `Ico_PAL.bin` or `Ico_PAL.cue`) instead.
 
+While the game runs, it asks your desktop not to lock the screen or put the
+computer to sleep. If the computer still goes to sleep while you play with a
+controller, send the log with your report (it says which display system the
+game uses).
+
 ## Steam Deck
 
 1. In Desktop Mode, unpack the Linux download into a folder in your home

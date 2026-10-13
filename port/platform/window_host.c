@@ -20,6 +20,7 @@
 #include "host_loop.h"
 #include "hotkeys.h"
 #include "ico_credits.h"
+#include "ico_version.h" /* ICO_VERSION_LABEL, generated (CMakeLists.txt; "" in a development build) */
 #include "input.h"
 #include "input_record.h"
 #include "input_sdl.h"
@@ -1023,6 +1024,11 @@ int ico_window_open(unsigned int gsW, unsigned int gsH)
         rhi_create_backend(backend);
     }
     ico_diag_set_startup_retry((int)retry, window_have_d3d12(), backendExplicit, backend);
+    /* the name the desktop shows for the game, e.g. in KDE's list of what
+       keeps the computer awake (SDL's D-Bus inhibit sends it); Android and
+       iOS set SDL_HINT_APP_NAME, which SDL prefers */
+    SDL_SetAppMetadata("ICO PC", ICO_VERSION_LABEL[0] != '\0' ? ICO_VERSION_LABEL : NULL,
+                       "com.defnf.icopc");
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
         fprintf(stderr, "window: SDL_Init: %s\n", SDL_GetError());
         return -1;
@@ -1045,6 +1051,19 @@ open_window:
         SDL_Quit();
         return -1;
     }
+    /* No screensaver, screen lock or idle sleep while the game runs: a
+       controller is not a desktop input device, so nothing else resets the
+       desktop's idle timer (issue 86). SDL_Init already asked
+       (SDL_HINT_VIDEO_ALLOW_SCREENSAVER is unset); asking again is
+       harmless. On Linux SDL asks through D-Bus (org.freedesktop.ScreenSaver
+       or the portal), the Wayland idle-inhibit protocol or the X11
+       screensaver extension. SDL_ScreenSaverEnabled reports SDL's own state,
+       not whether the desktop accepted the request: the video driver in the
+       line tells which way was taken. */
+    SDL_DisableScreenSaver();
+    fprintf(stderr, "window: video driver %s; screensaver and idle sleep %s\n",
+            SDL_GetCurrentVideoDriver() != NULL ? SDL_GetCurrentVideoDriver() : "(none)",
+            SDL_ScreenSaverEnabled() ? "allowed (not inhibited)" : "inhibited");
     /* the replay, the present and the FMV picture run on the host stack in
        the host FP mode, not on the game's 256 KB fiber stacks */
     rd_set_host_call(ico_sched_call_on_host);
