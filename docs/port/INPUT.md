@@ -1,0 +1,358 @@
+# Input
+
+How a press reaches the game: SDL3 devices are sampled once per [vsync](ARCHITECTURE.md#terms),
+the binding layer turns them into a virtual PS2 pad, and the host's
+[libpad](ARCHITECTURE.md#terms) hands that pad to the game's own pad code as a DualShock 2 in port
+0. A [pad script](ARCHITECTURE.md#terms) can stand in for the devices, and a recording writes what
+the game read as a pad script. [ARCHITECTURE.md](ARCHITECTURE.md) places this layer among the
+others.
+
+## Files
+
+| path | what it holds |
+| --- | --- |
+| `port/input/input.h` | the layers, the virtual pad, the binding tables and their API |
+| `port/input/input_sdl.h`, `input_sdl.c` | the SDL3 device layer: keyboard, mouse, gamepads, touch events, rumble out (window build) |
+| `port/input/bindings.c` | the default bindings and their config text, names, the per-vsync binding step, the mouse camera's stick |
+| `port/input/input_config.c` | `config.toml`'s `[input]` and `[gameplay]` onto the bindings, the live table, the remap screen's capture and writer |
+| `port/input/keys.def` | the keyboard keys a binding can name, with their SDL scancodes |
+| `port/input/vpad.c` | the virtual pad's arithmetic: merge, dead zone, stick fix, mirror, quantisation |
+| `port/input/pad_host.c` | libpad: the DualShock 2 the game reads |
+| `port/input/pad_script.h`, `pad_script.c` | the pad script reader and its timeline |
+| `port/input/pad-boot.txt` | a pad script from power-on through the boot signs and the title to New Game |
+| `port/input/input_record.h`, `input_record.c` | the pad recording |
+| `port/input/mouse_look.h`, `mouse_look.c` | the mouse capture rule, Escape's button, photo mode's look accumulator |
+| `port/input/mouse_camera.h`, `mouse_camera.c` | the mouse camera's speed and range for the game's hand camera |
+| `port/input/pointer.h`, `pointer.c` | the mouse pointer in the menus |
+| `port/input/touch.h`, `touch.c` | the touch overlay's input mapper |
+| `port/input/CMakeLists.txt` | `ico_input` and the input tests |
+| `port/input/test/` | the input unit tests |
+
+Everything except `input_sdl.c` is plain C with no SDL, so the [headless
+build](ARCHITECTURE.md#terms) and the tests link it (`port/input/input.h`, header comment;
+`port/input/CMakeLists.txt`).
+
+The layers, from the device to the game: `input_sdl.c` samples the devices into a raw snapshot
+(`IcoInputRaw`), `bindings.c` turns it into a virtual pad (`IcoVirtualPad`), `pad_host.c` into
+the DualShock 2 read buffer, and the game's own pad configuration (`ico2/fumi/ios/pad.c`,
+unchanged) sits on top (`port/input/input.h`, header comment).
+
+## Devices
+
+`port/input/input_sdl.c` is the device layer of the [window build](ARCHITECTURE.md#terms); the
+window (`port/platform/window_host.c`) drives it (`port/input/input_sdl.h`, header comment):
+
+- `ico_input_sdl_init(path)` builds the scancode table from `keys.def`, loads the bindings from
+  `config.toml` in the [user folder](ARCHITECTURE.md#terms) (defaults when the file is missing:
+  `input: no <path>, default bindings`), opens the gamepads already plugged in, looks for a direct
+  touch screen, and plugs the live pad into libpad (`ico_input_set_live(1)`).
+- `ico_input_sdl_event(e)` takes one SDL event: keys by scancode, mouse buttons (SDL's middle
+  and right swapped to the port's 2 right, 3 middle), motion, wheel, fingers, gamepad hotplug
+  (`input: gamepad "<name>"`). Focus loss and going to the background release what is held.
+- `ico_input_sdl_update()` runs once per vsync: sample up to 8 gamepads (buttons as 0 or 1, the
+  triggers as 0..1, every pad merged by maximum and the sticks by the largest magnitude), record
+  the gamepad's new presses for the remap screen, take the mouse motion and the time since the
+  last snapshot, run the binding step, add Escape's button, merge the touch overlay's pad, and
+  hand the result to libpad (`ico_input_set_vpad`); then send the rumble.
+
+Rumble: libpad maps the game's actuator bytes through `scePadSetActAlign`'s table (the small
+motor on or off to 0xFFFF, the large motor's level times 257; `port/input/pad_host.c`,
+`ico_pad_rumble_map`); the device layer sends them to every open gamepad for 250 ms, re-issued
+every 8 vsyncs while running, zero with `[input] rumble = false`, and with no controller to the
+phone's vibrator (`port/input/input_sdl.c`, `send_rumble`).
+
+While the menus' pointer is free and over a menu, the left mouse button is the pointer's click and
+not Cross, so a click off every row never confirms the row the cursor is on; the remap screen's
+capture still sees the press (`port/input/input_sdl.c`, `ico_input_sdl_update`).
+
+## Bindings
+
+`port/input/bindings.c` turns a snapshot into a virtual pad. A binding table
+(`IcoBindings`, `port/input/input.h`) maps each of 24 targets (the sixteen buttons in the pad's
+bit order, then the eight stick directions) to up to four sources per device: keyboard keys,
+mouse buttons (`left`, `right`, `middle`, `x1`, `x2`) and gamepad sources by position in SDL's
+gamepad layout (`south`, `leftshoulder`, `dpup`, `lefttrigger`, the half-axes `leftx-` ..
+`righty+`, ...; `gp_names`).
+
+`ico_bindings_step` (`port/input/bindings.c`):
+
+- Gamepad: a source is down at half its range or more; the analog sticks take the radial dead zone
+  (`ico_input_deadzone`: shorter than the zone is zero, the rest rescaled from the zone's edge);
+  digital stick targets make a vector no longer than 1, merged with the analog stick by magnitude.
+- Keyboard and mouse: buttons by their rows; the stick directions as digital vectors; while a
+  walk key is down the left stick is scaled by `walk_scale`; the mouse camera's stick (below)
+  merges into the right stick.
+- The gamepad pad and the keyboard/mouse pad merge with `ico_vpad_merge`: buttons ORed, each stick
+  the vector with the larger magnitude, a tie to the gamepad's.
+
+The menus get their own button word (`IcoVirtualPad.menu_buttons`): the gamepad's face buttons
+and d-pad by position whatever the remap says, and a source moved onto a face or d-pad target
+keeps its own default target there (a shoulder moved onto Cross still works as a shoulder); other
+sources and every other device as in play (`port/input/bindings.c`, `gp_menu_word`). It reaches
+the game through two bytes of libpad's buffer (below).
+
+`ico_bindings_start_sources` records which devices hold Start; `ico_input_start_source` names
+them for the movie player's skip line ([FMV.md](FMV.md)).
+
+### The config keys
+
+The defaults are the same on every platform and live as config text, parsed by the same code as a
+player's file (`port/input/bindings.c`, `default_text`, `set_defaults_from_text`):
+
+| key | default | range |
+| --- | --- | --- |
+| `keyboard`, `mouse`, `gamepad` | `true` | device on or off |
+| `deadzone` | `0.12` | 0..0.9, gamepad radial dead zone |
+| `walk_scale` | `0.5` | 0.05..1, left stick while a walk key is down |
+| `mouse_sensitivity` | `1.0` | 0.01..100 |
+| `mouse_decay` | `0.80` | 0..0.99, the touch look pad's decay per vsync |
+| `mouse_invert_y` | `false` | |
+| `mouse_camera` | `true` | the mouse moves the camera |
+| `mouse_hold` | `0.75` | 0..10 s before the look offset relaxes |
+| `mouse_camera_speed` | `1.0` | 0.5..10 |
+| `mouse_full_range` | `false` | past the area's angle limits |
+| `mouse_return` | `true` | the offset relaxes to centre |
+| `rumble` | `true` | |
+| `touch_mode` | `"auto"` | `off`, `auto`, `always` |
+| `touch_size` | `"medium"` | `small`, `medium`, `large` |
+| `touch_opacity` | `75` | 10..100 percent |
+
+The rows live in `[input.kb]`, `[input.mouse]` and `[input.pad]`, one key per target name (`l2`,
+`r2`, `l1`, `r1`, `triangle`, `circle`, `cross`, `square`, `select`, `l3`, `r3`, `start`, `up`,
+`right`, `down`, `left`, `lstick_up` .. `rstick_right`), the value a name, a comma list or an
+array of names, or `"none"`; `[input.kb]` also has `walk`. The default rows are in
+`default_text` (`ico_bindings_default_text`). Names are case-insensitive and ignore blanks and
+underscores, with aliases such as `return`, `grave`, `lshift`, `pgup` (`name_eq`, `key_alias`).
+An unknown key, a bad value or an unknown name is logged (`input: ignoring "..."`) and the rest
+still applies (`ico_bindings_set`).
+
+`port/input/keys.def` lists the keys a binding can name as `KEY(ID, "config name", SDL
+scancode)`: physical positions, so WASD stays WASD on any layout. Escape, Android's Back and
+Alt+Enter are reserved and not listed (`port/input/keys.def`, header comment).
+
+`port/input/input_config.c` applies `config.toml`'s `[input]` keys and `[gameplay] stick_fix`
+(`ico_input_apply_toml`), owns the live table the Settings menu's remap screen edits in place
+(`ico_input_live_bindings`; a change applies on the next vsync), records every new press for the
+remap screen's capture (`ico_input_note_press`, `ico_input_last_press`), binds one source with
+swap semantics (`ico_bindings_assign`: one key, one action; the target that loses the source
+receives the old row), and writes the tables back through `port/config` for each row or setting
+that differs from the default or is already in the file (`ico_input_write_bindings`). It is kept
+apart from `bindings.c` so that a build without `config.toml` does not pull in the TOML reader
+(`port/input/input_config.c`, header comment). The remap screen itself is [UI.md](UI.md)'s.
+
+## The virtual pad and libpad
+
+### The virtual pad
+
+`IcoVirtualPad` holds the buttons (the game's logical word, active high), the menus' word and
+four stick floats from -1 to +1, x to the right and y downwards (`port/input/input.h`).
+`ico_input_vpad_to_frame` turns it into a byte frame: the optional stick fix, the mirror (stick X
+negated on both sticks), then `ico_input_quantise` (0 to 128, the DualShock's idle; -1 to 0; +1 to
+255) (`port/input/vpad.c`).
+
+The stick fix scales a stick vector by 1 + 0.2 x d / 45, d the angle in degrees to the nearest
+axis, so the off-axis divisor of the game's `iosPadNormalizeStick` (`ico2/fumi/ios/pad.c`)
+cancels; it never shrinks a vector and is capped so neither component leaves -1..+1. No libm: a
+small arctangent, accurate to 0.25 degrees (`port/input/vpad.c`, `ico_input_stick_fix`,
+`atan01_deg`).
+
+### The stick fix's default
+
+`[gameplay] stick_fix` defaults to off on every platform, Android included:
+`ico_opt_stick_fix_default` passes whether the build is Android to `ico_opt_stick_fix_default_for`,
+which ignores it and returns 0. A file that names the key keeps its value; no file is rewritten.
+Every reader of the key uses this one default (`port/game/options.h`, `port/game/options.c`,
+`ico_opt_stick_fix_default_for`). `ico_input_apply_toml` and the recording header read it the
+same way.
+
+### libpad
+
+`port/input/pad_host.c` is libpad: one DualShock 2 in port 0, slot 0, when something feeds it,
+nothing otherwise (`port/input/pad_host.c`, header comment):
+
+- Feeds, in order: a loaded pad script, then the live virtual pad (when the device layer has
+  plugged it in), else a released, centred frame (`ico_input_frame`). With neither feed,
+  `scePadGetState` reports no controller, `ico2/fumi/ios/pad.c`'s `controler_stable_check` keeps
+  the port's error flag set and never calls `scePadRead`, and the game runs as a console with no
+  pad plugged in, the headless default.
+- The pad powers up in digital mode and answers the game's queries so that
+  `controler_stable_check` walks it into analog mode (locked), one step per
+  [Main tick](ARCHITECTURE.md#terms); the first read is on tick 7 (id 0x73) and compares against
+  a never-filled buffer, so a script's first press belongs on tick 8 or later.
+- `scePadInfoPressMode` answers 0: the game never reads the pressure bytes, so the pad is not
+  walked into pressure mode; `scePadEnterPressMode` still works (id 0x79 and 12 pressure bytes).
+
+`scePadRead` fills 32 bytes in Sony's libpad layout (`port/input/pad_host.c`, `scePadRead`):
+
+| byte | content |
+| --- | --- |
+| 0 | status, 0 = ok (0xFF when disconnected) |
+| 1 | terminal id: 0x41 digital, 0x73 analog, 0x79 analog with pressure |
+| 2, 3 | the buttons, active low: byte 2 the logical word's high byte, byte 3 the low byte |
+| 4-7 | right x, right y, left x, left y (analog ids; centred in digital mode) |
+| 8-19 | pressure, id 0x79 only: 0 or 255 per button |
+| 20, 21 | the menus' word, active low, high byte first: the port's own bytes; equal to 2, 3 for a script |
+
+The game reads bytes 20 and 21 through `ico_pad_menu_word` where it uses the default button table:
+`iosPadRead` takes the menus' word when its configuration is `iosPadConfDefault`, so menus and
+the readers of `pad[0]` with the default table see the gamepad's face buttons by position
+(`ico2/fumi/ios/pad.c`, `iosPadRead`; `port/input/input.h`, `ico_pad_menu_word`). Each read is
+also sampled for the pad recording (`ico_input_record_sample`).
+
+## Pad scripts and recordings
+
+### Pad scripts
+
+A pad script drives the pad instead of a person (`port/input/pad_script.h`, header comment). One
+entry per line:
+
+    <tick> <buttons-hex> [lx ly rx ry]
+
+- `#` starts a comment; blank lines are ignored.
+- `<tick>` is a decimal Main tick, counted from 0; from that tick on the
+  pad returns the line's values until the next line's tick. Ticks increase strictly.
+- `<buttons-hex>` is the game's logical word, active high, 0 to ffff, with or without `0x`:
+  L2 0001, R2 0002, L1 0004, R1 0008, Triangle 0010, Circle 0020, Cross 0040, Square 0080, Select
+  0100, L3 0200, R3 0400, Start 0800, Up 1000, Right 2000, Down 4000, Left 8000 (`ICO_PAD_*`).
+  This is Sony libpad's order (byte 2 high), not ps2sdk's.
+- `lx ly rx ry` are 0 to 255 each, decimal or `0x` hex, 128 the centre; all four or none.
+- Before the first line's tick the pad is connected, released, sticks centred.
+
+The tick is the one the [trace](ARCHITECTURE.md#terms) and `--ticks` count: the host counts a tick
+when Main reports it done (`ico_host_main_tick`, which sets `ico_pad_script_set_tick`), so the pad
+read of tick t sees the line for tick t. Ticks are not vsyncs: a movie or a stage load may take
+many vsyncs and no tick (`port/input/pad_script.h`, Tick; `port/platform/trace_host.c`).
+
+A script is loaded from `--pad-script FILE` or the ini's `pad_script=` (`[dev] pad_script`); the
+headless build also takes `pad-script.txt` beside the executable when it exists; a window build
+takes a script only when one is named, so a stray file never replaces the live controller
+(`port/platform/main_host.c`, `setup_pad`). A bad script stops the run with the file and line
+(`pad-script: <file>:<line>: ...`). The Windows package removes `pad-script.txt`
+(`tools/package_win.sh`).
+
+`port/input/pad-boot.txt` plays from power-on through the boot signs and the title to New Game,
+repeating a cycle of 3-tick presses that each advance the screen that is up or do nothing there,
+since load and memory card latency move the screens' ticks; its comments walk every screen
+(`port/input/pad-boot.txt`, header comment). The headless UI checks use its presses
+(`port/ui/test/headless_common.py`).
+
+### Recordings
+
+The pad recording writes what the game read from the pad as a pad script, so the headless build
+replays a session with `pad_script=<the file>` (`port/input/input_record.h`, header comment). The
+sample is taken in `scePadRead`, keyed by the Main tick the read belongs to, which is the script's
+own key. The play word is recorded; the menus' word is not (it equals the play word in a script).
+
+The file is a header of `#` lines, then one line per tick whose value differs from the one before:
+
+    <tick> <buttons-hex> lx ly rx ry
+
+with the buttons as four hex digits and the sticks in decimal, and a closing comment `# end at
+tick T: N lines, C ticks read twice with different values` (C is 0 unless something other than
+Main reads the pad). Lines are written after the vsync step that read them
+(`ico_input_record_poll`) and reach the disc at most a second later; F12 flushes them.
+
+`port/platform/main_host.c` (`record_open`, `record_header`) opens it: on by default in the window
+build as `logs/input-<time>.txt`, off headless; the ini's `input_record=` (`[dev] input_record`)
+takes `false`, `true` or a path. The header (`# ico-pc input recording`) carries the build, the
+config values the simulation depends on (`record_keys`), the effective fixed clock and stick fix,
+and the native frame's width and aspect; a width change adds `# tick N gs_width W`. Loading a
+recording as the pad script compares each header value with the run's and logs each difference
+(`record_check`), since the replay may then not follow the session.
+
+## The mouse camera and the pointer
+
+### Capture
+
+`port/input/mouse_look.h` decides what the mouse does. The window fills `IcoCaptureState` from the
+game's state once a vsync and passes `ico_mouse_capture_rule`'s answer to
+`ico_input_sdl_set_capture` (`port/platform/window_host.c`):
+
+- `ICO_CAPTURE_STICK` in play (the boy in a stage past the title, on the play or scene layout,
+  nothing paused or loading, no movie, model viewer or credits): the pointer is hidden and held
+  (relative mode), its motion is the right stick.
+- `ICO_CAPTURE_DELTA` in photo mode: hidden and held, its motion goes to an accumulator photo
+  mode's screen takes once a Main tick (`ico_mouse_look_take`, `port/ui/photo_ui.c`).
+- `ICO_CAPTURE_OFF` otherwise, and always without the focus or with the mouse camera off: the
+  pointer is free.
+
+Any change of mode starts the look from centre (`port/input/input_sdl.c`,
+`ico_input_sdl_set_capture`).
+
+### The mouse's stick
+
+In play the captured motion moves a held look offset: 400 counts cross the whole offset at
+sensitivity 1. After `mouse_hold` seconds without motion the offset relaxes to centre with a 0.25 s
+time constant, so the camera swings back behind Ico; with `mouse_return` off it stays. The game's
+camera is position control with a dead zone of 48, so the stick is the offset's direction at
+48.5/127.5 (just past the dead zone) plus its length up to 120/127.5 (`port/input/bindings.c`,
+`mouse_look`; `port/input/input.h`, `IcoBindings.mouse_camera`); the relax runs on the
+snapshot's real time step.
+
+`IcoBindings.mouse_drives` is set while the mouse's stick won the merge with the keys, the gamepad
+and the touch look pad (`ico_bindings_mouse_merged`). Only then do `mouse_camera_speed` and
+`mouse_full_range` apply: the game's hand camera (`ico2/omori/src/hand-camera.c`) asks
+`ico_mouse_camera_speed` (exactly 1 otherwise) and `ico_mouse_camera_full_range`, and steps with
+`ico_mouse_camera_step`, which is the game's own step at speed 1 (`port/input/mouse_camera.h`).
+
+### Escape and Back
+
+Escape and Android's Back never reach the bindings. They press Start in play (the pause menu),
+nothing on the game's Button configuration screen (where any button is assigned to the highlighted
+action), and Triangle everywhere else; never a quit (`port/input/mouse_look.h`,
+`ico_escape_target`; `port/platform/window_host.c`, `escape_event`). The button is chosen at the
+press and held until the release, and a press lasts at least two steps
+(`ICO_ESCAPE_TAP_STEPS`), since the game reads the pad every second vsync (`ico_escape_latch`,
+`ico_escape_take`).
+
+### The pointer
+
+`port/input/pointer.h` is the mouse in the menus. While the capture mode is off, the device layer
+feeds it the pointer's place (0..1 across and down the window), left-button clicks, the wheel
+(whole notches, up positive, SDL's flipped direction undone) and leaving the window; the menus'
+glue takes what happened once a Main tick (`port/ui/ui_mouse.c`, `ui_mouse_tick`) and says whether
+a menu is up (`ico_pointer_set_menu`). Motion in the first 100 ms after the pointer is freed is
+ignored, since SDL moves it back to where it was held (`port/input/input_sdl.c`,
+`POINTER_SETTLE_NS`). The menus' side is [UI.md](UI.md)'s.
+
+## Touch
+
+`port/input/touch.h` maps fingers on a direct touch screen to a virtual pad, merged with the
+bindings' like any other source before the stick fix, the mirror and the quantisation
+(`port/input/touch.h`, header comment):
+
+- **Layout**: every control is a fixed multiple of one unit q (output pixels per layout
+  millimetre) from an edge of the safe area, in a PlayStation pad's arrangement, the often used
+  controls at the lower corners; q follows the screen's density and the size setting, clamped so
+  the layout fits, and a fold splits or moves the layout (`port/input/touch.c`, layout comment).
+- **Left stick**: the first finger down in its area is the stick's centre while it stays down; its
+  offset is the deflection, with a small dead zone for jitter and no rescaling, so the game's own
+  reading decides walk and run as with a real stick.
+- **Look pad**: a finger's offset from where it went down is the right stick; after it lifts the
+  stick decays by `mouse_decay` per vsync.
+- **Buttons**: a finger holds the button it is on, sliding moves the hold, a tap between two steps
+  is held for one step; up to 10 fingers at once.
+- **Visibility**: `touch_mode` Off never maps or draws; Auto hides the overlay while a gamepad is
+  connected (and drops the touches) and 5 s after the last finger event, with 300 ms fades; Always
+  draws at full opacity and maps with a gamepad too. `touch_opacity` scales the drawing.
+
+`input_sdl.c` wires it: the finger events, cancel on focus loss and backgrounding, the step once a
+vsync (`ico_touch_update`), the layout from the output's size, safe area, density and fold that
+the window hands over (`ico_input_sdl_set_touch_layout`, `ico_input_sdl_set_touch_env`), and a
+copy for drawing taken at the step (`ico_input_sdl_touch_overlay`). The Settings rows for touch
+appear once a touch screen is known (`ico_input_sdl_touch_present`; `input: touch screen (...)`).
+The overlay's drawing is `port/ui/touch_ui.c` ([UI.md](UI.md)).
+
+## Tests
+
+| test | checks |
+| --- | --- |
+| `input` (`input_test.c`) | binding resolution from config text, the dead zone and quantisation, the stick fix, merging, the libpad buffer against a hand-written DualShock 2 frame, rumble, Escape's button |
+| `input_record` (`input_record_test.c`) | the recording's line format, the round trip through the script reader over a long session, the "only when it changes" rule, a second read in a tick, the poll's timing, a scripted session recorded through libpad and loaded back |
+| `touch` (`touch_test.c`) | the mapper's layouts over phones, a notch, foldables, a tablet and monitors at every size, the hinge rule, the floating stick, the d-pad and face buttons, sliding, cancel, the look pad's decay, hiding and fades, the merged pad with the stick fix off and on |
+| `mouse_camera` (`mouse_camera_test.c`) | the camera step arithmetic, and the speed and range applied only while the mouse drives the camera |
+| `pad_script` (`pad_script_test.c`) | the script reader and what libpad then shows the game's pad state machine, replayed from `pad.c`'s libpad calls in their order |
+| `movie_pad` (`port/platform/test/movie_pad_test.c`) | the Start edge through the game's own pad code during a movie ([FMV.md](FMV.md)) |
+
+The first four are registered in `port/input/CMakeLists.txt`, `pad_script` in
+`port/null/CMakeLists.txt`, `movie_pad` in `port/platform/CMakeLists.txt`.
