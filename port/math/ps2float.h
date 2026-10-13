@@ -1,22 +1,36 @@
 /*
  * port/math/ps2float.h
  *
- * The few PS2 float behaviours the port reproduces by hand. Everything else
- * is ordinary C float arithmetic: the simulation thread runs with
- * round-toward-zero and flush-to-zero/denormals-are-zero
- * (port/platform/fpenv.c), and the build uses -ffp-contract=off, so
- * `a * b + c` rounds the product and then the sum, as VU0's multiply-add
- * does.
+ * The PS2 float behaviours the port reproduces by hand, for the sites that
+ * call them. Everything else is ordinary C float arithmetic: the
+ * simulation thread runs with round-toward-zero and
+ * flush-to-zero/denormals-are-zero (port/platform/fpenv.c), and the build
+ * uses -ffp-contract=off, so `a * b + c` rounds the product and then the
+ * sum, as VU0's multiply-add does.
  *
- * What plain C would get wrong, and these helpers fix:
- *   - division by zero: IEEE gives Inf or NaN; the EE FPU and VU0 give
- *     +-Fmax with the sign of dividend XOR divisor, 0/0 included.
- *   - square root of a negative number: IEEE gives NaN; VU0 takes sqrt(|x|).
- *   - float to int out of range: x86's cvttss2si gives 0x80000000 for
- *     both signs; the PS2 saturates by sign.
- * Overflow needs no helper: under round-toward-zero an overflowing result is
- * already FLT_MAX (0x7F7FFFFF), the port's Fmax (the hardware's 0x7FFFFFFF
- * is not a host float).
+ * The models of the EE FPU's and VU0's arithmetic units (PCSX2 PR #12001's
+ * hardware-derived PS2Float):
+ *   - ps2_div: the divider (EE `div.s`, VU0 `vdiv`), with ps2_div_nonzero
+ *     in ps2float.c; a zero divisor gives +-Fmax with the sign of dividend
+ *     XOR divisor, 0/0 included, where IEEE gives Inf or NaN.
+ *   - ps2_mul: the multiplier (EE `mul.s`, VU0 `vmul` and the products of
+ *     `vmadd`/`vmsub`), over ps2_mul_mantissa's Booth product.
+ *   - ps2_add, ps2_sub: the adder, which keeps one guard bit of the
+ *     smaller operand (ps2_add_aligned does the sum).
+ *   - ps2_sqrt, ps2_rsqrt: VU0 `vsqrt` and `vrsqrt` (ps2float.c), sqrt(|x|)
+ *     where IEEE gives NaN for a negative number.
+ *   - ps2_ftoi, ps2_ftoi4: EE `cvt.w.s` and VU0 `vftoi0`/`vftoi4`, which
+ *     saturate by sign where x86's cvttss2si gives 0x80000000 for both.
+ *   - ps2_operand: an operand with exponent 255 read as +-Fmax (the PS2 has
+ *     no Inf or NaN).
+ * And the behaviours plain C already has, named for the sites that spell
+ * the instruction: ps2_itof (VU0 `vitof0`), ps2_max and ps2_min (`vmax`,
+ * `vmini`), ps2_is_zero (zero or denormal), ps2_fmax_signed, and the bit
+ * moves ps2_float_bits and ps2_bits_float.
+ *
+ * Overflow needs no helper in plain arithmetic: under round-toward-zero an
+ * overflowing result is already FLT_MAX (0x7F7FFFFF), the port's Fmax (the
+ * hardware's 0x7FFFFFFF is not a host float).
  *
  * The zero tests look at the exponent bits, so a denormal divisor counts as
  * zero even where DAZ is off (unit tests, other threads), as on the PS2.

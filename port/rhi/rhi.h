@@ -1,6 +1,7 @@
 /* rhi.h: the thin render hardware interface the backends implement.
  *
- * Backends: port/rhi/vk, port/rhi/d3d12 (Metal later).  A build may link
+ * Backends: port/rhi/vk, port/rhi/d3d12; macOS and iOS run the Vulkan one
+ * over MoltenVK (cmake/IcoMoltenVK.cmake).  A build may link
  * more than one (Windows: Vulkan and D3D12); rhi_create_backend at the end
  * picks the one the calls below go to (port/rhi/rhi_backend.h).
  * The surface is deliberately small: the game needs about a dozen shader

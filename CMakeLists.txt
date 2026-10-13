@@ -25,8 +25,10 @@ include(cmake/IcoExclusions.cmake)
 # ICO_HEADLESS=OFF (the default) is the windowed ico_pc: the seki layer
 # draws through port/render (ICO_RD) into an SDL3 window. ON is the headless
 # build of the trace and test runs: the original packet code, no window, no
-# Vulkan. In CMakePresets.json every preset but win-x64 and android-arm64 is
-# headless.
+# Vulkan. In CMakePresets.json the window presets (ICO_HEADLESS OFF) are
+# linux-arm64, win-x64, android-arm64, ios-moltenvk, macos-moltenvk, ios-app
+# and macos-app; the others (linux-x64, asan, fptrap, linux-x64-clang,
+# win-x64-clang) are headless.
 option(ICO_HEADLESS "Build the headless ico_pc (no window, no renderer)" OFF)
 option(ICO_FPTRAP "Unmask float divide-by-zero and invalid in simulation mode" OFF)
 option(ICO_BUILD_BLOCKED "Also compile the sources cmake/IcoExclusions.cmake blocks" OFF)

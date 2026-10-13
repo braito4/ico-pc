@@ -10,7 +10,8 @@
  * every backend serves one flat LSN space with the disc's own numbering.
  *
  * Backends:
- *   ico_vfs_iso9660   the user's disc image (.iso or .chd) read in place
+ *   ico_vfs_iso9660   the user's disc image (.iso, .chd, or a raw .bin or
+ *                     the .cue sheet that names one) read in place
  *                     (dev mode, the first-run extractor;
  *                     port/data/iso9660.c)
  *   ico_vfs_archive   the archive the first-run extractor writes (ico.o2r,

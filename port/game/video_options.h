@@ -15,9 +15,9 @@
  *   [video] window_mode     "windowed"  "windowed" | "borderless" | "fullscreen"
  *                                       (borderless: a frameless window over the
  *                                       whole display; ignored on Android)
- *   [video] fullscreen      false       the older key, still read when window_mode
- *                                       is absent, and written (true only for
- *                                       "fullscreen") for older builds
+ *   [video] fullscreen      false       read when window_mode is absent (true is
+ *                                       "fullscreen", false "windowed"), and written
+ *                                       beside it (true only for "fullscreen")
  *   [video] vsync           true
  *   [video] texture_filter  "original"  "original" | "trilinear" | "anisotropic"
  *   [video] full_height     false
@@ -55,7 +55,7 @@
  *                                       computer's memory) or 128..65536
  *   [video] effect_glow, effect_depth_of_field, effect_softening, effect_motion_blur,
  *           effect_fog, effect_cinematic_bars
- *                           true        the game's own picture effects (issue 11): the
+ *                           true        the game's own picture effects: the
  *                                       light bloom and sun flare, the distance blur, the
  *                                       edge softening, the motion trail, the distance fog
  *   [video] effects_depth   true        config only: the scene's depth beside

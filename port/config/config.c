@@ -32,11 +32,11 @@ void ico_config_reset(const char *toml_path, const char *ini_path)
     snprintf(want_ini, sizeof(want_ini), "%s", ini_path != NULL ? ini_path : "");
 }
 
-/* Keys a former version read and this one does not: kept in the file (as
-   any unknown key is) and logged once a load.  [game] classic_menu_text and
-   [game] port_font chose how the game's own words were drawn; they always
-   keep their texels now. [dev] hand_probe wrote the characters'
-   hand-holding numbers into the log for a bug report. */
+/* Keys a config.toml may hold that nothing reads: kept in the file (as any
+   unknown key is) and logged once a load.  [game] classic_menu_text and
+   [game] port_font name a choice of how the game's own words are drawn;
+   they always keep their texels. [dev] hand_probe names a log of the
+   characters' hand-holding numbers, which the port does not write. */
 static const char *const retired_keys[] = {"game.classic_menu_text", "game.port_font",
                                            "dev.hand_probe"};
 
@@ -301,8 +301,8 @@ static const char first_run_text[] =
     "# models/SCES-50760/dumps in your user folder. Needs Developer mode.\n"
     "dump_models = false\n"
     "# The three texture pack lines below are switched off by the # in front:\n"
-    "# to change one, remove its # (or, in an older file, add the line under\n"
-    "# [video]).\n"
+    "# to change one, remove its #, or add the line under [video] when the\n"
+    "# file does not have it.\n"
     "# The graphics card memory in MB a texture pack may use (128 to 65536).\n"
     "# Textures past it stay the game's own.\n"
     "# texture_pack_budget_mb = 2048\n"
