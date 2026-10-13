@@ -493,6 +493,14 @@ uint32_t rd_precreate_pipelines(void);
  * clears it.  Kept across calls until cleared. */
 typedef void (*RdPipelineProgressFn)(void *ctx, uint32_t done, uint32_t total);
 void rd_set_pipeline_progress(RdPipelineProgressFn fn, void *ctx);
+/* What the renderer is asking the graphics driver for, as one line, for
+ * a crash report (the window passes diag_host.h's activity note): fn(note)
+ * before each pipeline creation ("creating pipeline program 3 blend 0 ...",
+ * with "(start-up set, 12 of 431)" inside rd_precreate_pipelines) and
+ * between two pipelines of that set ("creating the start-up pipelines (12
+ * of 431)"), fn(NULL) when the step is over.  NULL (the default): nothing. */
+typedef void (*RdActivityFn)(const char *note);
+void rd_set_activity_fn(RdActivityFn fn);
 /* The depth fog's self-test (rd_fog_path.c): a frame of its own (never
  * recorded, never presented, no frame number) draws a grid of cells at
  * known GS Z on SCENE at its real size and scale and fogs it with a known

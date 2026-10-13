@@ -10,6 +10,7 @@ target_sources(ico_platform PRIVATE
     pace_policy.c
     perf_block.c
     sched.c
+    startup_retry.c
     vsync_hooks.c
     window_lifecycle.c)
 # diag_host.c's heartbeat and watchdog thread (pthreads on POSIX).
@@ -57,6 +58,14 @@ if(ICO_HEAP_STATS)
 endif()
 
 # --- Tests ------------------------------------------------------------------
+# startup_retry.c: the steps after a graphics driver crash while building a
+# pipeline, and the relaunch's environment
+add_executable(startup_retry_test test/startup_retry_test.c)
+target_compile_options(startup_retry_test PRIVATE ${ICO_SEMANTIC_OPTIONS} ${ICO_PORT_WARNINGS})
+target_link_libraries(startup_retry_test PRIVATE ico_platform)
+if(ICO_RUN_TESTS)
+    add_test(NAME startup_retry COMMAND startup_retry_test)
+endif()
 foreach(t sched fiber arena diag hotkeys pace_policy pace_loop perf_block lifecycle)
     add_executable(${t}_test test/${t}_test.c)
     target_include_directories(${t}_test PRIVATE "${ICO_COMPAT_DIR}")

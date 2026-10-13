@@ -479,6 +479,11 @@ void rhi_set_pipeline_cache_path(const char *path)
     be()->set_pipeline_cache_path(path);
 }
 
+bool rhi_pipeline_cache_loaded(void)
+{
+    return be()->pipeline_cache_loaded();
+}
+
 void rhi_set_vulkan_loader(void *getInstanceProcAddr)
 {
     be()->set_vulkan_loader(getInstanceProcAddr);

@@ -6,6 +6,11 @@
  *   - segv:     a game thread (fiber) dereferences NULL: exit 3, the log
  *               names the signal, the faulting address, the thread and its
  *               last kernel call, and lists stack candidates;
+ *   - segvnote: the same with the activity note set (a pipeline build):
+ *               "while: <note>" right after the CRASH line, and the
+ *               graphics driver crash named, with no relaunch (the child
+ *               never prepared one); segvcleared: a cleared note is not
+ *               printed;
  *   - abort:    an assertion through ico_assert: exit 3 and the failure
  *               message in the report;
  *   - watchdog: a game thread spins without a kernel call, so the host loop
@@ -187,6 +192,15 @@ static void run_child(const char *mode, const char *log)
     sema = ico_sched_create_sema(1, 1, 0, 0);
     if (strcmp(mode, "segv") == 0) {
         fn = segv_thread;
+    } else if (strcmp(mode, "segvnote") == 0) {
+        /* a crash inside the graphics driver's pipeline build; this child
+           never called ico_diag_prepare_relaunch, so it cannot start again */
+        ico_diag_set_activity("creating pipeline program %d blend 0", 3);
+        fn = segv_thread;
+    } else if (strcmp(mode, "segvcleared") == 0) {
+        ico_diag_set_activity("creating pipeline program 3");
+        ico_diag_clear_activity();
+        fn = segv_thread;
     } else if (strcmp(mode, "abort") == 0) {
         fn = abort_thread;
     } else if (strcmp(mode, "watchdog") == 0) {
@@ -285,9 +299,33 @@ int main(int argc, char **argv)
     CHECK(strstr(s, "last call PollSema(") != NULL);
     CHECK(strstr(s, "return-address candidates") != NULL);
     CHECK(strstr(s, "test: exit hook") != NULL);
+    CHECK(strstr(s, "ico_pc: while:") == NULL);
+    CHECK(strstr(s, "graphics driver") == NULL);
     if (fails) {
         printf("--- segv log ---\n%s\n", s);
     }
+
+    /* the activity note: named right after the CRASH line, and a pipeline
+       build makes it a graphics driver crash (no relaunch: not prepared) */
+    r = run(argv[0], "segvnote", log);
+    s = read_file(log);
+    CHECK(r == 3);
+    CHECK(strstr(s, "CRASH: SIGSEGV") != NULL);
+    CHECK(strstr(s, "ico_pc: while: creating pipeline program 3 blend 0\n") != NULL);
+    CHECK(strstr(s, "CRASH: SIGSEGV") != NULL && strstr(s, "ico_pc: while:") != NULL &&
+          strstr(s, "CRASH: SIGSEGV") < strstr(s, "ico_pc: while:") &&
+          strstr(s, "faulting access") > strstr(s, "ico_pc: while:"));
+    CHECK(strstr(s, "the graphics driver crashed while preparing the shaders; the game cannot "
+                    "start itself again here") != NULL);
+    CHECK(strstr(s, "starts again with") == NULL);
+    if (fails) {
+        printf("--- segvnote log ---\n%s\n", s);
+    }
+    r = run(argv[0], "segvcleared", log);
+    s = read_file(log);
+    CHECK(r == 3);
+    CHECK(strstr(s, "ico_pc: while:") == NULL);
+    CHECK(strstr(s, "graphics driver") == NULL);
 
     r = run(argv[0], "abort", log);
     s = read_file(log);

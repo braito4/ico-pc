@@ -909,6 +909,9 @@ bool rhi_present_statistics(uint64_t *presentCount, uint64_t *presentRefresh, ui
  * (the default; the tests): no file.  Call before rhi_init; the path is
  * copied.  D3D12: ignored (its drivers keep their own shader cache). */
 void rhi_set_pipeline_cache_path(const char *path);
+/* true when the last rhi_init created its pipeline cache from that file's
+ * blob (Vulkan); false when it started empty, and always on D3D12 */
+bool rhi_pipeline_cache_loaded(void);
 
 /* The Vulkan loader rhi_init uses, as its
  * vkGetInstanceProcAddr: a graphics driver the Android build loaded itself

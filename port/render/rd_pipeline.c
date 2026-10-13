@@ -730,6 +730,50 @@ static uint32_t keyHash(const RdPipeKeyInt *k)
     return h;
 }
 
+static RdActivityFn s_activityFn;
+/* inside rd_precreate_pipelines: the pipeline being created (1-based) and
+ * the set's size; 0 outside */
+static uint32_t s_preIndex, s_preTotal;
+
+void rd_set_activity_fn(RdActivityFn fn)
+{
+    s_activityFn = fn;
+}
+
+/* the note before a creation: the key's words */
+static void activityCreating(const RdPipeKeyInt *k)
+{
+    char note[160];
+    char set[48] = "";
+    if (s_activityFn == NULL) {
+        return;
+    }
+    if (s_preTotal > 0) {
+        snprintf(set, sizeof(set), " (start-up set, %u of %u)", s_preIndex, s_preTotal);
+    }
+    snprintf(note, sizeof(note),
+             "creating pipeline program %u blend %u vs %u fs %u fmt %u/%u msaa %u dst %u%s",
+             k->gs.program, k->gs.blend, k->vs, k->fs, k->colorFmt, k->depthFmt, k->gs.msaa,
+             (unsigned)k->dst, set);
+    s_activityFn(note);
+}
+
+/* the note after a creation: back to the set's, or none */
+static void activityDone(void)
+{
+    char note[64];
+    if (s_activityFn == NULL) {
+        return;
+    }
+    if (s_preTotal > 0) {
+        snprintf(note, sizeof(note), "creating the start-up pipelines (%u of %u)", s_preIndex,
+                 s_preTotal);
+        s_activityFn(note);
+    } else {
+        s_activityFn(NULL);
+    }
+}
+
 RhiPipeline rd__get_pipeline(const RdPipeKeyInt *k)
 {
     /* the MSAA epoch: a pipeline fetched for a multisampled pass draws with
@@ -783,7 +827,9 @@ RhiPipeline rd__get_pipeline(const RdPipeKeyInt *k)
         }
         return (RhiPipeline){0};
     }
+    activityCreating(k);
     RhiPipeline p = createPipeline(k);
+    activityDone();
     if (!p.id) {
         if (s_failedCount < RD_PIPELINE_FAIL_MAX) {
             s_failed[s_failedCount++] = *k;
@@ -847,12 +893,23 @@ uint32_t rd_precreate_pipelines(void)
         s_progressFn(s_progressCtx, 0, m);
     }
     for (uint32_t i = 0; i < m; i++) {
+        s_preIndex = i + 1;
+        s_preTotal = m;
+        activityDone(); /* "creating the start-up pipelines (i + 1 of m)" */
         if (!rd__get_pipeline(&keys[i]).id) {
             failed++;
         }
+        /* the progress may present a frame, whose own pipelines are not
+         * the set's */
+        s_preTotal = 0;
         if (s_progressFn != NULL) {
             s_progressFn(s_progressCtx, i + 1, m);
         }
+    }
+    s_preIndex = 0;
+    s_preTotal = 0;
+    if (s_activityFn != NULL) {
+        s_activityFn(NULL);
     }
     const double ms = rd__now_ms() - t0;
     rd__log("pipelines: %u of the reachable set's %u created at start-up in %.1f ms (%u failed)",

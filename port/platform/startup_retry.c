@@ -1,0 +1,225 @@
+/*
+ * port/platform/startup_retry.c
+ *
+ * The steps after a graphics driver crash while building a pipeline
+ * (startup_retry.h).
+ */
+#include "startup_retry.h"
+#include <stdio.h>
+#include <string.h>
+
+/* ASCII, any case */
+static bool same_name(const char *a, const char *b)
+{
+    for (; *a != '\0' && *b != '\0'; a++, b++) {
+        char x = *a >= 'A' && *a <= 'Z' ? (char)(*a + 32) : *a;
+        char y = *b >= 'A' && *b <= 'Z' ? (char)(*b + 32) : *b;
+        if (x != y) {
+            return false;
+        }
+    }
+    return *a == *b;
+}
+
+StartupRetry startup_retry_next(StartupRetry step, bool cacheWasLoaded, bool haveD3d12,
+                                bool backendExplicit, const char *backendName, char *reason,
+                                size_t reasonLen)
+{
+    const char *name = backendName != NULL && backendName[0] != '\0' ? backendName : "vulkan";
+    const bool onD3d12 = same_name(name, "d3d12");
+    char dummy[1];
+    if (reason == NULL || reasonLen == 0) {
+        reason = dummy;
+        reasonLen = sizeof dummy;
+    }
+    if (step < STARTUP_RETRY_CACHE && cacheWasLoaded) {
+        snprintf(reason, reasonLen,
+                 "the saved pipeline cache file was in use: it is deleted and %s tries again",
+                 name);
+        return STARTUP_RETRY_CACHE;
+    }
+    if (step < STARTUP_RETRY_D3D12 && haveD3d12 && !backendExplicit && !onD3d12) {
+        snprintf(reason, reasonLen, "%s crashed; the next try uses Direct3D 12", name);
+        return STARTUP_RETRY_D3D12;
+    }
+    if (step < STARTUP_RETRY_LAZY) {
+        snprintf(reason, reasonLen,
+                 "the next try on %s builds the shaders as the game needs them, not all at "
+                 "the start%s",
+                 name,
+                 backendExplicit && haveD3d12 && !onD3d12
+                     ? " (Direct3D 12 is not tried: the settings choose the backend)"
+                     : "");
+        return STARTUP_RETRY_LAZY;
+    }
+    snprintf(reason, reasonLen,
+             "it crashed even with the shaders built as the game needs them: nothing is left "
+             "to try");
+    return STARTUP_RETRY_NONE;
+}
+
+const char *startup_retry_name(StartupRetry step)
+{
+    switch (step) {
+    case STARTUP_RETRY_CACHE:
+        return "cache";
+    case STARTUP_RETRY_D3D12:
+        return "d3d12";
+    case STARTUP_RETRY_LAZY:
+        return "lazy";
+    default:
+        return "";
+    }
+}
+
+int startup_retry_value(StartupRetry next, const char *backendName, char *out, size_t size)
+{
+    const char *name = backendName != NULL && backendName[0] != '\0' ? backendName : "vulkan";
+    int n;
+    if (next == STARTUP_RETRY_NONE || out == NULL || size == 0) {
+        return -1;
+    }
+    n = snprintf(out, size, "%s:%s", startup_retry_name(next),
+                 next == STARTUP_RETRY_D3D12 ? "d3d12" : name);
+    return n > 0 && (size_t)n < size ? 0 : -1;
+}
+
+int startup_retry_parse(const char *value, StartupRetry *step, char *backend, size_t size)
+{
+    static const StartupRetry steps[] = {STARTUP_RETRY_CACHE, STARTUP_RETRY_D3D12,
+                                         STARTUP_RETRY_LAZY};
+    const char *colon;
+    size_t i, n;
+    *step = STARTUP_RETRY_NONE;
+    if (backend != NULL && size > 0) {
+        backend[0] = '\0';
+    }
+    if (value == NULL || (colon = strchr(value, ':')) == NULL || backend == NULL) {
+        return -1;
+    }
+    n = strlen(colon + 1);
+    if (n == 0 || n >= size) {
+        return -1;
+    }
+    for (i = 0; i < n; i++) {
+        const char c = colon[1 + i];
+        if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))) {
+            return -1;
+        }
+    }
+    for (i = 0; i < sizeof steps / sizeof steps[0]; i++) {
+        const char *name = startup_retry_name(steps[i]);
+        const size_t len = strlen(name);
+        if (len == (size_t)(colon - value) && strncmp(value, name, len) == 0) {
+            memcpy(backend, colon + 1, n + 1);
+            *step = steps[i];
+            return 0;
+        }
+    }
+    return -1;
+}
+
+const char *startup_retry_what(StartupRetry step)
+{
+    switch (step) {
+    case STARTUP_RETRY_CACHE:
+        return "the pipeline cache file was deleted; the shaders are prepared again from scratch";
+    case STARTUP_RETRY_D3D12:
+        return "this run uses Direct3D 12";
+    case STARTUP_RETRY_LAZY:
+        return "this run builds the shaders as the game needs them, not all at the start";
+    default:
+        return "";
+    }
+}
+
+/* s starts with "ICO_STARTUP_RETRY=" (the name in any case) */
+static bool is_retry_var(const char *s)
+{
+    static const char name[] = STARTUP_RETRY_ENV "=";
+    size_t i;
+    for (i = 0; name[i] != '\0'; i++) {
+        char c = s[i] >= 'a' && s[i] <= 'z' ? (char)(s[i] - 32) : s[i];
+        if (c != name[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool is_retry_var_w(const wchar_t *s)
+{
+    static const char name[] = STARTUP_RETRY_ENV "=";
+    size_t i;
+    for (i = 0; name[i] != '\0'; i++) {
+        wchar_t c = s[i] >= L'a' && s[i] <= L'z' ? (wchar_t)(s[i] - 32) : s[i];
+        if (c != (wchar_t)name[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+int startup_retry_envp(char *const *env, const char *extra, const char **out, size_t max)
+{
+    size_t n = 0;
+    size_t i;
+    for (i = 0; env != NULL && env[i] != NULL; i++) {
+        if (is_retry_var(env[i])) {
+            continue;
+        }
+        if (n + 1 >= max) {
+            return -1;
+        }
+        out[n++] = env[i];
+    }
+    if (extra != NULL) {
+        if (n + 1 >= max) {
+            return -1;
+        }
+        out[n++] = extra;
+    }
+    if (n >= max) {
+        return -1;
+    }
+    out[n] = NULL;
+    return (int)n;
+}
+
+long startup_retry_block_copy(const wchar_t *block, wchar_t *out, size_t cap)
+{
+    size_t used = 0;
+    const wchar_t *p = block;
+    while (p != NULL && *p != L'\0') {
+        const size_t len = wcslen(p);
+        if (!is_retry_var_w(p)) {
+            if (used + len + 1 > cap) {
+                return -1;
+            }
+            memcpy(out + used, p, (len + 1) * sizeof(wchar_t));
+            used += len + 1;
+        }
+        p += len + 1;
+    }
+    return (long)used;
+}
+
+int startup_retry_block_finish(wchar_t *out, size_t used, size_t cap, const char *value)
+{
+    static const char name[] = STARTUP_RETRY_ENV "=";
+    const size_t nl = sizeof name - 1;
+    const size_t vl = strlen(value);
+    size_t i;
+    if (used + nl + vl + 2 > cap) {
+        return -1;
+    }
+    for (i = 0; i < nl; i++) {
+        out[used++] = (wchar_t)name[i];
+    }
+    for (i = 0; i < vl; i++) {
+        out[used++] = (wchar_t)(unsigned char)value[i];
+    }
+    out[used++] = L'\0';
+    out[used] = L'\0';
+    return 0;
+}

@@ -194,6 +194,9 @@ int ico_sha1_file(const char *path, char hex[41], unsigned long long *bytes);
    Android: through host_android.c's mirror, to the file and logcat. 0,
    or -1 (the streams are unchanged when the file cannot be created). */
 int ico_host_redirect_output(const char *log_path);
+/* The same, keeping what log_path already holds (a run the crash handler
+   started again writes on after the crashed run's lines, diag_host.h). */
+int ico_host_redirect_output_keep(const char *log_path);
 /* Writes out what stdout and stderr hold (the host loop, once per vsync). */
 void ico_host_log_flush(void);
 /* The same, and on Android what the log's mirror still holds in its pipe

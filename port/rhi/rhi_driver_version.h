@@ -1,0 +1,31 @@
+/* rhi_driver_version.h: a GPU driver's version number as people know it,
+ * from the 32-bit driverVersion a Vulkan device reports. No Vulkan header:
+ * built and tested on every host (port/rhi/test/rhi_driver_version_test.c).
+ *
+ * Each vendor packs the number its own way:
+ *   NVIDIA's own driver: major 10 bits, minor 8, a third part 8, a fourth 6
+ *     (581.57 is (581 << 22) | (57 << 14));
+ *   Intel's Windows driver: major 18 bits, minor 14 (101.5333 is
+ *     (101 << 14) | 5333);
+ *   every other driver: the Vulkan version packing, major.minor.patch
+ *     (major 10 bits, minor 10, patch 12).
+ * driverId is VkDriverId (VK_KHR_driver_properties, core in Vulkan 1.2),
+ * which tells NVIDIA's own driver from Mesa's NVK on the same vendor id;
+ * 0 when unknown, and then the vendor id alone decides. */
+#ifndef PORT_RHI_RHI_DRIVER_VERSION_H
+#define PORT_RHI_RHI_DRIVER_VERSION_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+#define RHI_VENDOR_NVIDIA 0x10DEu
+#define RHI_VENDOR_INTEL 0x8086u
+/* VkDriverId values */
+#define RHI_DRIVER_ID_NVIDIA_PROPRIETARY 4u
+#define RHI_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS 5u
+
+/* The text into buf (always terminated when n > 0); returns buf. */
+char *rhi_driver_version_text(uint32_t vendorId, uint32_t driverId, uint32_t driverVersion,
+                              char *buf, size_t n);
+
+#endif /* PORT_RHI_RHI_DRIVER_VERSION_H */

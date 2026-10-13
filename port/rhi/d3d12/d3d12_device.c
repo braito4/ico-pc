@@ -253,6 +253,23 @@ static void dx_adapter_name(IDXGIAdapter1 *a, char *out, size_t size)
     }
 }
 
+/* "; driver version 32.0.15.8157" for the adapter line: the user-mode
+ * driver's version, four 16-bit parts (CheckInterfaceSupport with
+ * IDXGIDevice); "" when the adapter does not say */
+static char s_driverText[48];
+
+static void dx_driver_text(IDXGIAdapter1 *a)
+{
+    LARGE_INTEGER umd;
+    s_driverText[0] = '\0';
+    if (SUCCEEDED(IDXGIAdapter1_CheckInterfaceSupport(a, &IID_IDXGIDevice, &umd))) {
+        const unsigned long long v = (unsigned long long)umd.QuadPart;
+        snprintf(s_driverText, sizeof(s_driverText), "; driver version %u.%u.%u.%u",
+                 (unsigned)((v >> 48) & 0xffff), (unsigned)((v >> 32) & 0xffff),
+                 (unsigned)((v >> 16) & 0xffff), (unsigned)(v & 0xffff));
+    }
+}
+
 static bool dx_adapter_ok(IDXGIAdapter1 *a)
 {
     return SUCCEEDED(
@@ -329,6 +346,7 @@ static bool dx_pick_adapter(void)
     }
     g_dx.adapter = pick;
     dx_adapter_name(pick, g_dx.adapterName, sizeof(g_dx.adapterName));
+    dx_driver_text(pick);
     return true;
 }
 
@@ -569,8 +587,8 @@ bool rhi_init(const RhiDeviceDesc *desc)
         return false;
 #endif
     }
-    DX_LOG("%s (D3D12, feature level 11_0%s)%s", g_dx.adapterName, g_dx.warp ? ", WARP" : "",
-           g_dx.swapchain ? "" : ", headless");
+    DX_LOG("%s (D3D12, feature level 11_0%s%s)%s", g_dx.adapterName, g_dx.warp ? ", WARP" : "",
+           s_driverText, g_dx.swapchain ? "" : ", headless");
     dx_drain_messages();
     return true;
 }
@@ -708,6 +726,11 @@ int rhi_present_timing_next(uint64_t *id, uint64_t *ns)
 void rhi_set_pipeline_cache_path(const char *path)
 {
     (void)path; /* the driver keeps its own shader cache */
+}
+
+bool rhi_pipeline_cache_loaded(void)
+{
+    return false;
 }
 
 void rhi_set_vulkan_loader(void *getInstanceProcAddr)

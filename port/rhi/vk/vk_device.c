@@ -3,6 +3,7 @@
 #include "vk_internal.h"
 #include "rhi_vk.h"
 #include "../rhi_backend.h"
+#include "../rhi_driver_version.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -485,6 +486,31 @@ static VkFormat vkr_choose_depth_stencil(VkPhysicalDevice pd, bool *fake)
     return VK_FORMAT_D32_SFLOAT_S8_UINT;
 }
 
+/* "; driver NVIDIA 581.57, version 581.57" for the adapter line: the
+ * driver's name and its own version text (VK_KHR_driver_properties, core in
+ * Vulkan 1.2, which every device the renderer takes has), and driverVersion
+ * decoded the vendor's way (rhi_driver_version.h) */
+static char s_driverText[600];
+
+static void vkr_driver_text(VkPhysicalDevice pd, const VkPhysicalDeviceProperties *p)
+{
+    VkPhysicalDeviceDriverProperties dp = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES,
+    };
+    VkPhysicalDeviceProperties2 p2 = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
+        .pNext = &dp,
+    };
+    char ver[32];
+    vkGetPhysicalDeviceProperties2(pd, &p2);
+    dp.driverName[VK_MAX_DRIVER_NAME_SIZE - 1] = '\0';
+    dp.driverInfo[VK_MAX_DRIVER_INFO_SIZE - 1] = '\0';
+    rhi_driver_version_text(p->vendorID, (uint32_t)dp.driverID, p->driverVersion, ver, sizeof ver);
+    snprintf(s_driverText, sizeof s_driverText, "; driver %s%s%s, version %s",
+             dp.driverName[0] ? dp.driverName : "(unnamed)", dp.driverInfo[0] ? " " : "",
+             dp.driverInfo, ver);
+}
+
 /* Returns a score (higher is better) or -1 when the device cannot run the
  * renderer.  *outQueue receives the graphics(+present) queue family. */
 static int vkr_rate_device(VkPhysicalDevice pd, uint32_t *outQueue, const char **why)
@@ -634,6 +660,7 @@ static bool vkr_pick_device(void)
     }
     g_vkr.queueFamily = bestQueue;
     vkGetPhysicalDeviceProperties(g_vkr.phys, &g_vkr.props);
+    vkr_driver_text(g_vkr.phys, &g_vkr.props);
     vkr_fake_limits();
     vkGetPhysicalDeviceMemoryProperties(g_vkr.phys, &g_vkr.memProps);
     /* issue 58: the heaps, and the one uploads (the renderer's ring, texture
@@ -1293,9 +1320,9 @@ bool rhi_init(const RhiDeviceDesc *desc)
             return false;
         }
     }
-    VKR_LOG("%s (Vulkan %u.%u.%u)%s", g_vkr.adapterName, VK_API_VERSION_MAJOR(g_vkr.apiVersion),
+    VKR_LOG("%s (Vulkan %u.%u.%u%s)%s", g_vkr.adapterName, VK_API_VERSION_MAJOR(g_vkr.apiVersion),
             VK_API_VERSION_MINOR(g_vkr.apiVersion), VK_API_VERSION_PATCH(g_vkr.apiVersion),
-            g_vkr.surface ? "" : ", headless");
+            s_driverText, g_vkr.surface ? "" : ", headless");
     return true;
 }
 

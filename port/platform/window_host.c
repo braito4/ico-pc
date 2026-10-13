@@ -36,6 +36,7 @@
 #include "rhi.h"
 #include "sched.h"
 #include "settings.h"
+#include "startup_retry.h"
 #include "texpack.h"
 #include "touch_ui.h"
 #include "trace_host.h"
@@ -958,6 +959,28 @@ static void choose_driver(void)
 }
 #endif
 
+/* rd's note of the pipeline it asks the driver for, into the crash
+   report's activity note (diag_host.h) */
+static void window_activity(const char *note)
+{
+    if (note != NULL) {
+        ico_diag_set_activity("%s", note);
+    } else {
+        ico_diag_clear_activity();
+    }
+}
+
+static bool window_have_d3d12(void)
+{
+    const char *name;
+    for (uint32_t i = 0; (name = rhi_backend_name(i)) != NULL; i++) {
+        if (strcmp(name, "d3d12") == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 int ico_window_open(unsigned int gsW, unsigned int gsH)
 {
     RdSettings rs;
@@ -965,13 +988,31 @@ int ico_window_open(unsigned int gsW, unsigned int gsH)
 
     /* [video] backend (config.toml) or backend= (ico-pc.ini): "vulkan", the
        default, or "d3d12" where the build has it */
-    const char *backend = ico_config_get_string("video.backend", "vulkan");
+    const char *chosen = ico_config_get_string("video.backend", NULL);
+    const bool backendExplicit = chosen != NULL && chosen[0] != '\0';
+    const char *backend = backendExplicit ? chosen : "vulkan";
+    /* the crash handler started this run again after a graphics driver
+       crash while preparing the shaders (startup_retry.h): its step, and
+       its backend unless the player chose one */
+    static char retryBackend[16];
+    StartupRetry retry = STARTUP_RETRY_NONE;
+    if (startup_retry_parse(getenv(STARTUP_RETRY_ENV), &retry, retryBackend,
+                            sizeof(retryBackend)) == 0) {
+        if (!backendExplicit) {
+            backend = retryBackend;
+        }
+        fprintf(stderr,
+                "ico_pc: restarted after a graphics driver crash while preparing the shaders: "
+                "%s\n",
+                startup_retry_what(retry));
+    }
     if (!rhi_create_backend(backend)) {
         fprintf(stderr, "window: renderer backend \"%s\" is not in this build; using vulkan\n",
                 backend);
         backend = "vulkan";
         rhi_create_backend(backend);
     }
+    ico_diag_set_startup_retry((int)retry, window_have_d3d12(), backendExplicit, backend);
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
         fprintf(stderr, "window: SDL_Init: %s\n", SDL_GetError());
         return -1;
@@ -1012,6 +1053,7 @@ int ico_window_open(unsigned int gsW, unsigned int gsH)
 #endif
         snprintf(cache, sizeof(cache), "%s/pipelines.vkcache", pref);
         rhi_set_pipeline_cache_path(cache);
+        ico_diag_set_pipeline_cache(0, cache);
     }
     /* the window system's answer before the size is read */
     SDL_SyncWindow(s_window);
@@ -1038,6 +1080,7 @@ int ico_window_open(unsigned int gsW, unsigned int gsH)
        the phone's with a message */
     const int customDriver = ico_gpu_driver_android_start();
 #endif
+    rd_set_activity_fn(window_activity);
     bool up = rd_init(gsW, gsH, &rs, s_window);
 #ifdef __ANDROID__
     if (!up && customDriver) {
@@ -1065,6 +1108,8 @@ int ico_window_open(unsigned int gsW, unsigned int gsH)
         return -1;
 #endif
     }
+    /* whether the crash handler's first step would be to delete the file */
+    ico_diag_set_pipeline_cache(rhi_pipeline_cache_loaded(), NULL);
 #ifdef ICO_IOS
     s_background = 0;
     if (!SDL_AddEventWatch(lifecycle_watch, NULL)) {
@@ -1074,9 +1119,13 @@ int ico_window_open(unsigned int gsW, unsigned int gsH)
     /* the whole reachable pipeline set before the first frame and after
        rd_init (which makes the device), so the game never waits on a
        pipeline compile (tens of ms each on a GPU driver); the time is
-       logged */
+       logged. Not after a driver crash in it: the lazy step builds each
+       pipeline when a frame first needs it */
+    if (retry == STARTUP_RETRY_LAZY) {
+        fprintf(stderr, "window: the pipelines are created as the frames need them, not at "
+                        "start-up (a restart after a graphics driver crash)\n");
+    } else {
 #if defined(__ANDROID__) || defined(ICO_IOS)
-    {
         static PipeScreen screen;
 
         /* a start with a cold driver cache can take many seconds on a
@@ -1085,10 +1134,10 @@ int ico_window_open(unsigned int gsW, unsigned int gsH)
         rd_set_pipeline_progress(pipeline_progress, &screen);
         rd_precreate_pipelines();
         rd_set_pipeline_progress(NULL, NULL);
-    }
 #else
-    rd_precreate_pipelines();
+        rd_precreate_pipelines();
 #endif
+    }
     /* which way of reading the depth gives the fog its distances on this
        GPU, tried on the real scene size; logged ("fog: depth path") */
     rd_fog_selftest();

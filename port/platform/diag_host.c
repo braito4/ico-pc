@@ -38,6 +38,7 @@
 #include "fiber.h"
 #include "host_fs.h"
 #include "sched.h"
+#include "startup_retry.h"
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -1018,6 +1019,287 @@ static void stack_bounds_here(uintptr_t sp, uintptr_t *lo, uintptr_t *hi)
 
 #endif
 
+/* --- The activity note and the relaunch after a driver crash ------------------ */
+
+/* ico_diag_set_activity: written by the one thread that builds pipelines,
+   read by the crash report (on Windows from the watchdog thread while the
+   faulting thread waits, so the text stands still) */
+static char activity[160];
+
+void ico_diag_set_activity(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(activity, sizeof activity, fmt, ap);
+    va_end(ap);
+}
+
+void ico_diag_clear_activity(void)
+{
+    activity[0] = '\0';
+}
+
+const char *ico_diag_activity(void)
+{
+    return activity;
+}
+
+/* the note says the graphics driver was building a pipeline */
+static int driver_note(void)
+{
+    static const char a[] = "creating pipeline";
+    static const char b[] = "creating the start-up pipelines";
+    return strncmp(activity, a, sizeof a - 1) == 0 || strncmp(activity, b, sizeof b - 1) == 0;
+}
+
+/* ico_diag_set_startup_retry and ico_diag_set_pipeline_cache */
+static int retry_step;
+static int retry_have_d3d12;
+static int retry_explicit;
+static char retry_backend[16] = "vulkan";
+static int retry_cache_loaded;
+static char retry_cache_path[1024];
+#ifdef _WIN32
+static wchar_t retry_cache_wpath[1024];
+#endif
+
+void ico_diag_set_startup_retry(int step, int have_d3d12, int backend_explicit, const char *backend)
+{
+    retry_step = step;
+    retry_have_d3d12 = have_d3d12 != 0;
+    retry_explicit = backend_explicit != 0;
+    snprintf(retry_backend, sizeof retry_backend, "%s",
+             backend != NULL && backend[0] != '\0' ? backend : "vulkan");
+}
+
+void ico_diag_set_pipeline_cache(int loaded, const char *path)
+{
+    if (path != NULL) {
+        retry_cache_path[0] = '\0';
+        if (strlen(path) < sizeof retry_cache_path) {
+            memcpy(retry_cache_path, path, strlen(path) + 1);
+        }
+#ifdef _WIN32
+        retry_cache_wpath[0] = L'\0';
+        if (retry_cache_path[0] != '\0' &&
+            MultiByteToWideChar(
+                CP_UTF8, MB_ERR_INVALID_CHARS, retry_cache_path, -1, retry_cache_wpath,
+                (int)(sizeof retry_cache_wpath / sizeof retry_cache_wpath[0])) == 0) {
+            retry_cache_wpath[0] = L'\0';
+        }
+#endif
+    }
+    retry_cache_loaded = loaded != 0 && retry_cache_path[0] != '\0';
+}
+
+/* ico_diag_prepare_relaunch: everything the relaunch needs, made at
+   start-up, so the crash path neither allocates nor reads the environment
+   while another thread may change it. relaunch_value: set by the crash path
+   when the run is to start again (finish). */
+static int relaunch_ready;
+static char relaunch_value[48];
+
+#if defined(_WIN32)
+
+/* the executable, the command line (CreateProcessW may write into it) and
+   the environment without ICO_STARTUP_RETRY, ready for its new value */
+static wchar_t relaunch_exe[4096];
+static wchar_t relaunch_cmd[32768];
+static wchar_t relaunch_env[65536];
+static size_t relaunch_env_used;
+
+void ico_diag_prepare_relaunch(int argc, char **argv)
+{
+    const DWORD cap = (DWORD)(sizeof relaunch_exe / sizeof relaunch_exe[0]);
+    const wchar_t *cmd = GetCommandLineW();
+    wchar_t *env;
+    long used = -1;
+    (void)argc;
+    (void)argv;
+    relaunch_ready = 0;
+    const DWORD n = GetModuleFileNameW(NULL, relaunch_exe, cap);
+    if (n == 0 || n >= cap || cmd == NULL ||
+        wcslen(cmd) >= sizeof relaunch_cmd / sizeof relaunch_cmd[0]) {
+        return;
+    }
+    wcscpy(relaunch_cmd, cmd);
+    env = GetEnvironmentStringsW();
+    if (env != NULL) {
+        /* room for the variable and the final NUL: startup_retry_block_finish */
+        used = startup_retry_block_copy(env, relaunch_env,
+                                        sizeof relaunch_env / sizeof relaunch_env[0] - 64);
+        FreeEnvironmentStringsW(env);
+    }
+    if (used < 0) {
+        return;
+    }
+    relaunch_env_used = (size_t)used;
+    relaunch_ready = 1;
+}
+
+/* 0 when the new process was created */
+static int relaunch_now(const char *value)
+{
+    STARTUPINFOW si;
+    PROCESS_INFORMATION pi;
+    if (!relaunch_ready ||
+        startup_retry_block_finish(relaunch_env, relaunch_env_used,
+                                   sizeof relaunch_env / sizeof relaunch_env[0], value) != 0) {
+        return -1;
+    }
+    memset(&si, 0, sizeof si);
+    si.cb = sizeof si;
+    memset(&pi, 0, sizeof pi);
+    /* no handles inherited; the current folder stays the same (NULL) */
+    if (!CreateProcessW(relaunch_exe, relaunch_cmd, NULL, NULL, FALSE, CREATE_UNICODE_ENVIRONMENT,
+                        relaunch_env, NULL, &si, &pi)) {
+        return -1;
+    }
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return 0;
+}
+
+#elif !defined(__ANDROID__) && !defined(ICO_IOS)
+
+extern char **environ;
+
+/* the executable's path, main's argv (kept for the process's life) and the
+   environment's pointers with relaunch_var as the last */
+static char relaunch_exe[4096];
+static char **relaunch_argv;
+static const char *relaunch_envp[1024];
+static char relaunch_var[96];
+
+void ico_diag_prepare_relaunch(int argc, char **argv)
+{
+    relaunch_ready = 0;
+    if (argc < 1 || argv == NULL || argv[0] == NULL) {
+        return;
+    }
+#ifdef __APPLE__
+    {
+        uint32_t size = (uint32_t)sizeof relaunch_exe;
+        if (_NSGetExecutablePath(relaunch_exe, &size) != 0) {
+            return;
+        }
+    }
+#else
+    {
+        const ssize_t n = readlink("/proc/self/exe", relaunch_exe, sizeof relaunch_exe - 1);
+        if (n <= 0 || (size_t)n >= sizeof relaunch_exe - 1) {
+            return;
+        }
+        relaunch_exe[n] = '\0';
+    }
+#endif
+    relaunch_argv = argv;
+    relaunch_var[0] = '\0';
+    if (startup_retry_envp(environ, relaunch_var, relaunch_envp,
+                           sizeof relaunch_envp / sizeof relaunch_envp[0]) < 0) {
+        return;
+    }
+    relaunch_ready = 1;
+}
+
+/* Replaces this process with the program again (the same process id, so
+   whatever started the game keeps waiting on it). Only async-signal-safe
+   calls. Returns only when execve failed. */
+static int relaunch_now(const char *value)
+{
+    static const char name[] = STARTUP_RETRY_ENV "=";
+    size_t i = 0, j;
+    sigset_t none;
+    int fd;
+    if (!relaunch_ready) {
+        return -1;
+    }
+    for (j = 0; name[j] != '\0'; j++) {
+        relaunch_var[i++] = name[j];
+    }
+    for (j = 0; value[j] != '\0' && i + 1 < sizeof relaunch_var; j++) {
+        relaunch_var[i++] = value[j];
+    }
+    relaunch_var[i] = '\0';
+    /* the descriptors this run opened (the GPU's, the audio device's) are
+       not handed on; the log's stay open should execve fail */
+    for (fd = 3; fd < 1024; fd++) {
+        const int fl = fcntl(fd, F_GETFD);
+        if (fl >= 0) {
+            fcntl(fd, F_SETFD, fl | FD_CLOEXEC);
+        }
+    }
+    /* the crash's signal is blocked inside its handler, and the mask is
+       inherited across execve */
+    sigemptyset(&none);
+    pthread_sigmask(SIG_SETMASK, &none, NULL);
+    execve(relaunch_exe, relaunch_argv, (char *const *)relaunch_envp);
+    return -1;
+}
+
+#else
+
+/* Android and iOS: the system owns the app's process; no relaunch */
+void ico_diag_prepare_relaunch(int argc, char **argv)
+{
+    (void)argc;
+    (void)argv;
+}
+
+#ifndef __ANDROID__ /* iOS's finish asks; Android's has its own end */
+static int relaunch_now(const char *value)
+{
+    (void)value;
+    return -1;
+}
+#endif
+
+#endif
+
+/* The crash box's words after a driver crash with nothing left to try */
+static const char driver_box_text[] =
+    "The graphics driver crashed while preparing the game's shaders, and the game could not "
+    "work around it. Updating the graphics driver usually fixes this.";
+
+/* A crash while the note says a pipeline was being built: the step the
+   next run takes (startup_retry.h), logged; relaunch_value set when there
+   is one and this platform can start the game again. The cache step
+   deletes the pipeline cache file here. */
+static void driver_crash_plan(void)
+{
+    char reason[200];
+    const StartupRetry next =
+        startup_retry_next((StartupRetry)retry_step, retry_cache_loaded != 0, retry_have_d3d12 != 0,
+                           retry_explicit != 0, retry_backend, reason, sizeof reason);
+    relaunch_value[0] = '\0';
+    if (next == STARTUP_RETRY_NONE) {
+        flog("ico_pc: the graphics driver crashed while preparing the shaders: %s", reason);
+        return;
+    }
+    if (!relaunch_ready) {
+        flog("ico_pc: the graphics driver crashed while preparing the shaders; the game cannot "
+             "start itself again here (%s)",
+             reason);
+        return;
+    }
+    if (startup_retry_value(next, retry_backend, relaunch_value, sizeof relaunch_value) != 0) {
+        relaunch_value[0] = '\0';
+        return;
+    }
+    if (next == STARTUP_RETRY_CACHE) {
+#ifdef _WIN32
+        const int gone = retry_cache_wpath[0] != L'\0' && DeleteFileW(retry_cache_wpath);
+#else
+        const int gone = unlink(retry_cache_path) == 0;
+#endif
+        flog("ico_pc: %s the pipeline cache file %s", gone ? "deleted" : "could not delete",
+             retry_cache_path);
+    }
+    flog("ico_pc: the graphics driver crashed while preparing the shaders; the game starts "
+         "again with %s=%s: %s",
+         STARTUP_RETRY_ENV, relaunch_value, reason);
+}
+
 /* --- The fatal end ------------------------------------------------------------------- */
 
 static void finish(const char *reason, const char *box_text, int code)
@@ -1027,6 +1309,19 @@ static void finish(const char *reason, const char *box_text, int code)
         exit_hook(reason);
     }
 #ifdef _WIN32
+    if (relaunch_value[0] != '\0') {
+        if (log_h != INVALID_HANDLE_VALUE) {
+            FlushFileBuffers(log_h);
+        }
+        if (relaunch_now(relaunch_value) == 0) {
+            flog("ico_pc: started the game again");
+            if (log_h != INVALID_HANDLE_VALUE) {
+                FlushFileBuffers(log_h);
+            }
+            TerminateProcess(GetCurrentProcess(), (UINT)code);
+        }
+        flog("ico_pc: could not start the game again (error %lu)", (unsigned long)GetLastError());
+    }
     {
         char box[1536];
         snprintf(box, sizeof box,
@@ -1051,6 +1346,10 @@ static void finish(const char *reason, const char *box_text, int code)
     }
 #else
     (void)box_text;
+    if (relaunch_value[0] != '\0') {
+        relaunch_now(relaunch_value); /* returns only when it failed */
+        flog("ico_pc: could not start the game again");
+    }
 #endif
     _exit(code);
 #endif
@@ -1066,6 +1365,9 @@ static void report_crash_block(void)
     describe(crash.pc, where, sizeof where);
     flog("ico_pc: ======================================================================");
     flog("ico_pc: CRASH: %s (0x%lx) at %s", crash.what, crash.code, where);
+    if (activity[0] != '\0') {
+        flog("ico_pc: while: %s", activity);
+    }
     if (crash.fault_kind >= 0) {
         flog("ico_pc: the faulting access: %s address 0x%llx",
              crash.fault_kind == 1   ? "writing"
@@ -1103,8 +1405,16 @@ static void report_crash(void)
     char box[256];
 
     report_crash_block();
-    /* the player's box says what to do; what and where are in the log */
-    snprintf(box, sizeof box, "ICO PC hit an error and had to close.");
+    /* the player's box says what to do; what and where are in the log.
+       A driver crash while building a pipeline starts the game again
+       (finish) and shows the box only when nothing is left to try or the
+       new process could not be started. */
+    if (driver_note()) {
+        driver_crash_plan();
+        snprintf(box, sizeof box, "%s", driver_box_text);
+    } else {
+        snprintf(box, sizeof box, "ICO PC hit an error and had to close.");
+    }
     finish(crash.what, box, EXIT_CRASH);
 }
 
@@ -1302,6 +1612,9 @@ static void watchdog_fire(const char *reason)
         }
     } else {
         flog("ico_pc: could not sample the main thread");
+    }
+    if (activity[0] != '\0') {
+        flog("ico_pc: while: %s", activity);
     }
     if (failure[0] != '\0') {
         flog("ico_pc: last failure message: %s", failure);
@@ -1746,7 +2059,12 @@ ICO_ENTRY static void crash_handler(int sig, siginfo_t *si, void *ucv)
         /* a box instead of the game just going (the system shows
            nothing), from the watchdog thread; this thread waits for it */
         static char box[1536];
-        fatal_text(box, sizeof box, "ICO ran into a problem and has to close.");
+        if (driver_note()) {
+            driver_crash_plan(); /* logged; no relaunch on Android */
+            fatal_text(box, sizeof box, driver_box_text);
+        } else {
+            fatal_text(box, sizeof box, "ICO ran into a problem and has to close.");
+        }
         fatal_ui_box(box);
     }
     flog("ico_pc: the system's crash report (tombstone) follows");

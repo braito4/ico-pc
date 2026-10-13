@@ -59,6 +59,17 @@ if(ICO_RUN_TESTS)
     add_test(NAME rhi_d3d12_plan COMMAND rhi_d3d12_plan_test)
 endif()
 
+# --- The driver version text (CPU only, every target) -----------------------
+# rhi_driver_version.c: a Vulkan driverVersion as the vendor writes it (the
+# adapter line of vk_device.c).
+add_executable(rhi_driver_version_test test/rhi_driver_version_test.c rhi_driver_version.c)
+target_include_directories(rhi_driver_version_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_options(rhi_driver_version_test PRIVATE ${ICO_SEMANTIC_OPTIONS}
+                       ${ICO_PORT_WARNINGS})
+if(ICO_RUN_TESTS)
+    add_test(NAME rhi_driver_version COMMAND rhi_driver_version_test)
+endif()
+
 # --- SDL3 ---------------------------------------------------------------------
 # One prefix per target: the source builds for Linux x86-64 and arm64, SDL's
 # mingw development release for the two Windows targets, the NDK build for
@@ -152,8 +163,8 @@ endif()
 
 # --- ico_rhi_vulkan -------------------------------------------------------------
 if(_ico_have_vk)
-    set(_ico_vk_sources vk/vk_cmd.c vk/vk_device.c vk/vk_pipeline.c vk/vk_present_mode.c
-                        vk/vk_resource.c vk/vk_swapchain.c)
+    set(_ico_vk_sources rhi_driver_version.c vk/vk_cmd.c vk/vk_device.c vk/vk_pipeline.c
+                        vk/vk_present_mode.c vk/vk_resource.c vk/vk_swapchain.c)
     if(ANDROID)
         # the window's surface through the loader in use (a
         # driver the program loaded, or the system's)

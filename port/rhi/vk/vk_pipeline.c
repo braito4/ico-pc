@@ -59,9 +59,18 @@ static void *vkr_cache_load(size_t *size)
     return blob;
 }
 
+/* rhi_pipeline_cache_loaded: the cache was created from the file's blob */
+static bool s_cacheLoaded;
+
+bool rhi_pipeline_cache_loaded(void)
+{
+    return s_cacheLoaded;
+}
+
 void vkr_pipeline_cache_init(void)
 {
     size_t size = 0;
+    s_cacheLoaded = false;
     void *blob = vkr_cache_load(&size);
     VkPipelineCacheCreateInfo ci = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO,
@@ -79,6 +88,7 @@ void vkr_pipeline_cache_init(void)
             }
         }
     } else if (blob) {
+        s_cacheLoaded = true;
         VKR_LOG("pipeline cache: %zu bytes from %s", size, s_cachePath);
     }
     free(blob);

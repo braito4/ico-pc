@@ -99,6 +99,7 @@
 #include "fpenv.h"
 #include "host_config.h"
 #include "host_fs.h"
+#include "startup_retry.h"
 #include "host_loop.h"
 #include "ico_build_commit.h" /* ICO_BUILD_COMMIT, generated (port/platform/CMakeLists.txt) */
 #include "ico_version.h" /* ICO_VERSION_LABEL, generated (CMakeLists.txt; "" in a development build) */
@@ -1583,16 +1584,23 @@ static int host_main(int argc, char **argv)
                              0);
         a.console = 0;
     }
+    /* a run the crash handler started again after a graphics driver crash
+       (startup_retry.h) writes on after the crashed run's lines */
+    const int restarted = getenv(STARTUP_RETRY_ENV) != NULL;
     if (a.console) {
         log_path[0] = '\0';
     } else if (log_path[0] == '\0' || !logs_ready ||
-               (keep_previous_log(logs_dir, log_path), ico_host_redirect_output(log_path) != 0)) {
+               (restarted ? ico_host_redirect_output_keep(log_path) != 0
+                          : (keep_previous_log(logs_dir, log_path),
+                             ico_host_redirect_output(log_path) != 0))) {
         fprintf(stderr, "ico_pc: cannot write %s; logging to the console\n", log_path);
         log_path[0] = '\0';
     }
     /* crash handlers and the unbuffered diagnostics writer, first thing;
        no log file when none was opened */
     ico_diag_init(log_file());
+    /* what starting the program again needs, ready before any crash */
+    ico_diag_prepare_relaunch(argc, argv);
 #ifdef __ANDROID__
     /* A crash or the watchdog ends the run with a box and the C
        library's last words in the log, not by the game just going */

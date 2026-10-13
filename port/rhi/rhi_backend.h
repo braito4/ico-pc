@@ -91,6 +91,7 @@
     X(present_timing_next)                                                                         \
     X(present_statistics)                                                                          \
     X(set_pipeline_cache_path)                                                                     \
+    X(pipeline_cache_loaded)                                                                       \
     X(set_vulkan_loader)                                                                           \
     X(injector_name)                                                                               \
     X(overlay_name)

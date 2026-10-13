@@ -121,6 +121,38 @@ void ico_diag_milestone(const char *fmt, ...) ICO_DIAG_PRINTF(1, 2);
    crash report that follows it. */
 void ico_diag_set_failure(const char *fmt, ...) ICO_DIAG_PRINTF(1, 2);
 
+/* What the host is doing in a step where a crash would be someone
+   else's (the graphics driver building a pipeline, rd_pipeline.c): one
+   line, printed by the crash and watchdog reports as "ico_pc: while:
+   <note>" after the CRASH or WATCHDOG line. Set before the step, cleared
+   after it; a static buffer of 160 bytes, no allocation. One writer
+   thread. A crash while the note starts with "creating pipeline" or
+   "creating the start-up pipelines" is a graphics driver crash while
+   preparing the shaders: the handler starts the game again with the next
+   step of startup_retry.h when there is one (ico_diag_prepare_relaunch),
+   else shows a box saying that the driver crashed. */
+void ico_diag_set_activity(const char *fmt, ...) ICO_DIAG_PRINTF(1, 2);
+void ico_diag_clear_activity(void);
+/* The note ("" when none; tests). */
+const char *ico_diag_activity(void);
+/* The relaunch's inputs: the step this run is at (StartupRetry, 0 for the
+   first run), whether the build has the D3D12 backend, whether the player
+   named the backend, and the backend in use; the window sets them before
+   the renderer starts. */
+void ico_diag_set_startup_retry(int step, int have_d3d12, int backend_explicit,
+                                const char *backend);
+/* loaded: the renderer created its pipeline cache from the file at path
+   (rhi_pipeline_cache_loaded), which the cache step deletes; path NULL
+   keeps the path given before. */
+void ico_diag_set_pipeline_cache(int loaded, const char *path);
+/* Captures what starting the program again needs (Windows: the module
+   path, GetCommandLineW and the environment block; Linux and macOS: the
+   executable's path, argv and the environment's pointers), so the crash
+   path does not allocate. Call once after ico_diag_init with main's argc
+   and argv (kept: they must live as long as the process). Android and iOS:
+   nothing (no relaunch). */
+void ico_diag_prepare_relaunch(int argc, char **argv);
+
 /* Names a thread function for the thread lines; game threads are named by
    the function iosThreadCreate runs (ico_host_thread_func). */
 void ico_diag_name_func(void *func, const char *name);

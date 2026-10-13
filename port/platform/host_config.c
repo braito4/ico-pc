@@ -843,9 +843,21 @@ static int console_fd = -1; /* the original stderr, kept for fatal errors */
 
 #endif
 
+static int redirect_output(const char *log_path, int keep);
+
 int ico_host_redirect_output(const char *log_path)
 {
-    FILE *probe = ico_fopen(log_path, "w");
+    return redirect_output(log_path, 0);
+}
+
+int ico_host_redirect_output_keep(const char *log_path)
+{
+    return redirect_output(log_path, 1);
+}
+
+static int redirect_output(const char *log_path, int keep)
+{
+    FILE *probe = ico_fopen(log_path, keep ? "a" : "w");
 
     if (probe == NULL) {
         return -1;
@@ -864,7 +876,7 @@ int ico_host_redirect_output(const char *log_path)
         return 0;
     }
 #endif
-    /* the probe emptied the file; both streams append, so neither overwrites
+    /* the probe emptied the file (unless keep); both streams append, so neither overwrites
        the other's lines (unbuffered on POSIX, so they interleave in order;
        on Windows each is flushed whole, below) */
 #ifdef _WIN32
