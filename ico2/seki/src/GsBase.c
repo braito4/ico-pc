@@ -1003,17 +1003,22 @@ static void gsb_SetGsDefault(void)
 #ifdef ICO_RD
 
 /* port/game/photo_mode.c: 1 while photo mode is open, and the Film effect
-   it shows, 0 (off) .. 4 */
+   it shows, 0 (off) .. 4, or 5 (photo_mode.h ICO_PHOTO_FILM_DEJA, Deja vu);
+   ico_photo_deja: open with Deja vu */
 extern int ico_photo_active(void);
 extern int ico_photo_film(void);
+extern int ico_photo_deja(void);
+/* port/game/photo_view.c: the deja vision's veil over the photo */
+extern void ico_photo_view_veil(void);
 
 /* PC port: the Film effect in force, 0 for none: in photo mode the one
-   photo mode chose, whether or not the game is cleared and whatever the
-   Options row says; else the game's (cleared, and the row's mode) */
+   photo mode chose (its Deja vu has no grain: the veil is
+   ico_photo_view_veil's), whether or not the game is cleared and whatever
+   the Options row says; else the game's (cleared, and the row's mode) */
 static int gsb_filmMode(void)
 {
     if (ico_photo_active()) {
-        return ico_photo_film();
+        return ico_photo_deja() ? 0 : ico_photo_film();
     }
     return gFlagGameClear > 0 ? optionScreenMode : 0;
 }
@@ -1112,6 +1117,15 @@ static int gsb_PostEffect(void)
         shadow_Draw();
     }
     fog_DrawFog();
+#ifdef ICO_RD
+    /* PC port: photo mode's Deja vu, the deja vision's two veil layers
+       drawn here into list 5 (after the fog, before the motion blur and the
+       aura and softening passes, as stage 40 draws them); nothing
+       otherwise */
+    if (ico_photo_deja()) {
+        ico_photo_view_veil();
+    }
+#endif
     MotionBlur();
     gsb_antiAlias();
 #ifdef ICO_RD

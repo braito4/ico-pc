@@ -42,6 +42,12 @@
  *            quadrant sheet, and the sheet drawn at 4:3 (the same picture
  *            with and without them) and 16:9 (the sides covered), below
  *            ("the content table's sheets")
+ *   photo veil  photo mode's Deja vu (port/game/photo_view.c): the deja
+ *            veil's four quadrant sheets, as the stage's packets hold them,
+ *            at the two layers' places on the widest frame (60:9, 2560
+ *            GS pixels across): with rd_content_extend.c's tiles every
+ *            pixel of the frame is drawn, without them the sides are not,
+ *            below ("the photo veil")
  *   natural chains  rd_content_chain.c's table and a let-down chain laid
  *            out as BgAnimation.c lays it out with the option on: the links
  *            at their size along the chain, the far end where the keyed
@@ -1155,27 +1161,33 @@ static const float kVeilQuadrant[16][4] = {
     {-128.0f, -112.0f, 3.5f, 0.5f},
 };
 
-/* the quadrant's packet (GIF tag, then 16 prelit vertices: position z 0
+/* a quadrant's packet (GIF tag, then 16 prelit vertices: position z 0
    w 1, ST with the strip flag, colour 255 255 255 127; red: the colour's
    red) */
-static void veilPacket(float qw[1 + 16 * 3][4], float red)
+static void veilPacketOf(float qw[1 + 16 * 3][4], const float (*quad)[4], float red)
 {
     memset(qw, 0, sizeof(float) * 4 * (1 + 16 * 3));
     const uint32_t tag = 0x8000u | 16u; /* NLOOP 16, EOP */
     memcpy(&qw[0][0], &tag, 4);
     for (int v = 0; v < 16; v++) {
         float *p = qw[1 + v * 3], *st = qw[2 + v * 3], *c = qw[3 + v * 3];
-        p[0] = kVeilQuadrant[v][0];
-        p[1] = kVeilQuadrant[v][1];
+        p[0] = quad[v][0];
+        p[1] = quad[v][1];
         p[3] = 1.0f;
-        st[0] = kVeilQuadrant[v][2];
-        st[1] = kVeilQuadrant[v][3];
+        st[0] = quad[v][2];
+        st[1] = quad[v][3];
         st[2] = 1.0f;
         st[3] = v % 4 == 0 ? 0.0f : 1.0f;
         c[0] = red;
         c[1] = c[2] = 255.0f;
         c[3] = 127.0f;
     }
+}
+
+/* the upper left quadrant's packet */
+static void veilPacket(float qw[1 + 16 * 3][4], float red)
+{
+    veilPacketOf(qw, kVeilQuadrant, red);
 }
 
 static RdMesh veilMesh(float red)
@@ -1519,6 +1531,175 @@ static void sheetPixels(int wide)
     }
     rd_destroy_vu_mesh(plain);
     rd_destroy_vu_mesh(tiled);
+}
+
+/* ---------------------------------------------------- the photo veil */
+/* Photo mode's Deja vu (port/game/photo_view.c ico_photo_view_veil) draws
+ * the stage's sandstorm object at deja_lightning.bga's two layers: its four
+ * quadrant sheets (the meshes rd_content_extend.c lists), each layer held in
+ * the camera's space at one depth.  The dump of stage 40 (v2227) puts the
+ * first layer's model x -+256 at GS X 2048 -+ 702.3 and y -+224 at
+ * Y 2048 -+ 716.9, the second's at 2048 -+ 690.0 and -+ 704.3.  Here the
+ * four sheets, made from their packets as the stage holds them (rd_replay_tool
+ * --mesh sandstorm), are drawn untextured at those places on the widest
+ * frame, 60:9 (2560 GS pixels across, X 768..3327) and 512 lines:
+ *   with the table's tiles every pixel of the frame is drawn, by each layer;
+ *   with the table off the columns beside the sheets (GS X below 1345 and
+ *     above 2750, 577 of them each side) are the clear's grey */
+static const float kVeilLowerLeft[16][4] = {
+    {-256.0f, 224.0f, -3.53157902f, 4.5f}, {-128.0f, 224.0f, 3.5f, 4.5f},
+    {-256.0f, 112.0f, -3.53157902f, 0.5f}, {-128.0f, 112.0f, 3.5f, 0.5f},
+    {-256.0f, 0.0f, -3.53157902f, -2.5f},  {-256.0f, 112.0f, -3.53157902f, 1.5f},
+    {-128.0f, 0.0f, 3.5f, -2.5f},          {-128.0f, 112.0f, 3.5f, 1.5f},
+    {0.0f, 0.0f, 3.53157902f, -2.5f},      {-128.0f, 0.0f, -3.5f, -2.5f},
+    {0.0f, 112.0f, 3.53157902f, 1.5f},     {-128.0f, 112.0f, -3.5f, 1.5f},
+    {0.0f, 224.0f, 3.53157902f, 4.5f},     {0.0f, 112.0f, 3.53157902f, 0.5f},
+    {-128.0f, 224.0f, -3.5f, 4.5f},        {-128.0f, 112.0f, -3.5f, 0.5f},
+};
+static const float kVeilLowerRight[16][4] = {
+    {256.0f, 224.0f, 3.53157902f, 4.5f}, {256.0f, 112.0f, 3.53157902f, 0.5f},
+    {128.0f, 224.0f, -3.5f, 4.5f},       {128.0f, 112.0f, -3.5f, 0.5f},
+    {0.0f, 224.0f, -3.53157902f, 4.5f},  {128.0f, 224.0f, 3.5f, 4.5f},
+    {0.0f, 112.0f, -3.53157902f, 0.5f},  {128.0f, 112.0f, 3.5f, 0.5f},
+    {0.0f, 0.0f, -3.53157902f, -2.5f},   {0.0f, 112.0f, -3.53157902f, 1.5f},
+    {128.0f, 0.0f, 3.5f, -2.5f},         {128.0f, 112.0f, 3.5f, 1.5f},
+    {256.0f, 0.0f, 3.53157902f, -2.5f},  {128.0f, 0.0f, -3.5f, -2.5f},
+    {256.0f, 112.0f, 3.53157902f, 1.5f}, {128.0f, 112.0f, -3.5f, 1.5f},
+};
+static const float kVeilUpperRight[16][4] = {
+    {256.0f, -224.0f, 3.53157902f, -2.5f}, {128.0f, -224.0f, -3.5f, -2.5f},
+    {256.0f, -112.0f, 3.53157902f, 1.5f},  {128.0f, -112.0f, -3.5f, 1.5f},
+    {256.0f, 0.0f, 3.53157902f, 4.5f},     {256.0f, -112.0f, 3.53157902f, 0.5f},
+    {128.0f, 0.0f, -3.5f, 4.5f},           {128.0f, -112.0f, -3.5f, 0.5f},
+    {0.0f, 0.0f, -3.53157902f, 4.5f},      {128.0f, 0.0f, 3.5f, 4.5f},
+    {0.0f, -112.0f, -3.53157902f, 0.5f},   {128.0f, -112.0f, 3.5f, 0.5f},
+    {0.0f, -224.0f, -3.53157902f, -2.5f},  {0.0f, -112.0f, -3.53157902f, 1.5f},
+    {128.0f, -224.0f, 3.5f, -2.5f},        {128.0f, -112.0f, 3.5f, 1.5f},
+};
+
+#define VEIL_W 2560 /* the 60:9 frame's GS width at 1x */
+
+static const char kVeilKey;
+
+static uint8_t s_veilImg[VEIL_W * 512 * 4];
+
+/* the four quadrants (made with the table as it is set) drawn at a layer's
+   GS scale, into SCENE cleared grey; the pixels drawn, -1 on no read */
+static int veilLayerDrawn(float kx, float ky, int *sideX0, int *sideX1)
+{
+    static const uint8_t grey[4] = {40, 40, 60, 0x80};
+    const float (*quads[4])[4] = {kVeilQuadrant, kVeilLowerLeft, kVeilLowerRight, kVeilUpperRight};
+    RdMesh m[4];
+    static float qw[1 + 16 * 3][4];
+    int tiled = 0;
+    for (int q = 0; q < 4; q++) {
+        veilPacketOf(qw, quads[q], 255.0f);
+        const RdVuBatchDesc bd = {0, 0, 0};
+        RdVuMeshDesc md;
+        memset(&md, 0, sizeof(md));
+        md.qw = (const float (*)[4])qw;
+        md.qwCount = 1 + 16 * 3;
+        md.qwPerVertex = RD_VU_QW_PRELIT;
+        md.batchCount = 1;
+        md.batches = &bd;
+        md.materialCount = 1;
+        md.debugName = "sandstorm";
+        m[q] = rd_create_vu_mesh(&md);
+        const RdMeshRec *r = rd__mesh_rec(m[q].id);
+        tiled += r && r->tiledFrom == 16;
+    }
+    dl_Clear();
+    dl_SetDLPriority(5);
+    rd_set_target(rd_target(RD_TARGET_SCENE), rd_target(RD_TARGET_SCENE), VEIL_W, 512, 1);
+    rd_clear_target(rd_target(RD_TARGET_SCENE), grey, 1, 0);
+    rd_test_gs(RD_TEST_Z_GEQUAL);
+    rd_z_write(1);
+    rd_blend(RD_BLEND_LERP_AS, 0x80, 0);
+    rd_abe(0);
+    rd_pabe(0);
+    rd_fba(0);
+    rd_gouraud(1);
+    rd_texture_off();
+    for (int q = 0; q < 4; q++) {
+        RdVuDraw d;
+        memset(&d, 0, sizeof(d));
+        d.prog = RD_PROG_PRELIT;
+        d.code = 32;
+        d.clip = RD_VU_CLIP_REGION;
+        d.vu.mem[16][0] = kx;
+        d.vu.mem[17][1] = ky;
+        d.vu.mem[19][0] = 2048.0f;
+        d.vu.mem[19][1] = 2048.0f;
+        d.vu.mem[19][2] = 1000.0f;
+        d.vu.mem[19][3] = 1.0f;
+        rd_draw_vu_mesh(m[q], &d, RD_KEY(&kVeilKey, 0, q));
+    }
+    dl_Swap();
+    for (int q = 0; q < 4; q++) {
+        rd_destroy_vu_mesh(m[q]);
+    }
+    uint32_t w = 0, h = 0;
+    if (!rd__read_target(rd_target(RD_TARGET_SCENE), s_veilImg, sizeof(s_veilImg), &w, &h) ||
+        w != VEIL_W || h != 512) {
+        return -1;
+    }
+    int drawn = 0;
+    *sideX0 = (int)w;
+    *sideX1 = -1;
+    for (int y = 0; y < 512; y++) {
+        for (int x = 0; x < (int)w; x++) {
+            const uint8_t *p = &s_veilImg[((size_t)y * w + (size_t)x) * 4];
+            if (p[0] != 40 || p[1] != 40 || p[2] != 60) {
+                drawn++;
+            } else {
+                *sideX0 = x < *sideX0 ? x : *sideX0;
+                *sideX1 = x > *sideX1 ? x : *sideX1;
+            }
+        }
+    }
+    return tiled == 4 ? drawn : -2 - tiled;
+}
+
+static void photoVeilPixels(void)
+{
+    /* the two layers' GS scales: the dump's extents over the model's
+       256 x 224 half sheet */
+    static const float k[2][2] = {{702.3f / 256.0f, 716.9f / 224.0f},
+                                  {690.0f / 256.0f, 704.3f / 224.0f}};
+    CHECK(g_rd.gsW == VEIL_W, "photo veil: the frame is %u wide", g_rd.gsW);
+    for (int layer = 0; layer < 2; layer++) {
+        int x0 = 0, x1 = 0;
+        CHECK(rd__content_extend_set(NULL), "photo veil: the table");
+        const int all = veilLayerDrawn(k[layer][0], k[layer][1], &x0, &x1);
+        CHECK(all == VEIL_W * 512,
+              "photo veil, layer %d at 60:9: every pixel drawn with the tiles (%d of %d; "
+              "grey columns %d..%d)",
+              layer + 1, all, VEIL_W * 512, x0, x1);
+        CHECK(rd__content_extend_set("off"), "photo veil: off");
+        const int bare = veilLayerDrawn(k[layer][0], k[layer][1], &x0, &x1);
+        /* untiled the sheets reach GS X 2048 -+ 702 (690): the frame's
+           columns 0 .. 576 (588) are grey */
+        const int side = 1280 - (int)(256.0f * k[layer][0]) - 2;
+        CHECK(bare == -2 && x0 == 0 && x1 == VEIL_W - 1,
+              "photo veil, layer %d at 60:9 without the tiles: the sides grey (%d, columns "
+              "%d..%d)",
+              layer + 1, bare, x0, x1);
+        int sideGrey = 1;
+        for (int y = 0; y < 512; y++) {
+            for (int x = 0; x < side; x++) {
+                const uint8_t *a = &s_veilImg[((size_t)y * VEIL_W + (size_t)x) * 4];
+                const uint8_t *b = &s_veilImg[((size_t)y * VEIL_W + (size_t)(VEIL_W - 1 - x)) * 4];
+                sideGrey &= a[0] == 40 && a[1] == 40 && a[2] == 60 && b[0] == 40 && b[1] == 40 &&
+                            b[2] == 60;
+            }
+        }
+        CHECK(sideGrey, "photo veil, layer %d without the tiles: the %d columns each side grey",
+              layer + 1, side);
+        printf("  photo veil, layer %d at 60:9: %d of %d pixels drawn with the tiles, the %d "
+               "columns each side bare without\n",
+               layer + 1, all, VEIL_W * 512, side);
+    }
+    rd__content_extend_set(NULL);
 }
 
 /* -------------------------------------------------------- strip order */
@@ -3014,7 +3195,7 @@ static void recordingChecks(void)
 static const IcoShardCase k_cases[] = {
     {"recording", 1},        {"strip_disc", 1},  {"box_disc_0", 14},      {"box_disc_1", 14},
     {"box_disc_2", 15},      {"box_disc_3", 15}, {"gpu_prims", 1},        {"stretch_same", 1},
-    {"closing_original", 1}, {"chain", 1},       {"stretch_enhanced", 1},
+    {"closing_original", 1}, {"chain", 1},       {"stretch_enhanced", 1}, {"photo_veil", 1},
 };
 
 int main(int argc, char **argv)
@@ -3139,6 +3320,24 @@ int main(int argc, char **argv)
         closingPixels(1);
         sheetPixels(1);
         CHECK(rhi_vk_validation_error_count() == 0, "16:9: %u validation errors",
+              rhi_vk_validation_error_count());
+        rd_shutdown();
+    }
+    /* photo mode's Deja vu veil on the widest frame, 60:9 (2560 wide) */
+    st.preset = RD_PRESET_ENHANCED;
+    st.aspect = 60.0f / 9.0f;
+    st.sceneScale = 1.0f;
+    s_sceneW = VEIL_W;
+    if (!ico_shard_take("photo_veil")) {
+        /* another shard's */
+    } else if (!rd_init(VEIL_W, 512, &st, NULL)) {
+        CHECK(0, "rd_init at 60:9");
+    } else {
+        gif_HostForgetTextures();
+        gif_HostFrameReset();
+        setup();
+        photoVeilPixels();
+        CHECK(rhi_vk_validation_error_count() == 0, "60:9: %u validation errors",
               rhi_vk_validation_error_count());
         rd_shutdown();
     }

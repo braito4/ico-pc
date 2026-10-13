@@ -252,7 +252,7 @@ puts back only what differs from the defaults or is already in the file
 | `stick_speed` | float | `1.0` | every rate of the photo camera times this |
 | `invert_y` | bool | `false` | the looking stick's up and down swapped |
 | `hide_ui` | bool | `false` | the help panel hidden at enter; Square saves it |
-| `film_effect` | int | `0` | the Film effect photo mode shows, 0 (off) to 4; Right cycles and saves it |
+| `film_effect` | int | `0` | the Film effect photo mode shows, 0 (off) to 4, or 5 (Deja vu, `ICO_PHOTO_FILM_DEJA`); Right cycles and saves it |
 | `png_dir` | string | `"screenshots"` | the captures' folder, inside the user folder |
 
 (`port/game/photo_mode.h`, header comment.)

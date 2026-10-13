@@ -27,6 +27,7 @@
  * (settings_render).
  */
 #include "settings_fixture.h"
+#include "popup.h"
 
 static void testBuild(void)
 {
@@ -867,6 +868,32 @@ static void testPhoto(void)
     press(0x80);
     CHECK(!ico_photo_hud() && ico_photo_active(), "Square: the HUD hidden");
     CHECK(ico_config_get_bool("photo.hide_ui", 0) == 1, "Square: hide_ui saved");
+    /* Right: the Film effect, off, 1 .. 4, Deja vu, its popup saying which
+       (photo_ui.c ui__photo_film_word) */
+    ui_popup_reset();
+    for (int i = 0; i < ICO_PHOTO_FILM_DEJA; i++) {
+        press(0x2000);
+    }
+    CHECK(ico_photo_film() == ICO_PHOTO_FILM_DEJA && ico_photo_deja(),
+          "Right five times: Deja vu (%d)", ico_photo_film());
+    CHECK(strcmp(ui_popup_title(), ui_str(UI_STR_OPT_FILM_EFFECT)) == 0,
+          "Right: the Film effect popup (\"%s\")", ui_popup_title());
+    {
+        char val[16];
+        CHECK(strcmp(ui__photo_film_word(ICO_PHOTO_FILM_DEJA, val, sizeof(val)), "Deja vu") == 0 &&
+                  strcmp(ui__photo_film_word(3, val, sizeof(val)), "3") == 0 &&
+                  strcmp(ui__photo_film_word(0, val, sizeof(val)), ui_str(UI_STR_OFF)) == 0,
+              "the popup's words: Deja vu, 3, Off");
+        ui_set_language(UI_LANG_FR);
+        CHECK(strcmp(ui__photo_film_word(ICO_PHOTO_FILM_DEJA, val, sizeof(val)),
+                     "D\xc3\xa9j\xc3\xa0 vu") == 0,
+              "the popup's word in French: %s",
+              ui__photo_film_word(ICO_PHOTO_FILM_DEJA, val, sizeof(val)));
+        ui_set_language(UI_LANG_EN);
+    }
+    press(0x2000);
+    CHECK(ico_photo_film() == 0 && !ico_photo_deja(), "Right again: off (%d)", ico_photo_film());
+    ui_popup_reset();
     press(0x10);
     CHECK(settle(57, 60) && !ico_photo_active(), "Triangle: the pause menu again (%d)",
           current_layout_id);

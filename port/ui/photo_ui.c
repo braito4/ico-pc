@@ -48,6 +48,18 @@ static int s_layout = -1, s_row = -1;
 
 static int photoProc(int first, int item);
 
+const char *ui__photo_film_word(int mode, char *buf, size_t size)
+{
+    if (mode == ICO_PHOTO_FILM_DEJA) {
+        return ui_str(UI_STR_PHOTO_FILM_DEJA);
+    }
+    if (mode <= 0 || mode >= ICO_PHOTO_FILM_MODES) {
+        return ui_str(UI_STR_OFF);
+    }
+    snprintf(buf, size, "%d", mode);
+    return buf;
+}
+
 int ui_photo_build(void)
 {
     /* one row, masked: nothing drawn, no cursor (the layout's curItem -1),
@@ -133,12 +145,11 @@ static int photoProc(int first, int item)
     const int film = ico_photo_film();
     const int leave = ico_photo_update(&p);
     if (!leave && ico_photo_film() != film) {
-        /* Right cycled the Film effect: say which (the Options row's words) */
+        /* Right cycled the Film effect: say which */
         char val[16];
-        const int m = ico_photo_film();
-        snprintf(val, sizeof(val), "%d", m);
         ui_set_language(ui_lang_from_game(NonLinearCameraMove));
-        ui_popup_push(ui_str(UI_STR_OPT_FILM_EFFECT), m > 0 ? val : ui_str(UI_STR_OFF));
+        ui_popup_push(ui_str(UI_STR_OPT_FILM_EFFECT),
+                      ui__photo_film_word(ico_photo_film(), val, sizeof(val)));
     }
     if (leave) {
         ico_photo_exit();

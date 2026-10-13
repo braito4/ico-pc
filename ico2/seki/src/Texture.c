@@ -1605,8 +1605,10 @@ static void tex_scrollClut(void *dstClut, void *curClut, void *srcClut, int size
 
 #ifdef ICO_RD
 
-/* port/game/photo_mode.c: 1 while photo mode shows the paused game */
+/* port/game/photo_mode.c: 1 while photo mode shows the paused game, and
+   while it shows it with Deja vu (photo_mode.h ICO_PHOTO_FILM_DEJA) */
 extern int ico_photo_active(void);
+extern int ico_photo_deja(void);
 
 /* PC port: the one entry tex_textureAnimation advances (-1: all of them).
    Photo mode pauses the game (systemStatus[5]) and with it every texture
@@ -1820,8 +1822,14 @@ void tex_ResetVram(void)
     }
 #ifdef ICO_RD
     else if (ico_photo_active()) {
-        /* PC port: photo mode keeps the film grain moving */
+        /* PC port: photo mode keeps the film grain moving, and with Deja
+           vu the veil's (sandstorm.tm2's ICO block: its CLUT entries 0 to
+           15 cycled, no UV scroll) */
         texAnimOnly = tex_GetTextureNo("sandstorm_spr");
+        if (texAnimOnly >= 0) {
+            tex_textureAnimation();
+        }
+        texAnimOnly = ico_photo_deja() ? tex_GetTextureNo("sandstorm") : -1;
         if (texAnimOnly >= 0) {
             tex_textureAnimation();
         }

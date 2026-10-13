@@ -266,8 +266,8 @@ Two more rows are the game's own, and only show up in the pause menu's
 Options once you have finished the game:
 
 - **Film effect** is Off or 1 to 4, the game's own film look (a colour tint and grain) over the
-  picture. Photo mode has its own Film effect, which works without finishing the game (see
-  [Controls](CONTROLS.md#take-a-photo)).
+  picture. Photo mode has its own Film effect, which works without finishing the game and adds
+  one more look, Deja vu (see [Controls](CONTROLS.md#take-a-photo)).
 - **Players** is 1 or 2. With 2, a second controller controls Yorda.
 ## Language
 
@@ -435,7 +435,7 @@ Under `[photo]`, for photo mode:
 | `stick_speed = 1.0` | How fast the camera moves, turns, tilts and zooms. `0.5` is half as fast, `2.0` twice as fast. |
 | `invert_y = false` | `true` swaps up and down when you look around. |
 | `hide_ui = false` | `true` opens photo mode with its help panel hidden. Square in photo mode changes this for you. |
-| `film_effect = 0` | The Film effect photo mode opens with: `0` is off, `1` to `4` are the game's four looks. The D-pad Right button in photo mode changes this for you. |
+| `film_effect = 0` | The Film effect photo mode opens with: `0` is off, `1` to `4` are the game's four looks, `5` is Deja vu (the grainy veil of Ico's vision). The D-pad Right button in photo mode changes this for you. |
 | `png_dir = "screenshots"` | The folder your pictures go in, inside the folder with your saves. |
 
 Under `[video]`:

@@ -23,8 +23,9 @@
  *   reset     Select: the current camera (and the zoom) only
  *   panel     Square toggles the help panel and saves [photo] hide_ui; the
  *             next enter starts with it hidden, as hide_ui = true does
- *   film      Right cycles the Film effect off, 1 .. 4, off, saved as
- *             [photo] film_effect and read back at the next enter
+ *   film      Right cycles the Film effect off, 1 .. 4, Deja vu (5), off,
+ *             saved as [photo] film_effect and read back at the next enter;
+ *             ico_photo_deja is 1 only while photo mode is open with Deja vu
  *   keys      Cross asks one capture, Triangle, Circle and Start ask to
  *             leave; [photo] keys from a config
  *   name      the capture's file name
@@ -383,16 +384,21 @@ int main(int argc, char **argv)
     ico_photo_update(&p);
     CHECK(ico_photo_hud(), "Square: shown");
     ico_photo_exit();
-    /* the Film effect: Right cycles off, 1 .. 4, off; each choice saved */
+    /* the Film effect: Right cycles off, 1 .. 4, Deja vu, off; each choice
+       saved */
+    CHECK(ICO_PHOTO_FILM_MODES == 6 && ICO_PHOTO_FILM_DEJA == 5, "film: six modes, Deja vu last");
     ico_photo_enter();
-    CHECK(ico_photo_film() == 0, "film: off at enter by default (%d)", ico_photo_film());
+    CHECK(ico_photo_film() == 0 && !ico_photo_deja(), "film: off at enter by default (%d)",
+          ico_photo_film());
     p = pressed(ICO_PHOTO_RIGHT);
-    for (int want = 1; want <= 6; want++) {
+    for (int want = 1; want <= 7; want++) {
         ico_photo_update(&p);
-        const int mode = want % ICO_PHOTO_FILM_MODES;
+        const int mode = want % 6; /* 1, 2, 3, 4, 5, 0, 1 */
         CHECK(ico_photo_film() == mode && ico_config_get_int("photo.film_effect", -1) == mode,
               "film: Right %d gives %d, saved (%d, %lld)", want, mode, ico_photo_film(),
               ico_config_get_int("photo.film_effect", -1));
+        CHECK(ico_photo_deja() == (mode == ICO_PHOTO_FILM_DEJA), "film: Right %d: Deja vu %d", want,
+              ico_photo_deja());
     }
     p = idle();
     p.held = ICO_PHOTO_RIGHT; /* held, not pressed: nothing */
@@ -410,6 +416,20 @@ int main(int argc, char **argv)
     writeConfig(path, "version = 1\n[photo]\nfilm_effect = 3\n");
     ico_photo_enter();
     CHECK(ico_photo_film() == 3, "film: film_effect = 3 from the file (%d)", ico_photo_film());
+    ico_photo_exit();
+    /* Deja vu kept in the file: read back at the next enter, and off with
+       photo mode closed */
+    writeConfig(path, "version = 1\n[photo]\nfilm_effect = 5\n");
+    ico_photo_enter();
+    CHECK(ico_photo_film() == ICO_PHOTO_FILM_DEJA && ico_photo_deja(),
+          "film: film_effect = 5 from the file is Deja vu (%d)", ico_photo_film());
+    ico_photo_exit();
+    CHECK(ico_photo_film() == ICO_PHOTO_FILM_DEJA && !ico_photo_deja(),
+          "film: Deja vu draws nothing with photo mode closed");
+    writeConfig(path, "version = 1\n[photo]\nfilm_effect = 6\n");
+    ico_photo_enter();
+    CHECK(ico_photo_film() == 0, "film: film_effect = 6 is out of range, off (%d)",
+          ico_photo_film());
     ico_photo_exit();
     /* hide_ui = true from the file; stick_speed 2 doubles the zoom's rate */
     writeConfig(path, "version = 1\n[photo]\nstick_speed = 2.0\nhide_ui = true\n");

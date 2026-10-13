@@ -281,7 +281,7 @@ x0.25, Normal and Fast x4; the right stick looks; Up and Down rise and sink) and
 (the left stick orbits a pivot, the right stick dollies and pans; the pivot is the game camera's
 look-at point nearest the object it follows, or 400 cm in front without one). L1 and R1 roll, L2
 and R2 change the field of view between 10 and 100 degrees, Select resets the current camera,
-Square hides the help panel, Right cycles the Film effect, Cross takes a capture, and Triangle,
+Square hides the help panel, Right cycles the Film effect (Off, 1 to 4, Deja vu), Cross takes a capture, and Triangle,
 Circle or Start leave (`port/game/photo_mode.h`, the controls). Each tick's step is held to 250
 units of the eye and 25 degrees of the view, under the renderer's camera-cut thresholds, so the
 presenter blends it (`port/game/photo_mode.h` (`ico_photo_camera`); `port/game/photo_mode.c`
@@ -292,7 +292,7 @@ presenter blends it (`port/game/photo_mode.h` (`ico_photo_camera`); `port/game/p
 | `[photo] stick_speed` | `1.0` | every rate times this |
 | `[photo] invert_y` | `false` | the looking stick's up and down swapped |
 | `[photo] hide_ui` | `false` | the help panel hidden at enter; Square saves it |
-| `[photo] film_effect` | `0` | the Film effect photo mode shows, 0 to 4; the game's own setting is untouched |
+| `[photo] film_effect` | `0` | the Film effect photo mode shows, 0 to 4, or 5 (Deja vu); the game's own setting is untouched |
 | `[photo] png_dir` | `"screenshots"` | the captures' folder in the user folder |
 
 Captures are named `ico-YYYYMMDD-HHMMSS.png`, then `-2`, `-3` (`ico_photo_file_name`), and taken
@@ -322,6 +322,28 @@ zoomed is marked as a free camera (`rd_free_camera`, `RdCamera.freeCamera`): the
 keeps the triangles with a vertex behind it, which the game's own cameras rely on being dropped;
 the game's rule stays while the aspect sweep runs and while the photo camera is still the game's
 (`port/game/photo_view.c` (`ico_photo_view_tick`, `photoIsGameCamera`)).
+
+### The Deja vu filter
+
+Film effect 5, `ICO_PHOTO_FILM_DEJA`, is the deja vision's grain veil (stage 40). The stage draws
+it through its stage animation `deja_lightning.bga` (`stageTable` row 79): two "sandstorm" entries
+of type 10 hold the model 1614 (`sandstorm.p2o`, four quadrant sheets of the 256 x 256 noise
+texture under REPEAT) in the camera's space at depths 0.72907 and 0.74207 and scale 0.0039999,
+their type 0 envelopes the nodes' fades resting at 0.9 and -0.95 (`ico2/seki/src/BgAnimation.c`
+(`bga_calcEnvelope`)), which `reg_dispMObj` draws in list 5 through the dissolve, added at FIX 9
+and subtracted at FIX 4 (`ico2/seki/src/RegistPacket.c` (`reg_setDissolve`)). Every stage pack
+carries the model and its texture (the Film effect's own animations, rows 67 to 70, place it in
+every stage), so with photo mode on Deja vu `gsb_PostEffect` calls `ico_photo_view_veil` after the
+fog: it finds the stage's sandstorm object (model 1614 among the objects of kind 35), gives it two
+nodes of those values for one `reg_DispObj` under the tick's full-screen 500 unit pair, and puts
+its own nodes, that pair and the display list priority back (`port/game/photo_view.c`
+(`ico_photo_view_veil`); `ico2/seki/src/GsBase.c` (`gsb_PostEffect`)). The draws are the game's
+packets, so the renderer continues the sheets to a wide frame's edges as it does in the stage
+(`port/render/rd_content_extend.c`), the current stage's motion blur, aura and softening passes
+take them, and captures include them. Nothing is drawn in stage 40, which draws the veil itself;
+Deja vu has no film grain (`gsb_filmMode`), and the veil texture's palette cycle (its TIM2 block:
+entries 0 to 15, no UV scroll) keeps running in photo mode as the grain's does
+(`ico2/seki/src/Texture.c` (`tex_ResetVram`)).
 
 ## The model viewer and Characters
 

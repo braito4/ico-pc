@@ -159,6 +159,11 @@ int ico_photo_film(void)
     return s.film;
 }
 
+int ico_photo_deja(void)
+{
+    return s.st.active && s.film == ICO_PHOTO_FILM_DEJA;
+}
+
 int ico_photo_mode(void)
 {
     return s.st.mode;
@@ -536,8 +541,8 @@ int ico_photo_update(const IcoPhotoPad *pad)
         }
     }
     if (pad->pressed & ICO_PHOTO_RIGHT) {
-        /* the Film effect: off, the game's four, off ...; kept for the
-           next time */
+        /* the Film effect: off, the game's four, Deja vu, off ...; kept
+           for the next time */
         s.film = s.film + 1 >= ICO_PHOTO_FILM_MODES ? 0 : s.film + 1;
         fprintf(stderr, "photo: film effect %d\n", s.film);
         if (ico_config_set_int("photo.film_effect", s.film) != 0 || ico_config_save() != 0) {

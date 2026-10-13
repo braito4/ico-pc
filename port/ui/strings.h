@@ -475,6 +475,9 @@ typedef enum UiStrId {
     UI_STR_PHOTO_ACT_HIDE,
     UI_STR_PHOTO_ACT_BACK,
     UI_STR_PHOTO_ACT_FILM, /* the Film effect button, then the popup's title is UI_STR_OPT_FILM_EFFECT */
+    /* the popup's value for photo mode's Film effect 5 (photo_mode.h
+       ICO_PHOTO_FILM_DEJA): the deja vision's grain veil */
+    UI_STR_PHOTO_FILM_DEJA,
     /* the word before a mouse button's name on a key cap ("Mouse left") */
     UI_STR_PHOTO_MOUSE_PREFIX,
     /* the D-pad's Up and Down named on the photo panel (the game's button
