@@ -449,8 +449,11 @@ is drawn on the presentation overlay, never in the game's frame, so a capture ne
 Beside each action it shows the game's button picture (the glyphs' textures) or, for a button with
 no picture, its name; once a key or the mouse was the last input, the bound keys' names in
 brackets. `ui__photo_hud_build`, `ui__photo_hud_layout` and `ui__photo_hud_fit` make and place the
-panel's items so a test can read them (`port/ui/photo_ui.h`). [GAME_FEATURES.md](GAME_FEATURES.md)
-has the camera.
+panel's items so a test can read them (`port/ui/photo_ui.h`). When Right cycles the Film effect
+the proc queues a popup titled with the Options row's word whose body is
+`ui__photo_film_word`'s: Off, the mode's number 1 to 4, or `UI_STR_PHOTO_FILM_DEJA` ("Deja vu",
+the loanword as each language spells it) for mode 5 (`port/ui/photo_ui.c` (`photoProc`,
+`ui__photo_film_word`)). [GAME_FEATURES.md](GAME_FEATURES.md) has the camera and the filters.
 
 ## The title
 

@@ -417,6 +417,7 @@ const char *const ui_strings_it[UI_STR_COUNT] = {
     [UI_STR_PHOTO_ACT_HIDE] = "nascondi questo pannello (memorizzato)",
     [UI_STR_PHOTO_ACT_BACK] = "indietro",
     [UI_STR_PHOTO_ACT_FILM] = "effetto film (memorizzato)",
+    [UI_STR_PHOTO_FILM_DEJA] = "Déjà vu",
     [UI_STR_PHOTO_MOUSE_PREFIX] = "Mouse",
     [UI_STR_PHOTO_UP] = "Su",
     [UI_STR_PHOTO_DOWN] = "Giù",

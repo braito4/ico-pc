@@ -456,6 +456,10 @@ void SetMotionBlur(int v)
 
 void staffRollMain(void) {}
 
+/* port/game/photo_view.c: photo mode's Deja vu veil (not linked here; these
+   frames never open photo mode) */
+void ico_photo_view_veil(void) {}
+
 void stage_SetLoopFlag(int g, int f)
 {
     (void)g;

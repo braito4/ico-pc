@@ -37,6 +37,18 @@
  *            the native one, the frame's camera carries the aspect 16:9, and
  *            leave puts the 16:9 matrices back; a stage change or the game
  *            running again drops the save
+ *   veil     photo mode's Deja vu (photo_view.c ico_photo_view_veil, from
+ *            gsb_PostEffect): with photo mode open on Deja vu in a stage
+ *            other than 40, one reg_DispObj a frame of the stage's
+ *            sandstorm object (model 1614 among the kind-35 objects) with
+ *            two nodes of deja_lightning.bga's values (held in the camera's
+ *            space, fades 0.9 and -0.95, depths 0.72907 and 0.74207, scale
+ *            0.0039999) under the tick's full-screen 500 unit pair; the
+ *            object's own nodes, the matrices and the display list
+ *            priority given back; no film grain with it.  Nothing at all
+ *            (no call, the frame's commands the same as photo mode's
+ *            without it) with the effect off or 1 .. 4, in stage 40,
+ *            without the object, or with photo mode closed
  *   cull     the native width (gsb_SetVSMatrixSub's window half-width
  *            gsFrame.w / 2) and gsbHostCullMargin: with the Original
  *            framerate at 4:3 +0x240 and the 500 unit pair's +0x680 are as
@@ -353,9 +365,13 @@ int tex_GetTextureNo(const char *name)
    current at the call, as tex_TransTexture writes it on a texture in VRAM */
 #define NOISE_TBP 0x1A00
 
+/* the calls: gsb_filmNoise's, one a frame with the grain */
+static int s_grainTex;
+
 int tex_TransTexture(int id, int ret)
 {
     (void)id;
+    s_grainTex++;
     gif_StartPacketPri(dl_GetPri());
     *PacketBufferStruct.ptr.d++ =
         (unsigned long long)NOISE_TBP | (1ull << 14) | (6ull << 26) | (6ull << 30) | (1ull << 34);
@@ -381,7 +397,15 @@ int shadow_Tool(void)
     return 0;
 }
 
-void fog_DrawFog(void) {}
+/* >= 0: the display list priority the fog leaves (the veil's check) */
+static int s_fogPri = -1;
+
+void fog_DrawFog(void)
+{
+    if (s_fogPri >= 0) {
+        dl_SetDLPriority(s_fogPri);
+    }
+}
 
 int fog_FogTool(void)
 {
@@ -399,7 +423,14 @@ void FullScreenEffectAfter(void) {}
 
 void FullScreenEffectBefore(void) {}
 
-void MotionBlur(void) {}
+/* the display list priority current when gsb_PostEffect reaches the
+   motion blur (the veil's draw comes just before it) */
+static int s_blurPri = -1;
+
+void MotionBlur(void)
+{
+    s_blurPri = dl_GetPri();
+}
 
 /* counts the calls: the bars leave the blur alone while they are up */
 static int s_blurCalls;
@@ -416,6 +447,46 @@ void stage_SetLoopFlag(int g, int f)
 {
     (void)g;
     (void)f;
+}
+
+/* photo_view.c's veil: the stage's objects of kind 35 (gobj.c) and the
+   object drawn (RegistPacket.c reg_DispObj), as the call sees them */
+static GObj *s_kindHead;
+static int s_kindAsked = -1;
+
+void *isysGObjSearchFromObjKindID_begin(int kind)
+{
+    s_kindAsked = kind;
+    return s_kindHead;
+}
+
+void *isysGObjSearchFromObjKindID_next(GObj *g)
+{
+    return g->kindNext;
+}
+
+static struct {
+    int calls;
+    Sub15C *o;
+    int nodeNum;
+    struct DObjNode nodes[2];
+    float mtx[2][16];
+    float screen500[32];
+    int pri; /* the display list priority at the call */
+} s_disp;
+
+void reg_DispObj(Sub15C *o)
+{
+    s_disp.calls++;
+    s_disp.o = o;
+    s_disp.nodeNum = o->nodeNum;
+    if (o->nodeNum == 2) {
+        memcpy(s_disp.nodes, o->nodes, sizeof(s_disp.nodes));
+        memcpy(s_disp.mtx, (const void *)o->nodeMtx, sizeof(s_disp.mtx));
+    }
+    memcpy(s_disp.screen500, matrixptr + 0x640, sizeof(s_disp.screen500));
+    s_disp.pri = dl_GetPri();
+    dl_SetDLPriority(5); /* the dissolve's list, as reg_dispMObj leaves it */
 }
 
 void UpdateHandCameraLimitP(void) {}
@@ -2296,6 +2367,170 @@ static void checkStripCards(void)
     tick();
 }
 
+/* the film grain's texture bound since the last call (gsb_filmNoise) */
+static int grainPosts(void)
+{
+    const int n = s_grainTex;
+    s_grainTex = 0;
+    return n;
+}
+
+/* the commands of the last frame, every list's count */
+static uint32_t frameCommands(void)
+{
+    const RdFrame *f = rd__last_frame();
+    uint32_t n = 0;
+    for (int l = 0; f && l < RD_LIST_COUNT; l++) {
+        n += f->lists[l].count;
+    }
+    return n;
+}
+
+static void checkDejaVeil(void)
+{
+    static GObj g[2];
+    static Sub15C d[2];
+    static struct DObjNode ownNodes[3];
+    static float ownMtx[3][16];
+    static char model[64], light[64];
+    memset(g, 0, sizeof(g));
+    memset(d, 0, sizeof(d));
+    /* another stage object first, then the sandstorm one */
+    g[0].dobj = &d[0];
+    g[0].kindNext = &g[1];
+    d[0].modelId = 1552;
+    d[0].model = (struct PObjModel *)(void *)model;
+    d[0].lightMtx = (struct LightMatrix *)(void *)light;
+    d[0].dispType = 2;
+    g[1].dobj = &d[1];
+    d[1].modelId = 1614;
+    d[1].model = (struct PObjModel *)(void *)model;
+    d[1].lightMtx = (struct LightMatrix *)(void *)light;
+    d[1].dispType = 2;
+    d[1].nodeNum = 3;
+    d[1].nodes = ownNodes;
+    d[1].nodeMtx = (ICO_WORD)ownMtx;
+    s_kindHead = &g[0];
+
+    IcoVideoOptions o;
+    ico_video_defaults(&o);
+    ico_video_set(&o);
+    GlobalStageSetting.targetCol[0][3] = 64;
+    GlobalStageSetting.grainScale = 4.0f;
+    gFlagGameClear = 0;
+    optionScreenMode = 0;
+    tick();
+    systemStatus[5] = 1;
+    stage_no = 11;
+    ico_photo_reset();
+    ico_photo_set_tick_hz(25);
+    gameCamAt(PHOTO_D);
+    ico_photo_enter();
+    const IcoPhotoPad right = {0, ICO_PHOTO_RIGHT, {128, 128, 128, 128}};
+    const IcoPhotoPad still = {0, 0, {128, 128, 128, 128}};
+    float pair[32], other[32], after[32];
+    /* off, 1 .. 4: no call, the frame as photo mode's without the hook */
+    uint32_t plain = 0;
+    for (int m = 0; m < ICO_PHOTO_FILM_DEJA; m++) {
+        ico_photo_update(m == 0 ? &still : &right);
+        ico_photo_view_tick();
+        s_disp.calls = 0;
+        grainPosts();
+        tick();
+        const int grain = grainPosts();
+        CHECK(ico_photo_film() == m && !ico_photo_deja() && s_disp.calls == 0,
+              "veil: film %d draws no veil (%d calls)", m, s_disp.calls);
+        CHECK(grain == (m > 0), "veil: film %d, the grain %d times", m, grain);
+        if (m == 0) {
+            plain = frameCommands();
+        }
+    }
+    /* Deja vu: one call a frame, the stage's sandstorm object with the
+       stage's two nodes, under the tick's full screen pair; a reflection's
+       pair (another one in +0x640 at the post effect) put back after */
+    ico_photo_update(&right);
+    ico_photo_view_tick();
+    memcpy(pair, matrixptr + 0x640, sizeof(pair));
+    for (int i = 0; i < 32; i++) {
+        other[i] = (float)(i + 1) * 0.5f;
+    }
+    memcpy(matrixptr + 0x640, other, sizeof(other));
+    memset(&s_disp, 0, sizeof(s_disp));
+    s_blurPri = -1;
+    s_fogPri = 3;
+    grainPosts();
+    gsb_SyncGSSystem();
+    s_fogPri = -1;
+    memcpy(after, matrixptr + 0x640, sizeof(after));
+    gsb_UpdateGSSystem(0);
+    CHECK(ico_photo_deja() && s_disp.calls == 1 && s_disp.o == &d[1] && s_kindAsked == 35,
+          "veil: Deja vu draws the stage's sandstorm object once (%d calls, kind %d)", s_disp.calls,
+          s_kindAsked);
+    CHECK(s_disp.nodeNum == 2, "veil: two nodes (%d)", s_disp.nodeNum);
+    static const float z[2] = {0.72907043f, 0.74207032f}, fade[2] = {0.9f, -0.95f};
+    int nodesOk = 1;
+    for (int i = 0; i < 2; i++) {
+        const struct DObjNode *n = &s_disp.nodes[i];
+        nodesOk &= n->flags.ll == 3 && n->fade == fade[i] && n->alpha == 1.0f &&
+                   n->pos[0] == 0.0f && n->pos[1] == 0.0f && n->pos[2] == z[i] && n->pos[3] == 1.0f;
+        for (int k = 0; k < 16; k++) {
+            const float want = k == 15 ? 1.0f : (k % 5 == 0 ? 0.0039999341f : 0.0f);
+            nodesOk &= s_disp.mtx[i][k] == want;
+        }
+        /* reg_dispMObj's dissolve: FIX (1 - |fade|) x 96, added for a fade
+           above 0 and subtracted below (RegistPacket.c reg_setDissolve) */
+        const float a = 1.0f - (1.0f - n->fade) * n->alpha;
+        const int fix = (int)((a < 0.0f ? a + 1.0f : 1.0f - a) * 96.0f);
+        nodesOk &= fix == (i == 0 ? 9 : 4) && (a > 0.0f) == (i == 0);
+    }
+    CHECK(nodesOk, "veil: the nodes of deja_lightning.bga, held in the camera's space (FIX 9 "
+                   "added, FIX 4 subtracted)");
+    CHECK(memcmp(s_disp.screen500, pair, sizeof(pair)) == 0,
+          "veil: drawn under the tick's full screen 500 unit pair");
+    CHECK(memcmp(after, other, sizeof(other)) == 0, "veil: +0x640 and +0x680 put back");
+    CHECK(d[1].nodeNum == 3 && d[1].nodes == ownNodes && d[1].nodeMtx == (ICO_WORD)ownMtx,
+          "veil: the object's own nodes given back");
+    CHECK(s_disp.pri == 3 && s_blurPri == 3,
+          "veil: the display list priority put back (%d before, %d after)", s_disp.pri, s_blurPri);
+    const int grainDeja = grainPosts();
+    CHECK(grainDeja == 0, "veil: no film grain with Deja vu (%d)", grainDeja);
+    memcpy(matrixptr + 0x640, pair, sizeof(pair));
+    /* stage 40 draws the veil itself */
+    stage_no = 40;
+    s_disp.calls = 0;
+    tick();
+    CHECK(s_disp.calls == 0, "veil: nothing in stage 40 (%d calls)", s_disp.calls);
+    stage_no = 11;
+    ico_photo_view_tick();
+    /* no sandstorm object in the stage */
+    g[0].kindNext = NULL;
+    s_disp.calls = 0;
+    tick();
+    CHECK(s_disp.calls == 0, "veil: nothing without the stage's object (%d calls)", s_disp.calls);
+    CHECK(frameCommands() == plain,
+          "veil: without the object the frame is photo mode's without it (%u commands, %u)",
+          frameCommands(), plain);
+    g[0].kindNext = &g[1];
+    /* photo mode closed: Deja vu kept for the next time, nothing drawn */
+    ico_photo_exit();
+    ico_photo_view_tick();
+    s_disp.calls = 0;
+    grainPosts();
+    tick();
+    CHECK(ico_photo_film() == ICO_PHOTO_FILM_DEJA && s_disp.calls == 0 && grainPosts() == 0,
+          "veil: photo mode closed, nothing (%d calls)", s_disp.calls);
+    /* the saved choice back to off for the checks after this one */
+    ico_photo_enter();
+    ico_photo_update(&right);
+    CHECK(ico_photo_film() == 0, "veil: Right after Deja vu is off (%d)", ico_photo_film());
+    ico_photo_exit();
+    ico_photo_view_tick();
+    s_kindHead = NULL;
+    systemStatus[5] = 0;
+    stage_no = 0;
+    ico_photo_reset();
+}
+
 static void boot(void)
 {
     matrixptr = s_spr;
@@ -2320,6 +2555,7 @@ static void recordingChecks(void)
     checkVu();
     checkZScale();
     checkPhotoView();
+    checkDejaVeil();
     checkCull();
     checkDecoder();
     checkStripWindow();

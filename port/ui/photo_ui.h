@@ -17,6 +17,8 @@
 #ifndef PORT_UI_PHOTO_UI_H
 #define PORT_UI_PHOTO_UI_H
 
+#include <stddef.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -35,6 +37,11 @@ void ui_photo_reset(void);
 /* A capture's result (the window, port/platform/window_host.c): a popup
    with the file's name, and a log line. */
 void ui_photo_capture_done(int ok, const char *name);
+
+/* The word the Film effect popup shows for photo mode's mode (photo_mode.h
+   ico_photo_film), in the current language: Off, the number 1 .. 4 (into
+   buf), or the deja vision's veil by its name (UI_STR_PHOTO_FILM_DEJA). */
+const char *ui__photo_film_word(int mode, char *buf, size_t size);
 
 struct RdOverlayCtx;
 /* The HUD on the output (ui_host.c's overlay callback): nothing unless

@@ -419,6 +419,7 @@ const char *const ui_strings_de[UI_STR_COUNT] = {
     [UI_STR_PHOTO_ACT_HIDE] = "Anzeige ausblenden (wird gemerkt)",
     [UI_STR_PHOTO_ACT_BACK] = "zurück",
     [UI_STR_PHOTO_ACT_FILM] = "Film-Effekt (wird gemerkt)",
+    [UI_STR_PHOTO_FILM_DEJA] = "Déjà-vu",
     [UI_STR_PHOTO_MOUSE_PREFIX] = "Maus",
     [UI_STR_PHOTO_UP] = "Oben",
     [UI_STR_PHOTO_DOWN] = "Unten",

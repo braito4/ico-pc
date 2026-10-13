@@ -20,8 +20,9 @@
  *   [photo] invert_y     false         the looking stick's up and down swapped (the
  *                                      right stick in the free camera, the left in orbit)
  *   [photo] hide_ui      false         the help panel hidden at enter (Square saves it)
- *   [photo] film_effect  0             the Film effect photo mode shows, 0 (off) .. 4 (Right
- *                                      cycles it, saved); the game's own setting is not touched
+ *   [photo] film_effect  0             the Film effect photo mode shows, 0 (off) .. 4, or 5
+ *                                      (Deja vu; Right cycles it, saved); the game's own
+ *                                      setting is not touched
  *   [photo] png_dir      "screenshots" the captures' folder, in the pref folder
  *
  * Two cameras: the free camera (ICO_PHOTO_CAM_FREE, the one at enter) and
@@ -52,8 +53,8 @@
  *   Select          the current camera back to the game's view, and the
  *                   zoom (the other camera's state kept)
  *   Square          the help panel shown or hidden, saved as hide_ui
- *   Right (d-pad)   the Film effect: Off, 1, 2, 3, 4, Off ... (saved as
- *                   film_effect; shown whether or not the game is cleared)
+ *   Right (d-pad)   the Film effect: Off, 1, 2, 3, 4, Deja vu, Off ... (saved
+ *                   as film_effect; shown whether or not the game is cleared)
  *   Cross           a capture (ico_photo_take_capture)
  *   Triangle, Circle, Start  leave (the proc goes back to the pause menu)
  * The pivot is the game camera's look-at point: the point of its forward
@@ -194,11 +195,17 @@ int ico_photo_speed(void);
    each enter; hide_ui also follows Square, film_effect Right) */
 int ico_photo_hide_ui(void);
 /* The Film effect photo mode shows, 0 (off) .. ICO_PHOTO_FILM_MODES - 1:
-   the modes Options > Gameplay > Film effect has.  GsBase.c draws the
-   grain with it while photo mode is active, whatever the game's setting
-   and whether or not the game is cleared. */
-#define ICO_PHOTO_FILM_MODES 5
+   1 .. 4 the modes Options > Gameplay > Film effect has, whose grain
+   GsBase.c draws while photo mode is active, whatever the game's setting
+   and whether or not the game is cleared; ICO_PHOTO_FILM_DEJA the deja
+   vision's grain veil (stage 40's two layers of the "sandstorm" sheets),
+   which photo_view.c ico_photo_view_veil draws through the game's own
+   object path (no film grain with it). */
+#define ICO_PHOTO_FILM_DEJA 5
+#define ICO_PHOTO_FILM_MODES 6
 int ico_photo_film(void);
+/* 1 while photo mode is active with ICO_PHOTO_FILM_DEJA, else 0 */
+int ico_photo_deja(void);
 float ico_photo_stick_speed(void);
 const char *ico_photo_png_dir(void);
 /* The capture's file name for a local time (ico-YYYYMMDD-HHMMSS.png, then

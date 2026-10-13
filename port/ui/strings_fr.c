@@ -418,6 +418,7 @@ const char *const ui_strings_fr[UI_STR_COUNT] = {
     [UI_STR_PHOTO_ACT_HIDE] = "masquer ce panneau (mémorisé)",
     [UI_STR_PHOTO_ACT_BACK] = "retour",
     [UI_STR_PHOTO_ACT_FILM] = "effet séquence (mémorisé)",
+    [UI_STR_PHOTO_FILM_DEJA] = "Déjà vu",
     [UI_STR_PHOTO_MOUSE_PREFIX] = "Souris",
     [UI_STR_PHOTO_UP] = "Haut",
     [UI_STR_PHOTO_DOWN] = "Bas",

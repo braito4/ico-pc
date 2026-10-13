@@ -348,6 +348,21 @@ static void testStrings(void)
               ui_lang_from_game(4) == UI_LANG_DE && ui_lang_from_game(5) == UI_LANG_IT &&
               ui_lang_from_game(6) == UI_LANG_ES && ui_lang_from_game(0) == UI_LANG_EN,
           "the game's language numbers");
+    /* photo mode's Deja vu: each language's own table has it (ui_str_in
+       would give the English to a language without), the loanword as each
+       language writes it */
+    {
+        const char *const *tables[UI_LANG_COUNT] = {ui_strings_en, ui_strings_fr, ui_strings_de,
+                                                    ui_strings_it, ui_strings_es};
+        static const char *const deja[UI_LANG_COUNT] = {
+            "Deja vu", "D\xc3\xa9j\xc3\xa0 vu", "D\xc3\xa9j\xc3\xa0-vu", "D\xc3\xa9j\xc3\xa0 vu",
+            "D\xc3\xa9j\xc3\xa0 vu"};
+        for (int l = 0; l < UI_LANG_COUNT; l++) {
+            const char *t = tables[l][UI_STR_PHOTO_FILM_DEJA];
+            CHECK(t != NULL && strcmp(t, deja[l]) == 0, "language %d: Deja vu is \"%s\"", l,
+                  t ? t : "(none)");
+        }
+    }
     ui_set_language(UI_LANG_DE);
     CHECK(strcmp(ui_str(UI_STR_BACK), "Zurück") == 0, "German Back: %s", ui_str(UI_STR_BACK));
     ui_set_language(UI_LANG_EN);
