@@ -38,6 +38,10 @@
  *            frame's width covers all 688 columns
  *   content table  rd_content_hide.c's verbs on the top of the listed
  *            closing box (st08a_p4), below ("the content table")
+ *   sheets   rd_content_extend.c's tiles appended to the deja veil's
+ *            quadrant sheet, and the sheet drawn at 4:3 (the same picture
+ *            with and without them) and 16:9 (the sides covered), below
+ *            ("the content table's sheets")
  *   natural chains  rd_content_chain.c's table and a let-down chain laid
  *            out as BgAnimation.c lays it out with the option on: the links
  *            at their size along the chain, the far end where the keyed
@@ -1111,6 +1115,212 @@ static void closingPlaneChecks(void)
     rd__content_hide_set(NULL);
 }
 
+/* ------------------------------------------ the content table's sheets */
+/* rd_content_extend.c's TILES (rd_mesh.c extendSheet, rd__sheet_tiles) on
+ * the deja veil's upper left quadrant (mesh "sandstorm" of stage 40, as the
+ * dump v2227 holds it: four 128 x 112 tiles over x -256..0, y -224..0),
+ * made as the stage makes it.  Recording only:
+ *   the table: four entries, every one sandstorm's, TILES, 3 across, 1 down;
+ *   the mesh made gets 11 tiles appended (3 beside each of the two tiles of
+ *     the outer column, then 1 above each of the 5 tiles of the top row),
+ *     44 vertices and 22 triangles in its one batch, its own 16 vertices
+ *     and 24 indices first and unchanged, the sheet then x -640..0,
+ *     y -336..0; every appended vertex's U and V differ from those of any
+ *     other tile's vertex at its position by a whole number (the texture
+ *     runs on without a seam under REPEAT) and lie on the affine U(x),
+ *     V(y) of the tile it repeats;
+ *   rd_update_vu_mesh with the packet's own vertices lays the same tiles;
+ *   the same sheet one bit off (a colour 254), the closing box's top (not
+ *     a sheet of tiles) and the sheet with the table overridden "off" get
+ *     none; a bad spec changes nothing */
+
+static const float kVeilQuadrant[16][4] = {
+    /* x, y, s, t; the strip starts at vertex 0 of each four (3.53157902f is
+       the float 0x40620564) */
+    {-256.0f, -224.0f, -3.53157902f, -2.5f},
+    {-256.0f, -112.0f, -3.53157902f, 1.5f},
+    {-128.0f, -224.0f, 3.5f, -2.5f},
+    {-128.0f, -112.0f, 3.5f, 1.5f},
+    {0.0f, -224.0f, 3.53157902f, -2.5f},
+    {-128.0f, -224.0f, -3.5f, -2.5f},
+    {0.0f, -112.0f, 3.53157902f, 1.5f},
+    {-128.0f, -112.0f, -3.5f, 1.5f},
+    {0.0f, 0.0f, 3.53157902f, 4.5f},
+    {0.0f, -112.0f, 3.53157902f, 0.5f},
+    {-128.0f, 0.0f, -3.5f, 4.5f},
+    {-128.0f, -112.0f, -3.5f, 0.5f},
+    {-256.0f, 0.0f, -3.53157902f, 4.5f},
+    {-128.0f, 0.0f, 3.5f, 4.5f},
+    {-256.0f, -112.0f, -3.53157902f, 0.5f},
+    {-128.0f, -112.0f, 3.5f, 0.5f},
+};
+
+/* the quadrant's packet (GIF tag, then 16 prelit vertices: position z 0
+   w 1, ST with the strip flag, colour 255 255 255 127; red: the colour's
+   red) */
+static void veilPacket(float qw[1 + 16 * 3][4], float red)
+{
+    memset(qw, 0, sizeof(float) * 4 * (1 + 16 * 3));
+    const uint32_t tag = 0x8000u | 16u; /* NLOOP 16, EOP */
+    memcpy(&qw[0][0], &tag, 4);
+    for (int v = 0; v < 16; v++) {
+        float *p = qw[1 + v * 3], *st = qw[2 + v * 3], *c = qw[3 + v * 3];
+        p[0] = kVeilQuadrant[v][0];
+        p[1] = kVeilQuadrant[v][1];
+        p[3] = 1.0f;
+        st[0] = kVeilQuadrant[v][2];
+        st[1] = kVeilQuadrant[v][3];
+        st[2] = 1.0f;
+        st[3] = v % 4 == 0 ? 0.0f : 1.0f;
+        c[0] = red;
+        c[1] = c[2] = 255.0f;
+        c[3] = 127.0f;
+    }
+}
+
+static RdMesh veilMesh(float red)
+{
+    static float qw[1 + 16 * 3][4];
+    veilPacket(qw, red);
+    const RdVuBatchDesc bd = {0, 0, 0};
+    RdVuMeshDesc md;
+    memset(&md, 0, sizeof(md));
+    md.qw = (const float (*)[4])qw;
+    md.qwCount = 1 + 16 * 3;
+    md.qwPerVertex = RD_VU_QW_PRELIT;
+    md.batchCount = 1;
+    md.batches = &bd;
+    md.materialCount = 1;
+    md.debugName = "sandstorm";
+    return rd_create_vu_mesh(&md);
+}
+
+/* whether a - b is a whole number (to 1/10000 of a repeat) */
+static int veilWhole(float a, float b)
+{
+    const double d = (double)a - (double)b;
+    return fabs(d - floor(d + 0.5)) < 1e-4;
+}
+
+static void sheetTableChecks(void)
+{
+    int sheets = 0;
+    for (int e = 0; e < rd__content_extend_count; e++) {
+        const RdContentExtend *x = &rd__content_extend[e];
+        sheets += x->verb == RD_EXTEND_TILES && strncmp(x->model, "sandstorm", 9) == 0 &&
+                  x->vertexCount == 16 && x->qwPerVertex == RD_VU_QW_PRELIT && x->cols == 3 &&
+                  x->rows == 1;
+    }
+    CHECK(rd__content_extend_count == 4 && sheets == 4,
+          "sheets: four entries, sandstorm's quadrants, TILES 3 across 1 down (%d of %d)", sheets,
+          rd__content_extend_count);
+    CHECK(rd__content_extend_set(NULL) && rd__content_extend_verb(3) == RD_EXTEND_TILES,
+          "sheets: the table's verb applies");
+
+    static float qw[1 + 16 * 3][4];
+    veilPacket(qw, 255.0f);
+    const RdMesh veil = veilMesh(255.0f);
+    RdMeshRec *m = rd__mesh_rec(veil.id);
+    CHECK(m != NULL, "sheets: rd_create_vu_mesh");
+    if (m) {
+        CHECK(m->vertexCount == 60 && m->indexCount == 24 + 66 && m->tiledFrom == 16 &&
+                  m->batchCount == 1 && m->batches[0].vertexCount == 60 &&
+                  m->batches[0].indexCount == 90,
+              "sheets: 11 tiles appended in the one batch (%u vertices, %u indices, from %u)",
+              m->vertexCount, m->indexCount, m->tiledFrom);
+        int own = 1;
+        for (uint32_t v = 0; v < 16 && m->vertexCount >= 16; v++) {
+            own &= memcmp(m->stream[v * 3], qw[1 + v * 3], 48) == 0;
+        }
+        static const uint32_t kOwnIndex[8] = {2, 3, 6, 7, 10, 11, 14, 15}; /* the kicks */
+        for (uint32_t t = 0; t < 8; t++) {
+            for (uint32_t c = 0; c < 3; c++) {
+                own &= m->index[t * 3 + c] == ICO_VU_INDEX(kOwnIndex[t], c);
+            }
+        }
+        CHECK(own, "sheets: the quadrant's own vertices and indices first, unchanged");
+        float x0 = 0, x1 = 0, y0 = 0, y1 = 0;
+        int seam = 1, affine = 1, kicks = 1;
+        for (uint32_t v = 0; v < m->vertexCount; v++) {
+            const float *p = m->stream[v * 3], *st = m->stream[v * 3 + 1];
+            x0 = v == 0 || p[0] < x0 ? p[0] : x0;
+            x1 = v == 0 || p[0] > x1 ? p[0] : x1;
+            y0 = v == 0 || p[1] < y0 ? p[1] : y0;
+            y1 = v == 0 || p[1] > y1 ? p[1] : y1;
+            if (v < 16) {
+                continue;
+            }
+            for (uint32_t w = 0; w < m->vertexCount; w++) {
+                const float *q = m->stream[w * 3], *sq = m->stream[w * 3 + 1];
+                if (w / 4 != v / 4 && q[0] == p[0] && q[1] == p[1]) {
+                    seam &= veilWhole(st[0], sq[0]) && veilWhole(st[1], sq[1]);
+                }
+            }
+            /* the tile it repeats: the column (outer left: x below -128) and
+               row (top: y below -112) of the quadrant whose mapping it
+               continues; U(x) of the outer column runs -3.53 at -256 to 3.5
+               at -128, of the inner one -3.5 at -128 to 3.53 at 0; V(y) of
+               the top row -2.5 at -224 to 1.5 at -112 */
+            const uint32_t tile = (v - 16) / 4, first = 16 + tile * 4;
+            float cx = 0, cy = 0;
+            for (uint32_t k = 0; k < 4; k++) {
+                cx += m->stream[(first + k) * 3][0] / 4.0f;
+                cy += m->stream[(first + k) * 3][1] / 4.0f;
+            }
+            const double ua = cx < -128.0f ? -3.531580 : -3.5, ub = cx < -128.0f ? -256.0 : -128.0;
+            const double u = ua + (p[0] - ub) * ((cx < -128.0f ? 3.5 : 3.531580) - ua) / 128.0;
+            const double vv = cy < -112.0f ? -2.5 + (p[1] + 224.0) * 4.0 / 112.0
+                                           : 0.5 + (p[1] + 112.0) * 4.0 / 112.0;
+            affine &= fabs(st[0] - u) < 2e-4 && fabs(st[1] - vv) < 2e-4;
+        }
+        for (uint32_t i = 24; i < m->indexCount; i++) {
+            const uint32_t kick = m->index[i] / 4;
+            kicks &= kick >= 18 && kick < m->vertexCount && kick % 4 >= 2 && m->index[i] % 4 < 3;
+        }
+        CHECK(x0 == -640.0f && x1 == 0.0f && y0 == -336.0f && y1 == 0.0f,
+              "sheets: the quadrant reaches x %g..%g, y %g..%g (-640..0, -336..0)", x0, x1, y0, y1);
+        CHECK(seam, "sheets: the tiles meet with whole repeats between their UVs (no seam)");
+        CHECK(affine, "sheets: each appended tile continues the UV of the tile it repeats");
+        CHECK(kicks, "sheets: the appended triangles are kicks of their own 4-vertex strips");
+
+        /* a morph's rewrite with the packet's own vertices: the same tiles */
+        static float before[60 * 3][4];
+        const uint32_t nv = m->vertexCount < 60 ? m->vertexCount : 60;
+        memcpy(before, m->stream, (size_t)nv * 48);
+        CHECK(rd_update_vu_mesh(veil, (const float (*)[4])qw) &&
+                  memcmp(before, m->stream, (size_t)nv * 48) == 0,
+              "sheets: rd_update_vu_mesh lays the same tiles");
+    }
+    rd_destroy_vu_mesh(veil);
+
+    const RdMesh other = veilMesh(254.0f);
+    const RdMeshRec *o = rd__mesh_rec(other.id);
+    CHECK(o && o->vertexCount == 16 && o->tiledFrom == 0,
+          "sheets: the same sheet one colour off gets no tiles");
+    rd_destroy_vu_mesh(other);
+    const RdMesh box = closingMesh(kClosingGrey, 0.0f, 0);
+    const RdMeshRec *b = rd__mesh_rec(box.id);
+    CHECK(b && b->vertexCount == 4 && b->tiledFrom == 0 &&
+              rd__sheet_tiles((const float (*)[4])b->stream, 4, RD_VU_QW_PRELIT, 3, 1, NULL, 0) ==
+                  0,
+          "sheets: the closing box's top is not a sheet of tiles");
+    rd_destroy_vu_mesh(box);
+
+    CHECK(rd__content_extend_set("off") && rd__content_extend_verb(3) == RD_EXTEND_OFF,
+          "sheets: \"off\" overrides every entry");
+    const RdMesh off = veilMesh(255.0f);
+    const RdMeshRec *f = rd__mesh_rec(off.id);
+    CHECK(f && f->vertexCount == 16 && f->tiledFrom == 0, "sheets: off appends no tiles");
+    rd_destroy_vu_mesh(off);
+    CHECK(!rd__content_extend_set("hide") && !rd__content_extend_set("9=tiles") &&
+              !rd__content_extend_set("3=") && rd__content_extend_verb(3) == RD_EXTEND_OFF,
+          "sheets: a bad spec changes nothing");
+    CHECK(rd__content_extend_set("off,3=tiles") && rd__content_extend_verb(3) == RD_EXTEND_TILES &&
+              rd__content_extend_verb(0) == RD_EXTEND_OFF,
+          "sheets: the tokens apply in order");
+    rd__content_extend_set(NULL);
+}
+
 /* one frame: SCENE cleared grey, mesh m by code 32 at x = 0.08 x + tx,
    y = 0.08 z + 2103 GS window coordinates (GS Z 16000) */
 static void closingDraw(RdMesh m, float tx)
@@ -1212,6 +1422,103 @@ static void closingPixels(int wide)
     rd_destroy_vu_mesh(plain);
     rd_destroy_vu_mesh(grey);
     rd_destroy_vu_mesh(moved);
+}
+
+/* The deja veil's quadrant (sheetTableChecks) on the device, untextured, at
+ * 1.171875 GS pixels a unit across and 1.25 down from GS (2048, 2048): its
+ * tiles 150 x 140 pixels, the sheet over GS X 1748..2048 and Y 1768..2048,
+ * past the 4:3 frame's left edge (1792) by 44 pixels and short of the 16:9
+ * one's (1704) by as much, and past the frame's top (1792), as the veil
+ * reaches past the PS2's picture on every side.
+ *   4:3 (Original 1x): the picture with the tiles is the one without them,
+ *     byte for byte (they lie wholly off the frame);
+ *   16:9 (688 wide, Enhanced): without the tiles the 44 columns left of the
+ *     sheet are the clear's grey; with them they are drawn in every row the
+ *     sheet's own columns are, and the sheet's own columns are the same */
+static const char kSheetKey;
+
+static void sheetDraw(RdMesh m)
+{
+    static const uint8_t grey[4] = {40, 40, 60, 0x80};
+    dl_Clear();
+    dl_SetDLPriority(0);
+    rd_set_target(rd_target(RD_TARGET_SCENE), rd_target(RD_TARGET_SCENE), s_sceneW, 512, 1);
+    rd_clear_target(rd_target(RD_TARGET_SCENE), grey, 1, 0);
+    rd_test_gs(RD_TEST_Z_GEQUAL);
+    rd_z_write(1);
+    rd_blend(RD_BLEND_LERP_AS, 0x80, 0);
+    rd_abe(0);
+    rd_pabe(0);
+    rd_fba(0);
+    rd_gouraud(1);
+    rd_texture_off();
+    RdVuDraw d;
+    memset(&d, 0, sizeof(d));
+    d.prog = RD_PROG_PRELIT;
+    d.code = 32;
+    d.clip = RD_VU_CLIP_REGION;
+    d.vu.mem[16][0] = 1.171875f;
+    d.vu.mem[17][1] = 1.25f;
+    d.vu.mem[19][0] = 2048.0f;
+    d.vu.mem[19][1] = 2048.0f;
+    d.vu.mem[19][2] = 1000.0f;
+    d.vu.mem[19][3] = 1.0f;
+    rd_draw_vu_mesh(m, &d, RD_KEY(&kSheetKey, 0, 32));
+    dl_Swap();
+}
+
+static uint8_t s_sheetB[WT * 512 * 4];
+
+static void sheetPixels(int wide)
+{
+    const char *at = wide ? "16:9" : "4:3";
+    CHECK(rd__content_extend_set("off"), "sheets %s: off", at);
+    const RdMesh plain = veilMesh(255.0f);
+    CHECK(rd__content_extend_set(NULL), "sheets %s: the table", at);
+    const RdMesh tiled = veilMesh(255.0f);
+    const RdMeshRec *pr = rd__mesh_rec(plain.id), *tr = rd__mesh_rec(tiled.id);
+    CHECK(pr && tr && pr->vertexCount == 16 && tr->vertexCount == 60,
+          "sheets %s: the plain sheet and the tiled one", at);
+    uint32_t w = 0, w2 = 0;
+    sheetDraw(plain);
+    const int okA = closingRead(s_closingA, &w);
+    sheetDraw(tiled);
+    const int okB = closingRead(s_sheetB, &w2);
+    CHECK(okA && okB && w == w2 && w == (wide ? WT : 512u), "sheets %s: SCENE read (%u, %u)", at, w,
+          w2);
+    if (okA && okB && w == w2) {
+        const int edge = (int)w / 2 - 300; /* the sheet's left edge, GS X 1748 */
+        const int ownA = closingCount(s_closingA, w, edge, (int)w / 2);
+        const int ownB = closingCount(s_sheetB, w, edge, (int)w / 2);
+        const int sideA = closingCount(s_closingA, w, 0, edge);
+        const int sideB = closingCount(s_sheetB, w, 0, edge);
+        printf("  sheets %s: own columns %d / %d texels, beside them %d / %d (plain / tiled)\n", at,
+               ownA, ownB, sideA, sideB);
+        if (!wide) {
+            CHECK(memcmp(s_closingA, s_sheetB, (size_t)w * 512 * 4) == 0,
+                  "sheets 4:3: the picture with the tiles is the one without them, byte for byte");
+        } else {
+            /* the sheet's rows: those its middle column draws */
+            int rowsDrawn = 0;
+            for (int y = 0; y < 512; y++) {
+                const uint8_t *p = &s_closingA[((size_t)y * w + (size_t)(w / 2 - 10)) * 4];
+                rowsDrawn += p[0] != 40 || p[1] != 40 || p[2] != 60;
+            }
+            CHECK(edge == 44 && sideA == 0 && rowsDrawn > 100 && sideB >= edge * rowsDrawn,
+                  "sheets 16:9: the %d columns beside the sheet are drawn with the tiles in its %d "
+                  "rows (%d texels, none without)",
+                  edge, rowsDrawn, sideB);
+            int same = 1;
+            for (int y = 0; y < 512; y++) {
+                same &= memcmp(&s_closingA[((size_t)y * w + (size_t)edge) * 4],
+                               &s_sheetB[((size_t)y * w + (size_t)edge) * 4],
+                               (size_t)(w - (uint32_t)edge) * 4) == 0;
+            }
+            CHECK(same && ownA == ownB, "sheets 16:9: the sheet's own columns are the same");
+        }
+    }
+    rd_destroy_vu_mesh(plain);
+    rd_destroy_vu_mesh(tiled);
 }
 
 /* -------------------------------------------------------- strip order */
@@ -2692,6 +2999,7 @@ static void recordingChecks(void)
     checkParticleRecording();
     checkStretchRecording();
     closingPlaneChecks();
+    sheetTableChecks();
     chainTableChecks();
     chainDrawChecks();
     stripTableChecks();
@@ -2783,6 +3091,7 @@ int main(int argc, char **argv)
     }
     if (ico_shard_take("closing_original")) {
         closingPixels(0);
+        sheetPixels(0);
     }
     if (ico_shard_take("chain")) {
         chainPixels();
@@ -2828,6 +3137,7 @@ int main(int argc, char **argv)
         buildScene();
         stretchWidePixels();
         closingPixels(1);
+        sheetPixels(1);
         CHECK(rhi_vk_validation_error_count() == 0, "16:9: %u validation errors",
               rhi_vk_validation_error_count());
         rd_shutdown();

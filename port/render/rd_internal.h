@@ -23,6 +23,7 @@
  *   rd_dst_read.c  the destination read: the exact GS blend in the fragment shader
  *   rd_screen_planes.c  the screen-prim triangles' planes for the exact viewport
  *   rd_content_hide.c   the content table: stage geometry the native frame hides
+ *   rd_content_extend.c the content table's sheets: overlays continued to the frame's edges
  *   rd_content_chain.c  the chains a stage animation lets down, drawn at their size
  *   rd_join.c      the card test's strips joined over a part's meshes
  *   rd_png.c       a minimal PNG writer for the replay tool and tests
@@ -709,6 +710,12 @@ typedef struct RdMeshRec {
     /* the meshes of the part its strips were last joined over
      * (rd__mesh_join_part's sig; 0: its own strips only) */
     uint64_t partJoinSig;
+    /* a sheet of the content table (rd_content_extend.c): the vertex count
+     * of the stream it was made from, the tiles appended after it
+     * (rd_mesh.c extendSheet; 0: none), and the entry's cols and rows, for
+     * rd_update_vu_mesh to lay them again */
+    uint32_t tiledFrom;
+    uint8_t tileCols, tileRows;
 } RdMeshRec;
 
 /* The stream mesh m had when frame `frame` was recorded, NULL when no
@@ -790,6 +797,44 @@ extern const int rd__content_hide_count;
 bool rd__content_hide_set(const char *spec);
 /* the verb entry i is applied with (RD_HIDE_OFF for an index outside) */
 RdHideVerb rd__content_hide_verb(int i);
+
+/* The content table's sheets (rd_content_extend.c): stage overlays made to
+ * cover the PS2's 4:3 picture, by the bits of their stream, and the tiles
+ * rd_mesh.c appends around them.  RD_EXTEND_OFF is never listed (an
+ * override's "off"). */
+typedef enum RdExtendVerb { RD_EXTEND_OFF = 0, RD_EXTEND_TILES = 1 } RdExtendVerb;
+
+typedef struct RdContentExtend {
+    const char *model; /* where it is, for the reader */
+    RdExtendVerb verb;
+    uint32_t vertexCount, qwPerVertex;
+    uint64_t streamHash; /* xxh3_64 of the vertexCount * qwPerVertex quadwords */
+    uint8_t cols, rows;  /* tiles appended outward across and down */
+} RdContentExtend;
+
+extern const RdContentExtend rd__content_extend[];
+extern const int rd__content_extend_count;
+#define RD_CONTENT_EXTEND_MAX 64 /* the table's size at most (rd_content_extend.c asserts) */
+
+/* rd_mesh.c: the verbs the meshes created from now on are made with, as
+ * rd__content_hide_set (the environment variable ICO_RD_CONTENT_EXTEND,
+ * read when the first mesh is made): "off", "tiles" or "table" for every
+ * entry, or "N=verb" for entry N; NULL is "table".  False (nothing
+ * changed) on a bad spec. */
+bool rd__content_extend_set(const char *spec);
+/* the verb entry i is applied with (RD_EXTEND_OFF for an index outside) */
+RdExtendVerb rd__content_extend_verb(int i);
+/* rd_mesh.c: the tiles appended to the sheet in stream (vertexCount
+ * vertices of qwPerVertex quadwords, the prelit or lit layout): every
+ * 4-vertex strip an axis-aligned tile in one plane (its U a function of x
+ * alone, its V of y alone), all of one size; the outer column repeated cols
+ * times outward across, then the outer row rows times outward down (away
+ * from the model's origin; both ways on an axis the sheet is centred on),
+ * the UV continued.  Returns the vertex count of the tiles, 0 when the
+ * stream is not such a sheet; writes them at out when out is given and cap
+ * (in vertices) holds them. */
+uint32_t rd__sheet_tiles(const float (*stream)[4], uint32_t vertexCount, uint32_t qwPerVertex,
+                         uint32_t cols, uint32_t rows, float (*out)[4], uint32_t cap);
 /* rd_mesh.c: the per-list VU images (rd_set_vu_common updates all 13). */
 void rd__vu_init(void);
 void rd__vu_shutdown(void);
