@@ -1,0 +1,353 @@
+# Configuration: config.toml and ico-pc.ini
+
+The port's settings live in two files: `config.toml` in the [user folder](ARCHITECTURE.md#terms),
+which the Settings menu reads and writes, and `ico-pc.ini` beside the executable, an override layer
+for a few keys and the home of the start-up switches. This document lists every section and key
+with its type, its default and the code that reads it, the order in which the layers win, when the
+files are written, and how libscf's system configuration is answered from them.
+
+## Files
+
+| path | what it holds |
+| --- | --- |
+| `port/config/config.h`, `config.c` | the settings store over both files: the typed getters and setters, the save, the first-run template (`first_run_text`), `retired_keys` |
+| `port/config/sysconf.h`, `sysconf.c` | libscf (`sceScfGetLanguage`, `sceScfGetTimeZone`, `sceScfGetSummerTime`) and the boot screens' language and video mode |
+| `port/platform/host_config.h`, `host_config.c` | the ini reader, `ini_map` (the toml keys the ini may override), the TOML reader and writer, the user folder, portable mode, the card folders |
+| `port/game/video_options.h` | the `[video]` key table and their reader |
+| `port/game/options.h` | the `[gameplay]`, `[game] circle_back`, `[audio] output`, `[mirror]` and `[dev] debug_option` keys |
+| `port/input/input_config.c`, `port/input/input.h` | the `[input]` keys and the bindings |
+| `port/game/photo_mode.h` | `[photo]` |
+| `port/game/appearance.h` | `[characters]` |
+| `port/game/achievements.h` | `[game] achievements` and `achievements.toml` |
+| `port/render/texpack.h` | what the texture pack keys of `[video]` control |
+| `port/platform/main_host.c` | the start-up keys of `ico-pc.ini` and the command line |
+| `port/platform/android/android_paths.h` | the Android build's file layout |
+| `tools/package_docs_lib.sh` | `pkg_write_ini`: the `ico-pc.ini` the packages ship |
+| `port/config/test/config_test.c` | the `config` test |
+
+## The two files and who wins
+
+`config.toml` is `<user folder>/config.toml`; `ico-pc.ini` is beside the executable on Windows and
+Linux and in the user folder for the macOS app bundle (`port/config/config.c`, `ensure`;
+`port/platform/host_config.c`, `ico_host_ini_path`). The values are read on first use and kept in
+memory (`port/config/config.h`).
+
+A reader asks `ico_config_get_string`, `_bool`, `_int` or `_float` with a `section.key` path and a
+default. The answer is the ini's value when the path is one of the keys the ini may override and
+the ini has it non-empty, else `config.toml`'s, else the caller's default (`port/config/config.c`,
+`ini_value`, `ico_config_get_string`). The keys the ini may override, and their ini names, are the
+`ini_map` table (`port/platform/host_config.c`, `ini_map`, `ico_config_ini_key`):
+
+| config.toml | ico-pc.ini |
+| --- | --- |
+| `[paths] iso`, `saves`, `saves2`, `keep_image` | `iso`, `saves`, `saves2`, `keep_image` |
+| `[audio] enabled` | `audio` |
+| `[video] backend` | `backend` |
+| `[dev] ticks`, `watchdog`, `trace`, `dump_every`, `dump_dir`, `dump_interp`, `dump_from`, `audio_dump`, `pad_script`, `input_record`, `verify`, `headless`, `fixed_clock`, `use_iso`, `write_config`, `start_stage`, `switch_to`, `switch_at`, `unlock_credits`, `popup_test` | the same names |
+
+The start-up code reads the ini the other way round: `ico_ini_load` loads the ini and fills its
+missing keys from those `config.toml` entries (a `true` or `false` there reads as `1` or `0`), then
+exports the values other libraries take from the environment (`ICO_AUDIO`, `ICO_AUDIO_DUMP`,
+`ICO_AUDIO_VOLUME`, `ICO_AUDIO_MUSIC`, `ICO_AUDIO_EFFECTS`, `ICO_AUDIO_DEVICE`,
+`ICO_FIXED_CLOCK`, `ICO_RD_DUMP_*`, `ICO_START_STAGE`, `ICO_SWITCH_TO`, `ICO_SWITCH_AT`,
+`ICO_UI_POPUP_TEST`) (`port/platform/host_config.c`, `ico_ini_load_layered`, `ico_ini_export`).
+The command line, when there is one, wins over both: `--iso`, `--pad-script`, `--trace`, `--ticks`
+and `--no-verify` (`port/platform/main_host.c`, header comment, the argument loop in
+`host_main`). The disc image also has `$ICO_ISO` and the fixed places of `find_iso`
+([PLATFORM.md](PLATFORM.md)).
+
+The input layer reads `config.toml` itself, at start, through the TOML reader rather than the
+store: `[input]` and `[gameplay] stick_fix` (`port/input/input_sdl.c`, `ico_input_sdl_init`;
+`port/input/input_config.c`, `ico_input_apply_toml`). The achievements keep their own file,
+`<user folder>/achievements.toml` (`port/game/achievements.h`, `ico_ach_init`).
+
+## config.toml
+
+### The format
+
+A small TOML subset: `[section]` or `[a.b]` headers, `key = value` lines, `"basic"` and
+`'literal'` strings, `true`/`false`, numbers and one-line arrays (kept as written for the caller to
+split). A key's path is `section.key`, so `[input] kb.cross` and `[input.kb] cross` are the same
+entry. `#` outside quotes starts a comment and a repeated key keeps its last line; multi-line
+values, inline tables, dates, arrays of tables and escapes other than `\\` and `\"` are ignored
+(`port/platform/host_config.h`, the `IcoToml` comment). A bool reads `true`, `false`, `1` or `0`;
+anything malformed gives the caller's default (`ico_toml_get_bool`).
+
+The top-level `version` is `1` (`port/config/config.h`, `ICO_CONFIG_VERSION`); a file with a
+larger one is read, its unknown keys kept, and a log line says so (`port/config/config.c`,
+`ensure`). Keys in `retired_keys` (`[game] classic_menu_text`, `[game] port_font`,
+`[dev] hand_probe`) are kept in the file, read by nothing and logged once a load
+(`port/config/config.c`, `retired_keys`, `log_retired`).
+
+### When the file is written
+
+The game never rewrites the file wholesale. `ico_config_save` renders the keys held in memory over
+the file's own text: a line whose key changed is rewritten as `key = value`, everything else
+(comments, unknown keys, array layout, the lines the reader ignores) is kept byte for byte, new keys
+go at the end of their section, and the result is written to `config.toml.tmp` and renamed over
+the file (`port/platform/host_config.h`, `ico_toml_render`, `ico_toml_save`). The save also adds
+`version`, `[paths] iso`, `[video] preset`, `vsync`, `window_mode`, `fullscreen`, `[audio]
+enabled`, `volume`, `music`, `effects`, `output`, `device` and `[game] language` at their defaults
+when the file lacks them (`port/config/config.c`, `ico_config_save`).
+
+It is written at these moments only:
+
+- on leaving a Settings page, or before an action that leaves the menu (Extras > Credits, the
+  model viewer, Quit): `ui_settings_save` writes `[video]` through `ico_video_save`, the bindings
+  through `ico_input_write_bindings`, and anything else changed through `ico_config_save`
+  (`port/ui/settings.c`, `ui_settings_save`, `leaveTo`, `requestQuit`);
+- when the window is closed or the title's Quit row is taken with a change still pending
+  (`port/ui/settings.c`, `ui_settings_save_on_quit`; `port/platform/main_host.c`, the host loop);
+- when the game's own Stereo/Mono row changes with `[audio] output` set to stereo or mono
+  (`port/game/options.c`, `ico_opt_output_toggled`);
+- when a save is written, for the slot's `[mirror]` entry (`port/game/options.c`,
+  `ico_mirror_slot_saved`);
+- in photo mode, for `hide_ui` and `film_effect` (`port/game/photo_mode.c`);
+- on Android, when a graphics driver is chosen, fails or is removed
+  (`port/platform/android/gpu_driver_android.c`); with unsaved changes, on Android when the app is
+  terminated and on iOS when it goes to the background (`port/config/config.h`, `ico_config_dirty`;
+  `port/platform/window_lifecycle.h`, `ICO_LC_CONFIG_SAVE`; `port/platform/window_host.c`);
+- on the first run, when no file exists: `ico_config_write_first_run` writes the commented template
+  `first_run_text` (every key `ico_config_save` adds and more, at their defaults) and never
+  replaces an existing file. The [window build](ARCHITECTURE.md#terms) does it by default, the
+  [headless build](ARCHITECTURE.md#terms) only with `write_config=1`
+  (`port/config/config.c`, `ico_config_write_first_run`; `port/platform/main_host.c`,
+  `write_config`).
+
+### [paths]
+
+| key | type | default | read by |
+| --- | --- | --- | --- |
+| `iso` | string | `""` | the disc image; empty asks on the first start (`port/platform/main_host.c`, `find_iso`) |
+| `saves` | string | `<user folder>/memcard` | the card in port 0 ([SAVES.md](SAVES.md); `host_config.c`, `ico_host_saves_dir`) |
+| `saves2` | string | absent: no card | the card in port 1 (`host_config.c`, `ico_host_saves2_dir`) |
+| `keep_image` | bool | `false` | Android: keep the first start's copy of the disc image (`main_host.c`, `android_keep_image`) |
+
+### [video]
+
+Read by `port/game/video_options.c` into `IcoVideoOptions` the first time a value is asked for, and
+written back by `ico_video_save` (`port/game/video_options.h`, header comment). The meaning of each
+display option, the [preset](ARCHITECTURE.md#terms) rule and the pacing belong to
+[DISPLAY.md](DISPLAY.md).
+
+| key | type | default | values |
+| --- | --- | --- | --- |
+| `preset` | string | `"original"` | `original`, `enhanced`, `custom` |
+| `resolution` | string | `"window"` (Android `"auto"`) | `window`, `WxH`, `Nx` (N 1..16), `auto` |
+| `aspect` | string | `"4:3"` | `4:3`, `16:10`, `16:9`, `21:9`, `32:9`, `48:9`, `auto` |
+| `window_mode` | string | `"windowed"` | `windowed`, `borderless`, `fullscreen` |
+| `fullscreen` | bool | `false` | read when `window_mode` is absent |
+| `vsync` | bool | `true` | |
+| `texture_filter` | string | `"original"` | `original`, `trilinear`, `anisotropic` |
+| `full_height` | bool | `false` | |
+| `full_pixel` | bool | from the preset | true when the rows add up to Enhanced |
+| `framerate` | string or int | `"uncapped"` (Android 60) | `original`, `uncapped`, 30..1000 |
+| `anti_aliasing` | string | `"off"` | `off`, `ssaa2`, `ssaa4`, `msaa2`, `msaa4`, `msaa8` |
+| `crt` | bool | `false` | the CRT filter |
+| `crt_mode` | string | `"consumer"` | `scanlines`, `consumer`, `trinitron`, `pvm`, `shadow` |
+| `crt_strength` | float | `1.0` | 0..1 |
+| `crt_scanlines`, `crt_mask`, `crt_halation`, `crt_bloom`, `crt_curvature` | float | `-1` | file only; below 0 is the mode's value |
+| `texture_pack` | bool | `true` | load an installed texture pack |
+| `dump_textures` | bool | `false` | write each texture under its PCSX2 name |
+| `model_pack` | bool | `true` | load an installed model pack |
+| `dump_models` | bool | `false` | save each model part as glTF |
+| `texture_pack_budget_mb` | int | `2048` | file only; graphics memory for replacements, 128..65536 |
+| `texture_pack_precache` | bool | `true` | file only; read the whole pack into memory at start |
+| `texture_pack_cache_mb` | int | `0` | file only; memory for that read, 0 (half the computer's) or 128..65536 |
+| `effect_glow`, `effect_depth_of_field`, `effect_softening`, `effect_motion_blur`, `effect_fog`, `effect_cinematic_bars` | bool | `true` | the game's own picture effects |
+| `effects_depth` | bool | `true` | file only; the scene's depth for an effects program such as ReShade |
+| `video_mode` | string | absent: 60 Hz | `pal50` or `60hz`, the boot screen's choice (`port/config/sysconf.c`) |
+| `backend` | string | `"vulkan"` | `vulkan` or `d3d12`, the window build's renderer (`port/platform/window_host.c`) |
+| `gpu_driver` | string | `""` | Android: the folder of an added graphics driver, used from the next start |
+| `gpu_driver_failed` | string | `""` | Android: the driver that did not start last time, written by the game |
+
+(`port/game/video_options.h`, the key table; `port/game/video_options.c`, `read_config`;
+`port/platform/android/gpu_driver_android.c`, `KEY_DRIVER`, `KEY_FAILED`.) The texture pack keys
+are handed to the pack loader as its budget, cache size and precache switch
+(`port/render/texpack.h`, `budgetMb`, `cacheMb`, `precache`); [PACKS.md](PACKS.md) has the
+loader.
+
+### [audio]
+
+| key | type | default | read by |
+| --- | --- | --- | --- |
+| `enabled` | bool | `true` | the audio device; `false` keeps the sound driver running with no output (`ICO_AUDIO`) |
+| `volume`, `music`, `effects` | float | `1.0` | 0.0..1.0, the gains (`ICO_AUDIO_VOLUME`, `ICO_AUDIO_MUSIC`, `ICO_AUDIO_EFFECTS`; `port/audio/audio_host.c`) |
+| `output` | string | `"auto"` | `auto` leaves the PS2's stereo/mono choice to the game and its card; `stereo` or `mono` win over it (`port/game/options.h`, `ico_opt_output_mode`) |
+| `device` | string | `""` | an output device's name; empty is the system's default (`ICO_AUDIO_DEVICE`; `port/ui/settings.c`, `stepDevice`) |
+
+The gains and the device are read once at start from the environment `ico_ini_export` sets; the
+Settings menu changes the running values and the file (`port/platform/host_config.c`,
+`ico_ini_export`). [AUDIO.md](AUDIO.md) has the mixer.
+
+### [game]
+
+| key | type | default | read by |
+| --- | --- | --- | --- |
+| `language` | string | `"auto"` | `en`, `fr`, `de`, `it`, `es`; `auto` follows the system ([System configuration](#system-configuration-libscf)) |
+| `circle_back` | bool | `true` | Circle backs out of the game's menus as Triangle does (`port/game/options.h`, `ico_opt_circle_back`) |
+| `achievements` | bool | `true` | the achievement popups (`port/game/achievements.c`, `ico_ach_init`) |
+
+### [gameplay]
+
+Read once by `port/game/options.c` the first time each is asked for; every default is the
+original game's behaviour (`port/game/options.h`, header comment).
+[GAME_FEATURES.md](GAME_FEATURES.md) has what each does to the game.
+
+| key | type | default | meaning |
+| --- | --- | --- | --- |
+| `stick_fix` | bool | `false` | the stick fix (`ico_opt_stick_fix_default`); the input layer reads it too |
+| `yorda_safe` | bool | `false` | the shadows never take Yorda |
+| `door_fix` | bool | `false` | an arrival holding hands does not send the pair back through the door |
+| `mirror` | bool | `false` | mirrored play, the value a run starts from until New Game or a load |
+| `natural_chains` | bool | `false` | a chain let down keeps its links' size |
+| `developer_mode` | bool | `false` | the development build's debug menu and options |
+
+### [mirror]
+
+`slot_N` (bool) and `slot_N_sum` (int, the save's game-block checksum) for save file N
+(`game.00N`, 0..9): the mirror flag of each save, kept here and never in the card's files. A slot
+whose checksum differs reads Off (`port/game/options.h`, `ico_mirror_slot_saved`,
+`ico_mirror_slot_loaded`).
+
+### [input]
+
+The bindings and the input switches, applied over the defaults at start
+(`port/input/input_config.c`, `apply_keys`; `port/input/bindings.c`, `ico_bindings_defaults`,
+`ico_bindings_set`):
+
+| key | type | default | range |
+| --- | --- | --- | --- |
+| `keyboard`, `mouse`, `gamepad` | bool | `true` | the devices that drive the pad |
+| `rumble` | bool | `true` | |
+| `deadzone` | float | `0.12` | 0..0.9 |
+| `walk_scale` | float | `0.5` | 0.05..1, the left stick while a walk key is down |
+| `mouse_sensitivity` | float | `1.0` | 0.01..100 |
+| `mouse_decay` | float | `0.80` | 0..0.99, the touch look pad's decay a vsync |
+| `mouse_invert_y` | bool | `false` | |
+| `mouse_camera` | bool | `true` | |
+| `mouse_hold` | float | `0.75` | 0..10 seconds |
+| `mouse_camera_speed` | float | `1.0` | 0.5..10 |
+| `mouse_full_range` | bool | `false` | |
+| `mouse_return` | bool | `true` | |
+| `touch_mode` | string | `"auto"` | `off`, `auto`, `always` |
+| `touch_size` | string | `"medium"` | `small`, `medium`, `large` |
+| `touch_opacity` | number | `75` | 10..100 |
+
+The bindings themselves are `kb.<target>`, `mouse.<target>` and `pad.<target>` for each pad target
+(`cross`, `circle`, `lstick_up`, ...; `bindings.c`, `target_names`), plus `kb.walk`; a value is
+one name or an array of names from `port/input/keys.def`, the mouse buttons and the gamepad
+sources. A key or value that does not parse is logged and skipped (`ico_bindings_set`). The writer
+puts back only what differs from the defaults or is already in the file
+(`port/input/input.h`, `ico_input_write_bindings`). [INPUT.md](INPUT.md) has the bindings.
+
+### [photo]
+
+| key | type | default | meaning |
+| --- | --- | --- | --- |
+| `stick_speed` | float | `1.0` | every rate of the photo camera times this |
+| `invert_y` | bool | `false` | the looking stick's up and down swapped |
+| `hide_ui` | bool | `false` | the help panel hidden at enter; Square saves it |
+| `film_effect` | int | `0` | the Film effect photo mode shows, 0 (off) to 4; Right cycles and saves it |
+| `png_dir` | string | `"screenshots"` | the captures' folder, inside the user folder |
+
+(`port/game/photo_mode.h`, header comment.)
+
+### [characters]
+
+One string per part: `ico_skin`, `ico_poncho_navy`, `ico_poncho_pink`, `ico_poncho_light`,
+`ico_poncho_dark`, `ico_tunic`, `ico_shorts`, `yorda_skin`, `yorda_dress`. The value is
+`"original"` (the default, also for an absent key or an unknown value, which is logged once), one
+of the 24 palette names (`red` ... `black`), or for the skin parts `tone1` ... `tone12`
+(`port/game/appearance.h`, header comment).
+
+### [dev]
+
+Developer keys, none in the template. The ones in `ini_map` may also be given in `ico-pc.ini`
+under the same name (below). Read through the store:
+
+| key | type | default | read by |
+| --- | --- | --- | --- |
+| `debug_option` | int | `0` | with developer mode, non-zero loads `<user folder>/dev/thisIsYourDebugOption` (`port/game/options.c`, `ico_opt_debug_option`) |
+| `unlock_credits` | bool | `false` | Extras > Credits unlocked (`port/game/credits.c`) |
+| `perf_log` | bool | `false` | `logs/ico-pc-perf.csv`, one line per [replayed](ARCHITECTURE.md#terms) frame (`port/platform/window_host.c`, `perf_log`) |
+| `slow_step_ms` | float | `8` | the slow-step log threshold; 0 is off (`port/platform/window_host.c`) |
+
+## ico-pc.ini
+
+`key=value` lines; a line whose first non-blank character is `#` or `;` is a comment; keys and
+values are trimmed and a value in double quotes loses them; a relative path is taken from the
+executable's folder (`port/platform/host_config.h`, header comment). At most 32 keys are held
+(`ICO_INI_MAX_KEYS`). The keys the program reads (`ico_ini_get` in
+`port/platform/host_config.c` and `port/platform/main_host.c`):
+
+| key | effect |
+| --- | --- |
+| `iso` | the disc image; written back after the file dialog (`main_host.c`, `ico_ini_store`) |
+| `saves`, `saves2` | the card folders ([SAVES.md](SAVES.md)) |
+| `keep_image` | Android: `1` keeps the first start's copy of the disc image |
+| `portable` | `1` on, `0` off; read before the user folder is first used, ini only (`host_config.c`, `ico_host_portable_value`) |
+| `audio` | `0`: no audio device (exported as `ICO_AUDIO`) |
+| `audio_dump` | a WAV of the mixed output; `1` is `logs/audio.wav` (`export_audio_keys`) |
+| `backend` | `vulkan` or `d3d12` |
+| `ticks` | exit after N [Main ticks](ARCHITECTURE.md#terms) |
+| `watchdog` | seconds, default 30; 0 is off |
+| `trace` | `0` off, `1` or a path on; on by default only in the headless build |
+| `pad_script` | the pad script to run |
+| `input_record` | the pad recording: `0`/`false`/`none` off, `1`/`true` on, or a path; on by default in the window build |
+| `verify` | `0` skips the disc image's SHA-1 check when it is mounted directly |
+| `use_iso` | `1` mounts the disc image instead of `ico.o2r`; default 1 headless, 0 in the window build |
+| `write_config` | `1` writes the first-run `config.toml`; default 1 in the window build, 0 headless |
+| `headless`, `fixed_clock` | the fixed clock: `fixed_clock` when present, else on for the headless build, `headless=1` or a trace to an explicit path (`ico_host_fixed_clock`) |
+| `dump_every`, `dump_dir`, `dump_interp`, `dump_from` | [rd](ARCHITECTURE.md#terms) frame dumps every N frames into a folder beside the ini (`export_dump_keys`) |
+| `start_stage`, `switch_to`, `switch_at` | the stage Main starts in; one forced stage change (exported) |
+| `popup_test` | test popups from Main tick 100 (exported as `ICO_UI_POPUP_TEST`) |
+| `unlock_credits` | as `[dev] unlock_credits` |
+
+(`port/platform/host_config.c`, `ini_map`, `export_dump_keys`, `export_audio_keys`,
+`ico_ini_export`, `ico_host_fixed_clock`; `port/platform/main_host.c`, header comment,
+`record_open`, `use_iso_mode`, `android_keep_image`.) The program writes the ini only to store
+`iso=` (`port/platform/host_config.h`, `ico_ini_store`, which keeps the file's other lines).
+
+The packages ship an `ico-pc.ini` written by `pkg_write_ini`: notes in the platform's wording,
+`iso=` (with the packager's value), `watchdog=30`, and `portable=1` either commented out or, in the
+portable archive, on (`tools/package_docs_lib.sh`, `pkg_write_ini`).
+
+## System configuration (libscf)
+
+`port/config/sysconf.c` answers the game's libscf calls from the settings. `sceScfGetLanguage`
+returns `[game] language` when it names one of the game's five languages, else the host's: the
+first of SDL's preferred locales the game has (window build), else `LC_ALL`, `LC_MESSAGES` or
+`LANG` (not `C` or `POSIX`), else English; the answer is cached (`port/config/sysconf.c`,
+`sceScfGetLanguage`; `port/config/sysconf.h`, `ico_sysconf_host_language`). Japanese, Dutch and
+Portuguese are never answered. `sceScfGetTimeZone` and `sceScfGetSummerTime` return 0.
+
+The boot screens' choices come from the config: the port skips the language and 50/60 Hz screens,
+and `common/src/main.c` sets the language (`sceScfGetLanguage` mapped onto the game's numbers 2..6
+as the boot screen maps it) and the video mode (`[video] video_mode`, else 60 Hz) on every boot
+(`port/config/sysconf.h`, `ico_boot_language`, `ico_boot_video_mode`,
+`ico_scf_to_game_language`). The Settings menu's Language row writes `[game] language` and the
+cached answer together (`ico_sysconf_set_language`); the boot's 50/60 Hz value is written by
+`ico_sysconf_set_video_mode`.
+
+## The user folder and portable mode
+
+`config.toml`, `achievements.toml`, the card folders and the rest of the per-user files are in the
+user folder, `ico_host_pref_dir`: SDL's `SDL_GetPrefPath("ico-pc", "ico-pc")` in the window build,
+the executable's folder in the headless build and the tests. Portable mode (`portable=1` in the
+ini, or an existing `userdata/` folder beside the executable) makes it that `userdata/` folder; the
+Android and iOS builds always use the app's own folder and log a `portable=` line as ignored
+(`port/platform/host_config.h`, `ico_host_pref_dir`, `ico_host_set_portable`). On Android every
+file the port writes is in the app's files folder, the Vulkan pipeline cache in its cache folder:
+`ico-pc.ini`, `config.toml`, `achievements.toml`, `ico.o2r`, `memcard/`, `logs/`, `dumps/`,
+`textures/SCES-50760/replacements/` and the picker's copy of the image
+(`port/platform/android/android_paths.h`, `IcoAndroidPaths`). [PLATFORM.md](PLATFORM.md) has the
+per-platform table.
+
+## Tests
+
+`port/config/test/config_test.c` is the ctest `config`: the TOML reader and writer (render and the
+atomic save), round trips, the ini over `config.toml` over default precedence, the language
+`sceScfGetLanguage` answers, the wall clock and the [EE](ARCHITECTURE.md#terms) timers
+(`port/config/test/config_test.c`, header comment; `port/config/CMakeLists.txt`). The Settings
+menu tests check what the pages write (`port/ui/test/settings_test.c`; [UI.md](UI.md)).
