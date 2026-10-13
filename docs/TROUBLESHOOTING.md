@@ -135,9 +135,9 @@ line has `CRASH:` in it. Send the log. The developers can find where it
 happened from the numbers in that block.
 
 **The game closes or restarts itself right after it starts.** Some graphics
-drivers crash while the game prepares its shaders. When that happens the
+drivers crash while the game gets its graphics ready. When that happens the
 game notices and starts itself again, once or twice, each time trying a
-gentler way: on Windows it may switch to Direct3D 12, or prepare the shaders
+gentler way: on Windows it may switch to Direct3D 12, or get the graphics ready
 as you play instead of all at once. You need do nothing, and your settings
 are left as they are. If it still cannot start, a message says the graphics
 driver crashed. Updating the graphics driver usually fixes this. On Windows
