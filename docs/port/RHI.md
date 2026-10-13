@@ -1,0 +1,343 @@
+# The render hardware interface
+
+The [RHI](ARCHITECTURE.md#terms) is the thin interface under [rd](ARCHITECTURE.md#terms) that the
+Vulkan and Direct3D 12 backends implement; macOS and iOS run the Vulkan backend over MoltenVK. This
+document covers the interface, how several backends share one build, each backend's device,
+swapchain and diagnostics switches, and the tests. The shaders are [SHADERS.md](SHADERS.md); how the
+window paces and presents is [DISPLAY.md](DISPLAY.md).
+
+## Files
+
+| path | what it holds |
+| --- | --- |
+| `port/rhi/rhi.h` | the interface: handles, formats, resources, bind groups, pipelines, passes, commands, stats, timing, backend selection |
+| `port/rhi/rhi_backend.h` | the backend table (`RHI_BACKEND_FUNCS`, `RhiBackendTable`, `RHI_BACKEND_DEFINE`) |
+| `port/rhi/rhi_backend_names.h` | the renaming of every entry point to `rhi_<prefix>_*` inside a backend |
+| `port/rhi/rhi_backend.c` | the real `rhi_*` functions, forwarding to the selected table; the layer classifiers |
+| `port/rhi/CMakeLists.txt` | the libraries, SDL3's prefix per target, the tests |
+| `port/rhi/vk/rhi_vk.h` | Vulkan extras for tests and tools only |
+| `port/rhi/vk/vk_device.c` | instance, device pick, features, limits, validation, the `ICO_VK_*` switches, handle pools |
+| `port/rhi/vk/vk_present_mode.c` | the present mode and the present-wait decision, pure |
+| `port/rhi/vk/vk_swapchain.c` | the swapchain on SDL3's surface, the present-wait thread, the surface poll |
+| `port/rhi/vk/vk_pipeline.c` | bind group layouts, bind groups, pipelines, the pipeline cache file |
+| `port/rhi/vk/vk_cmd.c` | frames, command lists, submission, barriers, passes, draws, copies, readback |
+| `port/rhi/vk/vk_resource.c` | buffers, textures, samplers, shaders, deferred destruction |
+| `port/rhi/vk/vk_enums.h`, `vk_internal.h` | the enum tables; the backend's shared state |
+| `port/rhi/vk/vk_surface_android.c` | the window surface on Android |
+| `port/rhi/d3d12/rhi_d3d12.h` | D3D12 extras for tests only |
+| `port/rhi/d3d12/d3d12_device.c` | runtime loading, adapter pick, device, debug layer, heaps, limits, the stats entry points |
+| `port/rhi/d3d12/d3d12_plan.h`, `d3d12_plan.c` | the bookkeeping that needs no D3D12 header |
+| `port/rhi/d3d12/d3d12_swapchain.c` | the DXGI flip-model swapchain, the waitable object, frame statistics |
+| `port/rhi/d3d12/d3d12_cmd.c`, `d3d12_pipeline.c`, `d3d12_resource.c` | commands and fences; root signatures and pipeline states; committed resources |
+| `port/rhi/d3d12/d3d12_enums.h`, `d3d12_internal.h` | the enum tables; the backend's shared state |
+| `cmake/IcoMoltenVK.cmake` | the MoltenVK slice an Apple build links |
+| `tools/fetch_moltenvk.sh` | MoltenVK and the Apple SDL3 build |
+| `port/rhi/test/` | the backend tests and their shaders |
+
+## The interface
+
+`rhi.h` keeps the surface small: about a dozen shader programs, under a hundred pipelines, about
+fifteen render targets, ring buffers for per-frame data and no compute. Its rules for additions:
+nothing Vulkan-only (no input attachments, no framebuffer feedback loops, no push descriptors;
+anything added must be expressible in D3D12 and Metal); explicit state transitions
+(`rhi_cmd_barrier`: the caller knows the frame graph and backends do not track state); opaque 32-bit
+handles with a generation, 0 being null; byte layouts fixed by rd and shared with the shaders
+through `port/shaders/shader_consts.h` (`port/rhi/rhi.h`, header comment). The destination read's
+input attachment (`RHI_BIND_INPUT_ATTACHMENT`, Vulkan only) sits behind its own limits bit (below).
+
+**Handles and frames.** `RhiBuffer`, `RhiTexture`, `RhiSampler`, `RhiShader`, `RhiPipeline`,
+`RhiBindGroupLayout`, `RhiBindGroup`, `RhiCommandList`, `RhiFence`. `RHI_FRAMES_IN_FLIGHT` is 2;
+`rhi_wait_frame` blocks until the frame submitted two frames ago is done and is the frame boundary
+(command lists and transient bind groups of that slot recycled); `rhi_frame_slot` names the slot for
+per-frame resources outside the RHI. `rhi_wait_idle` idles the GPU; `rhi_collect_garbage_now` also
+carries out every deferred destroy (`port/rhi/rhi.h`, commands).
+
+**Formats** (`RhiFormat`): RGBA8 UNORM (alpha holds raw GS alpha, 0x80 = 1.0), RGBA8 UINT (the exact
+integer blend's targets), R8 UNORM and UINT, R16 UINT, RGBA16F, D32F, D32F_S8 (the scene's
+depth-stencil; the Vulkan backend may back it with D24S8, `RhiLimits.depthStencilFormatName`), BGRA8
+(the swapchain), BC1/2/3/7 (texture packs, only with `RhiLimits.bcTextures`, copy-destination and
+sampled only), R32 UINT (the scene depth's bits for the fog). Vertex formats are F32x1..4, U8x4
+UNORM and UINT, U16x2 UINT, U32x1 (`port/rhi/rhi.h`, formats).
+
+**Resources.** Buffers have a usage mask and a memory kind: DEVICE (static meshes), UPLOAD (the
+per-frame ring, persistently mapped) or READBACK. Textures take a size, mip levels, a format, a
+usage mask and a sample count (2, 4 or 8 from `RhiLimits.msaaCounts`: multisampled targets are never
+copied or read back, only resolved by `rhi_cmd_resolve_color` or read by a shader). STORAGE and
+INPUT_ATTACHMENT usages exist for the destination read. Create and destroy are not frame-safe:
+destruction is deferred until the frames that may use the handle have retired (`port/rhi/rhi.h`,
+resources).
+
+**States** (`RhiState`): UNDEFINED, RENDER_TARGET, DEPTH_WRITE, DEPTH_READ (test without write, also
+sampleable; a stencil-only writer uses DEPTH_WRITE with `depthWrite` false), SHADER_READ, COPY_SRC,
+COPY_DST, PRESENT, STORAGE and RENDER_TARGET_READ. A barrier is needed only when a texture changes
+state: two writes in the same state are ordered by the backend. Buffers have no barriers: a buffer
+copy is made visible to every later read and waits for every earlier read of its destination
+(`port/rhi/rhi.h`, commands).
+
+**Bind groups.** One fixed slot model for every program: group 0 the per-frame uniforms (b0), group
+1 the per-draw uniforms (b1; the VU programs' b2, b3) and the VU vertex stream (t0), group 2 the
+textures t1..t4 and samplers s1..s4. Backends map these onto descriptor sets or root parameters; rd
+never sees the mapping. Binding types: uniform buffer, storage buffer, sampled texture, sampler, a
+dynamic uniform buffer whose offset is given at bind time (`rhi_cmd_set_bind_group_offsets`, at most
+`RHI_MAX_DYNAMIC_OFFSETS` (4) a layout, so one group serves every draw reading a block of one size
+from one buffer), storage texture and input attachment. Bind groups are transient: valid for the
+current frame only (`port/rhi/rhi.h`, bind groups).
+
+**Pipelines and passes.** `RhiPipelineDesc` carries the two shaders, the layouts, vertex bindings
+and attributes, topology (triangle list or strip, line list, point list), up to
+`RHI_MAX_COLOR_TARGETS` (2) blend states with dual-source factors (`RHI_BF_SRC1_*`, only with
+`RhiLimits.dualSourceBlend`), the depth-stencil state (depth grows with GS Z: GS GEQUAL is GEQUAL),
+colour and depth formats, a sample count and `dstRead`: NONE, STORAGE (the target bound as a
+rasterizer-ordered storage texture, no colour target) or ATTACHMENT (colour attachment 0 read as an
+input attachment in rasterization order, Vulkan only). Culling is always off: the GS has none. A
+render pass names its colour and depth attachments with load ops (LOAD, CLEAR, DONT_CARE) and store
+ops (STORE, or DONT_CARE so a tile-based GPU can skip the write-back) (`port/rhi/rhi.h`, pipelines,
+passes).
+
+**Commands.** Begin, end and submit a list; barriers; begin and end a render pass; viewport,
+scissor, pipeline, bind groups, vertex and index buffers, stencil reference, blend constant; draw
+and draw indexed; buffer, buffer-to-texture, texture and texture-to-buffer copies (outside passes,
+the textures in COPY_SRC or COPY_DST); colour resolve; debug labels. `rhi_readback_texture` reads a
+whole texture synchronously for dumps and tests (`port/rhi/rhi.h`, commands, verification helpers).
+
+**Limits** (`RhiLimits`): the uniform alignment (256 on D3D12), the largest texture and render
+target, dual-source blending (optional: without it rd blends in two passes), depth readback and
+sampling of the depth-stencil format, copy pitch and offset alignment (D3D12 256 and 512, Vulkan 1
+and 4), mips and anisotropy, dynamic uniforms and the storage range, BC textures, `tiler` (a
+tile-based phone GPU: Qualcomm, ARM, Imagination, Samsung, Apple, Broadcom or any Android device;
+false on D3D12), the MSAA counts every renderer target supports and sample-rate shading, and the
+destination read's three bits: `fragmentInterlock` (Vulkan), `rov` (D3D12) and
+`rasterOrderAttachment` (Vulkan) (`port/rhi/rhi.h` (`RhiLimits`)).
+
+**Device and swapchain.** `rhi_init` takes an `SDL_Window` (NULL: headless, no swapchain), vsync,
+debug layers and the app name. `rhi_device_lost` turns true once the device is gone; the backend
+logs the reason once and the window ends the session. `rhi_resize_swapchain`, `rhi_swapchain_size`
+(the backend rebuilds on its own at the surface's size, and the renderer follows it at each
+acquire), `rhi_acquire_backbuffer` (id 0: rebuild needed), `rhi_present`, `rhi_present_shown` (false
+after a present that did nothing or a D3D12 present the OS reported occluded), and the Android
+lifecycle's `rhi_release_surface` and `rhi_recreate_surface` (`port/rhi/rhi.h`, device).
+
+**Stats** (`RhiStats`) are cumulative since `rhi_init`; the caller takes differences. The `*Ns`
+fields are CPU time blocked in the backend: `fenceWaitNs` on GPU completion (`rhi_wait_frame`,
+`rhi_wait_idle`, readbacks), `acquireNs` in the swapchain acquire, `presentNs` in the present call.
+`swapchains` counts swapchains made, so the window can tell the first present on a new one. On
+Vulkan `acquireNs` is `vkAcquireNextImageKHR` and `presentNs` `vkQueuePresentKHR`; on D3D12
+`acquireNs` is the wait on the frame latency object, `presentNs` is `Present` and `fenceWaitNs` is
+`dx_wait_fence`, and only those with `swapchains`, `presents` and `fenceWaits` are counted; every
+other field reads 0 (`port/rhi/rhi.h` (`RhiStats`); `port/rhi/vk/vk_swapchain.c`
+(`rhi_acquire_backbuffer`, `rhi_present`); `port/rhi/d3d12/d3d12_device.c` (`rhi_get_stats`);
+`port/rhi/d3d12/d3d12_cmd.c` (`dx_wait_fence`)). The memory gauges (live and peak allocations, their
+bytes, the device's limit) are Vulkan's.
+
+**Timestamps.** `RHI_MAX_TIMESTAMPS` (32) a frame slot; `rhi_read_timestamps` hands back the slot
+`rhi_wait_frame` last recycled, so reading never waits. `RHI_TIMESTAMP_KEEP_BARRIERS` keeps the
+held-back image barriers held. Vulkan uses query pools; D3D12 reports none (`port/rhi/rhi.h`, GPU
+timestamps).
+
+**Present mode and timing.** `rhi_prefer_mailbox` asks for mailbox with vsync from the next
+swapchain (D3D12: not offered); `rhi_present_mailbox` and `rhi_present_mode_name` say what the
+swapchain has. `rhi_present_timing`, `_use`, `rhi_present_last_id` and `rhi_present_timing_next` are
+the display's timing of presents (Vulkan's present wait, below; D3D12: false, nothing, 0, -1).
+`rhi_present_statistics(&presentCount, &presentRefresh, &syncRefresh, &syncNs)` is the swapchain's
+own count of the pictures it showed, read after each present: D3D12's `GetFrameStatistics`, with the
+last vblank's QPC time moved onto `SDL_GetTicksNS`'s clock; false on Vulkan, before the first
+picture, without a window or while DXGI calls the counts disjoint (`port/rhi/rhi.h`;
+`port/rhi/d3d12/d3d12_swapchain.c` (`dx_frame_stats`)).
+
+**Other entry points.** `rhi_set_pipeline_cache_path` (Vulkan's cache file, below; D3D12 ignores
+it), `rhi_set_vulkan_loader` (a `vkGetInstanceProcAddr` the Android build loaded itself; MoltenVK
+builds reject another loader), `rhi_injector_name` ("ReShade" or "vkBasalt") and `rhi_overlay_name`
+("Steam overlay" or "Mesa overlay"), with the pure classifiers `rhi_injector_from_layer_name`,
+`rhi_overlay_from_layer_name` and `rhi_layer_switched_on`, which reads a layer's enable and disable
+variables as the loader does (`port/rhi/rhi.h`; `port/rhi/rhi_backend.c`).
+
+## Backends in one build
+
+Each backend library is compiled with `RHI_BACKEND_PREFIX` set to its short name (`vk`, `d3d12`).
+`rhi.h` then includes `rhi_backend_names.h`, whose macros rename every entry point the backend
+defines to `rhi_<prefix>_*`, so the backend's sources keep the plain names. The backend registers
+its functions once with `RHI_BACKEND_DEFINE` (`rhi_backend_vk` at the end of `vk_device.c`,
+`rhi_backend_d3d12` at the end of `d3d12_device.c`); `RHI_BACKEND_FUNCS` lists every entry point in
+table order and types each field from `rhi.h`'s declaration (`port/rhi/rhi_backend.h`, header
+comment; `port/rhi/rhi_backend_names.h`). Callers never include `rhi_backend.h`.
+
+`rhi_backend.c` defines the real `rhi_*` functions as forwarders to the selected table. The linked
+backends are listed by `ICO_RHI_HAVE_VK` and `ICO_RHI_HAVE_D3D12`, Vulkan first.
+`rhi_create_backend(name)` takes "vulkan" (or "vk") or "d3d12", case-insensitive; NULL or "" takes
+`ICO_RHI_BACKEND` when it names a linked backend, else the first linked one. It refuses a backend
+not in the build and any change while a device is up; `rhi_backend_name(i)` lists the linked ones
+(`port/rhi/rhi_backend.c` (`find`, `defaultBackend`, `rhi_create_backend`)). The window passes
+`[video] backend` (default "vulkan"), so `ICO_RHI_BACKEND` reaches only callers that pass none
+(`port/platform/window_host.c` (`ico_window_open`)).
+
+`port/rhi/CMakeLists.txt` builds `ico_rhi_vulkan` (option `ICO_RHI_VULKAN`, on), `ico_rhi_d3d12`
+(`ICO_RHI_D3D12`, on for 64-bit Windows) and `ico_rhi` (the forwarders, linking the backends);
+`ico_rhi_vk` is what `port/render` and the shader tests link. Vulkan-Headers and volk come from
+`tools/fetch_deps.sh` (the backend loads the Vulkan library at run time); without SDL3 the backends
+are headless-only. The D3D12 backend uses mingw-w64's own headers and loads `d3d12.dll` and
+`dxgi.dll` at run time (`port/rhi/CMakeLists.txt`, header comment).
+
+## Vulkan
+
+**Device** (`port/rhi/vk/vk_device.c`). A device needs Vulkan 1.2, dynamic rendering (core 1.3 or
+the extension), timeline semaphores, the swapchain extension on a window, a graphics queue that can
+present, and RGBA8, RGBA8 UINT, R8, D32F and D32F_S8 or D24S8 formats. Devices score discrete 1000,
+integrated 500, virtual 200, CPU 100, plus 10 for core 1.3 and 5 for dual-source blending
+(`vkr_rate_device`). Only the features used are enabled; the destination read takes
+`VK_EXT_fragment_shader_interlock` or rasterization-order attachment access with
+`VK_KHR_dynamic_rendering_local_read`. The scene's depth-stencil is D32_SFLOAT_S8_UINT, or
+D24_UNORM_S8_UINT when only that has the sampled and transfer features (`vkr_choose_depth_stencil`).
+
+| variable | effect |
+| --- | --- |
+| `ICO_VK_VALIDATION` | 1 adds `VK_LAYER_KHRONOS_validation` and debug utils; 0 keeps them off |
+| `ICO_VK_DEVICE` | an index or a substring of the device name forces the pick |
+| `ICO_VK_FAKE_LIMITS` | `mali` clamps the limits to a Mali-G68's (4 descriptor sets, 128 bytes of push constants, 16 sampled images a stage, 4096 allocations, ...); `min` holds the alignment, texture, render target, dynamic uniform, storage range and anisotropy limits to 256, 4096, 4096, 8, 2^27 and 16 |
+| `ICO_VK_FAKE_D24S8` | 1 takes D24S8 where the device has it |
+| `ICO_VK_FAKE_NO_DUAL` | 1 leaves dual-source blending off |
+| `ICO_VK_FAKE_NO_MSAA` | 1 reports single sampling only |
+| `ICO_VK_FAKE_NO_DST` | 1 reports no destination read |
+| `ICO_VK_STORAGE_BARRIERS` | 1 puts the by-region barrier before a destination-read draw that only the validation layer needs |
+| `ICO_VK_GLOBAL_BARRIERS` | 1 records a global barrier before every pass (`vk_cmd.c`) |
+| `ICO_VK_PRESENT_WAIT` | 1 uses `VK_KHR_present_id` and `VK_KHR_present_wait` where offered (off otherwise) |
+| `ICO_VK_FIFO_LATEST_READY` | 1 uses `VK_PRESENT_MODE_FIFO_LATEST_READY_EXT` where FIFO would be taken, when offered |
+| `ICO_VK_POLL_SURFACE` | 1 polls the surface size after presents, as Android always does (`vk_swapchain.c`) |
+
+(`port/rhi/vk/vk_device.c` (`vkr_fake_limits`, `vkr_choose_depth_stencil`, `vkr_pick_device`);
+`port/rhi/vk/vk_cmd.c`; `port/rhi/vk/vk_swapchain.c` (`vkr_poll_surface_on`)).
+
+**Present mode** (`port/rhi/vk/vk_present_mode.c`, pure so its test compiles it alone). With vsync:
+mailbox when preferred and offered; FIFO latest ready when asked for and offered; else FIFO. Without
+vsync: immediate wherever offered (the picture tears where the compositor lets it), then mailbox,
+then FIFO (`vkr_choose_present_mode`). `vkr_present_wait_wanted` is true only when
+`ICO_VK_PRESENT_WAIT` is set to anything but "" or "0", the device offers both extensions and SDL
+can run the thread.
+
+**Swapchain** (`port/rhi/vk/vk_swapchain.c`). BGRA8 UNORM (else RGBA8) in sRGB-nonlinear colour
+space, so the game's colours are written as they are; `minImageCount + 1` images, held to the
+surface's maximum; the identity transform where offered (the compositor rotates). A rebuild keeps
+the old swapchain until the first present on the new one succeeds, so the screen keeps its last
+picture (`vkr_swapchain_create`). An out-of-date acquire returns id 0 and the presenter rebuilds; a
+lost surface makes a new surface and swapchain. On Android (or with `ICO_VK_POLL_SURFACE=1`) the
+surface's size is polled at every present for 15 s after a swapchain is made, then once a second,
+since the driver can go on returning success while the surface changes size (`vkr_poll_surface`).
+
+**The present-wait thread.** With `ICO_VK_PRESENT_WAIT=1` a thread waits on each present's id in
+turn (`vkWaitForPresentKHR`, 4 ms a wait) and notes when it returned on `SDL_GetTicksNS`'s clock in
+a 64-note ring. Ids go only to presents made while the window uses the timing (under its vsync
+lock). A wait that returned at once found the present on the screen already: its time is the note
+before when that was under half a millisecond earlier, else not known. Before the swapchain is made
+again or destroyed the thread is held out of its waits for at most 100 ms (`vkr_pw_pause`); a thread
+still in a wait then stops the timing and the swapchain goes on; at shutdown a thread that does not
+end is left to end on its own (`port/rhi/vk/vk_swapchain.c`, the display's timing).
+
+**Pipeline cache.** The window sets `pipelines.vkcache` in the [user folder](ARCHITECTURE.md#terms)
+(Android: the app's cache folder). `rhi_init` loads it when the file is 32 bytes to 64 MB and its
+header (`VkPipelineCacheHeaderVersionOne`: header size, version one, vendor id, device id,
+`pipelineCacheUUID`) names this device; anything else logs "is for another device or driver" and
+starts empty, as does data the driver refuses. Every pipeline is created through it, and
+`rhi_shutdown` writes it back to `<path>.tmp` and renames it over the file
+(`port/rhi/vk/vk_pipeline.c` (`vkr_cache_load`, `vkr_pipeline_cache_init`,
+`vkr_pipeline_cache_shutdown`)).
+
+**Bindings and synchronisation.** A layout slot is a descriptor binding at the slot plus its type's
+shift (`vkr_bindTypeMap`: b 0, t 16, s 32, u 48, the shifts DXC compiles with). Each frame slot owns
+a command pool, descriptor pools and the objects destroyed while it recorded; every submit signals
+the next value of one timeline semaphore that `rhi_wait_frame` waits on; the first submit after an
+acquire waits on its semaphore and the present on the image's `renderDone`
+(`port/rhi/vk/vk_pipeline.c`; `port/rhi/vk/vk_cmd.c`, header comment). Every buffer and texture has
+its own `VkDeviceMemory` (`port/rhi/vk/vk_resource.c`, header comment).
+
+**Android surface.** With a driver the app loaded itself the instance belongs to another loader, so
+`vk_surface_android.c` makes the surface through the `vkGetInstanceProcAddr` given to volk instead
+of SDL's; the surface is NULL while the app is in the background and the caller tries again
+(`port/rhi/vk/vk_surface_android.c`, header comment).
+
+**Test hooks** (`port/rhi/vk/rhi_vk.h`): the validation error count, a forced present result
+(suboptimal, surface lost, out of date), swapchain creation and retirement counts, a stand-in for
+`vkWaitForPresentKHR` (and one that hangs), the last limit a creation reached, and a texel ceiling
+that makes texture creation fail as out of memory.
+
+## Direct3D 12
+
+**Device** (`port/rhi/d3d12/d3d12_device.c`). `d3d12.dll` and `dxgi.dll` are loaded at run time, so
+the Vulkan path of the same executable never depends on them. A module loaded from outside the
+system directory (ReShade's `dxgi.dll` beside the program) makes `rhi_injector_name` "ReShade".
+Adapters are enumerated discrete first (`EnumAdapterByGpuPreference`); a software adapter or one
+without feature level 11_0 is skipped; with none the device runs on WARP (`dx_pick_adapter`).
+
+| variable | effect |
+| --- | --- |
+| `ICO_D3D12_DEBUG` | 1 the debug layer and the DXGI debug factory; 0 off |
+| `ICO_D3D12_ADAPTER` | `warp`, an adapter index or a substring of its name |
+| `ICO_DX_FAKE_NO_DST` | 1 reports no destination read (no ROVs) |
+| `ICO_D3D12_FRAME_LATENCY` | the swapchain's frame latency (below) |
+
+The debug layer's info queue keeps corruption, errors and warnings and drops the clear-value
+performance notes (`dx_setup_info_queue`). A lost device (removed, reset, hung, driver internal
+error) is logged once with the removed reason; later failures are counted, not logged (`dx_check`).
+
+**Bookkeeping** (`port/rhi/d3d12/d3d12_plan.h`), header-free so it is tested on every host: the
+`RhiState` to `D3D12_RESOURCE_STATES` table (depth SHADER_READ and DEPTH_READ are one state, PRESENT
+is COMMON) and the barrier plan (UNDEFINED takes the tracked state); buffer tracking for copies
+(COMMON at a list's start, COPY_DEST, then GENERIC_READ); same-state copy ordering (a second copy
+into a texture in one list goes through COPY_DEST, COMMON, COPY_DEST); the descriptor rings (one
+shader-visible heap per type, split into a region per frame slot, the sampler heap keeping one
+persistent descriptor per sampler); bind group layouts as up to two descriptor tables in register
+space `<group>` with each dynamic uniform a root CBV; constant buffer view sizes; the DXBC input
+signature reader; the handle pools. Every resource is committed (`d3d12_resource.c`); textures are
+created typeless and viewed typed (`d3d12_enums.h`).
+
+**Swapchain** (`port/rhi/d3d12/d3d12_swapchain.c`). `DXGI_SWAP_EFFECT_FLIP_DISCARD` on the SDL
+window's HWND, `DX_SWAP_BUFFERS` (3) BGRA8 buffers, stretch scaling, DXGI's Alt+Enter turned off.
+`DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING` is set when DXGI 1.5 offers it, and
+`DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT` when a frame latency is wanted; the same flags
+go to `ResizeBuffers`, since DXGI refuses a change of the waitable flag (`dx_swap_flags`).
+`ICO_D3D12_FRAME_LATENCY` "0" makes no waitable object (Present blocks on a full queue), "1" to "3"
+that latency, anything else 2 (`dx_frame_latency_wanted`). After creation `SetMaximumFrameLatency`
+and `GetFrameLatencyWaitableObject`; a failure logs one line and Present waits for the display
+(`dx_frame_latency_open`). With the object and vsync on, `rhi_acquire_backbuffer` waits on it (1 s
+at most, logged once) before the replay records, timed into `acquireNs`, so `Present` returns at
+once and the picture is drawn after the wait rather than before it; the first acquire waits too.
+`rhi_present` calls `Present(1)` with vsync and `Present(0)` without (`DXGI_PRESENT_ALLOW_TEARING`
+where allowed), times it into `presentNs`, treats `DXGI_STATUS_OCCLUDED` as not shown, reads the
+frame statistics (`PresentCount`, `PresentRefreshCount`, `SyncRefreshCount`, `SyncQPCTime`) after a
+shown present, and resizes the buffers when the window's pixel size changed, as DXGI has no
+out-of-date result. The surface calls do nothing: a DXGI swapchain stays on its window
+(`port/rhi/d3d12/d3d12_swapchain.c`).
+
+**Not implemented on D3D12**: timestamps, mailbox with vsync, the display's timing of presents, the
+pipeline cache file, and the stats beyond those above (`port/rhi/d3d12/d3d12_device.c`).
+
+**Test extras** (`port/rhi/d3d12/rhi_d3d12.h`): the debug layer's error count, whether it is active,
+and whether the device runs on WARP.
+
+## MoltenVK
+
+Apple builds link MoltenVK's static XCFramework instead of loading a Vulkan driver (iOS apps cannot
+load one): `cmake/IcoMoltenVK.cmake` picks the `ios-arm64` or `macos-arm64_x86_64` slice under
+`tools/toolchain/deps/moltenvk/<platform>/MoltenVK`, links Metal, Foundation, QuartzCore,
+CoreGraphics, IOSurface and UIKit or AppKit and IOKit, and exports `vkGetInstanceProcAddr` so SDL
+finds it with `dlsym`; the iOS package has the device slice only (`cmake/IcoMoltenVK.cmake`).
+`tools/fetch_moltenvk.sh [ios|macos]` (on macOS with Xcode) fetches MoltenVK v1.4.2 against a pinned
+SHA-256, the licences of the libraries compiled into it, and builds a static SDL3 for the target
+(iOS 15.0, macOS 12.0 minimum), then runs `tools/fetch_deps.sh --game-only`
+(`tools/fetch_moltenvk.sh`). `rhi_init` rejects a different Vulkan loader on these builds
+(`port/rhi/rhi.h` (`rhi_set_vulkan_loader`)).
+
+## Tests
+
+| test | checks |
+| --- | --- |
+| `rhi_test_common.c`, `.h` | headless rendering on any backend, texel by texel: a 64x32 target in eight cells (dual-source blending, stencil wrap, reversed depth, colour mask, a copied texture drawn indexed), an RGBA8 UINT target, R8 copies and same-state ordering, a device-local buffer, depth readback, three frames |
+| `rhi_vk_test.c` | the common cells on Vulkan, a hazard-tracking cell, and the pipeline cache file (written, read back, another device's or garbage ignored); ctest `rhi_vk`, and `rhi_vk_nodual`, `rhi_vk_d24s8`, `rhi_vk_mali` under the fake switches |
+| `rhi_vk_swapchain_test.c` | the window path on SDL's offscreen driver: frames, readback order, surface release and recreation, suboptimal and lost presents, resizes, the surface poll, submits per frame, the present-wait stand-in and a hanging wait |
+| `rhi_vk_present_mode_test.c` | `vkr_choose_present_mode` over the mode sets drivers offer |
+| `rhi_vk_enum_test.c` | every `rhi.h` enumeration has a Vulkan mapping; the layer classifiers and `rhi_layer_switched_on` |
+| `rhi_d3d12_plan_test.c` | `d3d12_plan.c` on every host; with the shader table, every vertex shader's DXIL inputs against its SPIR-V locations and every DXIL blob signed |
+| `rhi_d3d12_test.c` | Windows, double-clickable: the cells on WARP, on the hardware adapter, the swapchain on a hidden window, then Vulkan for comparison; writes `rhi_d3d12_test.log` and shows a message box (`--console` for ctest) |
+| `compare_backends.cmd`, `compare_png.ps1` | Windows: every dump in `dumps\` rendered by `rd_replay_tool` on both backends, compared texel by texel: DISPLAY identical, the presented picture within 1 LSB |
+| `shaders/rhi_test.hlsl`, `gen_shaders.sh` | the tests' shaders, committed as `rhi_test_spv.h` and `rhi_test_dxil.h` so the tests build without DXC |
+
+The Vulkan tests exit 77 (skipped) without a device; under the fetched validation layer `rhi_vk`
+fails on any validation error (`port/rhi/CMakeLists.txt`; `port/rhi/test/*`, header comments).
