@@ -270,6 +270,15 @@ void rdtex_set_release_hook(RdTexReleaseFn fn);
 
 const RdTexCacheStats *rdtex_stats(void);
 
+/* A texture the text draws from (a coverage format: rd_create_texture_sheet's
+ * menu text pages, rd_create_texture_r8's glyph pages) that was not made or
+ * did not reach the graphics card (reason, e.g. the device refused it, the
+ * upload ring had no room): one rd: log line for the session, so a menu
+ * whose words are missing while its pictures draw is readable in a log.
+ * 1 when this call wrote the line; 0 for any other format or once written. */
+int rdtex_text_upload_failed(const char *name, uint32_t w, uint32_t h, uint8_t format,
+                             const char *reason);
+
 #ifdef __cplusplus
 }
 #endif

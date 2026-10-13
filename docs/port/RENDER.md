@@ -296,7 +296,12 @@ again only after a morph rewrote them); the interpolation's scratch meshes stay 
 (`port/render/rd_replay.c` (`uploadTextures`, `uploadMeshes`)). Every `rd__ring_alloc` caller
 checks for `~0` (the ring is full) and skips its write and its draw or copy, the untextured draws'
 white texel included, which the next replay uploads (`port/render/rd_replay.c` (`rd__ring_alloc`,
-`uploadTextures`)).
+`uploadTextures`)). A text texture (a coverage format: a menu text page or a glyph page) that was
+not made, that the device refused, or that found the ring full is named once in the log,
+`rd: text: a menu texture could not be uploaded (...)` (`port/render/rd_tex.c`
+(`rdtex_text_upload_failed`), from `rd_create_texture_sheet` and `uploadTextures`; a glyph page
+`rd_create_texture_r8` could not make logs the same words with `ui:`, `port/ui/font.c`
+(`pageTexture`)).
 
 **Bind groups.** Bind groups are valid only in the [frame slot](ARCHITECTURE.md#terms) they were
 made in, so their caches are tagged with an epoch every `rhi_wait_frame` of the renderer starts anew

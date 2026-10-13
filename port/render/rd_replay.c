@@ -5786,6 +5786,8 @@ static void uploadTextures(void)
             t->state = RHI_STATE_UNDEFINED;
             t->mipLevels = levels;
             if (!t->rhi.id) {
+                rdtex_text_upload_failed(t->name, t->w, t->h, t->format,
+                                         "the graphics card refused the texture");
                 continue;
             }
             whole = 1;
@@ -5801,6 +5803,7 @@ static void uploadTextures(void)
         const uint32_t pitch = (rw * bpp + pitchA - 1) / pitchA * pitchA;
         uint64_t off = rd__ring_alloc((uint64_t)pitch * rh, offA);
         if (off == ~0ull) {
+            rdtex_text_upload_failed(t->name, t->w, t->h, t->format, "no room in the upload ring");
             continue;
         }
         for (uint32_t y = 0; y < rh; y++) {

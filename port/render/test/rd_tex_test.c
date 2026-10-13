@@ -1140,6 +1140,21 @@ static uint8_t r8At(int x, int y)
     return (uint8_t)hash((uint32_t)(y * 64 + x) + 991u);
 }
 
+/* rdtex_text_upload_failed: one log line a session, for the text's
+   coverage formats only (rd_replay.c uploadTextures calls it for every
+   texture it could not upload; the game's own textures are not text) */
+static void textUploadLogChecks(void)
+{
+    CHECK(rdtex_text_upload_failed("rgba", 4, 4, RD_TEXEL_RGBA8, "test") == 0,
+          "upload log: an RGBA8 texture is not text");
+    CHECK(rdtex_text_upload_failed("bc1", 4, 4, RD_TEXEL_BC1, "test") == 0,
+          "upload log: a BC1 texture is not text");
+    CHECK(rdtex_text_upload_failed("ui menu text light p0", 256, 128, RD_TEXEL_SHEET, "test") == 1,
+          "upload log: a menu text page is named");
+    CHECK(rdtex_text_upload_failed("ui font 16px p0", 256, 256, RD_TEXEL_R8, "test") == 0,
+          "upload log: once a session");
+}
+
 static void r8Checks(void)
 {
     enum { W = 37, H = 23 };
@@ -1357,6 +1372,7 @@ int main(void)
     scrollChecks();
     cacheChecks();
     r8Checks();
+    textUploadLogChecks();
     replacementChecks();
     photoGrainChecks();
     dl_Clear();

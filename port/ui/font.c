@@ -629,6 +629,15 @@ static uint32_t pageTexture(SizeSet *z, int page)
         snprintf(name, sizeof(name), "ui font %dpx p%d", z->px, page);
         p->tex = rd_create_texture_r8((uint32_t)z->pageW, (uint32_t)z->pageH, gs, name).id;
         free(gs);
+        if (!p->tex) {
+            static int s_logged; /* once a session: the page is asked for again at each draw */
+            if (!s_logged++) {
+                fprintf(stderr,
+                        "ui: text: a menu texture could not be uploaded (no texture slot "
+                        "or memory: \"%s\"); text drawn from it is missing\n",
+                        name);
+            }
+        }
     }
     return p->tex;
 }
