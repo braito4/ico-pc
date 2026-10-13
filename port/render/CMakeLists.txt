@@ -116,6 +116,7 @@ add_library(ico_render STATIC
     rd_post.c
     rd_present.c
     rd_replay.c
+    rd_upload.c # the upload ring and the uploads before a replay's first pass
     rd_screen_planes.c # the screen-prim triangles' planes
     rd_shadow.c
     rd_tex.c

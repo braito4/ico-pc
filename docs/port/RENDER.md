@@ -17,6 +17,7 @@ commands and [replays](ARCHITECTURE.md#terms) them on the [RHI](ARCHITECTURE.md#
 | `port/render/rd_tex.h`, `rd_tex.c` | the texture cache: GS formats decoded into rd textures |
 | `port/render/rd_mesh.h`, `rd_mesh.c` | the VU mesh path (VU1_PROGRAMS.md) |
 | `port/render/rd_replay.c` | a frame onto the RHI: every command's replay |
+| `port/render/rd_upload.c` | the upload ring and what a replay uploads before its first pass |
 | `port/render/rd_pipeline.c` | pipeline keys from the state block, the pipeline cache, the reachable set |
 | `port/render/rd_dst_read.c` | the exact GS blend read from the destination in the fragment shader |
 | `port/render/rd_post.c` | `rd_post`: each post kind as the GS writes and sprites GsBase.c issues |
@@ -212,7 +213,7 @@ display options are [DISPLAY.md](DISPLAY.md).
 come from a pool of parked textures of the same size (`port/render/rd_core.c`
 (`rd__temp_target_alloc`)). A target with a new texture starts cleared to zero colour and
 stencil and depth 1.0, so a start's first frames never show the driver's old memory
-(`port/render/rd_replay.c` (`clearNewTargets`)). When the GPU cannot hold a scene-sized texture
+(`port/render/rd_upload.c` (`rd__clear_new_targets`)). When the GPU cannot hold a scene-sized texture
 the scale is halved between frames and `rd_scene_scale_lowered` reports it to the Resolution row
 (`port/render/rd_core.c` (`rd__note_scene_pressure`, `rd_begin_frame`)).
 
@@ -242,7 +243,7 @@ time it is needed and keeps it until the content changes (`port/render/rd_tex.h`
 - **levels**: a mipmapped TEX1 stores the TIM2's own levels when they are authored pictures
   (`rdtex_store_levels`, `RDTEX_AUTHORED_RATIO`), sampled at the GS's level; otherwise the
   replay builds the further levels by a 2x2 box, colour weighted by alpha, with alpha coverage
-  kept for alpha-tested textures (`port/render/rd_replay.c` (`uploadMips`);
+  kept for alpha-tested textures (`port/render/rd_upload.c` (`uploadMips`);
   `port/render/rd_tex.h` (`rdtex_build_mip_chain`, `rdtex_keep_alpha_coverage`)).
 
 ## The replay
@@ -294,10 +295,11 @@ present and the camera probe keep the plain mapping.
 **Uploads.** Before the first pass the replay uploads pending textures and their levels through
 the frame's upload ring, and the static meshes the frame draws into the device arena (once, and
 again only after a morph rewrote them); the interpolation's scratch meshes stay on the ring
-(`port/render/rd_replay.c` (`uploadTextures`, `uploadMeshes`)). Every `rd__ring_alloc` caller
-checks for `~0` (the ring is full) and skips its write and its draw or copy, the untextured draws'
-white texel included, which the next replay uploads (`port/render/rd_replay.c` (`rd__ring_alloc`,
-`uploadTextures`)).
+(`port/render/rd_upload.c` (`rd__upload_dirty_textures`, `rd__upload_meshes`)). Every
+`rd__ring_alloc` caller checks for `~0` (the ring is full) and skips its write and its draw or
+copy, the untextured draws' white texel included, which the next replay uploads
+(`port/render/rd_replay.c` (`rd__ring_alloc`); `port/render/rd_upload.c`
+(`rd__upload_dirty_textures`)).
 
 **Bind groups.** Bind groups are valid only in the [frame slot](ARCHITECTURE.md#terms) they were
 made in, so their caches are tagged with an epoch every `rhi_wait_frame` of the renderer starts anew

@@ -13,6 +13,7 @@
  *   rd_tex.c       the texture cache: GS textures decoded into rd textures (rd_tex.h)
  *   rd_pipeline.c  pipeline keys from the state block, the pipeline cache, the reachable set
  *   rd_replay.c    an RdFrame onto the RHI: every command's replay
+ *   rd_upload.c    the upload ring and what a replay uploads before its first pass
  *   rd_interp.c    presentation between ticks: the blended frame and rd_present
  *   rd_present.c   DISPLAY to the output in every preset: box blit, overlay, deferred text, capture
  *   rd_crt.c       the CRT filter, in place of the present's box blit
@@ -390,7 +391,7 @@ typedef struct RdTargetRec {
     uint8_t zFormat;     /* RdZFormat of the depth buffer; 0 = PSMZ32 */
     /* a freed temporary target kept with its textures for the
      * next of its size (rd__temp_target_alloc); a taken one is cleared
-     * (rd_replay.c clearNewTargets: colour 0, depth 1.0) at the next replay
+     * (rd_upload.c rd__clear_new_targets: colour 0, depth 1.0) at the next replay
      * (clearPending) */
     uint8_t parked, clearPending;
     /* the destination reads the colour texture was made for
@@ -558,7 +559,7 @@ typedef struct RdTexRec {
     uint8_t format; /* RD_TEXEL_* (images; targets leave it 0) */
     /* with dirty, the texels changed since the last upload: the union
      * of the updates, [dirtyX0, dirtyX1) x [dirtyY0, dirtyY1); the whole
-     * texture after a create or rd_update_texture.  uploadTextures copies
+     * texture after a create or rd_update_texture.  rd__upload_dirty_textures copies
      * that rectangle (the whole texture when it makes the RHI texture or
      * a mip chain) */
     uint32_t dirtyX0, dirtyY0, dirtyX1, dirtyY1;
@@ -578,7 +579,7 @@ typedef struct RdTexRec {
      * texture had (2^TW x 2^TH), so a 4x replacement samples the same
      * place; 0 = w, h (every texture that is not a replacement).
      * pending: the replacement's levels as the file held them, owned
-     * here until uploadTextures copies every level to the RHI texture and
+     * here until rd__upload_dirty_textures copies every level to the RHI texture and
      * frees it (null otherwise).  refused: the graphics card would not
      * create it (uploadReplacement); rdtex_find then misses, so the game's
      * own texture is decoded again in its place. */
@@ -685,8 +686,8 @@ typedef struct RdMeshRec {
     uint32_t lastUsed;   /* g_rd.frameCounter of the last draw recorded */
     uint32_t replaySeen; /* g_rd.replayCounter of the replay that uploaded it */
     uint64_t ringStream, ringIndex;
-    /* the device copy (rd_mesh.c's arena, rd_replay.c
-     * uploadMeshes): stream at gpuOff, indices at gpuIndexOff of chunk
+    /* the device copy (rd_mesh.c's arena, rd_upload.c
+     * rd__upload_meshes): stream at gpuOff, indices at gpuIndexOff of chunk
      * gpuChunk - 1 (0: none), gpuSize bytes reserved; uploaded again when
      * gpuDirty (rd_update_vu_mesh).  transient: rewritten every present (the
      * interpolation's scratch meshes), drawn from the ring instead */
@@ -1591,7 +1592,7 @@ typedef struct RdContext {
     /* rd_set_mirror's flag (the run's mirror mode); the
      * effective mirror is this or settings.mirror (rd__mirror_on) */
     uint8_t mirrorRun;
-    /* image textures with dirty set (uploadTextures skips its
+    /* image textures with dirty set (rd__upload_dirty_textures skips its
      * walk of the table while there are none and the filter is unchanged) */
     uint32_t texDirtyCount;
     int texLevelsFilter; /* filterUpgrade the table was last walked for, -1 = never */
@@ -2020,10 +2021,33 @@ void rd__wait_frame(void);
  * work.  False when the ring cannot be had. */
 bool rd__begin_own_frame(uint64_t ringBytes);
 /* Tests only: a ring larger than this many bytes (0: none) cannot be made,
- * as on a device whose upload memory is full (rd_replay.c ensureRing). */
+ * as on a device whose upload memory is full (rd_upload.c rd__ensure_ring). */
 extern uint64_t g_rdRingFailOver;
 /* Ring allocation for the frame being replayed. */
 uint64_t rd__ring_alloc(uint64_t size, uint64_t align);
+/* rd_replay.c's replay state for rd_upload.c: the command list being
+ * recorded, the frame slot whose ring it uses, and the stencil's shadow
+ * window. */
+RhiCommandList rd__replay_cl(void);
+uint32_t rd__ring_slot(void);
+RdStencilWindow *rd__replay_stencil(void);
+/* rd_replay.c helpers rd_upload.c shares: the alpha coverage a texture's
+ * Enhanced mips keep, whether a target's passes begin readable, and
+ * rd__stencil_ops with the depth copy's stencil load and store. */
+int rd__mip_boost(const RdTexRec *t, uint8_t *ref);
+bool rd__pass_wants_readable(const RdTargetRec *c);
+bool rd__stencil_ops_packed(RdStencilWindow *w, uint32_t depth, bool whole, RhiLoadOp depthLoad,
+                            RhiLoadOp *stencilLoad, RhiStoreOp *stencilStore);
+/* rd_upload.c, for the replay: the ring a frame needs (its commands, plus
+ * rd__texture_ring_bytes), the slot's ring grown to at least `need` (false,
+ * keeping the old ring, when it cannot be had), the dirty textures' upload
+ * into the replay's list, the static meshes' upload into the device arena,
+ * and the first clear of the targets with a new texture. */
+uint64_t rd__estimate_ring(const RdFrame *f, int keep);
+bool rd__ensure_ring(uint64_t need);
+void rd__upload_dirty_textures(void);
+void rd__upload_meshes(const RdFrame *f, int keep);
+void rd__clear_new_targets(void);
 /* Binds u at group index `group` with its offset (rhi_cmd_set_bind_group_offsets). */
 void rd__bind_uniform(RhiCommandList cl, uint32_t group, RdUniform u);
 /* FrameCB for the presenter and posts (group 0). */
