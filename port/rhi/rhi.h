@@ -795,8 +795,8 @@ bool rhi_readback_texture(RhiTexture t, RhiViewAspect aspect, void *dst, size_t 
 /* ------------------------------------------------------------- performance
  * Counters since rhi_init, cumulative: the caller takes differences
  * (rd_core's per-replay records).  D3D12: only swapchains, presents,
- * presentNs, fenceWaits and fenceWaitNs are counted; every other field
- * reads 0.  The
+ * presentNs, acquireNs (the wait on the frame latency object), fenceWaits
+ * and fenceWaitNs are counted; every other field reads 0.  The
  * *Ns fields are CPU time blocked in the backend: fenceWaitNs on GPU
  * completion (rhi_wait_frame, rhi_wait_idle, readbacks), acquireNs in the
  * swapchain acquire, presentNs in the present call. */

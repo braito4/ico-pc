@@ -2,6 +2,7 @@
  * HWND.  Absent when the device is headless (RhiDeviceDesc.sdlWindow ==
  * NULL). */
 #include "d3d12_internal.h"
+#include <stdlib.h>
 #include <string.h>
 
 #ifdef ICO_RHI_HAVE_SDL
@@ -40,15 +41,68 @@ static bool dx_register_swap_buffers(uint32_t w, uint32_t h)
     return true;
 }
 
+static void dx_frame_latency_close(void)
+{
+    if (g_dx.frameLatencyEvent) {
+        CloseHandle(g_dx.frameLatencyEvent);
+        g_dx.frameLatencyEvent = NULL;
+    }
+}
+
 void dx_swapchain_destroy(void)
 {
     dx_release_swap_buffers();
+    dx_frame_latency_close();
     DX_RELEASE(g_dx.swapchain);
 }
 
+/* The frame latency the waitable swap chain is made with:
+ * ICO_D3D12_FRAME_LATENCY "0" = no waitable object (Present blocks on a
+ * full queue, as before), "1".."3" that latency (1 serialises the CPU and
+ * the GPU), anything else 2.  With the object, rhi_acquire_backbuffer
+ * waits for the display before the replay instead of Present after it. */
+static uint32_t dx_frame_latency_wanted(void)
+{
+    const char *env = getenv("ICO_D3D12_FRAME_LATENCY");
+    if (env && env[0] >= '0' && env[0] <= '3' && env[1] == '\0') {
+        return (uint32_t)(env[0] - '0');
+    }
+    if (env && env[0]) {
+        DX_LOG("ICO_D3D12_FRAME_LATENCY=%s is not 0..3: frame latency 2", env);
+    }
+    return 2u;
+}
+
+/* the same flags at creation and in ResizeBuffers (DXGI refuses a change
+ * of the waitable flag) */
 static UINT dx_swap_flags(void)
 {
-    return g_dx.tearing ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0u;
+    UINT f = g_dx.tearing ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0u;
+    if (g_dx.frameLatency) {
+        f |= DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
+    }
+    return f;
+}
+
+/* After creation: the latency and the waitable object.  IDXGISwapChain3
+ * derives from IDXGISwapChain2, so its methods are called on the
+ * swapchain itself (no second interface to hold).  No event = one log
+ * line and Present blocks as before. */
+static void dx_frame_latency_open(void)
+{
+    dx_frame_latency_close();
+    g_dx.frameLatencyTimeoutLogged = false;
+    if (!g_dx.frameLatency) {
+        return;
+    }
+    if (!DX_CHECK(IDXGISwapChain3_SetMaximumFrameLatency(g_dx.swapchain, g_dx.frameLatency))) {
+        DX_LOG("frame latency %u not set: no waitable object", g_dx.frameLatency);
+        return;
+    }
+    g_dx.frameLatencyEvent = IDXGISwapChain3_GetFrameLatencyWaitableObject(g_dx.swapchain);
+    if (!g_dx.frameLatencyEvent) {
+        DX_LOG("no frame latency waitable object: Present waits for the display");
+    }
 }
 
 bool dx_swapchain_create(uint32_t w, uint32_t h, bool vsync)
@@ -79,6 +133,7 @@ bool dx_swapchain_create(uint32_t w, uint32_t h, bool vsync)
     d.Scaling = DXGI_SCALING_STRETCH;
     d.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
     d.AlphaMode = DXGI_ALPHA_MODE_UNSPECIFIED;
+    g_dx.frameLatency = dx_frame_latency_wanted();
     d.Flags = dx_swap_flags();
     IDXGISwapChain1 *sc1 = NULL;
     if (!DX_CHECK(IDXGIFactory4_CreateSwapChainForHwnd(g_dx.factory, (IUnknown *)g_dx.queue,
@@ -95,6 +150,13 @@ bool dx_swapchain_create(uint32_t w, uint32_t h, bool vsync)
     /* SDL owns fullscreen (F11); no DXGI Alt+Enter */
     IDXGIFactory4_MakeWindowAssociation(g_dx.factory, g_dx.hwnd, DXGI_MWA_NO_ALT_ENTER);
     g_dx.vsync = vsync;
+    dx_frame_latency_open();
+    if (g_dx.frameLatencyEvent) {
+        DX_LOG("swapchain %ux%u, %u buffers, frame latency %u (waitable)", w, h, DX_SWAP_BUFFERS,
+               g_dx.frameLatency);
+    } else {
+        DX_LOG("swapchain %ux%u, %u buffers, no waitable object", w, h, DX_SWAP_BUFFERS);
+    }
     return dx_register_swap_buffers(w, h);
 }
 
@@ -153,6 +215,19 @@ RhiTexture rhi_acquire_backbuffer(void)
         return out;
     }
     if (!g_dx.swapAcquired) {
+        /* the waitable swap chain: wait here, before the replay, until the
+         * queue has room for this frame (Present then returns at once and
+         * the picture is drawn after the wait, not before it).  The first
+         * acquire waits too.  RhiStats.acquireNs: the window's "acquire". */
+        if (g_dx.frameLatencyEvent && g_dx.vsync) {
+            const uint64_t t0 = dx_now_ns();
+            const DWORD r = WaitForSingleObjectEx(g_dx.frameLatencyEvent, 1000, TRUE);
+            g_dx.acquireNs += dx_now_ns() - t0;
+            if (r == WAIT_TIMEOUT && !g_dx.frameLatencyTimeoutLogged) {
+                g_dx.frameLatencyTimeoutLogged = true;
+                DX_LOG("the frame latency wait took over 1 s: going on without it (once)");
+            }
+        }
         g_dx.swapIndex = IDXGISwapChain3_GetCurrentBackBufferIndex(g_dx.swapchain);
         if (g_dx.swapIndex >= g_dx.swapCount) {
             return out;

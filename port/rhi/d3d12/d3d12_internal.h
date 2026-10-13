@@ -217,6 +217,14 @@ typedef struct DxState {
     /* RhiStats: presents and the time in Present, fence waits that
      * blocked and their time (dx_now_ns) */
     uint64_t presents, presentNs, fenceWaits, fenceWaitNs;
+    /* the frame latency waitable object (d3d12_swapchain.c): the latency
+     * asked for (0 = no waitable object), its event (NULL = none: Present
+     * blocks as before) and the time rhi_acquire_backbuffer waited on it
+     * (RhiStats.acquireNs) */
+    uint32_t frameLatency;
+    HANDLE frameLatencyEvent;
+    bool frameLatencyTimeoutLogged;
+    uint64_t acquireNs;
     /* the frame statistics after the last present (rhi_present_statistics) */
     bool frameStatsValid;
     uint64_t frameStatsPresent, frameStatsRefresh, frameStatsSyncRefresh, frameStatsSyncNs;

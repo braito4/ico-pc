@@ -650,6 +650,7 @@ void rhi_get_stats(RhiStats *out)
         out->presentNs = g_dx.presentNs;
         out->fenceWaits = g_dx.fenceWaits;
         out->fenceWaitNs = g_dx.fenceWaitNs;
+        out->acquireNs = g_dx.acquireNs;
     }
 }
 
