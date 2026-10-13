@@ -1014,6 +1014,12 @@ RdPipeKeyInt rd__post_key(RdVsId vs, RdFsId fs, RhiFormat colorFmt);
 RdPipeKeyInt rd__present_depth_key(RhiFormat colorFmt);
 /* The pipeline for k, created on first use.  0 without a device. */
 RhiPipeline rd__get_pipeline(const RdPipeKeyInt *k);
+/* The crash report's note (rd_set_activity_fn) around a pipeline made
+ * outside rd__get_pipeline: begin sets "creating pipeline <what>" (a
+ * graphics driver crash then counts as one while preparing the shaders,
+ * diag_host.h), end restores the note rd__get_pipeline would leave. */
+void rd__pipeline_note_begin(const char *what);
+void rd__pipeline_note_end(void);
 void rd__pipeline_cache_clear(void);
 uint32_t rd__pipeline_count(void);
 const RdPipeKeyInt *rd__pipeline_key_at(uint32_t i);

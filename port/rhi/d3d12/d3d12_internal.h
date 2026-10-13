@@ -224,6 +224,9 @@ typedef struct DxState {
     uint32_t frameLatency;
     HANDLE frameLatencyEvent;
     bool frameLatencyTimeoutLogged;
+    /* the last Present queued nothing (DXGI_STATUS_OCCLUDED, a failure,
+     * a lost device): the next acquire does not wait on the object */
+    bool frameLatencySkipWait;
     uint64_t acquireNs;
     /* the frame statistics after the last present (rhi_present_statistics) */
     bool frameStatsValid;

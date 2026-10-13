@@ -12,7 +12,9 @@
  *   cache  the crashing run had loaded the pipeline cache file: it is
  *          deleted and the same backend tries again;
  *   d3d12  a build with the D3D12 backend, whose player did not choose a
- *          backend (backend= / [video] backend): Direct3D 12;
+ *          backend (backend= / [video] backend): Direct3D 12; when it
+ *          cannot start (no device), that run goes on to lazy on Vulkan
+ *          itself (window_host.c), as nothing crashed;
  *   lazy   the up-front creation of the pipeline set is skipped: each one
  *          is built when a frame first needs it, on the same backend.
  * After lazy there is nothing left: the crash box is shown.

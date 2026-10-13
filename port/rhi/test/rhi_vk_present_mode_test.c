@@ -137,9 +137,9 @@ int main(void)
     }
 
     /* the display's timing of presents (vkr_present_wait_wanted): off
-       unless ICO_VK_PRESENT_WAIT asks for it, even where the driver offers
-       it (used whenever offered, an RTX 3090 on Windows showed nothing
-       usable in mailbox mode); and only with the
+       unless ICO_VK_PRESENT_WAIT=1 asks for it, even where the driver
+       offers it (when it was used whenever offered, an RTX 3090 on Windows
+       showed nothing usable in mailbox mode); and only with the
        extensions and a thread */
     static const struct {
         bool offered;

@@ -3791,7 +3791,9 @@ static RhiPipeline wrapPipeline(int resolve, uint8_t vs, uint8_t prim, RhiFormat
         }
         d.debugName = "rd wrap accumulate";
     }
+    rd__pipeline_note_begin(d.debugName);
     RhiPipeline p = rhi_create_pipeline(&d);
+    rd__pipeline_note_end();
     if (!p.id) {
         rd__log("COLCLAMP 0 pipeline creation failed (resolve %d)", resolve);
         return p;

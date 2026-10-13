@@ -774,6 +774,21 @@ static void activityDone(void)
     }
 }
 
+void rd__pipeline_note_begin(const char *what)
+{
+    char note[160];
+    if (s_activityFn == NULL) {
+        return;
+    }
+    snprintf(note, sizeof(note), "creating pipeline %s", what != NULL ? what : "");
+    s_activityFn(note);
+}
+
+void rd__pipeline_note_end(void)
+{
+    activityDone();
+}
+
 RhiPipeline rd__get_pipeline(const RdPipeKeyInt *k)
 {
     /* the MSAA epoch: a pipeline fetched for a multisampled pass draws with

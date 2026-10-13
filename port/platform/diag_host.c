@@ -1073,6 +1073,18 @@ void ico_diag_set_startup_retry(int step, int have_d3d12, int backend_explicit, 
              backend != NULL && backend[0] != '\0' ? backend : "vulkan");
 }
 
+void ico_diag_forget_startup_retry_env(void)
+{
+#ifdef _WIN32
+    /* the C library's copy (getenv) and the process's block
+       (GetEnvironmentStringsW, CreateProcessW) */
+    _putenv_s(STARTUP_RETRY_ENV, "");
+    SetEnvironmentVariableW(L"" STARTUP_RETRY_ENV, NULL);
+#else
+    unsetenv(STARTUP_RETRY_ENV);
+#endif
+}
+
 void ico_diag_set_pipeline_cache(int loaded, const char *path)
 {
     if (path != NULL) {
@@ -1259,8 +1271,8 @@ static int relaunch_now(const char *value)
 
 /* The crash box's words after a driver crash with nothing left to try */
 static const char driver_box_text[] =
-    "The graphics driver crashed while preparing the game's shaders, and the game could not "
-    "work around it. Updating the graphics driver usually fixes this.";
+    "The graphics driver crashed while the game was getting its graphics ready, and the game "
+    "could not work around it. Updating the graphics driver usually fixes this.";
 
 /* A crash while the note says a pipeline was being built: the step the
    next run takes (startup_retry.h), logged; relaunch_value set when there

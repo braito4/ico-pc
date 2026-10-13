@@ -1013,6 +1013,9 @@ int ico_window_open(unsigned int gsW, unsigned int gsH)
                 "%s\n",
                 startup_retry_what(retry));
     }
+    /* read (main_host.c read it before, for the log): nothing started
+       from here inherits it */
+    ico_diag_forget_startup_retry_env();
     if (!rhi_create_backend(backend)) {
         fprintf(stderr, "window: renderer backend \"%s\" is not in this build; using vulkan\n",
                 backend);
@@ -1028,6 +1031,7 @@ int ico_window_open(unsigned int gsW, unsigned int gsH)
 
     ico_video_get(&start);
     s_videoSerial = ico_video_serial();
+open_window:
     /* fullscreen from the config is asked for at creation, not
        after: SDL's X11 backend then writes _NET_WM_STATE before the window
        is mapped, which KWin and gamescope honour (borderless at the desktop
@@ -1103,6 +1107,23 @@ int ico_window_open(unsigned int gsW, unsigned int gsH)
 #ifdef __ANDROID__
         choose_driver();
 #endif
+    }
+    if (!up && retry == STARTUP_RETRY_D3D12 && !backendExplicit &&
+        rhi_backend() == RHI_BACKEND_D3D12) {
+        /* the restart after a Vulkan driver crash found no Direct3D 12
+           (d3d12.dll missing, no device): nothing crashed, so this process
+           goes on to the next step itself, Vulkan with the pipelines built
+           as the frames need them. A new window: Vulkan needs one made
+           with SDL_WINDOW_VULKAN (window_flags) */
+        fprintf(stderr, "ico_pc: Direct3D 12 could not start after the restart; using Vulkan "
+                        "and building the shaders as the game needs them\n");
+        SDL_DestroyWindow(s_window);
+        s_window = NULL;
+        backend = "vulkan";
+        rhi_create_backend(backend);
+        retry = STARTUP_RETRY_LAZY;
+        ico_diag_set_startup_retry((int)retry, window_have_d3d12(), backendExplicit, backend);
+        goto open_window;
     }
     if (!up) {
         SDL_DestroyWindow(s_window);

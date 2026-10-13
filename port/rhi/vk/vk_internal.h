@@ -401,8 +401,9 @@ const char *vkr_present_mode_name(VkPresentModeKHR m);
  * (VK_KHR_present_id + VK_KHR_present_wait, rhi_present_timing) is used:
  * only when asked for (asked: ICO_VK_PRESENT_WAIT, anything but unset, ""
  * or "0"), offered by the driver, and a thread can wait (SDL).  Off by
- * default: used whenever offered, an RTX 3090 on Windows showed nothing
- * usable in mailbox mode at 120/144/240 and under the vsync lock. */
+ * default, opt-in with ICO_VK_PRESENT_WAIT=1: when it was used whenever
+ * offered, an RTX 3090 on Windows showed nothing usable in mailbox mode at
+ * 120/144/240 and under the vsync lock. */
 bool vkr_present_wait_wanted(bool offered, const char *asked, bool canThread);
 
 /* vk_swapchain.c */

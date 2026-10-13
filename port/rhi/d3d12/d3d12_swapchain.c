@@ -92,6 +92,7 @@ static void dx_frame_latency_open(void)
 {
     dx_frame_latency_close();
     g_dx.frameLatencyTimeoutLogged = false;
+    g_dx.frameLatencySkipWait = false; /* the first acquire waits */
     if (!g_dx.frameLatency) {
         return;
     }
@@ -218,16 +219,25 @@ RhiTexture rhi_acquire_backbuffer(void)
         /* the waitable swap chain: wait here, before the replay, until the
          * queue has room for this frame (Present then returns at once and
          * the picture is drawn after the wait, not before it).  The first
-         * acquire waits too.  RhiStats.acquireNs: the window's "acquire". */
-        if (g_dx.frameLatencyEvent && g_dx.vsync) {
+         * acquire waits too.  With vsync on or off: the object counts
+         * presented frames, not refreshes, so without vsync the wait
+         * returns as soon as a frame has left the queue (uncapped stays
+         * uncapped), and a count left over from a run without waits
+         * cannot carry into a later vsync-on run.  Not after a Present
+         * that queued nothing (occluded, failed): no frame will leave
+         * the queue for it.  50 ms (three refreshes) bounds a count that
+         * is off to one frame.  RhiStats.acquireNs: the window's
+         * "acquire". */
+        if (g_dx.frameLatencyEvent && !g_dx.frameLatencySkipWait) {
             const uint64_t t0 = dx_now_ns();
-            const DWORD r = WaitForSingleObjectEx(g_dx.frameLatencyEvent, 1000, TRUE);
+            const DWORD r = WaitForSingleObjectEx(g_dx.frameLatencyEvent, 50, TRUE);
             g_dx.acquireNs += dx_now_ns() - t0;
             if (r == WAIT_TIMEOUT && !g_dx.frameLatencyTimeoutLogged) {
                 g_dx.frameLatencyTimeoutLogged = true;
-                DX_LOG("the frame latency wait took over 1 s: going on without it (once)");
+                DX_LOG("the frame latency wait took over 50 ms: going on without it (once)");
             }
         }
+        g_dx.frameLatencySkipWait = false;
         g_dx.swapIndex = IDXGISwapChain3_GetCurrentBackBufferIndex(g_dx.swapchain);
         if (g_dx.swapIndex >= g_dx.swapCount) {
             return out;
@@ -310,6 +320,7 @@ void rhi_present(void)
     }
     if (g_dx.deviceLost) {
         g_dx.swapAcquired = false;
+        g_dx.frameLatencySkipWait = true;
         return;
     }
     UINT flags = (!g_dx.vsync && g_dx.tearing) ? DXGI_PRESENT_ALLOW_TEARING : 0u;
@@ -319,6 +330,8 @@ void rhi_present(void)
     g_dx.presents++;
     g_dx.swapAcquired = false;
     g_dx.frameStatsValid = false;
+    /* the next acquire waits only when this Present queued a frame */
+    g_dx.frameLatencySkipWait = FAILED(hr) || hr == DXGI_STATUS_OCCLUDED;
     if (FAILED(hr)) {
         /* DXGI_ERROR_DEVICE_REMOVED / _RESET / _HUNG mark the device lost
          * here (dx_check); the window loop ends the session */

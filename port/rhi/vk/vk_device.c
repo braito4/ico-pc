@@ -905,10 +905,10 @@ static bool vkr_create_device(void)
     /* the display's timing of presents (rhi_present_timing): VK_KHR_present_id
      * and VK_KHR_present_wait on a window, with SDL for the thread that
      * waits on each present (vk_swapchain.c).  Only when asked for
-     * (ICO_VK_PRESENT_WAIT=1, vkr_present_wait_wanted): used whenever the
-     * driver offers them, they left the screen with nothing usable on an
-     * RTX 3090 under Windows with presents in mailbox mode at 120/144/240
-     * and under the vsync lock.  Nothing is queried or enabled otherwise
+     * (opt-in with ICO_VK_PRESENT_WAIT=1, vkr_present_wait_wanted): when
+     * they were used whenever the driver offered them, they left the
+     * screen with nothing usable on an RTX 3090 under Windows with
+     * presents in mailbox mode at 120/144/240 and under the vsync lock.  Nothing is queried or enabled otherwise
      * (docs/port/RHI.md, "Vulkan"). */
     VkPhysicalDevicePresentIdFeaturesKHR qPid = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_ID_FEATURES_KHR};

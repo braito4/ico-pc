@@ -144,6 +144,10 @@ const char *ico_diag_activity(void);
    the renderer starts. */
 void ico_diag_set_startup_retry(int step, int have_d3d12, int backend_explicit,
                                 const char *backend);
+/* Removes ICO_STARTUP_RETRY from this process's environment once the
+   window has read it, so nothing started from here inherits the step (the
+   relaunch's own environment was captured without it at start-up). */
+void ico_diag_forget_startup_retry_env(void);
 /* loaded: the renderer created its pipeline cache from the file at path
    (rhi_pipeline_cache_loaded), which the cache step deletes; path NULL
    keeps the path given before. */

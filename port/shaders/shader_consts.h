@@ -64,8 +64,12 @@ typedef struct IcoDrawCB {
     float tex[4];      /* w, h of t1 in texels, 1/w, 1/h */
     float param[4];    /* kind specific */
     float scale[4];    /* xy t1 texels per GS texel (1, or a scaled target's
-                        * scale); z with t1 a Full pixel crop of the frame,
-                        * its left-out texels (common.hlsli g_scale), else 0;
+                        * scale); z with t1 a Full pixel crop of the frame:
+                        * the left-out share of t1's width, ox / tw, in the
+                        * draws and the blur sprite (rd_replay.c fillDrawCB,
+                        * doBlurSpriteDraw; common.hlsli gs_uv_norm), the
+                        * left-out texels, ox, in the shadow reduce blit
+                        * (shadowReduce; blit.hlsl box_reduce_ps); else 0;
                         * w reserved (0) */
 } IcoDrawCB;
 
