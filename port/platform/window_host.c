@@ -2929,8 +2929,8 @@ static bool lock_io_present(void *u, float a)
     }
     rhi_get_stats(&after);
     /* how long it waited: the backend's own blocked time in it (Vulkan:
-       the acquire, the present and the fence waits; D3D12: Present and
-       the fence waits), which leaves out the replay's own CPU time; the
+       the acquire, the present and the fence waits; D3D12: the frame
+       latency wait, Present and the fence waits), which leaves out the replay's own CPU time; the
        whole present where the backend times nothing.  Never more than the
        present (a rebuild's first present is paused out: present_once) */
     if (after.presents != before.presents &&
