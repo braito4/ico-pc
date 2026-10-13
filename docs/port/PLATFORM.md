@@ -28,7 +28,9 @@ run explain itself. [ARCHITECTURE.md](ARCHITECTURE.md) places this layer among t
 | `port/platform/window_host.c`, `window_host.h` | the SDL3 window, the renderer device, the real-time pacing, the stats lines (window build) |
 | `port/platform/window_video.c`, `window_video.h` | window mode requests and their readback |
 | `port/platform/window_lifecycle.c`, `window_lifecycle.h` | the steps run when a mobile system moves the app |
-| `port/platform/pace_policy.c`, `pace_policy.h` | the pacing decisions, free of SDL |
+| `port/platform/pace_policy.c`, `pace_policy.h` | the pacing decisions, free of SDL: the vsync lock, slow presents, the gap between presents |
+| `port/platform/display_clock.h`, `display_clock_win.c`, `display_clock_none.c`, `perf_block.c`, `perf_block.h` | the vsync lock's vblank clock and the replay blocks ([DISPLAY.md](DISPLAY.md#files)) |
+| `port/platform/startup_retry.c`, `startup_retry.h` | the steps the crash handler's relaunch takes after a graphics driver crash |
 | `port/platform/hotkeys.c`, `hotkeys.h` | F11 and F12 |
 | `port/platform/dump_zip.c`, `dump_zip.h` | F12's zip and the aspect sweep's zip |
 | `port/platform/steam_shortcut.c`, `steam_shortcut.h` | Settings > Extras > Add to Steam (Windows and Linux; not offered on macOS) |
@@ -36,8 +38,10 @@ run explain itself. [ARCHITECTURE.md](ARCHITECTURE.md) places this layer among t
 | `port/platform/android/` | `main_android.c`, `host_android.c`, `android_paths.c`, `iso_import.c`, `gpu_driver_android.c` |
 | `port/platform/ios/main_ios.c`, `ios/Info.plist.in` | the iOS entry point and bundle |
 | `port/platform/macos/Info.plist.in` | the macOS bundle |
-| `port/platform/win/` | the Windows manifest, resource script and version header |
+| `port/platform/win/` | the Windows manifest and resource script (`ico_pc.manifest`, `ico_pc.rc`) |
+| `port/platform/ico_version.h.in`, `build_commit.cmake` | the package label and the commit, generated into `<build>/generated/` for the log header, the Options menu and the Windows version information |
 | `port/platform/test/` | the platform unit tests |
+| `port/platform/fpenv_test.c` | the FP-mode test (`fpenv`, `fpenv_trap`) |
 | `port/compat/eekernel.h`, `port/compat/eeregs.h` | the game-side declarations of the kernel calls and register names |
 | `port/null/gfx_null.c`, `libgcc_null.c` | the graphics floor (libgraph, libdma) and `fptodp` |
 | `ico2/fumi/ios/ios.c` | the game's partitions, with the [host extras](ARCHITECTURE.md#terms) |
@@ -49,26 +53,26 @@ On Windows, Linux and macOS the program's `main` is in `port/platform/main_host.
 (`--iso`, `--pad-script`, `--trace`, `--ticks`, `--no-verify`, `--console`), opens the log, reads
 `ico-pc.ini`, writes a first `config.toml`, mounts the game data, loads the data tables, opens
 the window, starts the watchdog, calls `ico_host_init` and then loops on `ico_host_step`
-(`port/platform/main_host.c`, `host_main`, `parse_args`). An error that stops the run is logged,
-shown in a message box on Windows, and exits 1; a bad option exits 2 (`port/platform/main_host.c`,
-header comment; `port/platform/host_config.h`, `ico_host_fatal`). On macOS the program is an app
-bundle (`CMakeLists.txt`, `MACOSX_BUNDLE`; `port/platform/macos/Info.plist.in`).
+(`port/platform/main_host.c` (`host_main`, `parse_args`)). An error that stops the run is logged,
+shown in a message box on Windows, and exits 1; a bad option exits 2 (`port/platform/main_host.c`
+(header comment); `port/platform/host_config.h` (`ico_host_fatal`)). On macOS the program is an app
+bundle (`CMakeLists.txt` (`MACOSX_BUNDLE`); `port/platform/macos/Info.plist.in`).
 
 On Android the program is `libmain.so`, which SDL's Java side loads. `SDL_main`
 (`port/platform/android/main_android.c`) sets the hints and runs `ico_host_main` on an SDL thread
-with a 32 MB stack, as large as the desktop main thread's, because the
-[replay](ARCHITECTURE.md#terms), the [present](ARCHITECTURE.md#terms) and the movie decoder run on
-the host stack. `ico_host_main` runs the end-of-run steps itself (`ico_host_shutdown`) before
-returning, since returning finishes the activity (`port/platform/main_host.c`, `ico_host_main`). The
-window opens before the game data is mounted, because SDL has one window there and the first start's
-picker, copy and extraction progress are drawn in it (`port/platform/main_host.c`, `host_main`,
-`ICO_ANDROID_UI`; `port/platform/android/iso_import.h`). The log is mirrored to logcat and a fatal
-error shows SDL's message box (`port/platform/android/host_android.h`).
+with a 32 MB stack (`ICO_MAIN_STACK_BYTES`), because the [replay](ARCHITECTURE.md#terms), the
+[present](ARCHITECTURE.md#terms) and the movie decoder run on the host stack. `ico_host_main` runs
+the end-of-run steps itself (`ico_host_shutdown`) before returning, since returning finishes the
+activity (`port/platform/main_host.c` (`ico_host_main`)). The window opens before the game data is
+mounted, because SDL has one window there and the first start's picker, copy and extraction progress
+are drawn in it (`port/platform/main_host.c` (`host_main`, `ICO_ANDROID_UI`);
+`port/platform/android/iso_import.h`). The log is mirrored to logcat and a fatal error shows SDL's
+message box (`port/platform/android/host_android.h`).
 
 On iOS, `main` (`port/platform/ios/main_ios.c`) keeps UIKit and the renderer on the main thread:
 it changes to the Documents folder and runs `ico_host_main` on a fiber with a guarded 32 MB stack.
 It also sets `ICO_RD_BLEND=fixed`, the fixed-function blend path, because storage interlock
-costs rendering and speed on MoltenVK there (`port/platform/ios/main_ios.c`, `main`).
+costs rendering and speed on MoltenVK there (`port/platform/ios/main_ios.c` (`main`)).
 
 ## Fibers
 
@@ -77,14 +81,22 @@ runs it on its own stack until it calls `ico_fiber_yield` (`port/platform/fiber.
 is the only resumer, so every switch between two game threads goes fiber, scheduler, fiber. Stacks
 are 256 KB (`ICO_FIBER_STACK_SIZE`). With minicoro's assembly backend (x86-64 Linux and Windows,
 arm64) the stack has a no-access guard page below it, so an overflow faults instead of corrupting
-the fiber's control block (`port/platform/fiber.c`, the stack allocation section;
+the fiber's control block (`port/platform/fiber.c` (the stack allocation section);
 `ico_fiber_has_guard_page`).
 
 The game's own thread stacks (`mainThreadStack`, the stacks `iosThreadCreate` is handed) are
 still allocated and stamped with `<THREAD_SP>` marks by the game, so its memory use is the PS2's
 (`ico2/fumi/ios/thread.c`); the scheduler records them, and every fiber runs on a host stack of
-`ICO_FIBER_STACK_SIZE` (`port/platform/sched.c`, `ico_sched_create_thread`,
-`ico_sched_start_thread`).
+`ICO_FIBER_STACK_SIZE` (`port/platform/sched.c` (`ico_sched_create_thread`,
+`ico_sched_start_thread`)).
+
+A thread's fiber lives from `StartThread` to the thread's exit. `CreateThread` records a dormant
+thread (`ico_sched_create_thread`); `StartThread` creates its fiber and puts it on the tail of its
+ready queue (`ico_sched_start_thread`); `ExitThread` and `ExitDeleteThread` mark the thread to be
+reaped and yield, and `ico_sched_run` destroys the fiber once it has yielded, freeing the id too
+for `ExitDeleteThread` (`port/platform/sched.c` (`exit_current`, `ico_sched_run`)). Thread ids and
+semaphore ids each run from 1 to 255 (`port/platform/sched.h` (`ICO_SCHED_MAX_THREADS`,
+`ICO_SCHED_MAX_SEMAS`)).
 
 ## Scheduler
 
@@ -103,25 +115,31 @@ semantics only) and the game's use:
 
 Every switch goes through the dispatcher, `ico_sched_run`: a thread that must give up the CPU yields
 to it, and it resumes the highest-priority ready thread until none is ready or the highest one
-busy-waits for the next vsync (`port/platform/sched.c`, `ico_sched_run`, `pick`). Code runs either
+busy-waits for the next vsync (`port/platform/sched.c` (`ico_sched_run`, `pick`)). Code runs either
 on a fiber (a game thread) or on the [host context](ARCHITECTURE.md#terms) (the dispatcher's caller,
 the vsync callbacks). A call that would block is a fatal error on the host context; a call that
 wakes a thread from the host context never switches, and the next `ico_sched_run` picks the thread
-up, as the EE does on return from an interrupt (`port/platform/sched.h`, Contexts).
+up, as the EE does on return from an interrupt (`port/platform/sched.h` (Contexts)).
+
+A wait (`WaitSema` on a zero count, `SleepThread` with no wakeup counted) takes the thread off its
+ready queue, marks it waiting and yields its fiber to the dispatcher. A call from a fiber that
+readies a higher-priority thread yields the caller the same way, so the dispatcher's next pick is
+the readied thread (`port/platform/sched.c` (`ico_sched_wait_sema`, `ico_sched_sleep`,
+`reschedule`)).
 
 The EE's busy waits (`VSync`, `VSync2`, libgraph's `sceGsSyncV`, the game's idle loop) are
 `ico_sched_spin_vsync`: the thread stays ready at the head of its queue, lower priorities do not
 run, higher ones woken by an interrupt do, and `ico_sched_run` returns to the host once that
-thread is the highest ready one, until the next vsync (`port/platform/sched.h`, Busy waits;
-`port/platform/kernel_host.c`, `VSync`; `port/null/gfx_null.c`, `sceGsSyncV`;
-`ico2/common/src/main.c`, `idle`).
+thread is the highest ready one, until the next vsync (`port/platform/sched.h` (Busy waits);
+`port/platform/kernel_host.c` (`VSync`); `port/null/gfx_null.c` (`sceGsSyncV`);
+`ico2/common/src/main.c` (`idle`)).
 
 Host work too deep for a 256 KB fiber stack (the GPU driver's replay, pipeline creation, present)
 goes through `ico_sched_call_on_host`: from a fiber the thread yields, the dispatcher runs the
 function on the host stack in the host FP mode and resumes the same thread at once, with no other
-thread running in between (`port/platform/sched.c`, `ico_sched_call_on_host`).
-[rd](ARCHITECTURE.md#terms) reaches it through `rd_set_host_call` (`port/platform/window_host.c`,
-`ico_window_open`).
+thread running in between (`port/platform/sched.c` (`ico_sched_call_on_host`)).
+[rd](ARCHITECTURE.md#terms) reaches it through `rd_set_host_call` (`port/platform/window_host.c`
+(`ico_window_open`)).
 
 ## Kernel calls
 
@@ -133,11 +151,11 @@ diagnostics (`ico_sched_note`). Interrupts are a table: `AddIntcHandler` and `Ad
 handler lists per [INTC](ARCHITECTURE.md#terms) cause and [DMA](ARCHITECTURE.md#terms) channel,
 `EnableIntc` and `DisableIntc` set masks, and `ico_kernel_raise_intc` runs an enabled cause's
 handlers in order as [interrupt code](ARCHITECTURE.md#terms); for vblank start it first completes a
-pending `SetVSyncFlag` (`port/platform/kernel_host.c`, `ico_kernel_raise_intc`, `SetVSyncFlag`).
+pending `SetVSyncFlag` (`port/platform/kernel_host.c` (`ico_kernel_raise_intc`, `SetVSyncFlag`)).
 `DIntr`/`EIntr` report interrupts enabled, `FlushCache`, `SyncDCache` and `SetGsCrt` do nothing,
 `SetAlarm` fails (its one user, the PS2 movie player, is not compiled), `Exit` logs and exits, and
 `scePrintf` writes to stdout only when the `ICO_TTY` environment variable is set
-(`port/platform/kernel_host.c`, `SetAlarm`, `Exit`, `scePrintf`).
+(`port/platform/kernel_host.c` (`SetAlarm`, `Exit`, `scePrintf`)).
 
 ## Host loop and vsync callbacks
 
@@ -145,17 +163,28 @@ pending `SetVSyncFlag` (`port/platform/kernel_host.c`, `ico_kernel_raise_intc`, 
 the port's music gallery and credits engines, ties the EE timers to the game's video mode word,
 resets the scheduler, installs the fiber start hook, boots the game's `main` as thread 1 at
 priority 1 (libkernl's `InitThread` value) and runs it until every thread waits
-(`port/platform/host_loop.c`, `ico_host_init`, `BOOT_PRIORITY`). If `main` ever returns, the
+(`port/platform/host_loop.c` (`ico_host_init`, `BOOT_PRIORITY`)). If `main` ever returns, the
 program exits (`boot_main`).
 
-`ico_host_step` is one simulated vsync (`port/platform/host_loop.c`, `ico_host_step`):
+The game then makes its own threads; the priority is the last argument of `iosThreadCreate`, and a
+lower number runs first. `main` drops the boot thread to 14 and runs `boot`, which starts `idle`
+(27) and `scheduler` (15) and then sleeps. `idle` starts the disc manager (28), the stage manager
+(27), the memory card manager (27), the subtitle manager (27), the sound manager (16) and `Main`
+(27), lowers itself to 32 and spins on `ico_sched_spin_vsync` (`ico2/common/src/main.c` (`main`,
+`boot`, `idle`); `ico2/fumi/ios/thread.c` (`iosThreadCreate`)). `scheduler` waits on the vblank
+event: the game's vblank handler wakes an event thread at priority 11, whose message wakes
+`scheduler`, which wakes `Main` every `systemStatus[1]` vsyncs, the sound manager every vsync, and
+the memory card, disc and stage manager threads when they wait for it (`ico2/fumi/ios/message.c`
+(`iosMsgSetEvent`, `signal_handler`); `ico2/common/src/main.c` (`scheduler`, `ico_vsync`)).
+
+`ico_host_step` is one simulated vsync (`port/platform/host_loop.c` (`ico_host_step`)):
 
 1. the simulation's FP mode again (host work between steps may leave anything in MXCSR or FPCR);
 2. `ico_sched_vsync_advance`, then `ico_vsync(field)` in the game (`ico2/common/src/main.c`), which
    sets `GS_CSR.FIELD` and raises the vblank-start cause, the field alternating from 0;
 3. the on-vsync callbacks, as interrupt code (`ico_host_run_vsync_hooks`);
 4. the vsync's audio from the [SPU2](ARCHITECTURE.md#terms) state the last sound tick left
-   (`port/audio/audio_host.h`, `ico_audio_host_vsync`);
+   (`port/audio/audio_host.h` (`ico_audio_host_vsync`));
 5. `ico_sched_run`: every thread that became ready runs until all wait again;
 6. the achievements' poll (once per new [Main tick](ARCHITECTURE.md#terms), reading game state only)
    and the Extras credits' poll (nothing unless a credits playback runs);
@@ -165,53 +194,59 @@ program exits (`boot_main`).
 The callbacks live in `port/platform/vsync_hooks.c`, apart from the loop so device code and its
 tests link them without the game: at most 16, run in registration order between
 `ico_sched_interrupt_begin` and `ico_sched_interrupt_end` (`ico_host_on_vsync_register`). Disc
-reads (`port/data/cdvd_host.c`, `ico_cdvd_host_vsync`), memory card requests
-(`port/save/mc_host.c`, `sceMcInit`) and the EE timers (`port/platform/clock.c`,
-`ico_clock_timers_attach`) complete or advance there, so a request issued during one tick
+reads (`port/data/cdvd_host.c` (`ico_cdvd_host_vsync`)), memory card requests
+(`port/save/mc_host.c` (`sceMcInit`)) and the EE timers (`port/platform/clock.c`
+(`ico_clock_timers_attach`)) complete or advance there, so a request issued during one tick
 completes at the next vsync.
 
 The vsync rate is the game's: 50 when `systemStatus[0]` is nonzero (PAL), else 60
-(`ico_host_vsync_hz`). The Main tick is counted by the game's call to `ico_host_main_tick` at the
-end of each pass of `Main` (`port/platform/trace_host.c`, `ico_host_main_tick`). After each step
+(`ico_host_vsync_hz`); the window build paces an NTSC vsync at 16.683 ms ([Pacing](#pacing)). The Main tick is counted by the game's call to `ico_host_main_tick` at the
+end of each pass of `Main` (`port/platform/trace_host.c` (`ico_host_main_tick`)). After each step
 `host_main` writes the [trace](ARCHITECTURE.md#terms) and pad recording lines, flushes the log, and
 in the [window build](ARCHITECTURE.md#terms) switches to the host FP mode, pumps the window and
-paces (`port/platform/main_host.c`, `host_main`).
+paces (`port/platform/main_host.c` (`host_main`)).
 
 ## Pacing
 
-In the window build `ico_window_pace(hz)` presents until the current vsync's deadline in real time
-(50 or 60 a second), as often as the frame rate option and vsync allow, then sleeps to it; a host
-that falls more than 100 ms behind resynchronises instead of running fast to catch up
-(`port/platform/window_host.h`, `ico_window_pace`; `port/platform/window_host.c`, `RESYNC_NS`). The
-pure decisions (when a present counts as slow, the gap between presents) are in
-`port/platform/pace_policy.c`. The [headless build](ARCHITECTURE.md#terms) has no pacing and runs
-vsyncs as fast as it can. [DISPLAY.md](DISPLAY.md) describes the [vsync lock](ARCHITECTURE.md#terms)
-and the presents between ticks.
+In the window build `ico_window_pace(hz)` runs after every simulated vsync. Outside the
+[vsync lock](ARCHITECTURE.md#terms) it presents until the vsync's deadline in real time (20 ms PAL,
+16.683 ms NTSC), as often as the frame rate option and vsync allow, then sleeps to it; more than
+100 ms behind, the lag is dropped instead of run off fast (`port/platform/window_host.c` (`pace`,
+`RESYNC_NS`, `resync`)). Under the vsync lock (vsync on, and a frame rate cap equal to the
+display's refresh and a whole multiple of the game's rate) the step is due on a grid of n display
+refreshes and is followed by n presents; more than `PACE_LOCK_DEBT_VSYNCS` (6) periods behind, the
+lag is dropped and the grid starts again (`port/platform/window_host.c` (`pace_locked`);
+`port/platform/pace_policy.h` (`pace_lock_vsync`, `PACE_LOCK_DEBT_VSYNCS`)). Every decision free
+of SDL (the vsync lock and its display clocks, slow presents, the gap between presents, the FIFO
+hold, the first present on a new swapchain, the automatic resolution step) is in
+`port/platform/pace_policy.c`, tested by ctest `pace_policy` and `pace_loop`; `window_host.c` only
+times and calls them. The [headless build](ARCHITECTURE.md#terms) has no pacing and runs vsyncs as
+fast as it can. [DISPLAY.md](DISPLAY.md#pacing) describes the paths and the vsync lock.
 
 ## Arena, partitions and host extras
 
 `ico_arena_init` allocates one block of `ICO_ARENA_EE_SIZE` (32 MB) plus `ICO_ARENA_HEADROOM`
 (8 MB), zero filled (`VirtualAlloc` on Windows, `mmap` elsewhere), with its base 1 MB aligned so
 every address keeps the EE's residue modulo any alignment up to 1 MB
-(`port/platform/arena.h`; `port/platform/arena.c`, `ico_arena_init`). `ico_arena_ee_addr(ee)`
+(`port/platform/arena.h`; `port/platform/arena.c` (`ico_arena_init`)). `ico_arena_ee_addr(ee)`
 is the host address of EE physical address `ee`. `ico_host_init` logs the base, which turns the
 object pointers in the renderer's draw keys back into EE addresses
-(`port/platform/host_loop.c`, `ico_host_init`).
+(`port/platform/host_loop.c` (`ico_host_init`)).
 
 The game's `iosInitialize` makes its root [partition](ARCHITECTURE.md#terms) over
 `ico_arena_ee_addr(0x760000)` to the EE's end plus `ICO_HOST_HEAP_EXTRA`, and carves the named
 partitions from the root's end down, so the stage partition keeps the EE's start
-(`ico2/fumi/ios/ios.c`, `iosInitialize`). Four partitions are larger on the host, because a block
+(`ico2/fumi/ios/ios.c` (`iosInitialize`)). Four partitions are larger on the host, because a block
 header is 0x50 bytes there (0x40 on the EE) and records with pointers grow: stage by
 `ICO_HOST_STAGE_EXTRA` (4 MB), common by `ICO_HOST_COMMON_EXTRA` (0x1E0000, which also carries the
 packet banks' host pad, `ico2/seki/src/DmaPacket.c`, `DPK_HOST_PAD`), the static motion partition by
 `ICO_HOST_SMOTION_EXTRA` and the demo motion partition by `ICO_HOST_S2MOTION_EXTRA`
 (`ico2/fumi/ios/ios.c`). Together they are 7 MB of the arena's 8 MB headroom
-(`port/platform/arena.h`, `ICO_ARENA_HEADROOM`).
+(`port/platform/arena.h` (`ICO_ARENA_HEADROOM`)).
 
 Built with `ICO_HEAP_STATS`, the game's allocator reports each allocation and free, and the arena
 keeps the bytes in use and the high-water mark per partition, logging every new mark that grows
-by 64 KB (`port/platform/arena.h`, `ico_heap_stats_alloc`; `ico2/fumi/ios/memory.c`).
+by 64 KB (`port/platform/arena.h` (`ico_heap_stats_alloc`); `ico2/fumi/ios/memory.c`).
 
 ## Register pages
 
@@ -221,25 +256,25 @@ by 64 KB (`port/platform/arena.h`, `ico_heap_stats_alloc`; `ico2/fumi/ios/memory
 (`port/platform/hwregs.c`). A store lands in the block and a load reads it back; nothing reacts. The
 code that waited on hardware is replaced by the library that owns the hardware: the vsync waits are
 busy waits on the scheduler (above), `sceGsSyncPath` reports every path drained, `sceDmaSend` sends
-nothing (`port/null/gfx_null.c`, `sceGsSyncPath`, `sceDmaSend`), and the movie player's
-[IPU](ARCHITECTURE.md#terms) and DMA register code is not compiled (`cmake/IcoSources.cmake`,
-`ICO_EE_ONLY_SOURCES`). Two registers do change on the host: the host loop's `GS_CSR.FIELD`
-(`ico2/common/src/main.c`, `ico_vsync`) and the timer counters (below).
+nothing (`port/null/gfx_null.c` (`sceGsSyncPath`, `sceDmaSend`)), and the movie player's
+[IPU](ARCHITECTURE.md#terms) and DMA register code is not compiled (`cmake/IcoSources.cmake`
+(`ICO_EE_ONLY_SOURCES`)). Two registers do change on the host: the host loop's `GS_CSR.FIELD`
+(`ico2/common/src/main.c` (`ico_vsync`)) and the timer counters (below).
 
 ## Floating-point environment
 
 `ico_fpenv_sim_enter` sets the host FPU to round toward zero with flush-to-zero and
-denormals-are-zero (MXCSR `0x1F80 | RC=toward zero | FTZ | DAZ` on x86-64; FPCR RMode toward
-zero and FZ on arm64), the closest IEEE mode to the EE's FPU; `ico_fpenv_host_enter` puts back
-round to nearest with every exception masked for host code (`port/platform/fpenv.c`). Any other
-architecture is a compile error. With `ICO_FPTRAP` (the `fptrap` preset) the divide-by-zero and
-invalid exceptions are unmasked in simulation mode, so the first such operation stops the
-program at the instruction (`port/platform/fpenv.h`).
+denormals-are-zero (MXCSR `0x1F80 | RC=toward zero | FTZ | DAZ` on x86-64; FPCR RMode toward zero
+and FZ on arm64), the closest IEEE mode to the EE's FPU; `ico_fpenv_host_enter` puts back round to
+nearest with every exception masked for host code (`port/platform/fpenv.c`). Any other architecture
+is a compile error. With `ICO_FPTRAP` (the `fptrap` CMake preset) the divide-by-zero and invalid
+exceptions are unmasked in simulation mode, so the first such operation stops the program at the
+instruction (`port/platform/fpenv.h`).
 
 The fiber switch does not save MXCSR or FPCR on minicoro's assembly backend, and its Windows fiber
 backend gives each fiber an FP state of its own; so the scheduler runs a start hook,
 `ico_fpenv_sim_enter`, at the top of every fiber (`port/platform/fiber.h`;
-`port/platform/sched.h`, `ico_sched_set_fiber_start_hook`), and `ico_host_step` enters the
+`port/platform/sched.h` (`ico_sched_set_fiber_start_hook`)), and `ico_host_step` enters the
 simulation mode again before the vsync and after the audio push (`port/platform/host_loop.c`).
 `ico_sched_call_on_host` brackets its host function with the host mode
 (`port/platform/sched.h`).
@@ -248,15 +283,15 @@ simulation mode again before the vsync and after the audio push (`port/platform/
 
 `sceCdReadClock` reports the host's local wall clock, or 2002-01-01 00:00:00 when the clock is
 fixed, so trace runs and the save serial (which packs this clock) are reproducible
-(`port/platform/clock.h`, `ico_clock_now`; `port/data/cdvd_host.c`, `sceCdReadClock`). The clock
+(`port/platform/clock.h` (`ico_clock_now`); `port/data/cdvd_host.c` (`sceCdReadClock`)). The clock
 is fixed unless `ICO_FIXED_CLOCK` is `0`; `host_config.c` sets that variable from
 `[dev] fixed_clock`, else fixed for the headless build or a trace written to an explicit path
-(`port/platform/host_config.h`, `ico_host_fixed_clock`).
+(`port/platform/host_config.h` (`ico_host_fixed_clock`)).
 
 The EE timers T0 to T3 are counters in `ico_hw_eeio`. A vsync callback advances each one whose
 mode's CUE bit is set, at the rate its CLKS field selects (bus clock 147.456 MHz, /16, /256, or
 the horizontal blank), 16 bits wide, setting the overflow flag on a wrap; a write by the game is
-kept (`port/platform/clock.h`, `ico_clock_timers_step`). The rate follows the game's video mode
+kept (`port/platform/clock.h` (`ico_clock_timers_step`)). The rate follows the game's video mode
 word (`ico_clock_set_mode_word`, called by `ico_host_init`). The callback is registered by the
 first libscf call of the boot (`port/config/sysconf.c`; `ico_clock_timers_attach`).
 
@@ -269,37 +304,38 @@ Three places matter (`port/platform/host_config.h`):
 - the [user folder](ARCHITECTURE.md#terms) (`ico_host_pref_dir`): `config.toml`, the memory cards
   (`memcard/`), the extracted `ico.o2r`, `dumps/`, the developer `dev/` folder. In the window build
   it is SDL's `SDL_GetPrefPath("ico-pc", "ico-pc")`; in the headless build and the tests, which have
-  no SDL, the executable's folder (`port/platform/host_config.c`, `ico_host_pref_dir`;
-  `port/config/CMakeLists.txt`, `ICO_HOST_SDL_PREFPATH`);
+  no SDL, the executable's folder (`port/platform/host_config.c` (`ico_host_pref_dir`);
+  `port/config/CMakeLists.txt` (`ICO_HOST_SDL_PREFPATH`));
 - the disc image, found beside the executable, through `iso=`, `$ICO_ISO`, `baserom/Ico_PAL.iso`
   under the working folder, or a file dialog whose answer is saved as `iso=`
-  (`port/platform/main_host.c`, `find_iso`).
+  (`port/platform/main_host.c` (`find_iso`)).
 
 Per platform:
 
 | platform | ini and logs | user folder |
 | --- | --- | --- |
 | Windows, Linux (window build) | beside the executable | SDL's pref path, or `userdata/` in portable mode |
-| macOS app | the user folder (`ico_host_ini_path`; `host_main`'s `logs_dir`) | SDL's pref path, or `userdata/` beside the executable inside the bundle in portable mode |
+| macOS app | the user folder (`port/platform/host_config.h` (`ico_host_ini_path`, `ico_host_logs_dir`)) | SDL's pref path, or `userdata/` beside the executable inside the bundle in portable mode |
 | headless build | beside the executable | the executable's folder |
 | Android | the app's files folder | the same folder, always |
 | iOS | the app's Documents folder | the same folder, always |
 
 Portable mode makes the user folder `userdata/` beside the executable, created if missing: on with
 `portable=1` in `ico-pc.ini` or when that folder already exists, off with `portable=0`
-(`port/platform/host_config.c`, `portable_dir`, `ico_host_portable_value`). A folder that cannot
+(`port/platform/host_config.c` (`portable_dir`, `ico_host_portable_value`)). A folder that cannot
 be made falls back to the normal user folder with one log line. The Android and iOS builds are
 compiled with `ICO_HOST_FORCE_PORTABLE`: the user folder is the executable's folder itself (the
 app's files folder on Android, Documents on iOS), and a `portable=` line is logged as ignored
-(`port/platform/host_config.c`, `ico_host_set_portable`; `CMakeLists.txt`, the Android and iOS
-targets). The Android layout is listed in `port/platform/android/android_paths.h`: everything in
+(`port/platform/host_config.c` (`ico_host_set_portable`); `CMakeLists.txt` (the Android and iOS
+targets)). The Android layout is listed in `port/platform/android/android_paths.h`: everything in
 the files folder (shared storage when writable), the Vulkan pipeline cache in the cache folder.
 
 `ico-pc.ini` is `key=value` lines with `#` or `;` comments; a quoted value loses its quotes; a
 relative path is taken from the executable's folder. Its keys win over the matching
 `config.toml` entries, which win over the defaults; `ico_ini_load` also exports the keys other
-libraries read from the environment (`ICO_AUDIO`, `ICO_AUDIO_DUMP`, `ICO_FIXED_CLOCK`,
-`ICO_RD_DUMP_*`) (`port/platform/host_config.h`, `ico_ini_load`, `ico_config_ini_key`). Paths are
+libraries read from the environment (`ICO_AUDIO`, `ICO_AUDIO_DUMP`, `ICO_AUDIO_VOLUME`,
+`ICO_AUDIO_MUSIC`, `ICO_AUDIO_EFFECTS`, `ICO_AUDIO_DEVICE`, `ICO_FIXED_CLOCK`, `ICO_START_STAGE`,
+`ICO_RD_DUMP_*`) (`port/platform/host_config.h` (`ico_ini_load`, `ico_config_ini_key`)). Paths are
 UTF-8 throughout and reach the file system through `host_fs.h`, which converts to UTF-16 and calls
 the wide functions on Windows (`port/platform/host_fs.h`). [CONFIG.md](CONFIG.md) lists every key.
 
@@ -307,43 +343,70 @@ the wide functions on Windows (`port/platform/host_fs.h`). [CONFIG.md](CONFIG.md
 
 The log is `logs/ico-pc.log`, stdout and stderr redirected there, rewritten each run with the run
 before kept as `logs/ico-pc-previous.log`; `--console` keeps them on the console
-(`port/platform/main_host.c`, `keep_previous_log`; `port/platform/host_config.h`,
-`ico_host_redirect_output`). On Windows the streams are fully buffered and the host loop flushes
+(`port/platform/main_host.c` (`keep_previous_log`); `port/platform/host_config.h`
+(`ico_host_redirect_output`)). After the start time and folder the log's next line is
+`ico_pc: version <label> (commit <hash>)`, or `ico_pc: development build (commit <hash>)` when the
+build has no package label (`port/platform/main_host.c` (`host_main`); `CMakeLists.txt`
+(`ICO_VERSION_LABEL`)). On Windows the streams are fully buffered and the host loop flushes
 them once per vsync; elsewhere they are unbuffered. Other files in `logs/`: the
 trace (`trace-<time>.txt`, by default in the headless build only), the
 pad recording (`input-<time>.txt`, by default in the window build only), `ico-pc-perf.csv` with
-`[dev] perf_log`, and `audio.wav` with `audio_dump=1` (`port/platform/main_host.c`, header
-comment; `port/platform/window_host.c`, the perf record comment).
+`[dev] perf_log`, and `audio.wav` with `audio_dump=1` (`port/platform/main_host.c` (header
+comment); `port/platform/window_host.c` (the perf record comment)).
 
-`ico_diag_init`, called first thing, installs the crash handlers: a vectored handler and the
-unhandled-exception filter on Windows, SIGSEGV, SIGBUS, SIGILL, SIGFPE and SIGTRAP on an alternate
-stack on POSIX, and `abort` (asserts, `ico_assert`, the scheduler's fatal errors). A crash writes
-the cause, the faulting address as module+offset (to be looked up in `ico_pc.map`, the link map
-written beside the program), the current game thread and its last kernel call, return-address
-candidates, the heartbeat line and every thread, then on Windows shows a message box and exits
-with code 3 (`port/platform/diag_host.h`; `port/platform/CMakeLists.txt`, the link map). Every
+`ico_diag_init`, called as soon as the log is open, installs the crash handlers: a vectored handler
+and the unhandled-exception filter on Windows, SIGSEGV, SIGBUS, SIGILL, SIGFPE and SIGTRAP on an
+alternate stack on POSIX, and `abort` (asserts, `ico_assert`, the scheduler's fatal errors). A crash
+writes the cause, the faulting address as module+offset (to be looked up in `ico_pc.map`, the link
+map written beside the program), the current game thread and its last kernel call, return-address
+candidates, the heartbeat line and every thread, then on Windows shows a message box and exits with
+code 3 (`port/platform/diag_host.h`; `port/platform/CMakeLists.txt` (the link map)). Every
 diagnostic line is written with one unbuffered OS call to its own handle on the log, so a crash
-leaves everything before it (`port/platform/diag_host.c`, header comment). On Android the
-handler then puts the system's handlers back so the system still writes its tombstone.
+leaves everything before it (`port/platform/diag_host.c` (header comment)). On Android the handler
+then puts the system's handlers back so the system still writes its tombstone
+(`port/platform/diag_host.c` (`restore_handlers`)).
+
+A crash while the renderer builds a pipeline is a graphics driver crash: the activity note
+(`ico_diag_set_activity`) starts with "creating pipeline" or "creating the start-up pipelines". On
+Windows, Linux and macOS the handler then starts the program again at once, with
+`ICO_STARTUP_RETRY=<step>:<backend>` in the new run's environment; nothing is written to the user
+folder or the settings. The steps come in order, each taken only when the run before crashed:
+`cache` (the crashed run had loaded the pipeline cache file: it is deleted and the same backend
+tries again), `d3d12` (a build with the Direct3D 12 backend whose player named no backend), `lazy`
+(each pipeline is built when a frame first needs it), then none: the crash ends as any other, with
+the driver-crash text in the crash box where the platform shows one (`port/platform/startup_retry.h`
+(`startup_retry_next`); `port/platform/diag_host.c` (`driver_crash_plan`, `driver_box_text`)).
+Everything the relaunch needs is captured at start-up, so the handler does not allocate
+(`port/platform/diag_host.h` (`ico_diag_prepare_relaunch`)). On Windows the relaunch is
+`CreateProcessW` with the module path, `GetCommandLineW` and a copy of the environment block, and
+the crashed process then ends; on Linux and macOS it is `execve` of `/proc/self/exe` or
+`_NSGetExecutablePath` with the same `argv`, which keeps the process id (`port/platform/diag_host.c`
+(`relaunch_now`); `port/platform/startup_retry.h` (`startup_retry_block_copy`,
+`startup_retry_envp`)). Android and iOS do not relaunch. The new run appends to the crashed run's
+log instead of keeping it as `ico-pc-previous.log`, logs
+`ico_pc: restarted after a graphics driver crash while preparing the shaders: <what this run does>`,
+and takes the step's backend
+unless the player chose one (`port/platform/main_host.c` (`host_main`);
+`port/platform/window_host.c` (`ico_window_open`); `port/platform/startup_retry.c`
+(`startup_retry_what`)). ctest `startup_retry` checks the steps and the relaunch's environment
+(`port/platform/test/startup_retry_test.c`).
 
 A heartbeat and a watchdog share one OS thread of their own, so a game thread that spins without a
 kernel call cannot stop them. Every 2 s the heartbeat logs one line of progress
-(`port/platform/trace_host.c`, `ico_host_status`: vsyncs, ticks, stage, the disc and
-[SIF](ARCHITECTURE.md#terms) counters). The watchdog stops the run, with every thread dumped and
+(`port/platform/trace_host.c` (`ico_host_status`: vsyncs, ticks, stage, the disc and
+[SIF](ARCHITECTURE.md#terms) counters)). The watchdog stops the run, with every thread dumped and
 exit code 4, when no Main tick comes `watchdog=` seconds after boot (default 30) or no new tick or
 other progress for twice that; a movie notes each picture as progress, time inside a present is
-excused for an effects program, and the limit is doubled when one is loaded
-(`port/platform/diag_host.h`, `ico_diag_start`, `ico_diag_note_progress`;
-`port/platform/main_host.c`, `start_watchdog`). Milestone lines carry the wall time, vsyncs, Main
+excused for an effects program, and the first limit is doubled when one is loaded
+(`port/platform/diag_host.h` (`ico_diag_start`, `ico_diag_note_progress`);
+`port/platform/main_host.c` (`start_watchdog`)). Milestone lines carry the wall time, vsyncs, Main
 ticks and the current thread (`ico_diag_milestone`), and game threads are named by the function
 `iosThreadCreate` runs (`ico_host_thread_func`). `ico_diag_float_fault` logs a NaN that reaches game
-code the PS2 never fed one.
+code the PS2 never fed one (`port/platform/diag_host.h` (`ico_diag_float_fault`)).
 
-The window build logs a stats block every 10 s. A host step that takes longer than
-`[dev] slow_step_ms` (default 8, 0 off) gets a slow-step line from the step profile: the time in the
-vsync callbacks, audio, threads and achievements, the switches, disc reads, a pending card
-command, the stage (`port/platform/window_host.c`, `slowMs`; `port/platform/host_loop.h`,
-`IcoStepProfile`).
+The window build logs a stats block every 10 s. A host step longer than `[dev] slow_step_ms`
+(default 8, 0 off) logs a slow-step line ([DISPLAY.md](DISPLAY.md#pacing);
+`port/platform/window_host.c` (`slow_step`); `port/platform/host_loop.h` (`IcoStepProfile`)).
 
 `port/platform/assert_host.c` is newlib's `__assert` as the game calls it: the same message on
 stderr, then `abort`, which the crash handler reports.
@@ -351,13 +414,13 @@ stderr, then `abort`, which the crash handler reports.
 ## Hotkeys and dump zips
 
 The window build's diagnostic keys are free of SDL so a unit test checks them
-(`port/platform/hotkeys.h`, `ico_hotkey_for_mod`):
+(`port/platform/hotkeys.h` (`ico_hotkey_for_mod`)):
 
 - **F12**: an [.rddump](ARCHITECTURE.md#terms) of the last closed frame and a PNG of it
   (`frame-<time>-v<vsync>.rddump`, `.png`), and a PNG of the picture as presented
   (`frame-<time>-present.png`), in `<user folder>/dumps/`. The
   dump and a copy of the log go into one zip, and the loose dump is deleted
-  (`port/platform/dump_zip.h`, `ico_frame_dump_zip`). The
+  (`port/platform/dump_zip.h` (`ico_frame_dump_zip`)). The
   [replay tool](ARCHITECTURE.md#terms) takes the zip directly (`ico_dump_zip_extract`).
 - **Shift+F12** in photo mode: the aspect sweep, the paused frame rendered at 4:3, 16:9, 32:9,
   48:9 and 60:9 into `sweep-<time>.zip` (`ico_sweep_zip`).
@@ -371,7 +434,7 @@ writes every Nth frame as an `.rddump` (`port/platform/host_config.h`).
 
 When a mobile system moves the app, the window build runs one table of steps per event through
 operations it supplies, so `port/platform/test/lifecycle_test.c` checks the order with fakes
-(`port/platform/window_lifecycle.h`, `ico_lifecycle_on`):
+(`port/platform/window_lifecycle.h` (`ico_lifecycle_on`)):
 
 - will enter background: a line, the GPU idle, the surface released (the device kept), the
   watchdog paused, the sound paused, the log flushed;
@@ -381,7 +444,7 @@ operations it supplies, so `port/platform/test/lifecycle_test.c` checks the orde
 - low memory: the texture pack's read-ahead held, a line, the log flushed.
 
 SDL3 delivers these only to an event watch, which `window_host.c` installs on Android and iOS
-(`port/platform/window_host.c`, `lifecycle_watch`).
+(`port/platform/window_host.c` (`lifecycle_watch`)).
 
 ## Android graphics driver packages
 
@@ -393,7 +456,7 @@ app's internal `drivers/` folder, the only place the system lets the app load a 
 before the driver opens, deleted after 300 presents or at a normal end, so a marker still there
 at the next start means that start died inside the driver, which is then recorded as failed and
 replaced by the phone's own driver with a message box
-(`port/platform/android/gpu_driver_android.h`, `ico_gpu_driver_android_start`). The package
+(`port/platform/android/gpu_driver_android.h` (`ico_gpu_driver_android_start`)). The package
 handling is pure C and tested on every platform (`port/platform/test/gpu_driver_test.c`).
 
 ## Steam shortcut
@@ -402,17 +465,19 @@ Settings > Extras > Add to Steam writes a non-Steam shortcut for the program int
 Steam user's `userdata/<id>/config/shortcuts.vdf`, inserting one entry before the end of the
 `shortcuts` map so every existing entry keeps its bytes, after copying the file to
 `shortcuts.vdf.bak`. Nothing is written while Steam runs, because Steam rewrites the file when it
-exits (`port/platform/steam_shortcut.h`; `port/platform/steam_shortcut.c`, header comment). It is
-compiled into the desktop window build only, not Android or iOS (`CMakeLists.txt`, the window
-build section).
+exits (`port/platform/steam_shortcut.h`; `port/platform/steam_shortcut.c` (header comment)). It is
+compiled into the Windows and Linux window builds only, not macOS, Android or iOS
+(`CMakeLists.txt` (the window build section)).
 
 ## The null floor and the headless build
 
-The game's render layer is compiled in both builds and builds its packets and display lists in its
-own buffers as on the PS2, so the state the draw phase changes (fades, view matrices, the
-lightning's random reseeds, heap allocations) is the same with or without a renderer. Under it,
+The game's render layer is compiled in both builds, so the state the draw phase changes (fades,
+view matrices, the lightning's random reseeds, heap allocations) is the same with or without a
+renderer; the headless build writes its packets and display lists as on the PS2, and the window
+build sends the GS register writes to the decoder instead (`port/null/gfx_null.c` (header
+comment); `ico2/seki/src/GifPacket.c` (`setGsReg`)). Under it,
 `port/null/gfx_null.c` stubs Sony's libgraph and libdma: a DMA kick is a no-op and the GS is always
-idle (`port/null/gfx_null.c`, header comment). `port/null/libgcc_null.c` supplies `fptodp`, which
+idle (`port/null/gfx_null.c` (header comment)). `port/null/libgcc_null.c` supplies `fptodp`, which
 only feeds debug prints. `ico_port_null` links the host's devices (the disc,
 [libpad](ARCHITECTURE.md#terms), libscf) into `ico_pc` and the device tests
 (`port/null/CMakeLists.txt`).
@@ -428,3 +493,9 @@ ticks. In `CMakePresets.json` the `base` preset sets `ICO_HEADLESS=ON`, so `linu
 presets that inherit it (`asan`, `fptrap`, the clang ones) are headless; `linux-arm64`, `win-x64`,
 `android-arm64` and the Apple presets set it off. [TESTING.md](TESTING.md) covers the runs built
 on it.
+
+## Tests
+
+`ctest -L platform` runs this layer's tests, together with those of `port/input`, `port/config` and
+the top level (`cmake/IcoTests.cmake` (`_ico_test_area`)); [TESTING.md](TESTING.md#portplatformtest)
+lists each program.

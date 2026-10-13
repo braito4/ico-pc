@@ -2,7 +2,8 @@
 
 How the PC port works, for contributors: what stands in for each part of the PS2, where that code
 lives and how it is tested. Start with [ARCHITECTURE.md](ARCHITECTURE.md); its last section,
-[Terms](ARCHITECTURE.md#terms), is the glossary every other document links to.
+[Terms](ARCHITECTURE.md#terms), is the glossary every other document links to. The table below
+uses the glossary's words; each is defined there.
 
 ## Documents
 
@@ -43,6 +44,13 @@ In reading order.
 
 ## How these documents are written
 
-They state only what the tree at HEAD does, cite each behaviour as `path (symbol)`, define each
-term once in [ARCHITECTURE.md](ARCHITECTURE.md#terms) "Terms" and link it elsewhere, and pass the
-`docs_check` gate (`python3 -I tools/check_docs.py`).
+They state only what the tree at HEAD does and pass the `docs_check` gate
+(`python3 -I tools/check_docs.py`).
+
+- A behaviour is cited by its file and symbol in the form `` `path` (`symbol`) ``, for example
+  `` `port/platform/sched.c` (`ico_sched_run`) ``: the path in code, then the symbols, a section
+  of the file or "header comment" in parentheses. Several citations in one place are separated by
+  semicolons. Symbols, never line numbers.
+- Each term is defined once in [ARCHITECTURE.md](ARCHITECTURE.md#terms) "Terms" and linked from
+  its first use in a document's prose. A document's opening Files table (and this index) may use a
+  term before that first link.

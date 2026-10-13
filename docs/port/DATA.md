@@ -51,7 +51,7 @@ port  port/data/cdvd_host.c    sceCd* over the VFS disc
 
 The seam is the SDK's own function names: the game calls `sceCdRead`, and the host build links
 `port/data`'s definition. Everything above it in `cdvd.c` (the queue, the threads, the cache, the
-retry and drive-recovery paths) runs as written (`port/data/cdvd_host.c`, header comment).
+retry and drive-recovery paths) runs as written (`port/data/cdvd_host.c` (header comment)).
 
 ## The VFS
 
@@ -75,7 +75,8 @@ A backend (`IcoVfsBackend`) has `mount`, `unmount`, `lookup` (a normalized path)
 (-1 when any sector lies outside the volume) and `volume_sectors`. Paths are case-insensitive, and
 `ico_vfs_normalize` accepts `DFDATAS/DATA.DF`, `DFDATAS\DATA.DF;1`, `\DFDATAS\DATA.DF;1`,
 `cdrom0:\SYSTEM.CNF;1` and `/SCES_507.60`: it strips a `cdrom0:` or `cdrom:` prefix, leading
-separators and the `;<version>` suffix, maps `\` to `/` and upper-cases.
+separators and the `;<version>` suffix, maps `\` to `/` and upper-cases (`port/data/vfs.h`
+(`IcoVfsBackend`, `ico_vfs_normalize`)).
 
 ## Disc images
 
@@ -131,17 +132,19 @@ archive and checks its SHA-1 again before making it the disc; the log line is `i
 
 `mount_game_data` (`port/platform/main_host.c`) looks for `ico.o2r` in the
 [user folder](ARCHITECTURE.md#terms) (`ico_host_pref_dir`: SDL's pref path in the
-[window build](ARCHITECTURE.md#terms), the executable's folder in the headless build, the portable
-folder in portable mode), then beside the executable. The first usable one is mounted; an unusable
-one is logged (`ico_pc: <path> is not usable: <why>`) and skipped. With none, the first run finds
-the disc image, extracts it into the user folder, and mounts the result.
+[window build](ARCHITECTURE.md#terms), the executable's folder in the
+[headless build](ARCHITECTURE.md#terms), the portable folder in portable mode), then beside the
+executable. The first usable one is mounted; an unusable one is logged
+(`ico_pc: <path> is not usable: <why>`) and skipped. With none, the first run finds the disc image,
+extracts it into the user folder, and mounts the result.
 
 `find_iso` (`main_host.c`) looks for the image in this order: `--iso`; `Ico_PAL.iso`, `Ico_PAL.chd`,
-`Ico_PAL.bin`, `Ico_PAL.cue` beside the executable (`image_names`); `iso=` in `ico-pc.ini`; the
+`Ico_PAL.bin`, `Ico_PAL.cue` beside the executable (`image_names`); `iso=` in `ico-pc.ini` (a
+relative path is taken from the executable's folder); the
 `ICO_ISO` environment variable; the same four names under `baserom/` in the working folder; then a
 file-open dialog (native on Windows, SDL3's in the other window builds), whose answer is saved as
 `iso=` once it is verified. On iOS the executable's folder is the app's Documents folder
-(`ico_host_exe_dir`, `port/platform/host_config.c`), and with no image there the run ends with a
+(`port/platform/host_config.c` (`ico_host_exe_dir`)), and with no image there the run ends with a
 message box instead of a dialog. On Android the image comes from the system's file picker
 (`find_iso_android`, below).
 
@@ -165,7 +168,8 @@ modified image), which `mount_game_data` turns into the message box the player s
 `ico_archive_info_acceptable` refuses. The archive is written to `<out>.tmp` and moved over `<out>`
 once it is complete and reads back (`MoveFileEx` on Windows); a failure or a cancel removes the
 `.tmp`. Progress runs through `IcoExtractProgressFn` in the phases `open`, `hash`, `extract`,
-`finish`; the window build shows it in a small window and the log.
+`finish`; the window build shows it in a small window and the log (`port/platform/main_host.c`
+(`mount_game_data`)).
 
 The DATA.DF manifest in `extract.c` (between the `BEGIN DATA.DF MANIFEST` and `END` lines) holds
 DATA.DF's size, the directory's member count and CRC-32, and each member's offset, size and CRC-32:
@@ -181,7 +185,7 @@ then reads the copy like any file, and `main_host.c` deletes it once the game da
 unless `keep_image=1` is in `ico-pc.ini`. A cancelled or refused copy is removed.
 
 `use_iso=1` in `ico-pc.ini` (or `[dev] use_iso`) skips the archive and mounts the image directly
-with `ico_cdvd_host_mount_iso`; it is the [headless build](ARCHITECTURE.md#terms)'s default, so
+with `ico_cdvd_host_mount_iso`; it is the headless build's default, so
 [trace](ARCHITECTURE.md#terms) runs and tests read the image (`use_iso_mode`). In that mode the
 image's SHA-1 is checked unless `verify=0` or `--no-verify` (`verify_iso`); the extractor always
 verifies.
@@ -199,8 +203,8 @@ verifies.
   names (`ico_cdvd_host_boot_name`). The drive never reports a tray-open or not-ready state while a
   disc is mounted.
 - `sceCdRead` copies the sectors at once; `sceCdReadIOPm` copies them into `ico_iop_ram` at the IOP
-  address it is given, and logs `cdvd: sceCdReadIOPm to 0x... is outside IOP RAM` for an address
-  outside it.
+  address it is given, and logs `cdvd: sceCdReadIOPm to 0x... (N sectors) is outside IOP RAM` for
+  an address outside it.
 - Completion follows the drive's timing at [vsync](ARCHITECTURE.md#terms) grain: the buffer is
   full when the call returns (no caller can see it before syncing), but a non-blocking
   `sceCdSync` (odd mode) reports the command busy until the next simulated vsync, and a blocking
@@ -211,9 +215,12 @@ verifies.
   the [host context](ARCHITECTURE.md#terms) the wait completes at once.
 - The stream calls read the requested sectors straight from the disc, so the ring is always full
   and `sceCdStStat` reports its size; pause and resume change nothing.
-- `sceCdReadClock` reports the port clock (`ico_clock_now`, `port/platform/clock.c`: local time,
-  or a fixed moment under `ICO_FIXED_CLOCK`) in BCD; a test can set its own source with
-  `ico_cdvd_host_set_clock_source`.
+- `sceCdReadClock` reports the port clock in BCD: 2002-01-01 00:00:00 unless `ICO_FIXED_CLOCK`
+  is `0`, and the host's local time then (`port/platform/clock.c` (`ico_clock_now`)).
+  `ico_ini_export`, run by `ico_ini_load`, sets the variable from `[dev] fixed_clock`, whose
+  default is the fixed clock in the headless build and in trace runs and local time otherwise
+  (`port/platform/host_config.c` (`ico_ini_export`, `ico_host_fixed_clock`)). A test can set its
+  own source with `ico_cdvd_host_set_clock_source`.
 - With no disc in the slot, `sceCdInit` mounts `ico_cdvd_host_default_iso()`: `ICO_ISO`, else
   `baserom/Ico_PAL.iso` (tests and developer runs). `ico_cdvd_host_stats` feeds the diagnostics
   heartbeat.
@@ -284,7 +291,7 @@ A good load logs `ico_pc: N data table rows (N records) loaded from SCES_507.60`
 DATA.DF (`DFDATAS/DATA.DF`) starts with a directory: a count, then 40-byte entries of a 32-byte
 name, a byte offset and a byte size. The entries named `*.DF` are packs: a raw deflate stream whose
 output is a 16-byte header (the member count first), 0x224-byte member entries (id, kind, a word,
-size, name) and the members back to back (`iosCdvdMgrPackLoad` in `ico2/fumi/ios/cdvd.c`). The
+size, name) and the members back to back (`ico2/fumi/ios/cdvd.c` (`iosCdvdMgrPackLoad`)). The
 other entries are loose files (`.int` streams, `.smb`, `.pss`, `.jim`).
 
 `port/data/df_pack.h` reads these outside the game's cdvd thread, for the music gallery
@@ -311,7 +318,7 @@ mark, no comments, trailing commas, leading zeros, `NaN` or control characters, 
 | test | checks |
 | --- | --- |
 | `vfs_synthetic`, `vfs_disc` | the VFS and ISO9660 backend on an image the test builds, and on the player's disc (`ICO_DISC_IMAGE`; skipped, 77, without it) |
-| `archive_synthetic`, `archive_disc` | extraction into a temporary archive and its mount, compared with the ISO backend |
+| `archive_synthetic`, `archive_disc` | extraction into a temporary archive and its mount, compared with the ISO backend (`archive_disc` reads the player's disc and is skipped, 77, without it) |
 | `iso_import` | the Android copy on Linux with SDL's memory streams: byte for byte, cancel, write failure, the space arithmetic (Linux window build) |
 | `json` | numbers, nesting and the depth limit, escapes, malformed input |
 | `data_desc_fresh` | `port/data/gen/` is what `tools/gen_data_desc.py` writes |

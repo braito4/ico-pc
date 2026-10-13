@@ -13,7 +13,7 @@ changed.
 | `tools/format.sh` | clang-format over the C the script owns, then the top-level layout pass |
 | `tools/format_layout.py` | the top-level blank-line layout of the game's C |
 | `.clang-format` | the clang-format style |
-| `tools/rename_port_symbols.py`, `tools/rename_table.txt` | the `prefix_snake_case` rename of `port/` symbols and its table of old and new names |
+| `tools/rename_port_symbols.py`, `tools/rename_table.txt` | the check that lists any `port/` name not in `prefix_snake_case`, and the rename table it writes and applies |
 | `port/test/ico_check.h` | `CHECK`, `CHECK_STR` and `ico_check_summary` for a port C test |
 | `port/ui/test/settings_fixture.h` | the shared fixture and `CHECK` of the Options-screen tests |
 | `cmake/IcoTests.cmake` | the `add_test` wrapper that labels every test and the `tests` target |
@@ -72,7 +72,7 @@ A `FILE` that does not exist (in the index, with `--staged`) is an error.
 C uses `/* */` comments only. A comment says what the code does and why, in the present tense: no
 release numbers, package codes or history; git history keeps those. A file starts with a comment
 that names its path or file name and says what it holds (`port/platform/arena.h`: "The simulated
-[EE](ARCHITECTURE.md#terms) main RAM the game's heap lives in."). A comment that names a behaviour
+EE main RAM the game's heap lives in."). A comment that names a behaviour
 of another file names that file and the symbol. Host paths inside `ico2/` start their comment with
 `PC port` ([GAME_CODE.md](GAME_CODE.md#host-paths-in-the-game-sources)).
 
@@ -88,7 +88,7 @@ struct tags are CamelCase (`IcoVfsEntry`, `RdFrame`); macros and enum constants 
 | `ico_` | `port/platform`, `port/game`, `port/data`, `port/input`, `port/audio`, `port/config`, `port/save`, `port/math` |
 | `rd_`, `rd__` | `port/render` |
 | `rdtex_` | the texture cache (`port/render/rd_tex.c`) |
-| `vu1ref_` | the CPU reference of the VU1 programs (`port/render/vu1_ref/`) |
+| `vu1ref_` | the CPU reference of the [VU1](ARCHITECTURE.md#terms) programs (`port/render/vu1_ref/`) |
 | `texpack_`, `modelpack_`, `gltf_` | texture packs, model packs and the glTF loader (`port/render`) |
 | `rhi_` | `port/rhi`, the backend-independent layer |
 | `vkr_` | the Vulkan backend (`port/rhi/vk/`) |
@@ -105,14 +105,17 @@ checks). Run `tools/format.sh` after an apply, since longer names rewrap lines.
 
 ## Log lines
 
-The log is stderr (the file `logs/ico-pc.log` unless the program runs with `--console`; Android
-mirrors it to logcat under the tag `ico-pc`). A port log line starts with its module's prefix and a
+The log is stderr: the file `logs/ico-pc.log` unless the program runs with `--console`. Android
+mirrors it to logcat under the tag `ico-pc` (`port/platform/android/host_android.h`
+(`ICO_ANDROID_LOG_TAG`)). A port log line starts with its module's prefix and a
 colon; a test's own lines start with the test's name.
 
 | prefix | written by |
 | --- | --- |
 | `ico_pc:` | the host program: `main_host.c`, `host_config.c`, `host_loop.c`, `diag_host.c`, `kernel_host.c`, `android/host_android.c`, `android/iso_import.c` |
-| `window:`, `video:`, `boot:` | `port/platform/window_host.c`, `window_video.c`, `port/game/video_options.c` |
+| `window:` | `port/platform/window_host.c`, `window_video.c` |
+| `video:` | `port/game/video_options.c` |
+| `boot:` | `port/platform/window_host.c` (the first presents) |
 | `fiber:`, `sched:`, `arena:`, `heap:`, `trace:` | `port/platform/fiber.c`, `sched.c`, `arena.c`, `trace_host.c` |
 | `gpu driver:` | `port/platform/android/gpu_driver_android.c` |
 | `rd:` | `port/render` through `rd__log` and `rd__log_once` (`rd_core.c`), with a topic after it (`rd: blend:`, `rd: fog:`) |
@@ -132,7 +135,7 @@ The player guides quote some of these lines (`textures:` and `models:` in
 [TEXTURE_PACKS.md](../TEXTURE_PACKS.md) and [MODEL_PACKS.md](../MODEL_PACKS.md)); change a quoted
 line and its guide together.
 
-A message box is titled `ICO PC` on Windows (`ico_host_message_box`, `port/platform/host_config.c`)
+A message box is titled `ICO PC` on Windows (`port/platform/host_config.c` (`ico_host_message_box`))
 and Android (`port/platform/android/host_android.c`) and `ICO` on iOS (the same function and
 `port/platform/ios/main_ios.c`); elsewhere `ico_host_message_box` writes the text to stderr.
 
@@ -140,9 +143,13 @@ and Android (`port/platform/android/host_android.c`) and `ICO` on iOS (the same 
 
 A test is a C program under `port/<area>/test/` (or a script under `tools/`) registered with
 `add_test` in its directory's `CMakeLists.txt`, with a comment above the registration saying what it
-checks. `cmake/IcoTests.cmake` wraps `add_test`: the test gets its area's label (`render`, `ui`,
-`platform`, `audio`, `game`, `data`, `rhi`, `save`, and `tools` for a script) and its program joins
-the `tests` target, so a new test needs no extra line. [BUILDING.md](../BUILDING.md#tests) says how
+checks. `cmake/IcoTests.cmake` wraps `add_test`: the test gets its area's label by directory
+(`render`, `ui`, `audio`, `game`, `data`, `rhi`, `save` for `port/<area>`; `port/input`
+(`port/config` and the top level are `platform` with `port/platform`); `port/math` (`port/null` and
+`port/test` are `game`); `port/fmv` is `data`; `port/shaders` is `rhi`), a test whose command runs a
+script from `tools/` also gets `tools`, and its program joins the `tests` target, so a new test
+needs no extra line (`cmake/IcoTests.cmake` (`_ico_test_area`)). There is no `input` label:
+`ctest -L platform` runs the input tests. [BUILDING.md](../BUILDING.md#tests) says how
 to run them.
 
 - The program's first comment names the file and lists what it checks, one line or item per case
@@ -163,9 +170,33 @@ to run them.
   usage lines, and `set -euo pipefail`. A file that is sourced (`tools/fetch_common.sh`,
   `tools/package_*_lib.sh`) starts with `# shellcheck shell=bash`, says it is sourced, and sets no
   shell options.
-- A Python tool starts with a docstring that says what it does and how it is called, runs as
-  `python3 -I tools/<name>.py`, and parses its arguments with `argparse` (`--help` prints the
-  usage). A generator has `--check` (exit 1 when its output is stale); an audit with fixtures has
-  `--selftest`; a test-time tool exits 77 when what it needs is missing.
+-  A Python tool starts with a docstring that says what it does and how it is called, and runs as
+  `python3 -I tools/<name>.py`. A new tool parses its arguments with `argparse` (`--help` prints the
+  usage); `check_call_types.py`, `check_int_arrays.py`, `check_stack_guard.py`, `format_layout.py`,
+  `ico_version.py`, `stack_overread_audit.py` and `struct_cast_audit.py` read `sys.argv` directly,
+  and `extract_elf.py` and `font_audit.py` take no arguments. A generator has `--check` (exit 1 when
+  its output is stale); an audit with fixtures has `--selftest`; a test-time tool exits 77 when what
+  it needs is missing.
 - A tool that needs a third-party Python package takes it from `tools/requirements.txt` through the
   venv (`.venv/bin/python`).
+
+## Where a change goes
+
+| change | where to start |
+| --- | --- |
+| a new config key | [CONFIG.md](CONFIG.md): the reader, the writer and the `ico-pc.ini` mapping |
+| a new Options row | [UI.md](UI.md): the Settings menu's pages and strings |
+| a new gameplay option or achievement | [GAME_FEATURES.md](GAME_FEATURES.md) |
+| a new shader | [SHADERS.md](SHADERS.md) |
+| a new texture or model pack format | [PACKS.md](PACKS.md) |
+| a pacing change | [DISPLAY.md](DISPLAY.md#pacing); the decisions go in `port/platform/pace_policy.c` and only the timing and I/O in `window_host.c` ([PLATFORM.md](PLATFORM.md#pacing)) |
+| a host path in `ico2/` | [GAME_CODE.md](GAME_CODE.md#host-paths-in-the-game-sources) |
+| a new test | [Tests](#tests) above; [TESTING.md](TESTING.md) lists the programs by area |
+
+## Documents
+
+`docs/port/` states what the tree at HEAD does, cites each behaviour in the form
+[README.md](README.md#how-these-documents-are-written) gives, and links each term to
+[Terms](ARCHITECTURE.md#terms). `python3 -I tools/check_docs.py` (ctest `docs_check`;
+not in the pre-commit hook) checks links, anchors, history words, package codes and issue numbers
+(`CMakeLists.txt` (`docs_check`); `tools/check_docs.py` (docstring)).

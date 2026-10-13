@@ -38,61 +38,62 @@ The EE's FPU rounds every single-precision result toward zero and flushes denorm
 outputs to zero. `ico_fpenv_sim_enter` puts the host FPU in the closest IEEE mode: on x86-64 MXCSR
 gets round toward zero, FTZ and DAZ over the power-on value `0x1F80`; on arm64 FPCR gets RMode
 toward zero and FZ. `ico_fpenv_host_enter` puts back the host defaults, round to nearest with
-denormals kept and every exception masked, and clears the sticky flags so nothing the simulation
-raised carries over (`port/platform/fpenv.c`, `ico_fpenv_sim_enter`, `ico_fpenv_host_enter`). Any
+denormals kept and every exception masked: on x86-64 it loads MXCSR's power-on value, which also
+clears the sticky flags, and on arm64 it clears FPCR's rounding, flush and trap bits and leaves
+FPSR as it is (`port/platform/fpenv.c` (`ico_fpenv_sim_enter`, `ico_fpenv_host_enter`)). Any
 other architecture is a compile error. `ico_fpenv_raw` returns the control register for tests and
 [trace](ARCHITECTURE.md#terms) headers (`port/platform/fpenv.h`).
 
 The mode does not give the EE's other differences: the EE has no infinities or NaNs, clamps
 results, and has its own division and square root. Those are the models of
-`port/math/ps2float.h` (below), used where a site was converted (`port/platform/fpenv.h`).
+`port/math/ps2float.h` (below), which the sites listed below call (`port/platform/fpenv.h`).
 
 Where each mode is entered:
 
-- `ico_host_init` enters the simulation mode first, and installs `ico_fpenv_sim_enter` as the
-  scheduler's [fiber](ARCHITECTURE.md#terms) start hook (`port/platform/host_loop.c`,
-  `ico_host_init`; `port/platform/sched.h`, `ico_sched_set_fiber_start_hook`). The fiber switch does
-  not save MXCSR or FPCR, and minicoro's Windows fiber path gives each
+-  `ico_host_init` enters the simulation mode first, and installs `ico_fpenv_sim_enter` as the
+  scheduler's [fiber](ARCHITECTURE.md#terms) start hook (`port/platform/host_loop.c`
+  (`ico_host_init`); `port/platform/sched.h` (`ico_sched_set_fiber_start_hook`)). The fiber switch
+  does not save MXCSR or FPCR, and minicoro's Windows fiber path gives each
   [fiber](ARCHITECTURE.md#terms) an FP state of its own, so every fiber sets the mode at its top
   (`port/platform/fiber.h`).
 - `ico_host_step` enters the simulation mode at the start of each [vsync](ARCHITECTURE.md#terms)
-  step and again after the audio push, which is an SDL call (`port/platform/host_loop.c`,
-  `ico_host_step`).
+  step and again after the audio push, which is an SDL call (`port/platform/host_loop.c`
+  (`ico_host_step`)).
 - `ico_sched_call_on_host` runs its host function in the host mode and puts the simulation mode
-  back afterwards, whatever the function left in the register (`port/platform/sched.c`,
-  `run_host_call`).
+  back afterwards, whatever the function left in the register (`port/platform/sched.c`
+  (`run_host_call`)).
 - In the [window build](ARCHITECTURE.md#terms) the main loop enters the host mode before it pumps
   the window, SDL and the renderer; the next `ico_host_step` puts the simulation mode back
-  (`port/platform/main_host.c`, the `ico_window_pump` call).
+  (`port/platform/main_host.c` (the `ico_window_pump` call)).
 
-Built with `ICO_FPTRAP` (the `fptrap` preset), the simulation mode also unmasks the
+Built with `ICO_FPTRAP` (the `fptrap` CMake preset), the simulation mode also unmasks the
 divide-by-zero and invalid exceptions, so the first such operation stops the program at the
 instruction that raised it: SIGFPE on Linux, a structured exception on Windows
-(`port/platform/fpenv.c`, `ico_fpenv_sim_enter`; `CMakeLists.txt`, `ICO_FPTRAP_DEFINITION`). The
-crash handlers report it like any other fault (`port/platform/diag_host.c`, `fatal_code`). The
+(`port/platform/fpenv.c` (`ico_fpenv_sim_enter`); `CMakeLists.txt` (`ICO_FPTRAP_DEFINITION`)). The
+crash handlers report it like any other fault (`port/platform/diag_host.c` (`fatal_code`)). The
 models below are written so that they raise nothing a branch would have skipped: `ps2_ftoi`
 brings every lane in range before its one conversion, because a vectorised convert raises
-invalid on all lanes (`port/math/ps2float.h`, `ps2_ftoi`).
+invalid on all lanes (`port/math/ps2float.h` (`ps2_ftoi`)).
 
 `fpenv_test` checks the two modes bit for bit: in the simulation mode 1/3 is `0x3EAAAAAA`,
 `FLT_MIN * 0.5` is zero and a denormal input reads as zero; in the host mode 1/3 is `0x3EAAAAAB`
 and the denormals survive. With `ICO_FPTRAP`, `fpenv_test trap` checks that 1/0 in the simulation
-mode raises SIGFPE (`port/platform/fpenv_test.c`, `main`). `fiber_test` checks that a fiber
+mode raises SIGFPE (`port/platform/fpenv_test.c` (`main`)). `fiber_test` checks that a fiber
 whose entry sets the simulation mode sees the host thread's register and leaves it as it was
-(`port/platform/test/fiber_test.c`, `test_fp_state`); `sched_test` checks that a host call runs in
+(`port/platform/test/fiber_test.c` (`test_fp_state`)); `sched_test` checks that a host call runs in
 the host mode and that the calling thread is back in the simulation mode after it
-(`port/platform/test/sched_test.c`, `test_call_on_host`).
+(`port/platform/test/sched_test.c` (`test_call_on_host`)).
 
 ## The PS2 float models
 
 Ordinary game arithmetic stays plain C float arithmetic in the simulation mode, compiled with
 `-ffp-contract=off`, so `a * b + c` rounds the product and then the sum as VU0's multiply-add does
-(`port/math/ps2float.h`, header comment). What plain C gets wrong is written out in
+(`port/math/ps2float.h` (header comment)). What plain C gets wrong is written out in
 `port/math/ps2float.h` and `port/math/ps2float.c`. The divider, multiplier, adder and square root
 are PCSX2 PR #12001's hardware-derived `PS2Float` model; the divider and the square root are
 radix-2 SRT recurrences on a carry-save remainder that come out at the truncated result or one ulp
 above it, in integer arithmetic only, so the host's rounding mode does not reach them
-(`port/math/ps2float.c`, header comment).
+(`port/math/ps2float.c` (header comment)).
 
 Every function in `port/math/ps2float.h`:
 
@@ -117,7 +118,7 @@ Every function in `port/math/ps2float.h`:
 
 Overflow needs no model in plain arithmetic: under round toward zero an overflowing result is
 already `FLT_MAX`, the port's Fmax; the hardware's `0x7FFFFFFF` is not a host float
-(`port/math/ps2float.h`, header comment).
+(`port/math/ps2float.h` (header comment)).
 
 ### Where the models are used
 
@@ -126,21 +127,21 @@ different result the game can reach: a zero divisor, an exponent-255 operand, an
 conversion, or a last bit that decides a branch. By function:
 
 - `ps2_div` (the most used): the motion manager's leg and arm IK, where a zero distance or bone
-  length divides by zero (`ico2/sugipon/src/motMan_getFinalMatrix.c.inc`, `_getFinalMatrix`,
-  `limitHPAngleAndSetB`); `motMan_rootUpdate.c.inc` (`rootUpdateDirectPlay`), `motionManager.c`
+  length divides by zero (`ico2/sugipon/src/motMan_getFinalMatrix.c.inc` (`_getFinalMatrix`,
+  `limitHPAngleAndSetB`)); `motMan_rootUpdate.c.inc` (`rootUpdateDirectPlay`), `motionManager.c`
   (`checkWallState`), `motionOrientManager.c` (`getMotionGeometry`), `handManager.c`
   (`connectToTarget`), `enemy.c` (`dispEnemyObject`), `weapon.c` (`initializeQueenzSword`),
   `particleEffect.c` (`_setParticleEffect`, `particleEffectOffScreen`), `staticBlur.c` (`calcSun`),
   `darkVolume.c` (`projectVertex`) and `lineManager.c` (`perspLine`, `clipAtX`, `clipAtY`), all
-  under `ico2/sugipon/src`; the camera (`ico2/omori/src/camera-root.c`, `SetCameraMatrix`); the
+  under `ico2/sugipon/src`; the camera (`ico2/omori/src/camera-root.c` (`SetCameraMatrix`)); the
   projections of `ico2/seki/src/GifPacket.c` (`rotTransPers`), `GsBase.c` (`VS_DIV`) and
-  `Shadow.c` (`clipVolumeEdge`); lightning (`ico2/ito/src/lightning.c`, `set_vertex`,
-  `DrawLightning2`); the collision (`ico2/fumi/src/fieldCollision.c`, `FC_DIV`). In `port/`:
-  libvu0's normalise, divide and projection (`port/math/libvu0.c`, `sceVu0Normalize`,
-  `sceVu0DivVector`, `sceVu0RotTransPers`), `_RotTransPersCurrentMatrix`
+  `Shadow.c` (`clipVolumeEdge`); lightning (`ico2/ito/src/lightning.c` (`set_vertex`,
+  `DrawLightning2`)); the collision (`ico2/fumi/src/fieldCollision.c` (`FC_DIV`)). In `port/`:
+  libvu0's normalise, divide and projection (`port/math/libvu0.c` (`sceVu0Normalize`,
+  `sceVu0DivVector`, `sceVu0RotTransPers`)), `_RotTransPersCurrentMatrix`
   (`port/math/matrix_stack.c`), `ico_domain_error` (`port/math/newlib/ico_libm.c`) and the
-  [VU1](ARCHITECTURE.md#terms) CPU references (`port/render/vu1_ref/vu1_ref_internal.h`,
-  `vu_rcp`; `port/render/vu1_ref/vu1_scissor.c`, `interpolate`).
+  [VU1](ARCHITECTURE.md#terms) CPU references (`port/render/vu1_ref/vu1_ref_internal.h`
+  (`vu_rcp`); `port/render/vu1_ref/vu1_scissor.c` (`interpolate`)).
 - `ps2_ftoi`: `ico2/fumi/src/commonact.c` (`_ACTCorrectMsg`), `fieldCollision.c` (`FC_FTOI`),
   `ico2/omori/src/chain.c` (`ChainNodeSpan`), `ico2/sugipon/src/enemy.c` (`dispEnemyObject`),
   `ico2/ito/src/lightning.c` (`lightningSeg`, `DrawLightning2`); `port/math/libvu0.c`
@@ -148,13 +149,13 @@ conversion, or a last bit that decides a branch. By function:
   `vu1_ref_internal.h` (`vu_ftoi0_4`).
 - `ps2_ftoi4`: `GifPacket.c` (`rotTransPers`), `Shadow.c` (`storeVolumeVerts`), `darkVolume.c`
   (`projectVertex`); `libvu0.c`, `matrix.c` (`_FTOI4Vector`), `matrix_stack.c`
-  (`_RotTransCurrentMatrix`) and the VU1 references (`vu1_ref_internal.h`, `vu_xyz`;
+  (`_RotTransCurrentMatrix`) and the VU1 references (`vu1_ref_internal.h` (`vu_xyz`);
   `vu1_normal.c`, `vu1_particle.c`, `vu1_scissor.c`).
-- `ps2_mul`, `ps2_add`, `ps2_sub`: the collision rays (`ico2/fumi/src/fieldCollision.c`,
-  `FC_MUL`, `FC_ADD`, `FC_SUB`), where IEEE round toward zero puts some hits one ulp off the EE's
+- `ps2_mul`, `ps2_add`, `ps2_sub`: the collision rays (`ico2/fumi/src/fieldCollision.c`
+  (`FC_MUL`, `FC_ADD`, `FC_SUB`)), where IEEE round toward zero puts some hits one ulp off the EE's
   and, where two coplanar floors meet, picks the other floor; `ico_apply_matrix_ps2`
   (`port/math/matrix_stack.c`); and, for `ps2_add` and `ps2_sub`, the libm copies
-  (`port/math/newlib/ico_libm.c`, below).
+  (`port/math/newlib/ico_libm.c` (below)).
 - `ps2_operand`: `ico_apply_matrix` and `ico_apply_matrix_ps2` read a vector's w through it
   (`port/math/matrix_stack.c`); `ico2/sugipon/src/motionOrientManager.c` (`getMotionGeometry`),
   `enemyParts.c` (`UpdatePointBlur`) and `ico_domain_error` (`ico_libm.c`).
@@ -167,31 +168,32 @@ conversion, or a last bit that decides a branch. By function:
   `_RemakeNormal`'s helpers),
   `port/math/vector_inline.h` (`ico_sub_inv_length`), `port/math/cloth.c` (`getXZInvLength`),
   `ico2/sugipon/src/clothAnimation.c` (`fSqrtInv_i`, `xzInvLength_i`) and the VU1 reference
-  (`port/render/vu1_ref/vu1_normal.c`, `normalRef`).
+  (`port/render/vu1_ref/vu1_normal.c` (`normalRef`)).
 - `ps2_min`, `ps2_max`: `ico2/sugipon/src/darkVolume.c` (`projectVertex`), `port/math/libvu0.c`
   (`sceVu0ClampVector`), `vu1_ref_internal.h` (`vu_max0`, `vu_min255`).
 - `ps2_itof`: `port/math/libvu0.c` (`sceVu0ITOF0Vector`, `sceVu0ITOF4Vector`). `ps2_is_zero`:
   `port/render/vu1_ref/vu1_particle.c` (`vu1ref_particle`). `ps2_float_bits` and `ps2_bits_float`:
-  the R register (`port/math/matrix.c`, below).
+  the R register (`port/math/matrix.c` (below)).
 
 `port/math/test/math_test.c` calls every model directly. A site not in this list does plain IEEE
-arithmetic in the simulation mode.
+arithmetic in the simulation mode. A new site that calls a model is added to this list;
+`math_test` tests the models, not their callers.
 
 ### What stays plain IEEE
 
 - Every game addition, subtraction and multiplication outside the collision rays and the libm
   copies. `ico_apply_matrix_ps2` costs about 75 times `ico_apply_matrix`, so only the collision
-  rays use it (`port/math/ico_math.h`, `ico_apply_matrix_ps2`).
-- Every division outside the converted sites, the libm copies' divisions included: those use the
-  host's IEEE division under the simulation's rounding mode (`port/math/newlib/ico_libm.c`,
-  header comment).
+  rays use it (`port/math/ico_math.h` (`ico_apply_matrix_ps2`)).
+- Every division outside the sites listed above, the libm copies' divisions included: those use the
+  host's IEEE division under the simulation's rounding mode (`port/math/newlib/ico_libm.c`
+  (header comment)).
 - Expressions of constants: ee-gcc folded most of them at compile time in round to nearest, and a
   host compiler may or may not fold the same ones. Inside the libm copies each folded constant
   is written as the literal the EE object holds; elsewhere the compiler decides
-  (`port/math/newlib/ico_libm.c`, header comment).
+  (`port/math/newlib/ico_libm.c` (header comment)).
 - The FP mode off the simulation thread: other threads (the heartbeat and watchdog thread,
   SDL's own) run in the host mode, so a model that must hold everywhere tests the exponent bits
-  rather than trusting DAZ (`port/math/ps2float.h`, `ps2_is_zero`).
+  rather than trusting DAZ (`port/math/ps2float.h` (`ps2_is_zero`)).
 
 ## The soft double
 
@@ -205,14 +207,14 @@ computes the EE's results with integers only, on bit patterns (`uint64_t` for a 
 variadic argument, and `ICO_D(lit)` for the bits of a `double` literal (`port/math/softdouble.h`).
 `port/math/softdouble.c` lists each way the library differs from a textbook IEEE implementation
 and repeats it: the 61-bit significand with eight guard bits, the sticky bit, the specials and the
-comparison's answer for a NaN (`port/math/softdouble.c`, header comment).
+comparison's answer for a NaN (`port/math/softdouble.c` (header comment)).
 
 The game functions that did `double` arithmetic (33 functions in 20 files, and two static inline
 helpers expanded into them) call these. `tools/softdouble_gate.py` holds the list (`FUNCTIONS`)
 and fails when one of them holds a `double` keyword (other than `va_arg(ap, double)`) or an
 unsuffixed floating constant outside `ICO_D(...)`; with `--build` it also compiles the files with
 `-Wdouble-promotion -Wfloat-conversion` and fails on a warning inside one of the functions
-(`tools/softdouble_gate.py`, docstring). It runs as the `softdouble_gate` test on native builds
+(`tools/softdouble_gate.py` (docstring)). It runs as the `softdouble_gate` test on native builds
 with `compile_commands.json` (`port/math/CMakeLists.txt`).
 
 ## The newlib copies
@@ -222,7 +224,7 @@ Windows CRTs have other random generators, `qsort` leaves the order of equal ele
 host libms differ from newlib's fdlibm code in the last bits and in the EE's round-toward-zero
 mode. Those results feed game state (a random stream, the order of sorted objects, an angle that
 decides a branch), so the port carries host copies of the members the game linked
-(`port/compat/ico_libc.h`, header comment). `port/compat/math.h` and `port/compat/stdlib.h` stand
+(`port/compat/ico_libc.h` (header comment)). `port/compat/math.h` and `port/compat/stdlib.h` stand
 in for the host headers on the game's include path and, under `ICO_HOST`, map `rand`, `srand`,
 `qsort`, `RAND_MAX`, `atan2f`, `acosf`, `asinf`, `sinf`, `cosf`, `fmodf` and `sqrtf` onto the
 `ico_*` names; code outside the game's include path keeps the host functions
@@ -233,10 +235,10 @@ the string calls stay the host's, with their differences listed there.
   `_REENT_INIT` does; `ICO_RAND_MAX` is newlib's `0x7FFFFFFF` (`port/math/newlib/rand.c`;
   `port/math/newlib/ico_newlib.h`). `ico_rand_state` reads the state word for diagnostics.
 - `ico_qsort`: newlib's 4.4BSD qsort with the EE's sequence of comparisons and exchanges, so
-  elements that compare equal end in the same order (`port/math/newlib/qsort.c`, header comment).
+  elements that compare equal end in the same order (`port/math/newlib/qsort.c` (header comment)).
 - `ico_atan2f`, `ico_acosf`, `ico_asinf`, `ico_sinf`, `ico_cosf`, `ico_fmodf`, `ico_sqrtf`:
   fdlibm's single-precision code as newlib carries it, with newlib's X/Open wrappers, each section
-  naming the `libm.a` member it was copied from (`port/math/newlib/ico_libm.c`, header comment).
+  naming the `libm.a` member it was copied from (`port/math/newlib/ico_libm.c` (header comment)).
   Nothing in the file calls the host libm, and only the `ico_*` entry points are external.
 
 What `ico_libm.c` keeps from the EE copies: every operation, its order, its operand types (float
@@ -246,16 +248,16 @@ the sign bit are done on `uint32_t`, and the wrappers return the X/Open results 
 addition and subtraction in `sinf`'s kernels and argument reduction, `atanf`, `atan2f`, `acosf`
 and `asinf` goes through `ps2_add`/`ps2_sub`; the case that shows it is `sinf`'s table argument
 just under pi/2, where `1 - 4.7e-9` is 1.0 on the EE and `0x3F7FFFFF` under IEEE round toward
-zero (`port/math/newlib/ico_libm.c`, header comment).
+zero (`port/math/newlib/ico_libm.c` (header comment)).
 
 What it does not reproduce: `__kernel_rem_pio2f` and `floorf` (used only for `sinf` arguments
 above 2^7 * pi/2, which the game never passes) and `fmodf` (exact) stay IEEE; divisions are the
 host's IEEE division; the EE's lack of infinities and NaNs is reproduced only in `acosf`'s and
 `asinf`'s domain errors, where `ico_domain_error` gives the EE's +Fmax for an exponent-255
-argument instead of the host's NaN (`port/math/newlib/ico_libm.c`, `ico_domain_error`).
+argument instead of the host's NaN (`port/math/newlib/ico_libm.c` (`ico_domain_error`)).
 `ico_cosf` follows newlib's `sf_cos.c` and is not checked against an EE object, because the game's
 link holds no `cosf`; `ico_sqrtf` is the `__ieee754_sqrtf` core alone, because the EE build links
-no `sqrtf` wrapper (`port/math/newlib/ico_libm.c`, `ico_cosf`, `ico_sqrtf`). The file refuses to
+no `sqrtf` wrapper (`port/math/newlib/ico_libm.c` (`ico_cosf`, `ico_sqrtf`)). The file refuses to
 compile where float maths has excess precision (`__FLT_EVAL_METHOD__` other than 0).
 
 ## VU0 in C
@@ -288,50 +290,50 @@ alone left alone. `ico2/common/include/typedef.h` includes `port/math/ico_math.h
 matrix: vector sums, scales and products (`cross3` pairs the products as `vopmula`/`vopmsub` do),
 lengths, `_NormalizeVector` through `vrsqrt`, `_MulMatrix`, `_InversMatrix`, the light matrices
 and `_RemakeNormal`'s normal builders, which add z before y where the assembly does
-(`port/math/matrix.c`, `sq_len_xzy`). The game's `ico2/seki/src/Matrix.c` keeps its C routines and
+(`port/math/matrix.c` (`sq_len_xzy`)). The game's `ico2/seki/src/Matrix.c` keeps its C routines and
 calls these.
 
 VU0's R register is a 23-bit LFSR read as a float in [1, 2): the bits are
 `0x3F800000 | state`. One advance takes bits 4 and 22, shifts the state left one and XORs the two
-taps into bit 0. The polynomial is PCSX2's and is unverified on hardware (`port/math/matrix.c`,
-`r_next`). `_InitRandom` is `vrinit` with seed + 1 then `vrxor` with seed + seed; `_GetRandom` is
+taps into bit 0. The polynomial is PCSX2's and is unverified on hardware (`port/math/matrix.c`
+(`r_next`)). `_InitRandom` is `vrinit` with seed + 1 then `vrxor` with seed + seed; `_GetRandom` is
 one advance minus 1.0, exactly `(R & 0x7FFFFF) / 2^23`; `_GetRandomVector` advances three times
 and `_GetRandomVector0` once for all three fields, and neither writes w (both have no caller)
 (`port/math/matrix.c`). `ico2/ito/src/lightning.c` writes R directly on the PS2 (`ctc2` to
 `$vi20`); its host form is `ico_vu0_random_set`, which keeps the low 23 bits
-(`port/math/ico_math.h`, `ico_vu0_random_set`). `math_test` checks the seed, the state after
-`vrinit` and `vrxor` and six steps against fixed values (`port/math/test/math_test.c`,
-`test_random`).
+(`port/math/ico_math.h` (`ico_vu0_random_set`)). `math_test` checks the seed, the state after
+`vrinit` and `vrxor` and six steps against fixed values (`port/math/test/math_test.c`
+(`test_random`)).
 
 ## The current matrix
 
 The PS2 kept the current matrix in VU0 registers vf4-vf7 and pushed it to VU0 data memory through
 vi15. On the host it is `ico_current_matrix` and a 64-entry stack, which wraps as VU0's 4 KB data
-memory does (`port/math/matrix_stack.c`, `MATRIX_STACK_DEPTH`). Every routine that combines the
+memory does (`port/math/matrix_stack.c` (`MATRIX_STACK_DEPTH`)). Every routine that combines the
 current matrix with another (rotate, scale, translate, multiply) builds the other matrix in full,
 zeros and ones included, and runs the four-term multiply-add on it, so the rounding and the order
-of operations are the PS2's (`port/math/matrix_stack.c`, header comment).
+of operations are the PS2's (`port/math/matrix_stack.c` (header comment)).
 
 - `ico_apply_matrix` computes `m[0]*x + m[1]*y + m[2]*z + m[3]*w` left to right for all four
   fields, the `vmulax`/`vmadday`/`vmaddaz`/`vmaddw` sequence; w is read through `ps2_operand`,
   because callers often write only x, y and z and leave a stale word in w, which times a zero
-  translation row is 0 on the PS2 and NaN on the host (`port/math/matrix_stack.c`,
-  `ico_apply_matrix`). `ico_apply_matrix_w1` takes w as 1.
+  translation row is 0 on the PS2 and NaN on the host (`port/math/matrix_stack.c`
+  (`ico_apply_matrix`)). `ico_apply_matrix_w1` takes w as 1.
 - `ico_apply_matrix_ps2` is the same sequence with each step through `ps2_mul` and `ps2_add`,
   every product truncated before its sum, the matrix field the multiplicand (fs) and the vector
   field the broadcast (ft). The collision rays use it through `FC_APPLY`
-  (`port/math/matrix_stack.c`, `ico_apply_matrix_ps2`; `ico2/fumi/src/fieldCollision.c`).
+  (`port/math/matrix_stack.c` (`ico_apply_matrix_ps2`); `ico2/fumi/src/fieldCollision.c`).
 - `_RotTransPersCurrentMatrix` divides by w as `vdiv` then `vmulq`, two roundings rather than
   `x / w` (`port/math/matrix_stack.c`).
 - `ico_vu0_registers_push`/`_pop` are the host halves of `_PushVu0Registers` and
   `_PopVu0Registers`. On the PS2 those save vf1-vf31 around code that clobbers them; on the host
   only the current matrix is left of those registers, so that is what is saved, up to eight deep
-  (the game nests five and asserts at six) (`port/math/matrix_stack.c`, `VU0_SAVE_DEPTH`).
+  (the game nests five and asserts at six) (`port/math/matrix_stack.c` (`VU0_SAVE_DEPTH`)).
 
 `port/math/matrix_drive.c` holds `sugipon/src/matrixDrive.c`'s VU0 and quadword-copy routines:
 the copies are `memmove`s, `FSqrt` is `ps2_sqrt`, and `ico_set_transpose_matrix_ps2` is
 `MatrixDrive_SetTransposeMatrix` with its `sceVu0ApplyMatrix` as `ico_apply_matrix_ps2`, for the
-collision's `FC_SET_TRANSPOSE` (`port/math/matrix_drive.c`, `ico_set_transpose_matrix_ps2`).
+collision's `FC_SET_TRANSPOSE` (`port/math/matrix_drive.c` (`ico_set_transpose_matrix_ps2`)).
 
 ## Quaternions and cloth
 
@@ -346,7 +348,7 @@ it for its `GetMatrixFromQuaternion*` bodies.
 has a caller outside that file, whose own code uses the static inline copies, but the symbols are
 the game's. `FSqrtInv` is declared `void (void)` while its assembly computes a reciprocal square
 root of `$f12`; with no argument there is nothing to compute, so the host body is empty
-(`port/math/cloth.c`, `FSqrtInv`).
+(`port/math/cloth.c` (`FSqrtInv`)).
 
 ## Compile options
 
@@ -379,5 +381,5 @@ checks (`tools/check_android_flags.sh`). CI runs it on the Android job
 
 The `fptrap` preset builds with `ICO_FPTRAP` and CI runs its tests, so a division by zero or an
 invalid operation in the simulation's code under test stops the run at the instruction
-(`CMakePresets.json`, `fptrap`; `.github/workflows/ci.yml`). The `math`, `newlib` and `softdouble`
+(`CMakePresets.json` (`fptrap`); `.github/workflows/ci.yml`). The `math`, `newlib` and `softdouble`
 tests carry the `game` label (`cmake/IcoTests.cmake`).

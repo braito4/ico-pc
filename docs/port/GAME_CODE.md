@@ -9,7 +9,7 @@ from.
 
 | path | what it holds |
 | --- | --- |
-| `ico2/<programmer>/` | the game's sources, one directory per programmer (`common`, `fumi`, `ito`, `omori`, `script`, `seki`, `sugipon`), each with `src/` (or `ios/`, `isys/`, `sound/`) and `include/` |
+| `ico2/<programmer>/` | the game's sources, one directory per programmer (`common`, `fumi`, `ito`, `omori`, `script`, `seki`, `sugipon`), each with `src/` (or `ios/`, `isys/`, `sound/`, and `ito/mpeg/`, the PS2 movie player that is not compiled) and `include/` |
 | `ico2/vusrc/` | the VU1 [microprograms](ARCHITECTURE.md#terms), kept as the reference for the renderer's shaders; never compiled |
 | `sce/` | Sony's SDK headers the game includes, and `sce/libsndn2/sound.c`, the one `sce/` source compiled |
 | `config/link_order.pal.txt` | the retail link's object list: the inventory of the game's translation units and data members |
@@ -54,7 +54,8 @@ list, minus `ICO_BLOCKED_SOURCES` unless `ICO_BUILD_BLOCKED=ON`, and prints the 
 boot [fiber](ARCHITECTURE.md#terms). The object libraries and `ico_data` (the table definitions and
 the loader) are collected into the static library `ico_game`. `ico_pc` (only with `ICO_LINK_EXE=ON`)
 links `ico_game`, `ico_platform` and the port's libraries, plus `port/null/gfx_null.c` and
-`port/null/libgcc_null.c` compiled into the program itself, since they call back into the game.
+`port/null/libgcc_null.c` compiled into the program itself, since they call back into the game
+(`CMakeLists.txt` (the game library and the program sections)).
 
 `cmake/IcoExclusions.cmake` holds `ICO_BLOCKED_SOURCES` (fails with every compiler) and
 `ICO_BLOCKED_SOURCES_CLANG` (fails with clang only). Both are empty: every game source compiles with
@@ -64,7 +65,9 @@ recheck them.
 
 Of `sce/`, only `sce/libsndn2/sound.c`, the [EE](ARCHITECTURE.md#terms) side of the Sg sound
 sequencer, is compiled, into `ico_sndn2` (`port/audio/CMakeLists.txt`). It takes the semantics
-options, `ICO_HOST=1` and the game's warning set like a game source; its header comment lists the
+options and `ICO_HOST=1`; its target's port warning set is followed by the game's warning set and
+five `-Wno-` switches for this file (`port/audio/CMakeLists.txt` (`ico_sndn2`)); its header comment
+lists the
 host seams it carries (pointer arrays where the EE kept addresses in 32-bit context words).
 
 ## Semantics options
@@ -106,7 +109,8 @@ There are two warning sets (`cmake/IcoFlags.cmake`):
   int/pointer conversions, incompatible pointers, return mismatches), each added only when the
   compiler knows it (`check_c_compiler_flag`). Clang also gets `-Wno-invalid-source-encoding` for
   the EUC-JP literals. With `ICO_STRICT_WARNINGS=ON` the first three become errors; the option is
-  off on every preset, and the build prints many warnings, most of them `-Wstrict-prototypes`.
+  off by default and no CMake preset sets it (`cmake/IcoFlags.cmake`; `CMakePresets.json`), and
+  the game sources still raise these warnings, most of them `-Wstrict-prototypes`.
 - `ICO_PORT_WARNINGS`, for every `port/` target: `-Wall -Wextra -Wno-unused-parameter -Werror` and
   the three diagnostics above as errors, on every preset and both compilers. A new warning in
   `port/` fails the build. A port unit that includes a game header still declaring an unprototyped
@@ -136,17 +140,18 @@ error without `-fsanitize=address`), it poisons the game heap's block headers, s
 `ICO_HEAP_ASAN_FREE=1` in the environment also poisons free areas' bodies.
 
 A comment that starts `PC port` marks a host path and says what the original did and why the
-host differs. `grep -a -rn "PC port" ico2/` finds about 400; they cluster where the hardware was:
+host differs. `grep -a -rn "PC port" ico2/` finds about 400, most of them in `ico2/seki/`; they
+cluster where the hardware was:
 
-| directory | `PC port` comments | mostly |
-| --- | --- | --- |
-| `ico2/seki/` | 177 | the GS packet layer, textures, display lists, the file loader |
-| `ico2/sugipon/` | 74 | effects and their packet code |
-| `ico2/common/` | 71 | `debug.c`, `main.c`, the menus' layout code |
-| `ico2/fumi/` | 36 | `ios/` (threads, cdvd, memory card, pad), actors |
-| `ico2/omori/` | 24 | generators and objects |
-| `ico2/script/` | 9 | the event scripts |
-| `ico2/ito/` | 4 | the Queen's barrier |
+| directory | mostly |
+| --- | --- |
+| `ico2/seki/` | the [GS](ARCHITECTURE.md#terms) packet layer, textures, display lists, the file loader |
+| `ico2/sugipon/` | effects and their packet code |
+| `ico2/common/` | `debug.c`, `main.c`, the menus' layout code |
+| `ico2/fumi/` | `ios/` (threads, cdvd, memory card, pad), actors |
+| `ico2/omori/` | generators and objects |
+| `ico2/script/` | the event scripts |
+| `ico2/ito/` | the Queen's barrier |
 
 Other host lines carry a short trailing comment instead (`/* (int) on the EE: pointer-wide on the
 host */` in `ico2/fumi/ios/cdvd.c`). Use `grep -a`: the EUC-JP files otherwise read as binary.
@@ -180,13 +185,14 @@ Three kinds of code reached the EE's hardware without an SDK call; each has one 
 - **Inline assembly.** The [VU0](ARCHITECTURE.md#terms) macro-mode and R5900 assembly of the game
   has C bodies over `port/math`; no compiled game source holds an `asm` statement (the only one left
   is in `ico2/ito/mpeg/mv_main.c`, an `ICO_EE_ONLY_SOURCES` file).
-- **Floating point.** The simulation runs in the environment `port/platform/fpenv.h` describes:
+-  **Floating point.** The simulation runs in the environment `port/platform/fpenv.h` describes:
   `ico_fpenv_sim_enter` selects round toward zero with flush-to-zero and denormals-are-zero (MXCSR
   on x86-64, FPCR on arm64), the closest IEEE mode to the EE's FPU, and `ico_fpenv_host_enter`
   restores the host defaults for the platform layer, SDL and the renderer. The EE's other float
   differences (no infinities or NaNs, clamped results, its own division and square root) are
-  `port/math`'s helpers, used at the call sites that need them. The `fptrap` preset (`ICO_FPTRAP`)
-  also unmasks divide-by-zero and invalid in simulation mode; `fpenv_test` checks both modes.
+  `port/math`'s helpers, used at the call sites that need them. The `fptrap` CMake preset
+  (`ICO_FPTRAP`) also unmasks divide-by-zero and invalid in simulation mode; `fpenv_test` checks
+  both modes.
 
 ## Layout asserts
 
@@ -197,22 +203,23 @@ and a `sizeof` assert where the size is known. Every struct it touches has a lin
 `config/struct_classes.txt`:
 
 ```
-<name> <class> [size=0xNN] [base=0xNN] [pending=<package>] [nosize] [# evidence]
+<name> <class> [size=0xNN] [base=0xNN] [pending=<note>] [nosize] [# evidence]
 ```
 
 The class is `runtime` (natural host layout, real pointers), `overlay` (read directly from disc or
 ELF bytes, so frozen) or `save` (serialised into the save image or the card files, so frozen). On
 the host only the `overlay` and `save` structs are asserted; the `runtime` ones compile only with
 `-DICO_LAYOUT_EE=1` and document the EE layout. `pending=` holds a frozen struct's asserts back
-(`ICO_LAYOUT_PENDING` compiles them anyway). `port/test/CMakeLists.txt` compiles the file as the
-game compiles (include path, definitions, layout options), so a frozen layout that moves fails the
-build; `layout_asserts_fresh` (and the pre-commit hook and CI) runs `--check`.
+(none is pending; `ICO_LAYOUT_PENDING` compiles them anyway). `port/test/CMakeLists.txt` compiles
+the file as the game compiles (include path, definitions, layout options), so a frozen layout that
+moves fails the build; `layout_asserts_fresh` (and the pre-commit hook and CI) runs `--check`.
 
 ## Audits
 
 Each audit is a Python tool whose docstring says what it looks for; each fails (exit 1) on a
-finding that its allow list does not name, and the allow lists fail on an entry that matches
-nothing, so they cannot go stale.
+finding its allow list does not name. The allow lists of `stack_overread_audit.py`,
+`struct_cast_audit.py`, `offset_audit.py` and `template_audit.py` also fail on an entry that
+matches nothing, so they cannot go stale; `check_call_types.py`'s does not.
 
 | tool | refuses | runs in |
 | --- | --- | --- |
@@ -256,8 +263,8 @@ fresh, and never opens an ELF. [DATA.md](DATA.md#the-data-tables) describes the 
 No table is `const` on the host: the loader writes them all, and the game writes three tables the
 PS2 build kept in `.rodata` (`stageTable`, `motionLimitDef`, `seDef`). The generated definitions
 rename a header's `extern const` declaration around the `#include`s (`table_defs.c`), and
-`check_const_writes.py` looks for other writes to `const` objects (`CMakeLists.txt`, the
-`ico_data` comment).
+`check_const_writes.py` looks for other writes to `const` objects (`CMakeLists.txt` (the
+`ico_data` comment)).
 
 The maintainer step: with the base ELF (`ICO_BASE_ELF`, default `baserom/pal/baseelf.elf`, written
 by `tools/extract_elf.sh`) and pyelftools present, `port/data/CMakeLists.txt` generates each
@@ -271,17 +278,19 @@ says so.
 ## The decompilation
 
 The decompilation (<https://github.com/nathanialf/ico>) is the byte-matched reference: it rebuilds
-the PAL boot ELF with the period toolchain. This repository has it as the git remote `upstream`
-and merges `upstream/main` into `main`. What comes down that way is what the program is, not where
-it runs: a reconstruction bug the port finds (a wrong type, field, operand or control flow), a
-name, a struct or union layout, a header declaration.
+the PAL boot ELF with the period toolchain. Add it as the remote `upstream`
+(`git remote add upstream https://github.com/nathanialf/ico.git`) and merge `upstream/main` into
+`main`. What comes down that way is what the program is, not where it runs: a reconstruction bug
+the port finds (a wrong type, field, operand or control flow), a name, a struct or union layout, a
+header declaration.
 
 Such a fix is made in the decompilation first, under its rules (byte match against the ROM, the
 period toolchain, its hooks), and reaches this tree through the merge. Conflicts in `ico2/` resolve
 to the host form here while taking the upstream names, types and fixes; `strip_host_gates.py`
 removes any `ICO_HOST` conditional a merge brings in. The port's own changes (the host build,
 `port/`, host paths in `ico2/`) never go up, and nothing here changes a byte the decompilation
-builds. The decompilation's `docs/PORT.md` states the same contract from its side.
+builds. The decompilation's [docs/PORT.md](https://github.com/nathanialf/ico/blob/main/docs/PORT.md)
+states the same contract from its side.
 
 ## EUC-JP sources
 
