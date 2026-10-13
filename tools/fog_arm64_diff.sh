@@ -9,8 +9,8 @@
 # parameter sweep), then its printed tables and sprites against the host
 # build's (the program ctest built, gcc or clang), byte for byte.  A
 # difference is game code whose result depends on the compiler or the
-# target, as issue 19's deleted stores and BgAnimation.c's (short)(float)
-# were.
+# target, as clang's deleted stores to const tables and BgAnimation.c's
+# (short)(float) were.
 #
 # Usage: tools/fog_arm64_diff.sh HOST-FOG-LUT-TEST [out-dir]
 #   HOST-FOG-LUT-TEST  the host build's fog_lut_test program

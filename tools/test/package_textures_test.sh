@@ -87,8 +87,8 @@ echo x > "$m/game/userdata/f"
 if HOME="$m/home" "$m/game/make_portable.sh" </dev/null >"$m/out2" 2>&1; then bad "make_portable.sh accepted a non-empty userdata"; fi
 rm "$m/game/userdata/f"
 ok "make_portable.sh refuses and creates"
-# The player archives carry no developer files (v0.6.2: browsers and Windows
-# flagged the bundle): the zip file list of package_win.sh and the tar list
+# The player archives carry no developer files (browsers and Windows flag a
+# bundle that does): the zip file list of package_win.sh and the tar list
 # of package_linux.sh name only the game, mc_import, the notes and the docs,
 # and both scripts assert the developer files are absent.
 zl="$(sed -n '/^    files=(/,/^    \[\[ "\$variant" == portable \]\] || files/p' "$here/tools/package_win.sh")"

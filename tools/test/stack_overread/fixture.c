@@ -37,7 +37,7 @@ static inline void UnitMatrix33(QMat3 *m)
     m->z.f[2] = 1.0f;
 }
 
-/* issue 12's shape: a 3x3 local, the translation in the next local */
+/* QueenBarrierGeo's shape: a 3x3 local, the translation in the next local */
 void barrierBefore(void *node, QVec *pos)
 {
     QMat3 rot;

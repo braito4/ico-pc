@@ -4,7 +4,7 @@
 Looks in the game sources (ico2/ by default) for code that only worked on the
 PS2 because of how the period compiler laid out a function's locals on the
 stack. The host compiler orders and pads locals as it likes, so such code
-reads or writes the wrong bytes on the PC. Issue 12 was one: QueenBarrierGeo
+reads or writes the wrong bytes on the PC. One such case: QueenBarrierGeo
 built a 3x3 matrix in a 48-byte local, put the translation in the next local,
 and copied 64 bytes from the first, which only gave the right translation
 because the second local sat right after the first in the PS2's frame.

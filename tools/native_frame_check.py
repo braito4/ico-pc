@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""tools/native_frame_check.py: the native-frame gate harness (v0.6.0).
+"""tools/native_frame_check.py: the native-frame gate harness.
 
 Drives port/render/rd_replay_tool over saved frame dumps (.rddump or the F12
 .zip) and checks two things.

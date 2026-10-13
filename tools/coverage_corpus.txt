@@ -22,7 +22,7 @@
 
 default pixels=0.5 tol=8
 
-# the user's dumps (v0.6.0 set); the consecutive triple v17553/v17589/v17614 also renders interpolated
+# the maintainer's dumps; the consecutive triple v17553/v17589/v17614 also renders interpolated
 /primary/dev/ico-pc/dist/dumps/*.zip
 /primary/dev/ico-pc/dist/dumps/frame-20261011-090006-v17589.zip interp=0.5:/primary/dev/ico-pc/dist/dumps/frame-20261011-090005-v17553.zip
 /primary/dev/ico-pc/dist/dumps/frame-20261011-090007-v17614.zip interp=0.5:/primary/dev/ico-pc/dist/dumps/frame-20261011-090006-v17589.zip

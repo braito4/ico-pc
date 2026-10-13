@@ -35,7 +35,7 @@ MIN_ELEMENTS = 64
 
 _SCE = (
     "sce/ is the reconstruction of the period SDK and toolchain library "
-    "members the retired PS2 build linked; the PC port compiles no sce/ "
+    "members the PS2 build (the decompilation's) linked; the PC port compiles no sce/ "
     "source (CMakeLists.txt, cmake/IcoSources.cmake), so none of it is in "
     "the shipped program. "
 )

@@ -2963,7 +2963,7 @@ def main():
     ap.add_argument("files", nargs="*")
     ap.add_argument("--dump", help="print a record's EE fields as the audit reads them")
     ap.add_argument("--no-narrow", action="store_true",
-                    help="skip the pointer-to-32-bit conversion pass (X4)")
+                    help="skip the pointer-to-32-bit conversion pass")
     args = ap.parse_args()
     if args.dump:
         db = LayoutDB()

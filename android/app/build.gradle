@@ -118,7 +118,7 @@ android {
                         '-DCMAKE_JOB_POOL_COMPILE=compile',
                         '-DCMAKE_JOB_POOL_LINK=link'
                 // libmain.so and libadrenotools' hook libraries, which load
-                // the player's graphics driver (CMakeLists.txt, v0.4.3 AN-22a)
+                // the player's graphics driver (CMakeLists.txt; docs/port/PLATFORM.md)
                 targets 'ico_pc', 'main_hook', 'hook_impl', 'file_redirect_hook'
                 abiFilters 'arm64-v8a'
             }
@@ -158,7 +158,7 @@ android {
             // (extractNativeLibs true): libadrenotools loads its hook
             // libraries from that folder (nativeLibraryDir) into a linker
             // namespace of its own, which cannot read them inside the APK
-            // (v0.4.3 AN-22a; adrenotools/driver.h)
+            // (adrenotools/driver.h)
             useLegacyPackaging = true
         }
     }

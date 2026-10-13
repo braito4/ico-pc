@@ -105,14 +105,14 @@ jobs:
           python3 tools/stack_overread_audit.py --selftest
           python3 tools/stack_overread_audit.py
 
-      # a fixed buffer cast to a struct that is wider on the host (issue 71)
+      # a fixed buffer cast to a struct that is wider on the host
       - name: No buffer cast to a wider struct in the game sources
         run: |
           python3 tools/struct_cast_audit.py --selftest
           python3 tools/struct_cast_audit.py
 
       # a call that passes fewer arguments than its target reads, an extern
-      # that disagrees with its definition (issue 20)
+      # that disagrees with its definition
       - name: Calls and declarations agree with the definitions
         run: python3 tools/check_call_types.py
 

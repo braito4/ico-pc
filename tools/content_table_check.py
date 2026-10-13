@@ -30,7 +30,7 @@ rd__content_hide_set: "N=off", "N=hide").
   report  the meshes that are NOT listed and are expected not to need an
           entry (the region rule covers them): by default st26a_p1 and
           st26a_near (the opening's cliff and tree card) on the opening
-          dumps and the waterfall mist wf_smoke1 (issue 57) on the patched
+          dumps and the waterfall mist wf_smoke1 on the patched
           waterfall dump.  For each
           dump at each aspect it holds (a v10 dump: its own aspect; an
           aspect sweep zip, Shift+F12 in photo mode: 4:3, 16:9, 32:9, 48:9

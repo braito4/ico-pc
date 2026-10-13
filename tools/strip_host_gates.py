@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Resolve every ICO_HOST preprocessor conditional in the game sources.
 
-ico2/ and sce/ are the port's own source (docs/BUILDING.md, "The game
-code"): they are only ever compiled for the host, with ICO_HOST defined, so a
+ico2/ and sce/ are the port's own source (docs/port/GAME_CODE.md): they are only ever compiled for the host, with ICO_HOST defined, so a
 conditional on ICO_HOST has one live arm. This tool keeps that arm and drops
 the other, together with the #if/#else/#endif lines themselves:
 

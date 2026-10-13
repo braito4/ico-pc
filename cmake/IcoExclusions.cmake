@@ -5,9 +5,11 @@
 # once it compiles.
 #
 # Reasons:
-#   vu0-asm     R5900/VU0 inline assembly: none left in the game sources
-#               (rewritten in C over port/math/); typedef.h makes any new
-#               use a compile error on the host.
+#   vu0-asm     R5900/VU0 inline assembly: none left in the compiled game
+#               sources (rewritten in C over port/math/; the one left, in
+#               ito/mpeg/mv_main.c, is in ICO_EE_ONLY_SOURCES).  A new use
+#               names R5900 instructions, which the host's assembler
+#               rejects.
 #   nested-fn   GNU C nested functions, which clang does not implement (gcc
 #               does); the game's were rewritten as file-scope functions.
 #   decl        a declaration conflicting with an earlier implicit one

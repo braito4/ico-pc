@@ -5,7 +5,7 @@ The PS2 build keeps several tables in .rodata that the game writes at run
 time (the EE has no page protection): SetNodeRotationLimitDataTable
 reorders motionLimitDef's rows in place, for one.  gcc keeps such a store;
 clang deletes it, because a store to an object declared const is undefined
-behaviour and LLVM marks the object `constant`.  Issue 19 was that: on
+behaviour and LLVM marks the object `constant`.  One such table: on
 Android (the NDK's clang) the shoulder limits stayed in the disc's order and
 Ico's and Yorda's arms went straight up while they held hands, where the gcc
 builds were right.

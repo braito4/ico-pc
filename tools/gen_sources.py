@@ -2,10 +2,9 @@
 """Write cmake/IcoSources.cmake, the host build's source lists.
 
 The lists come from config/link_order.pal.txt, the one inventory of the
-game's translation units (the PS2 build's tools/gen_ninja.py, now retired,
-failed on a tracked source it did not list). The host build takes its ico2/ C sources and its data-only
-members, never sce/ (Sony's libraries are replaced by port/) or the VU1
-microprograms (ico2/vusrc/, replaced by shaders).
+game's translation units. The host build takes its ico2/ C sources and
+its data-only members, never sce/ (Sony's libraries are replaced by port/)
+or the VU1 microprograms (ico2/vusrc/, replaced by shaders).
 
 Each C source lands in one list per programmer directory (the directory
 decides its include path, as the period build had it), or in
@@ -14,7 +13,7 @@ player: port/fmv). There is one host source list: the renderer-owned
 files the port's renderer rewrote (all of
 seki/src, the sugipon and ito effect files, common/src/debug.c and
 debug_exception.c) compile like every other game source, in both the
-headless and the window build (docs/BUILDING.md, "How the game is compiled").
+headless and the window build (docs/port/GAME_CODE.md, "What is compiled").
 
     tools/gen_sources.py           rewrite cmake/IcoSources.cmake
     tools/gen_sources.py --check   exit 1 if it is out of date

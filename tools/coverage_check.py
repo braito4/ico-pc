@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""tools/coverage_check.py: the regression renders (v0.6.1, ctest coverage_corpus).
+"""tools/coverage_check.py: the regression renders (ctest coverage_corpus).
 
 Renders every dump of tools/coverage_corpus.txt with rd_replay_tool at its own
 aspect (--enhanced --present 1376x896, once with --aa off, once with --aa msaa4,

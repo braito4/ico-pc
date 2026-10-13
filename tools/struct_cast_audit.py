@@ -6,8 +6,8 @@ struct that is larger on the host than the buffer.  The decompiled code sized
 a buffer from the EE record it holds (a static `float work[12][4]` for a
 0xC0-byte ClipWork); the host records are wider wherever they hold pointers
 (8 bytes, not 4: WallCfg, ClipWork, ...), so the cast struct reaches past the
-buffer and every write through it lands on the next object in memory.  Issue
-71 found one: avoidInsideOfWall cast the 192-byte itemWork to the 240-byte
+buffer and every write through it lands on the next object in memory.  One
+such cast: avoidInsideOfWall cast the 192-byte itemWork to the 240-byte
 ClipWork and wrote over itemDropOfs and lodManager's tables.
 
 A hit is a cast `(T *)NAME`, `(T *)&NAME` (also through a (char *) or (void *)

@@ -30,7 +30,7 @@ A symbol the member defines in .rodata is written `const`, as the developers
 compiled it, unless its header declares it `extern` without const: a table
 the game writes (the EE has no page protection, so those stores worked on
 the PS2), which must not be const on the host either (clang deletes stores
-to an object declared const, issue 19; motionOrientManager.h declares
+to an object declared const; motionOrientManager.h declares
 motionLimitDef without const for that).
 
 The record type is read from the header the schema row names: a typedef of a
@@ -529,7 +529,7 @@ SYMBOL_LISTS = [ROOT / "config/symbol_addrs.pal.txt", ROOT / "config/symbol_addr
 
 # Globals a data member points at that neither symbol list names, at the
 # address the period layout link gave them. Each entry belongs in
-# config/symbol_addrs.pal.data.txt and stays here until it moves there.
+# config/symbol_addrs.pal.data.txt (not yet listed there).
 SUPPLEMENT = [
     ("scpDummyGObj", 0x0063AA20, False),  # ico2/script/src/script.c .sdata
 ]
@@ -731,7 +731,7 @@ def declared_writable(header, name):
     """Whether header declares name `extern` without const: a .rodata table
     the game writes, which the host declares writable where it is written
     (motionOrientManager.h's motionLimitDef: clang deletes stores to an
-    object declared const, issue 19). Its host definition must agree."""
+    object declared const). Its host definition must agree."""
     toks = Header(header).toks
     for i, t in enumerate(toks):
         if t != "extern":

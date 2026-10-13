@@ -4,9 +4,9 @@
 The game was decompiled from a PS2 program where an argument is a register
 the caller fills and the callee reads.  On x86-64 and arm64 a callee that
 reads an argument its caller never passed gets whatever the register held
-(issue 20: default_item_select called the item-select callback with no
-argument; the callback indexed a table with a pointer's low half and ended
-the run on a phone).  Two kinds of source finding hide this:
+(default_item_select called the item-select callback with no argument; the
+callback indexed a table with a pointer's low half and ended the run on a
+phone).  Two kinds of source finding hide this:
 
   (a) a function-pointer cast called with fewer arguments than the function
       it reaches defines: ((T (*)(ARGS))expr)(CALLARGS).  The target is the

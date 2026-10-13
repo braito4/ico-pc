@@ -83,8 +83,8 @@ EOF
 chmod +x "$HOOK"
 echo "Installed pre-commit hook at $HOOK"
 
-# The byte-gate pre-push hook of the decompilation is gone; remove one left
-# behind by an earlier install.
+# This script installs no pre-push hook; a pre-push hook that names it was
+# written by the decompilation's install and is removed.
 if [[ -f "$GITDIR/hooks/pre-push" ]] && grep -q "tools/install_hooks.sh" "$GITDIR/hooks/pre-push"; then
     rm -f "$GITDIR/hooks/pre-push"
     echo "Removed the old pre-push hook at $GITDIR/hooks/pre-push"

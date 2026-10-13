@@ -515,7 +515,7 @@ else
     echo "$LIBMPEG2_COMMIT" > "$LIBMPEG2_DIR/.ico-release"
     echo "==> libmpeg2 ${LIBMPEG2_TAG} at $LIBMPEG2_DIR"
 fi
-# --- 6. libchdr (the .chd disc image reader, issue 2) ---------------------------
+# --- 6. libchdr (the .chd disc image reader) ------------------------------------
 #
 # rtissera/libchdr (BSD-3-Clause), tag v0.3.0 (2026-04-24) = commit
 # 93d8c239ff0d4e8d7722985992649fce12d2463b. Fetched and checked like
