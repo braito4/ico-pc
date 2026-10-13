@@ -1,6 +1,7 @@
 /* d3d12_cmd.c: frames, command lists, submission, barriers, render passes,
  * draws, copies and readback for the D3D12 backend. */
 #include "d3d12_internal.h"
+#include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -222,7 +223,22 @@ void rhi_submit(RhiCommandList cl)
         ID3D12CommandQueue_ExecuteCommandLists(g_dx.queue, 1, lists);
     }
     dx_cur_frame()->fenceValue = dx_signal();
+    dx_note_submit(dx_cur_frame()->fenceValue);
     dx_drain_messages();
+}
+
+void dx_note_submit(uint64_t value)
+{
+    const uint32_t i = g_dx.submitCount++ % DX_SUBMIT_HISTORY;
+    g_dx.submits[i].value = value;
+    g_dx.submits[i].replay = g_dx.tagReplay;
+    g_dx.submits[i].frame = g_dx.tagFrame;
+}
+
+void rhi_set_submit_tag(uint32_t replay, uint32_t frame)
+{
+    g_dx.tagReplay = replay;
+    g_dx.tagFrame = frame;
 }
 
 /* ---------------------------------------------------------------- barriers */
@@ -275,6 +291,40 @@ void rhi_cmd_barrier(RhiCommandList cl, const RhiTextureBarrier *barriers, uint3
  * D3D12 orders render target and depth writes of successive draws and
  * clears in one state, so a pass after a pass on one target needs nothing
  * (the Vulkan backend's global barrier has no counterpart here). */
+/* A pass larger than an attachment draws past it (the viewport and
+ * scissor the pass sets are its size): logged once with the sizes, an
+ * assert in the debug build, and the defaults clamped to the smallest
+ * attachment, as on Vulkan (vk_cmd.c vkr_pass_area_fits). */
+static void dx_pass_area_check(uint32_t *w, uint32_t *h, const RhiRenderPassDesc *pass,
+                               const DxTexture *depth)
+{
+    uint32_t mw = *w, mh = *h;
+    for (uint32_t i = 0; i < pass->colorCount; i++) {
+        const DxTexture *t = dx_get_texture(pass->color[i].texture);
+        if (t) {
+            mw = t->width < mw ? t->width : mw;
+            mh = t->height < mh ? t->height : mh;
+        }
+    }
+    if (depth) {
+        mw = depth->width < mw ? depth->width : mw;
+        mh = depth->height < mh ? depth->height : mh;
+    }
+    if (mw == *w && mh == *h) {
+        return;
+    }
+    if (g_dx.passAreaBad++ == 0) {
+        DX_LOG("render pass %ux%u is larger than an attachment (depth %ux%u): drawn at %ux%u "
+               "(reported once)",
+               *w, *h, depth ? depth->width : 0u, depth ? depth->height : 0u, mw, mh);
+    }
+#ifdef ICO_RHI_DEBUG_DEFAULT
+    assert(!"render pass larger than an attachment");
+#endif
+    *w = mw;
+    *h = mh;
+}
+
 void rhi_cmd_begin_render_pass(RhiCommandList cl, const RhiRenderPassDesc *pass)
 {
     DxCmdList *c = dx_get_cmd(cl);
@@ -336,8 +386,10 @@ void rhi_cmd_begin_render_pass(RhiCommandList cl, const RhiRenderPassDesc *pass)
         }
     }
     c->inPass = true;
-    RhiViewport vp = {0.0f, 0.0f, (float)pass->width, (float)pass->height, 0.0f, 1.0f};
-    RhiRect sc = {0, 0, pass->width, pass->height};
+    uint32_t areaW = pass->width, areaH = pass->height;
+    dx_pass_area_check(&areaW, &areaH, pass, dt);
+    RhiViewport vp = {0.0f, 0.0f, (float)areaW, (float)areaH, 0.0f, 1.0f};
+    RhiRect sc = {0, 0, areaW, areaH};
     rhi_cmd_set_viewport(cl, &vp);
     rhi_cmd_set_scissor(cl, &sc);
 }
@@ -792,6 +844,26 @@ void rhi_cmd_end_label(RhiCommandList cl)
     ID3D12GraphicsCommandList_EndEvent(c->cl);
 }
 
+/* A checkpoint under DRED (gpu_checkpoints): a marker "pass #N" in the
+ * list, kept by DRED as the breadcrumb context of the next operation and
+ * printed with the breadcrumbs on a removal (dx_lost_report).  The marker
+ * is the caller's number (the renderer's pass ring, rhi.h). */
+void rhi_cmd_checkpoint(RhiCommandList cl, const void *marker)
+{
+    DxCmdList *c = dx_get_cmd(cl);
+    if (!c || !g_dx.dred || !c->recording) {
+        return;
+    }
+    char a[32];
+    WCHAR text[32];
+    snprintf(a, sizeof(a), "pass #%llu", (unsigned long long)(uintptr_t)marker);
+    const int n = MultiByteToWideChar(CP_UTF8, 0, a, -1, text, 32); /* with the terminator */
+    if (n > 0) {
+        /* metadata 0: a UTF-16 string, as PIX's markers are */
+        ID3D12GraphicsCommandList_SetMarker(c->cl, 0, text, (UINT)((size_t)n * sizeof(WCHAR)));
+    }
+}
+
 /* ---------------------------------------------------------------- readback */
 bool rhi_readback_texture(RhiTexture h, RhiViewAspect aspect, void *dst, size_t dstSize,
                           uint32_t *outRowPitch)
@@ -849,6 +921,7 @@ bool rhi_readback_texture(RhiTexture h, RhiViewAspect aspect, void *dst, size_t 
         ID3D12CommandQueue_ExecuteCommandLists(g_dx.queue, 1, lists);
         uint64_t v = dx_signal();
         dx_cur_frame()->fenceValue = v;
+        dx_note_submit(v);
         dx_wait_fence(v);
         const uint8_t *src = (const uint8_t *)b->mapped + fp.Offset;
         for (uint32_t y = 0; y < t->height; y++) {

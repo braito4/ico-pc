@@ -1,0 +1,92 @@
+/* rd_passring.h: the pass ring, what the GPU was last given to do.
+ *
+ * The replay (rd_replay.c) notes every render pass, copy, snapshot, exact
+ * blend, upload batch and present it records: the last RD_PASSRING_SIZE of
+ * them, each with its sequence number, replay and frame numbers, keep flag,
+ * list, targets and their sizes, storage flag, picture effect and the last
+ * pipeline asked for while it was open; and per replay the sequence numbers
+ * of its first and last entries (the last RD_PASSRING_REPLAYS replays).  A
+ * few stores per pass, always on.
+ *
+ * On a device loss the window prints it before the box
+ * (port/platform/window_host.c device_lost_quit), after the backend's own
+ * report (port/rhi/vk/vk_device.c vkr_lost_report): the sequence numbers are
+ * the checkpoint markers the replay gives rhi_cmd_checkpoint, so a
+ * checkpoint the GPU reached names its pass, or at least its replay and
+ * frame once the ring has moved past it.  docs/port/RENDER.md, "The pass
+ * ring".
+ *
+ * Pure: no device, no renderer state (rd_passring_test). */
+#ifndef PORT_RENDER_RD_PASSRING_H
+#define PORT_RENDER_RD_PASSRING_H
+
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+
+#define RD_PASSRING_SIZE 32
+#define RD_PASSRING_REPLAYS 8
+
+typedef enum RdPassKind {
+    RD_PASSK_PASS,    /* a render pass (beginPass) */
+    RD_PASSK_COPY,    /* a target-to-target copy (doCopy) */
+    RD_PASSK_SNAP,    /* a target into its snapshot (takeSnap) */
+    RD_PASSK_EXACT,   /* the exact blend between two targets (doExact) */
+    RD_PASSK_UPLOAD,  /* the replay's texture and mesh uploads */
+    RD_PASSK_PRESENT, /* the present onto the window */
+    RD_PASSK_COUNT
+} RdPassKind;
+
+typedef struct RdPassRec {
+    uint64_t seq; /* 1, 2, ...: the checkpoint marker */
+    uint32_t replay, frame;
+    uint8_t kind;          /* RdPassKind */
+    uint8_t keep;          /* the replay was a keep frame (lists 11-12 only) */
+    uint8_t list;          /* the frame list being replayed (0..12), 255: none */
+    uint8_t storage;       /* a storage pass (the exact blend's interlock path) */
+    int8_t post;           /* the picture effect (RD_PERF_POST_*), -1: none */
+    uint8_t vs, fs, dst;   /* the last pipeline's shaders and destination read */
+    uint32_t color, depth; /* target ids (copies: source, destination), 0: none */
+    uint32_t cw, ch, dw, dh;
+    uint32_t pipeline; /* the last pipeline asked for while open, 0: none */
+    uint64_t bytes;    /* uploads: the ring bytes written */
+} RdPassRec;
+
+typedef struct RdPassReplay {
+    uint32_t replay, frame;
+    uint8_t keep;
+    uint64_t first, last; /* sequence numbers, 0: none yet */
+} RdPassReplay;
+
+/* the replay: a replay begins (its counter, frame number, keep flag); the
+ * list being walked */
+void rd__passring_frame(uint32_t replay, uint32_t frame, int keep);
+void rd__passring_list(int list);
+/* an entry; the marker returned is its sequence number as a pointer (what
+ * rhi_cmd_checkpoint is given) */
+const void *rd__passring_push(RdPassKind kind, uint32_t color, uint32_t cw, uint32_t ch,
+                              uint32_t depth, uint32_t dw, uint32_t dh, int storage, int post);
+/* the newest entry, while it is a render pass or exact blend: the pipeline
+ * asked for (rd_pipeline.c rd__get_pipeline) */
+void rd__passring_pipeline(uint32_t id, uint8_t vs, uint8_t fs, uint8_t dst);
+/* the newest entry, an upload batch: its bytes */
+void rd__passring_bytes(uint64_t bytes);
+/* empties the ring and the replay table (tests) */
+void rd__passring_reset(void);
+
+/* the entries held, oldest first (i < rd_passring_count()); the replays
+ * held, oldest first */
+uint32_t rd_passring_count(void);
+const RdPassRec *rd_passring_get(uint32_t i);
+uint32_t rd_passring_replay_count(void);
+const RdPassReplay *rd_passring_replay_get(uint32_t i);
+/* the replay holding sequence number seq, NULL when the table has moved
+ * past it */
+const RdPassReplay *rd_passring_replay_of(uint64_t seq);
+/* one entry as a line (no newline), postName naming an effect (NULL:
+ * numbers); the length written, as snprintf */
+int rd_passring_format(const RdPassRec *e, const char *(*postName)(int), char *out, size_t n);
+/* the replays and the entries, oldest first, "rd: " lines */
+void rd_passring_print(FILE *f, const char *(*postName)(int));
+
+#endif /* PORT_RENDER_RD_PASSRING_H */

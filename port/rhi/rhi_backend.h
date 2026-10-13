@@ -77,6 +77,8 @@
     X(cmd_resolve_color)                                                                           \
     X(cmd_begin_label)                                                                             \
     X(cmd_end_label)                                                                               \
+    X(cmd_checkpoint)                                                                              \
+    X(set_submit_tag)                                                                              \
     X(readback_texture)                                                                            \
     X(get_stats)                                                                                   \
     X(timestamps_supported)                                                                        \

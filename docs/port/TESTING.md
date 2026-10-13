@@ -194,7 +194,8 @@ program under an environment switch ([Environment switches](#environment-switche
 - `gpu_driver_test.c`: the Android driver packages: `meta.json`, refusals, installs from zips made
   here, the trial marker (`gpu_driver`).
 - `host_config_test.c`: `ico-pc.ini` parsing and rewriting, SHA-1 vectors, path joining, the
-  card folders read from the ini the game reads (`ico_host_ini_path`), portable mode; built again
+  card folders read from the ini the game reads (`ico_host_ini_path`), portable mode, the `[dev]`
+  keys exported as environment switches (`ico_dev_env_value`); built again
   as `host_config_portable_test` (`host_config`, `host_config_portable`).
 - `host_fs_test.c`: the file helpers on a UTF-8 path outside ASCII (`host_fs`).
 - `hotkeys_test.c`: F12, Shift+F12 and F11, repeats ignored, no other key taken (`hotkeys`).
@@ -251,6 +252,8 @@ program under an environment switch ([Environment switches](#environment-switche
 - `rd_mesh_test.c`: the mesh path from `Packet.c` to the VU shaders (`rd_mesh`, sharded).
 - `rd_mip_test.c`: the Enhanced mip chain's size and its builder staying inside it (`rd_mip`).
 - `rd_mirror_test.c`: mirror mode's flag and the flipped presenter output (`rd_mirror`).
+- `rd_passring_test.c`: the pass ring the device-loss report prints: order, wrap, the replay table,
+  the line format; pure (`rd_passring`).
 - `rd_msaa_test.c`: the anti-aliasing's MSAA against the frame without it (`rd_msaa`).
 - `rd_native_test.c`: the native frame's centre rule on a synthetic frame at five widths
   (`rd_native`).
@@ -282,8 +285,8 @@ program under an environment switch ([Environment switches](#environment-switche
 
 ### port/rhi/test
 
-- `rhi_vk_test.c`: the exact-texel RHI checks on Vulkan, a hazard cell, the pipeline cache file
-  (`rhi_vk`, `rhi_vk_nodual`, `rhi_vk_d24s8`, `rhi_vk_mali`).
+- `rhi_vk_test.c`: the exact-texel RHI checks on Vulkan, a hazard cell, the render-area check, the
+  pipeline cache file (`rhi_vk`, `rhi_vk_nodual`, `rhi_vk_d24s8`, `rhi_vk_mali`).
 - `rhi_d3d12_test.c`: the same checks on D3D12, a Windows GUI program that writes a log and shows
   a message box (`rhi_d3d12`).
 - `rhi_d3d12_plan_test.c`: the D3D12 backend's state and barrier bookkeeping on the CPU

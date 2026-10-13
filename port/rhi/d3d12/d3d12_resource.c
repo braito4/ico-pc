@@ -74,7 +74,8 @@ void dx_destroy_garbage(DxFrame *f)
 
 void dx_set_name(ID3D12Object *o, const char *name)
 {
-    if (!o || !name || !g_dx.debugLayer) {
+    /* the debug layer's messages, and DRED's page-fault report */
+    if (!o || !name || !(g_dx.debugLayer || g_dx.dred)) {
         return;
     }
     WCHAR w[128];

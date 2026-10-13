@@ -137,7 +137,26 @@ image.
 reset, updated or crashed while you played, and the game has to close.
 Your last save is kept, and the log says why. Start the game again. This
 is usually a driver reset: if it keeps happening, update the graphics
-driver and send the log.
+driver and send the log. If the graphics card is overclocked (its speed or
+memory raised above the maker's settings, in a tool such as MSI
+Afterburner), set it back to its stock clocks first and try again: a card
+pushed past what it can do steadily makes the driver reset, even in a game
+that asks little of it. The log also lists what the game was drawing when
+the card stopped.
+
+If you report it, the developers may ask you to try a few lines in
+`ico-pc.ini` (on Windows in the `x64` folder; open it with Notepad, add the
+line at the end, start the game, and send the new log). Each one changes
+one thing, so use only the ones you are asked for, and delete them again
+afterwards:
+
+- `blend=fixed` draws see-through effects the simpler way.
+- `fog_path=copy` (or `inplace`, or `buffer`) picks another way of drawing
+  the fog.
+- `gpu_checkpoints=true` makes the log say more exactly what the graphics
+  card was doing when it stopped. The game may run a little slower with it.
+- `gpu_robust=true` makes the graphics card check every read and write the
+  game asks for. The game may run a little slower with it.
 
 ## The game closes by itself
 

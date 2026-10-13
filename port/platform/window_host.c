@@ -32,6 +32,7 @@
 #include "photo_ui.h"
 #include "pointer.h"
 #include "rd.h"
+#include "rd_passring.h"
 #include "rd_tex.h"
 #include "../fmv/rd_video.h"
 #include "rhi.h"
@@ -1410,7 +1411,9 @@ static void toggle_fullscreen(void)
    crashed or was updated, the GPU was unplugged): nothing more can be drawn,
    so instead of a frozen window the player gets one message and the session
    ends through the normal quit path (atexit closes the window). The backend
-   logged the reason. */
+   logged the reason and its loss report (docs/port/RHI.md, "Device loss");
+   the renderer's pass ring follows it here, before the box, so the log names
+   what was being drawn (port/render/rd_passring.h). */
 static int device_lost_quit(void)
 {
     static int s_shown;
@@ -1422,10 +1425,13 @@ static int device_lost_quit(void)
     if (!s_shown) {
         s_shown = 1;
         fprintf(stderr, "window: the graphics device was lost; quitting\n");
+        rd_passring_print(stderr, rd_perf_post_name);
+        ico_host_log_flush();
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "ICO PC",
                                  "The graphics card stopped responding (its driver was reset or "
                                  "updated, or the card was removed).\n\nThe game has to close. "
-                                 "Your last save is kept; the log says why.",
+                                 "Your last save is kept; the log says why.\n\nIf the graphics "
+                                 "card is overclocked, try its stock clocks first.",
                                  s_window);
     }
     return 1;

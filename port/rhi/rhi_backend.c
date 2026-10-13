@@ -400,6 +400,18 @@ void rhi_cmd_end_label(RhiCommandList cl)
     be()->cmd_end_label(cl);
 }
 
+void rhi_cmd_checkpoint(RhiCommandList cl, const void *marker)
+{
+    be()->cmd_checkpoint(cl, marker);
+}
+
+void rhi_set_submit_tag(uint32_t replay, uint32_t frame)
+{
+    if (s_up) {
+        be()->set_submit_tag(replay, frame);
+    }
+}
+
 bool rhi_readback_texture(RhiTexture t, RhiViewAspect aspect, void *dst, size_t dstSize,
                           uint32_t *outRowPitch)
 {

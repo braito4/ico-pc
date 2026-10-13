@@ -102,6 +102,8 @@ typedef struct DxBindGroup {
 
 /* --------------------------------------------------------- per frame slot */
 #define DX_MAX_CMD_LISTS 8
+/* submissions kept for the loss report (DxState.submits) */
+#define DX_SUBMIT_HISTORY 8
 #define DX_RES_HEAP_SIZE (2u * 65536u)
 #define DX_SMP_HEAP_SIZE 2048u           /* D3D12_MAX_SHADER_VISIBLE_SAMPLER_HEAP_SIZE */
 #define DX_SMP_PERSISTENT 256u           /* one per RhiSampler: the sampler pool's capacity */
@@ -177,6 +179,23 @@ typedef struct DxState {
      * submits and presents are skipped, rhi_device_lost reports it */
     bool deviceLost;
     uint32_t lostFailures; /* failures after the loss, not logged */
+    /* GPU loss diagnostics (docs/port/RHI.md, "Device loss";
+     * d3d12_device.c dx_lost_report, printed once at the loss): DRED's
+     * auto-breadcrumbs, breadcrumb contexts and page-fault report, turned on
+     * before the device is made under ICO_GPU_CHECKPOINTS=1 (ico-pc.ini
+     * gpu_checkpoints); rhi_cmd_checkpoint then sets a marker DRED keeps
+     * with its breadcrumbs.  The last submissions with their fence values
+     * and the rhi_set_submit_tag in force. */
+    bool dred;
+
+    struct {
+        uint64_t value;
+        uint32_t replay, frame;
+    } submits[DX_SUBMIT_HISTORY];
+
+    uint32_t submitCount;
+    uint32_t tagReplay, tagFrame;
+    uint32_t passAreaBad; /* d3d12_cmd.c dx_pass_area_check: logged once */
 
     ID3D12Fence *fence;
     uint64_t fenceValue; /* last value signalled */
@@ -276,6 +295,10 @@ static inline uint64_t dx_now_ns(void)
 /* Prints and counts the debug layer's stored messages (errors and
  * corruption count toward rhi_d3d12_debug_error_count). */
 void dx_drain_messages(void);
+/* d3d12_device.c: the loss report (DxState, "GPU loss diagnostics"), once */
+void dx_lost_report(void);
+/* d3d12_cmd.c: a submission's fence value into DxState.submits */
+void dx_note_submit(uint64_t value);
 
 static inline DxFrame *dx_cur_frame(void)
 {
@@ -304,7 +327,8 @@ DxTexture *dx_get_texture(RhiTexture t);
 uint32_t dx_register_swapchain_buffer(ID3D12Resource *res, uint32_t w, uint32_t h);
 void dx_release_swapchain_buffer(uint32_t id);
 void dx_release_all_objects(void);
-/* Names an object for the debug layer's messages (nothing without it). */
+/* Names an object for the debug layer's messages and DRED's page-fault
+ * report (nothing without either). */
 void dx_set_name(ID3D12Object *o, const char *name);
 /* d3d12_pipeline.c */
 DxBindGroup *dx_get_bind_group(uint32_t id);

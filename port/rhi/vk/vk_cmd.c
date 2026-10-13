@@ -10,6 +10,8 @@
  * semaphore, which the presenting list's submit or an empty batch in
  * rhi_present signals (rhi_submit). */
 #include "vk_internal.h"
+#include "rhi_vk.h"
+#include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -93,7 +95,9 @@ void vkr_frames_shutdown(void)
 
 static void vkr_wait_value(uint64_t value)
 {
-    if (value == 0) {
+    /* a lost device finishes nothing more: no wait (the first failed one
+     * is the report's, vkr_lost_report) */
+    if (value == 0 || g_vkr.deviceLost) {
         return;
     }
     /* a wait that blocks is counted with its time */
@@ -109,9 +113,42 @@ static void vkr_wait_value(uint64_t value)
         .pValues = &value,
     };
     const uint64_t t0 = vkr_now_ns();
-    VKR_CHECK(vkWaitSemaphores(g_vkr.device, &wi, UINT64_MAX));
+    const VkResult r = vkWaitSemaphores(g_vkr.device, &wi, UINT64_MAX);
+    const uint64_t waited = vkr_now_ns() - t0;
+    if (r != VK_SUCCESS) {
+        /* the value waited for against the one the GPU reached: the
+         * submissions between them never finished (the loss report names
+         * their frames, vkr_lost_report) */
+        uint64_t reached = 0;
+        const VkResult rc = vkGetSemaphoreCounterValue(g_vkr.device, g_vkr.timeline, &reached);
+        VKR_LOG("waited %.1f s for timeline value %llu (the last submitted is %llu); the GPU "
+                "reached %llu%s",
+                (double)waited / 1e9, (unsigned long long)value,
+                (unsigned long long)g_vkr.timelineValue, (unsigned long long)reached,
+                rc == VK_SUCCESS ? "" : " (the counter read failed too)");
+        if (!g_vkr.lostWaitValue) {
+            g_vkr.lostWaitValue = value;
+        }
+    }
+    VKR_CHECK(r);
     g_vkr.stats.fenceWaits++;
-    g_vkr.stats.fenceWaitNs += vkr_now_ns() - t0;
+    g_vkr.stats.fenceWaitNs += waited;
+}
+
+void vkr_note_submit(uint64_t value, uint32_t lists, bool present)
+{
+    const uint32_t i = g_vkr.submitCount++ % VKR_SUBMIT_HISTORY;
+    g_vkr.submits[i].value = value;
+    g_vkr.submits[i].replay = g_vkr.tagReplay;
+    g_vkr.submits[i].frame = g_vkr.tagFrame;
+    g_vkr.submits[i].lists = (uint8_t)(lists > 255u ? 255u : lists);
+    g_vkr.submits[i].present = present ? 1u : 0u;
+}
+
+void rhi_set_submit_tag(uint32_t replay, uint32_t frame)
+{
+    g_vkr.tagReplay = replay;
+    g_vkr.tagFrame = frame;
 }
 
 /* the finished slot's timestamps into g_vkr.tsResult (the slot is complete:
@@ -367,6 +404,7 @@ static bool vkr_submit_batch(const VkCommandBuffer *cbs, uint32_t count, bool fo
     }
     g_vkr.stats.submits++;
     vkr_cur_frame()->waitValue = value;
+    vkr_note_submit(value, count, forPresent);
     return true;
 }
 
@@ -769,6 +807,52 @@ static void vkr_hz_copy(VkrCmdList *c, VkrTexture *srcTex, VkrBuffer *srcBuf, Vk
 }
 
 /* ------------------------------------------------------------ render passes */
+/* A render area must lie within every attachment (VkRenderingInfo,
+ * VUID-VkRenderingInfo-pNext-06079/06080): one that does not is drawn over
+ * memory past the image's end.  Such a pass is logged once (with the
+ * sizes; an assert in the debug build), counted (vkr_test_pass_area_count)
+ * and clamped to the smallest attachment, so it draws what lies inside.
+ * A pass whose area fits is untouched. */
+static bool s_passAreaNoAssert; /* vkr_test_pass_area_no_assert */
+
+uint32_t vkr_test_pass_area_count(void)
+{
+    return g_vkr.passAreaBad;
+}
+
+void vkr_test_pass_area_no_assert(bool on)
+{
+    s_passAreaNoAssert = on;
+}
+
+static void vkr_pass_area_fits(uint32_t *w, uint32_t *h, VkrTexture *const *color, uint32_t n,
+                               const VkrTexture *depth)
+{
+    uint32_t mw = *w, mh = *h;
+    for (uint32_t i = 0; i < n; i++) {
+        mw = color[i]->width < mw ? color[i]->width : mw;
+        mh = color[i]->height < mh ? color[i]->height : mh;
+    }
+    if (depth) {
+        mw = depth->width < mw ? depth->width : mw;
+        mh = depth->height < mh ? depth->height : mh;
+    }
+    if (mw == *w && mh == *h) {
+        return;
+    }
+    if (g_vkr.passAreaBad++ == 0) {
+        VKR_LOG("render pass %ux%u is larger than an attachment (colour %ux%u, depth %ux%u): "
+                "drawn at %ux%u (reported once)",
+                *w, *h, n ? color[0]->width : 0u, n ? color[0]->height : 0u,
+                depth ? depth->width : 0u, depth ? depth->height : 0u, mw, mh);
+    }
+#ifdef ICO_RHI_DEBUG_DEFAULT
+    assert(s_passAreaNoAssert && "render pass larger than an attachment");
+#endif
+    *w = mw;
+    *h = mh;
+}
+
 void rhi_cmd_begin_render_pass(RhiCommandList cl, const RhiRenderPassDesc *pass)
 {
     VkrCmdList *c = vkr_get_cmd(cl);
@@ -858,9 +942,11 @@ void rhi_cmd_begin_render_pass(RhiCommandList cl, const RhiRenderPassDesc *pass)
             stencil.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
         }
     }
+    uint32_t areaW = pass->width, areaH = pass->height;
+    vkr_pass_area_fits(&areaW, &areaH, colorTex, pass->colorCount, depthTex);
     VkRenderingInfo ri = {
         .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
-        .renderArea = {{0, 0}, {pass->width, pass->height}},
+        .renderArea = {{0, 0}, {areaW, areaH}},
         .layerCount = 1,
         .colorAttachmentCount = pass->colorCount,
         .pColorAttachments = color,
@@ -918,8 +1004,8 @@ void rhi_cmd_begin_render_pass(RhiCommandList cl, const RhiRenderPassDesc *pass)
     g_vkr.stats.renderPasses++;
 
     /* defaults: full-target viewport and scissor */
-    RhiViewport vp = {0.0f, 0.0f, (float)pass->width, (float)pass->height, 0.0f, 1.0f};
-    RhiRect sc = {0, 0, pass->width, pass->height};
+    RhiViewport vp = {0.0f, 0.0f, (float)areaW, (float)areaH, 0.0f, 1.0f};
+    RhiRect sc = {0, 0, areaW, areaH};
     rhi_cmd_set_viewport(cl, &vp);
     rhi_cmd_set_scissor(cl, &sc);
 }
@@ -1315,6 +1401,21 @@ void rhi_cmd_end_label(RhiCommandList cl)
     vkCmdEndDebugUtilsLabelEXT(c->cb);
 }
 
+/* ------------------------------------------------------------- checkpoints */
+void rhi_cmd_checkpoint(RhiCommandList cl, const void *marker)
+{
+    if (!g_vkr.checkpoints) {
+        return;
+    }
+    VkrCmdList *c = vkr_get_cmd(cl);
+    if (!c || !c->recording) {
+        return;
+    }
+    /* in order with what the list recorded before it */
+    vkr_flush_barriers(c);
+    g_vkr.cmdSetCheckpoint(c->cb, marker);
+}
+
 /* ---------------------------------------------------------------- readback */
 bool rhi_readback_texture(RhiTexture h, RhiViewAspect aspect, void *dst, size_t dstSize,
                           uint32_t *outRowPitch)
@@ -1402,6 +1503,7 @@ bool rhi_readback_texture(RhiTexture h, RhiViewAspect aspect, void *dst, size_t 
         ok = VKR_CHECK(vkQueueSubmit(g_vkr.queue, 1, &si, VK_NULL_HANDLE));
         if (ok) {
             vkr_cur_frame()->waitValue = value;
+            vkr_note_submit(value, 1, false);
             vkr_wait_value(value);
             const void *mapped = rhi_map_buffer(rb); /* NULL when vkMapMemory failed */
             ok = mapped != NULL;

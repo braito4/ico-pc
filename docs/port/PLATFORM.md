@@ -408,6 +408,16 @@ The window build logs a stats block every 10 s. A host step longer than `[dev] s
 (default 8, 0 off) logs a slow-step line ([DISPLAY.md](DISPLAY.md#pacing);
 `port/platform/window_host.c` (`slow_step`); `port/platform/host_loop.h` (`IcoStepProfile`)).
 
+**A lost graphics device.** When the backend reports the device gone (`rhi_device_lost`), the window
+pump and the start-up screens' pump end the session through the normal quit path: one line
+`window: the graphics device was lost; quitting`, then the renderer's
+[pass ring](RENDER.md#the-pass-ring) (the last replays and the last passes recorded, with the
+sequence numbers the checkpoint markers carry and each effect's name from `rd_perf_post_name`), a
+flush of the log, and one message box: the card stopped responding, the game has to close, the save
+is kept, and "If the graphics card is overclocked, try its stock clocks first."
+(`port/platform/window_host.c` (`device_lost_quit`)). The backend's own loss report comes before
+it, at the first failing call ([RHI.md](RHI.md#device-loss)).
+
 `port/platform/assert_host.c` is newlib's `__assert` as the game calls it: the same message on
 stderr, then `abort`, which the crash handler reports.
 

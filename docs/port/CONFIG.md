@@ -276,6 +276,10 @@ under the same name (below). Read through the store:
 | `unlock_credits` | bool | `false` | Extras > Credits unlocked (`port/game/credits.c`) |
 | `perf_log` | bool | `false` | `ico-pc-perf.csv` in the logs folder, one line per [replayed](ARCHITECTURE.md#terms) frame (`port/platform/window_host.c` (`perf_csv_open`)) |
 | `slow_step_ms` | float | `8` | the slow-step log threshold; 0 is off (`port/platform/window_host.c` (`ico_window_open`)) |
+| `blend` | string | (none) | the A/B switches below, as their ini keys |
+| `fog_path` | string | (none) | |
+| `gpu_checkpoints` | bool | `false` | |
+| `gpu_robust` | bool | `false` | |
 
 ## ico-pc.ini
 
@@ -307,10 +311,14 @@ store (`backend`, `unlock_credits`):
 | `dump_every`, `dump_dir`, `dump_interp`, `dump_from` | [rd](ARCHITECTURE.md#terms) frame dumps every N frames into a folder beside the ini (`export_dump_keys`) |
 | `start_stage`, `switch_to`, `switch_at` | the stage Main starts in; one forced stage change (exported) |
 | `popup_test` | test popups from Main tick 100 (exported as `ICO_UI_POPUP_TEST`) |
+| `blend` | `fixed`: the GS blend on the fixed-function path instead of the exact destination read (exported as `ICO_RD_BLEND=fixed`; `exact`, the default, exports nothing) ([RENDER.md](RENDER.md#destination-reads-and-blend-paths)) |
+| `fog_path` | `inplace`, `copy` or `buffer`: the fog's depth path, tried first (exported as `ICO_RD_FOG_PATH`) ([RENDER.md](RENDER.md#the-fog-path-and-its-self-test)) |
+| `gpu_checkpoints` | `true`: GPU checkpoints, resource addresses (Vulkan) and DRED (D3D12) for the device-loss report (exported as `ICO_GPU_CHECKPOINTS=1`) ([RHI.md](RHI.md#device-loss)) |
+| `gpu_robust` | `true`: robust buffer and image access (Vulkan; exported as `ICO_GPU_ROBUST=1`) ([RHI.md](RHI.md#device-loss)) |
 | `unlock_credits` | as `[dev] unlock_credits` |
 
 (`port/platform/host_config.c` (`ini_map`, `export_dump_keys`, `export_audio_keys`,
-`ico_ini_export`, `ico_host_fixed_clock`); `port/platform/main_host.c`, header comment,
+`ico_ini_export`, `ico_host_fixed_clock`, `ico_dev_env_value`); `port/platform/main_host.c`, header comment,
 `record_open`, `use_iso_mode`, `android_keep_image`.) The program writes the ini only to store
 `iso=` (`port/platform/host_config.h`, `ico_ini_store`, which keeps the file's other lines).
 
@@ -372,6 +380,6 @@ atomic save), round trips, the ini over `config.toml` over default precedence, t
 (`port/config/test/config_test.c`, header comment; `port/config/CMakeLists.txt`). The Settings
 menu tests check what the pages write (`port/ui/test/settings_test.c`; [UI.md](UI.md#tests)). The
 defaults of `[gameplay]`, `[photo]`, `[characters]` and `[input]` are also checked by `options`,
-`photo`, `appearance` and `input` (`port/game/test/`, `port/input/test/`), and the ini's reader by
-`host_config` (`port/null/CMakeLists.txt`). Run them with
+`photo`, `appearance` and `input` (`port/game/test/`, `port/input/test/`), and the ini's reader and
+the `[dev]` keys' environment switches by `host_config` (`port/null/CMakeLists.txt`). Run them with
 `ctest --preset linux-x64 -R '^(config|host_config|options|photo|appearance|input|settings)$'`.

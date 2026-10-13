@@ -65,6 +65,7 @@
  */
 #include <string.h>
 #include "rd_internal.h"
+#include "rd_passring.h"
 #include "shader_consts.h"
 
 typedef struct RdPipeEntry {
@@ -819,6 +820,7 @@ RhiPipeline rd__get_pipeline(const RdPipeKeyInt *k)
     uint32_t at = keyHash(k) % RD_PIPE_HASH;
     for (; s_hash[at] != 0; at = (at + 1) % RD_PIPE_HASH) {
         if (rd__pipe_key_equal(&s_cache[s_hash[at] - 1].key, k)) {
+            rd__passring_pipeline(s_cache[s_hash[at] - 1].pipe.id, k->vs, k->fs, k->dst);
             return s_cache[s_hash[at] - 1].pipe;
         }
     }
@@ -859,6 +861,7 @@ RhiPipeline rd__get_pipeline(const RdPipeKeyInt *k)
     s_count++;
     s_hash[at] = (uint16_t)s_count; /* at: the empty slot the probe ended on */
     g_rd.stats.pipelineCreates++;
+    rd__passring_pipeline(p.id, k->vs, k->fs, k->dst);
     return p;
 }
 

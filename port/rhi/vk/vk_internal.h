@@ -127,6 +127,8 @@ typedef struct VkrGarbage {
 #define VKR_GARBAGE_OVERFLOW 256
 
 #define VKR_MAX_CMD_LISTS 8
+/* submissions kept for the loss report (VkrState.submits) */
+#define VKR_SUBMIT_HISTORY 8
 /* image barriers a command list holds back before issuing them together
  * (vk_cmd.c, vkr_flush_barriers) */
 #define VKR_PENDING_BARRIERS 8
@@ -231,6 +233,45 @@ typedef struct VkrState {
     bool storageBarriers;
     uint32_t validationErrors;
     bool deviceLost; /* a call returned VK_ERROR_DEVICE_LOST (rhi_device_lost) */
+
+    /* GPU loss diagnostics (docs/port/RHI.md, "Device loss"; vk_device.c
+     * vkr_lost_report, printed once at the first VK_ERROR_DEVICE_LOST):
+     *   robust       robustBufferAccess (+ VK_EXT_robustness2's
+     *                robustImageAccess2 and nullDescriptor when offered),
+     *                ICO_GPU_ROBUST=1 (ico-pc.ini gpu_robust);
+     *   deviceFault  VK_EXT_device_fault enabled (whenever offered):
+     *                vkGetDeviceFaultInfoEXT's addresses and description;
+     *   checkpoints  VK_NV_device_diagnostic_checkpoints enabled,
+     *                ICO_GPU_CHECKPOINTS=1 (ico-pc.ini gpu_checkpoints):
+     *                rhi_cmd_checkpoint's markers, read back on a loss;
+     *   addressReport VK_EXT_device_address_binding_report under the same
+     *                switch: the GPU address of every buffer and image
+     *                (vk_resource.c, the allocation table), so a faulting
+     *                address names its resource. */
+    bool robust, robust2, deviceFault, checkpoints, addressReport;
+    PFN_vkGetDeviceFaultInfoEXT getFaultInfo;
+    PFN_vkCmdSetCheckpointNV cmdSetCheckpoint;
+    PFN_vkGetQueueCheckpointDataNV getCheckpointData;
+    VkDebugUtilsMessengerEXT bindMessenger; /* the address binding report's */
+    bool lostReported;
+    uint64_t lostNs; /* vkr_now_ns at the first VK_ERROR_DEVICE_LOST */
+
+    /* the last submissions (vkr_submit_batch, rhi_readback_texture): the
+     * timeline value each signals, the rhi_set_submit_tag in force, its
+     * command buffers and whether it signalled a present */
+    struct {
+        uint64_t value;
+        uint32_t replay, frame;
+        uint8_t lists, present;
+    } submits[VKR_SUBMIT_HISTORY];
+
+    uint32_t submitCount; /* ever; the newest is submits[(submitCount - 1) % N] */
+    uint32_t tagReplay, tagFrame;
+    /* the timeline value of the wait that failed, 0: none (vkr_wait_value) */
+    uint64_t lostWaitValue;
+    /* render passes whose area exceeded an attachment (vk_cmd.c
+     * vkr_pass_area_fits: logged once, clamped; vkr_test_pass_area_count) */
+    uint32_t passAreaBad;
 
     /* timeline semaphore: one value per submit */
     VkSemaphore timeline;
@@ -357,6 +398,25 @@ static inline VkrFrame *vkr_cur_frame(void)
 {
     return &g_vkr.frames[g_vkr.frameIndex % RHI_FRAMES_IN_FLIGHT];
 }
+
+/* vk_device.c: the device-loss report (VkrState, "GPU loss diagnostics"),
+ * once, from vkr_check at the first VK_ERROR_DEVICE_LOST */
+void vkr_lost_report(void);
+/* vk_cmd.c: a submission into VkrState.submits */
+void vkr_note_submit(uint64_t value, uint32_t lists, bool present);
+
+/* vk_resource.c: the allocation table, every VkDeviceMemory alive with the
+ * object bound to it, its size and debug name, and (with the address
+ * binding report) the object's GPU address range.  vkr_alloc_note when
+ * vkr_allocate succeeds, vkr_alloc_forget in vkr_free_memory,
+ * vkr_alloc_bound from the report's callback (vk_device.c);
+ * vkr_alloc_nearest logs the resource whose range holds `address`, or the
+ * nearest below it. */
+void vkr_alloc_note(VkDeviceMemory memory, uint64_t object, VkDeviceSize size, const char *name);
+void vkr_alloc_forget(VkDeviceMemory memory);
+void vkr_alloc_bound(uint64_t object, uint64_t base, uint64_t size, bool bound);
+void vkr_alloc_nearest(uint64_t address);
+void vkr_alloc_table_free(void);
 
 /* vk_resource.c */
 void vkr_defer(VkrGarbageKind kind, uint64_t handle);

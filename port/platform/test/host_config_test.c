@@ -2,7 +2,8 @@
  * port/platform/test/host_config_test.c
  *
  * ico-pc.ini parsing and rewriting, SHA-1 against FIPS 180 test vectors,
- * path joining (port/platform/host_config.c). Built a second time with
+ * path joining, the [dev] keys exported as environment switches
+ * (port/platform/host_config.c). Built a second time with
  * ICO_HOST_FORCE_PORTABLE (host_config_portable_test, as the Android build
  * compiles host_config.c), where the user folder is always the executable's
  * own folder.
@@ -416,6 +417,91 @@ static void test_forced_portable(void)
 
 #endif
 
+static void unset_env(const char *name)
+{
+#ifdef _WIN32
+    _putenv_s(name, "");
+#else
+    unsetenv(name);
+#endif
+}
+
+static int env_is(const char *name, const char *want)
+{
+    const char *v = getenv(name);
+
+    if (want == NULL) {
+        return v == NULL || v[0] == '\0';
+    }
+    return v != NULL && strcmp(v, want) == 0;
+}
+
+/* the [dev] A/B switches: the mapping (ico_dev_env_name/_value), the
+   config.toml paths they take, and ico_ini_export setting them (an ini
+   other than the executable's own: the export block alone) */
+static void test_dev_env(void)
+{
+    static const char *const vars[] = {"ICO_RD_BLEND", "ICO_RD_FOG_PATH", "ICO_GPU_CHECKPOINTS",
+                                       "ICO_GPU_ROBUST"};
+    IcoIni ini;
+    size_t i;
+
+    CHECK(strcmp(ico_dev_env_name("blend"), "ICO_RD_BLEND") == 0);
+    CHECK(strcmp(ico_dev_env_name("fog_path"), "ICO_RD_FOG_PATH") == 0);
+    CHECK(strcmp(ico_dev_env_name("gpu_checkpoints"), "ICO_GPU_CHECKPOINTS") == 0);
+    CHECK(strcmp(ico_dev_env_name("gpu_robust"), "ICO_GPU_ROBUST") == 0);
+    CHECK(ico_dev_env_name("ticks") == NULL);
+    CHECK(ico_dev_env_name(NULL) == NULL);
+    /* blend: fixed is exported, exact is the default (nothing set) */
+    CHECK(strcmp(ico_dev_env_value("blend", "fixed"), "fixed") == 0);
+    CHECK(ico_dev_env_value("blend", "exact") == NULL);
+    CHECK(ico_dev_env_value("blend", "rov") == NULL);
+    /* fog_path: the three paths as they are */
+    CHECK(strcmp(ico_dev_env_value("fog_path", "inplace"), "inplace") == 0);
+    CHECK(strcmp(ico_dev_env_value("fog_path", "copy"), "copy") == 0);
+    CHECK(strcmp(ico_dev_env_value("fog_path", "buffer"), "buffer") == 0);
+    CHECK(ico_dev_env_value("fog_path", "test") == NULL);
+    CHECK(ico_dev_env_value("fog_path", "") == NULL);
+    /* the switches: on and off words, anything else nothing */
+    CHECK(strcmp(ico_dev_env_value("gpu_checkpoints", "true"), "1") == 0);
+    CHECK(strcmp(ico_dev_env_value("gpu_checkpoints", "1"), "1") == 0);
+    CHECK(strcmp(ico_dev_env_value("gpu_robust", "yes"), "1") == 0);
+    CHECK(strcmp(ico_dev_env_value("gpu_robust", "false"), "0") == 0);
+    CHECK(strcmp(ico_dev_env_value("gpu_robust", "off"), "0") == 0);
+    CHECK(ico_dev_env_value("gpu_robust", "maybe") == NULL);
+    CHECK(ico_dev_env_value("gpu_robust", NULL) == NULL);
+    CHECK(ico_dev_env_value("ticks", "1") == NULL);
+    /* config.toml's [dev] keys reach the same ini keys */
+    CHECK(strcmp(ico_config_ini_key("dev.blend"), "blend") == 0);
+    CHECK(strcmp(ico_config_ini_key("dev.fog_path"), "fog_path") == 0);
+    CHECK(strcmp(ico_config_ini_key("dev.gpu_checkpoints"), "gpu_checkpoints") == 0);
+    CHECK(strcmp(ico_config_ini_key("dev.gpu_robust"), "gpu_robust") == 0);
+
+    for (i = 0; i < sizeof(vars) / sizeof(vars[0]); i++) {
+        unset_env(vars[i]);
+    }
+    ico_ini_parse(&ini, "[dev]\nblend = fixed\nfog_path = copy\ngpu_checkpoints = true\n"
+                        "gpu_robust = 1\n");
+    ico_ini_export(&ini, "dev-env-test.ini", 0);
+    CHECK(env_is("ICO_RD_BLEND", "fixed"));
+    CHECK(env_is("ICO_RD_FOG_PATH", "copy"));
+    CHECK(env_is("ICO_GPU_CHECKPOINTS", "1"));
+    CHECK(env_is("ICO_GPU_ROBUST", "1"));
+    for (i = 0; i < sizeof(vars) / sizeof(vars[0]); i++) {
+        unset_env(vars[i]);
+    }
+    /* blend=exact and an unknown path leave the defaults; false is 0 */
+    ico_ini_parse(&ini, "blend=exact\nfog_path=sideways\ngpu_robust=false\n");
+    ico_ini_export(&ini, "dev-env-test.ini", 0);
+    CHECK(env_is("ICO_RD_BLEND", NULL));
+    CHECK(env_is("ICO_RD_FOG_PATH", NULL));
+    CHECK(env_is("ICO_GPU_CHECKPOINTS", NULL));
+    CHECK(env_is("ICO_GPU_ROBUST", "0"));
+    for (i = 0; i < sizeof(vars) / sizeof(vars[0]); i++) {
+        unset_env(vars[i]);
+    }
+}
+
 int main(void)
 {
     test_sha1();
@@ -425,6 +511,7 @@ int main(void)
     test_saves_dir_layered();
     test_paths();
     test_portable_value();
+    test_dev_env();
 #ifdef ICO_HOST_FORCE_PORTABLE
     test_forced_portable();
 #else

@@ -782,6 +782,23 @@ void rhi_cmd_resolve_color(RhiCommandList cl, RhiTexture src, RhiTexture dst);
 void rhi_cmd_begin_label(RhiCommandList cl, const char *name);
 void rhi_cmd_end_label(RhiCommandList cl);
 
+/* GPU loss diagnostics (docs/port/RHI.md, "Device loss").
+ *
+ * rhi_cmd_checkpoint: a marker the GPU writes when it gets there, read back
+ * after a device loss to say how far the work went.  The marker is an
+ * opaque value the caller can name later (the renderer passes its pass
+ * ring's sequence numbers, port/render/rd_passring.h).  Vulkan with
+ * VK_NV_device_diagnostic_checkpoints and the switch on
+ * (ICO_GPU_CHECKPOINTS=1, ico-pc.ini gpu_checkpoints); a no-op otherwise
+ * and on D3D12 (whose DRED breadcrumbs, under the same switch, need no
+ * markers).  Inside or outside a render pass.
+ *
+ * rhi_set_submit_tag: the replay and frame numbers the next submissions
+ * belong to, kept with each submission's timeline or fence value so the
+ * loss report names the frame a wait was stuck on. */
+void rhi_cmd_checkpoint(RhiCommandList cl, const void *marker);
+void rhi_set_submit_tag(uint32_t replay, uint32_t frame);
+
 /* -------------------------------------------------- verification helpers
  * Synchronous readback of a whole texture into caller memory as tightly
  * packed rows (RGBA8 or R32F for depth).  Slow; only used by the frame-dump

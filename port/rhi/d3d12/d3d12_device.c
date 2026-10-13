@@ -59,9 +59,163 @@ bool dx_check(HRESULT hr, const char *what, const char *file, int line)
                 "rhi_d3d12: the device was lost (%s); removed reason 0x%08lx (%s). Rendering "
                 "stops; the session ends.\n",
                 dx_loss_name(hr), (unsigned long)reason, dx_loss_name(reason));
+        dx_lost_report();
     }
     dx_drain_messages();
     return false;
+}
+
+/* ------------------------------------------------------------ device loss
+ * The report dx_check prints once, at the loss (docs/port/RHI.md, "Device
+ * loss"): the last submissions with the frames they carried and whether
+ * the GPU finished them, and with gpu_checkpoints DRED's breadcrumbs (each
+ * command list the GPU had not finished: its last operation done, the ones
+ * after it, the checkpoint markers among them) and its page-fault report
+ * (the faulting address and the resources at it, alive or freed). */
+static bool dx_env_on(const char *name)
+{
+    const char *v = getenv(name);
+    return v && (strcmp(v, "1") == 0 || strcmp(v, "true") == 0 || strcmp(v, "on") == 0 ||
+                 strcmp(v, "yes") == 0);
+}
+
+/* DRED on before the device is made (gpu_checkpoints): the breadcrumbs, the
+ * markers' contexts and the page-fault report, forced on whatever the
+ * system's settings say */
+static void dx_dred_enable(void)
+{
+    if (!dx_env_on("ICO_GPU_CHECKPOINTS") || !g_dx.getDebugInterface) {
+        return;
+    }
+    ID3D12DeviceRemovedExtendedDataSettings1 *s1 = NULL;
+    ID3D12DeviceRemovedExtendedDataSettings *s0 = NULL;
+    if (SUCCEEDED(
+            g_dx.getDebugInterface(&IID_ID3D12DeviceRemovedExtendedDataSettings1, (void **)&s1))) {
+        ID3D12DeviceRemovedExtendedDataSettings1_SetAutoBreadcrumbsEnablement(
+            s1, D3D12_DRED_ENABLEMENT_FORCED_ON);
+        ID3D12DeviceRemovedExtendedDataSettings1_SetPageFaultEnablement(
+            s1, D3D12_DRED_ENABLEMENT_FORCED_ON);
+        ID3D12DeviceRemovedExtendedDataSettings1_SetBreadcrumbContextEnablement(
+            s1, D3D12_DRED_ENABLEMENT_FORCED_ON);
+        ID3D12DeviceRemovedExtendedDataSettings1_Release(s1);
+        g_dx.dred = true;
+    } else if (SUCCEEDED(g_dx.getDebugInterface(&IID_ID3D12DeviceRemovedExtendedDataSettings,
+                                                (void **)&s0))) {
+        ID3D12DeviceRemovedExtendedDataSettings_SetAutoBreadcrumbsEnablement(
+            s0, D3D12_DRED_ENABLEMENT_FORCED_ON);
+        ID3D12DeviceRemovedExtendedDataSettings_SetPageFaultEnablement(
+            s0, D3D12_DRED_ENABLEMENT_FORCED_ON);
+        ID3D12DeviceRemovedExtendedDataSettings_Release(s0);
+        g_dx.dred = true;
+    }
+    DX_LOG("loss diagnostics: DRED breadcrumbs and page faults %s (gpu_checkpoints)",
+           g_dx.dred ? "on" : "asked for, not offered by this Windows");
+}
+
+/* a DRED context string (UTF-16) for the log */
+static const char *dx_narrow(const WCHAR *w, char *out, int size)
+{
+    if (!w || WideCharToMultiByte(CP_UTF8, 0, w, -1, out, size, NULL, NULL) <= 0) {
+        snprintf(out, (size_t)size, "?");
+    }
+    return out;
+}
+
+static void dx_report_breadcrumbs(const D3D12_AUTO_BREADCRUMB_NODE1 *node)
+{
+    char ctxText[64];
+    uint32_t lists = 0;
+    for (; node; node = node->pNext) {
+        const UINT done = node->pLastBreadcrumbValue ? *node->pLastBreadcrumbValue : 0;
+        if (done >= node->BreadcrumbCount) {
+            continue; /* finished: not the one that hung */
+        }
+        lists++;
+        DX_LOG("  command list \"%s\": %u of %u operations done; the next ones:",
+               node->pCommandListDebugNameA ? node->pCommandListDebugNameA : "?", done,
+               node->BreadcrumbCount);
+        /* the operation it stopped at and up to 7 after it, each with the
+         * checkpoint marker that came before it (its context) */
+        for (UINT i = done; i < node->BreadcrumbCount && i < done + 8; i++) {
+            const WCHAR *ctx = NULL;
+            for (UINT k = 0; k < node->BreadcrumbContextsCount; k++) {
+                if (node->pBreadcrumbContexts[k].BreadcrumbIndex == i) {
+                    ctx = node->pBreadcrumbContexts[k].pContextString;
+                }
+            }
+            if (ctx) {
+                DX_LOG("    op %u: %d (%s)", i, (int)node->pCommandHistory[i],
+                       dx_narrow(ctx, ctxText, (int)sizeof(ctxText)));
+            } else {
+                DX_LOG("    op %u: %d", i, (int)node->pCommandHistory[i]);
+            }
+        }
+        /* the marker before the stop: the pass it was in */
+        for (UINT k = node->BreadcrumbContextsCount; k-- > 0;) {
+            if (node->pBreadcrumbContexts[k].BreadcrumbIndex <= done) {
+                DX_LOG("    last marker before it: %s (op %u)",
+                       dx_narrow(node->pBreadcrumbContexts[k].pContextString, ctxText,
+                                 (int)sizeof(ctxText)),
+                       node->pBreadcrumbContexts[k].BreadcrumbIndex);
+                break;
+            }
+        }
+    }
+    DX_LOG("loss report: %u command list%s not finished (operation numbers: "
+           "D3D12_AUTO_BREADCRUMB_OP)",
+           lists, lists == 1 ? "" : "s");
+}
+
+static void dx_report_allocations(const char *what, const D3D12_DRED_ALLOCATION_NODE1 *n)
+{
+    for (uint32_t k = 0; n && k < 16; n = n->pNext, k++) {
+        DX_LOG("    %s: \"%s\" (allocation type %d)", what, n->ObjectNameA ? n->ObjectNameA : "?",
+               (int)n->AllocationType);
+    }
+}
+
+void dx_lost_report(void)
+{
+    static bool s_done;
+    if (s_done || !g_dx.device) {
+        return;
+    }
+    s_done = true;
+    const uint64_t reached = g_dx.fence ? ID3D12Fence_GetCompletedValue(g_dx.fence) : 0;
+    const uint32_t n = g_dx.submitCount < DX_SUBMIT_HISTORY ? g_dx.submitCount : DX_SUBMIT_HISTORY;
+    DX_LOG("loss report: the last %u submissions (fence reached %llu):", n,
+           (unsigned long long)reached);
+    for (uint32_t k = 0; k < n; k++) {
+        const uint32_t i = (g_dx.submitCount - n + k) % DX_SUBMIT_HISTORY;
+        DX_LOG("  fence %llu: replay %u, frame %u, %s", (unsigned long long)g_dx.submits[i].value,
+               g_dx.submits[i].replay, g_dx.submits[i].frame,
+               g_dx.submits[i].value <= reached ? "finished" : "not finished");
+    }
+    if (!g_dx.dred) {
+        DX_LOG("loss report: no breadcrumbs (gpu_checkpoints = true in ico-pc.ini turns DRED on)");
+        return;
+    }
+    ID3D12DeviceRemovedExtendedData1 *dred = NULL;
+    if (FAILED(ID3D12Device_QueryInterface(g_dx.device, &IID_ID3D12DeviceRemovedExtendedData1,
+                                           (void **)&dred))) {
+        DX_LOG("loss report: DRED's report is not available");
+        return;
+    }
+    D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT1 bc;
+    memset(&bc, 0, sizeof(bc));
+    if (SUCCEEDED(ID3D12DeviceRemovedExtendedData1_GetAutoBreadcrumbsOutput1(dred, &bc))) {
+        dx_report_breadcrumbs(bc.pHeadAutoBreadcrumbNode);
+    }
+    D3D12_DRED_PAGE_FAULT_OUTPUT1 pf;
+    memset(&pf, 0, sizeof(pf));
+    if (SUCCEEDED(ID3D12DeviceRemovedExtendedData1_GetPageFaultAllocationOutput1(dred, &pf))) {
+        DX_LOG("loss report: page fault at 0x%016llx%s", (unsigned long long)pf.PageFaultVA,
+               pf.PageFaultVA ? "" : " (none: not a page fault)");
+        dx_report_allocations("alive there", pf.pHeadExistingAllocationNode);
+        dx_report_allocations("freed there lately", pf.pHeadRecentFreedAllocationNode);
+    }
+    ID3D12DeviceRemovedExtendedData1_Release(dred);
+    fflush(stderr);
 }
 
 /* ------------------------------------------------------------- debug layer */
@@ -520,6 +674,7 @@ bool rhi_init(const RhiDeviceDesc *desc)
         rhi_shutdown();
         return false;
     }
+    dx_dred_enable(); /* gpu_checkpoints, before the device */
     if (!DX_CHECK(g_dx.createDevice((IUnknown *)g_dx.adapter, D3D_FEATURE_LEVEL_11_0,
                                     &IID_ID3D12Device, (void **)&g_dx.device))) {
         rhi_shutdown();

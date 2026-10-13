@@ -102,7 +102,8 @@ passes).
 **Commands.** Begin, end and submit a list; barriers; begin and end a render pass; viewport,
 scissor, pipeline, bind groups, vertex and index buffers, stencil reference, blend constant; draw
 and draw indexed; buffer, buffer-to-texture, texture and texture-to-buffer copies (outside passes,
-the textures in COPY_SRC or COPY_DST); colour resolve; debug labels. `rhi_readback_texture` reads a
+the textures in COPY_SRC or COPY_DST); colour resolve; debug labels; checkpoint markers and the
+submit tag of the [device-loss report](#device-loss). `rhi_readback_texture` reads a
 whole texture synchronously for dumps and tests (`port/rhi/rhi.h`, commands, verification helpers).
 
 **Limits** (`RhiLimits`): the uniform alignment (256 on D3D12), the largest texture and render
@@ -116,7 +117,8 @@ destination read's three bits: `fragmentInterlock` (Vulkan), `rov` (D3D12) and
 
 **Device and swapchain.** `rhi_init` takes an `SDL_Window` (NULL: headless, no swapchain),
 [vsync](ARCHITECTURE.md#terms), debug layers and the app name. `rhi_device_lost` turns true once the
-device is gone; the backend logs the reason once and the window ends the session.
+device is gone; the backend logs the reason and its [loss report](#device-loss) once and the window
+ends the session.
 `rhi_resize_swapchain`, `rhi_swapchain_size` (the backend rebuilds on its own at the surface's size,
 and the renderer follows it at each acquire), `rhi_acquire_backbuffer` (id 0: rebuild needed),
 `rhi_present`, `rhi_present_shown` (false after a [present](ARCHITECTURE.md#terms) that did nothing
@@ -219,6 +221,8 @@ transfer features (`vkr_choose_depth_stencil`).
 | `ICO_VK_PRESENT_WAIT` | 1 uses `VK_KHR_present_id` and `VK_KHR_present_wait` where offered (off otherwise) |
 | `ICO_VK_FIFO_LATEST_READY` | 1 uses `VK_PRESENT_MODE_FIFO_LATEST_READY_EXT` where FIFO would be taken, when offered |
 | `ICO_VK_POLL_SURFACE` | 1 polls the surface size after presents, as Android always does (`vk_swapchain.c`) |
+| `ICO_GPU_ROBUST` | 1 enables `robustBufferAccess`, and `robustImageAccess2` and `nullDescriptor` where `VK_EXT_robustness2` offers them ([Device loss](#device-loss)); ico-pc.ini `gpu_robust` |
+| `ICO_GPU_CHECKPOINTS` | 1 enables `VK_NV_device_diagnostic_checkpoints` and `VK_EXT_device_address_binding_report` where offered ([Device loss](#device-loss)); ico-pc.ini `gpu_checkpoints` |
 
 (`port/rhi/vk/vk_device.c` (`vkr_fake_limits`, `vkr_choose_depth_stencil`, `vkr_pick_device`);
 `port/rhi/vk/vk_cmd.c`; `port/rhi/vk/vk_swapchain.c` (`vkr_poll_surface_on`)).
@@ -277,10 +281,17 @@ refused an allocation it is tried last, so uploads go through system memory
 of SDL's; the surface is NULL while the app is in the background and the caller tries again
 (`port/rhi/vk/vk_surface_android.c`, header comment).
 
+**Render area.** A render pass larger than one of its attachments would draw past the image's end:
+`rhi_cmd_begin_render_pass` logs the first such pass with the sizes, asserts in a Debug build,
+counts it and clamps the area, viewport and scissor to the smallest attachment; a pass that fits is
+untouched (`port/rhi/vk/vk_cmd.c` (`vkr_pass_area_fits`)). The D3D12 backend clamps its default
+viewport and scissor the same way (`port/rhi/d3d12/d3d12_cmd.c` (`dx_pass_area_check`)).
+
 **Test hooks** (`port/rhi/vk/rhi_vk.h`): the validation error count, a forced present result
 (suboptimal, surface lost, out of date), swapchain creation and retirement counts, a stand-in for
-`vkWaitForPresentKHR` (and one that hangs), the last limit a creation reached, and a texel ceiling
-that makes texture creation fail as out of memory.
+`vkWaitForPresentKHR` (and one that hangs), the last limit a creation reached, a texel ceiling
+that makes texture creation fail as out of memory, and the count of render passes clamped to their
+attachments (with a switch that keeps the Debug build's assert quiet).
 
 ## Direct3D 12
 
@@ -361,6 +372,55 @@ the vsync lock takes the display's vblanks from the window's own clock thread on
 **Test extras** (`port/rhi/d3d12/rhi_d3d12.h`): the debug layer's error count, whether it is active,
 and whether the device runs on WARP.
 
+## Device loss
+
+When the driver gives up on the device (Vulkan `VK_ERROR_DEVICE_LOST`; D3D12 a removed, reset or hung
+device) the backend prints one report, at the first failing call, and the window prints the
+renderer's [pass ring](RENDER.md#the-pass-ring) after it, before the message box
+([PLATFORM.md](PLATFORM.md#diagnostics)). The report's parts:
+
+- **The last submissions.** Each backend keeps its last 8 submissions with the timeline (fence) value
+  each signals, the replay and frame numbers `rhi_set_submit_tag` set before it, and on Vulkan its
+  command lists and whether it signalled a present; the report marks each finished or not against
+  the value the GPU reached. A Vulkan wait that fails first logs how long it waited, the value it
+  waited for, the last one submitted and the one the GPU reached; once the device is lost no wait is
+  made again (`port/rhi/vk/vk_cmd.c` (`vkr_wait_value`, `vkr_note_submit`); `port/rhi/vk/vk_device.c`
+  (`vkr_report_submits`); `port/rhi/d3d12/d3d12_device.c` (`dx_lost_report`)).
+- **The driver's fault report** (Vulkan). `VK_EXT_device_fault` is enabled whenever the driver offers
+  it; `vkGetDeviceFaultInfoEXT` gives a description, the faulting addresses (each with its kind:
+  invalid read, write or execute, instruction pointer; and its precision) and the vendor's entries.
+  Each address is matched to a resource through the allocation table: every `VkDeviceMemory` alive
+  with the buffer or image bound to it, its size and debug name, kept by `vkr_allocate` and
+  `vkr_free_memory`, and with `gpu_checkpoints` the object's GPU address range from
+  `VK_EXT_device_address_binding_report` (a debug-utils messenger of its own, no validation layer);
+  the report names the resource holding the address, or the nearest below it
+  (`port/rhi/vk/vk_resource.c` (`vkr_alloc_note`, `vkr_alloc_bound`, `vkr_alloc_nearest`);
+  `port/rhi/vk/vk_device.c` (`vkr_report_fault`, `vkr_bind_callback`)).
+- **Checkpoints** (`gpu_checkpoints`). `rhi_cmd_checkpoint(cl, marker)` records
+  `vkCmdSetCheckpointNV` where `VK_NV_device_diagnostic_checkpoints` is offered; the renderer gives
+  every render pass, copy, snapshot, exact blend, upload batch and present a marker, the pass ring's
+  sequence number. On the loss `vkGetQueueCheckpointDataNV` gives the last marker the GPU started
+  (top of pipe) and finished (bottom of pipe): "pass #N" in the ring printed next. On D3D12 the same
+  switch turns DRED on before the device is made (auto-breadcrumbs, breadcrumb contexts, page faults,
+  through `ID3D12DeviceRemovedExtendedDataSettings1`, else the first settings interface), the marker
+  is a `SetMarker` string ("pass #N") DRED keeps as a breadcrumb context, objects are named for its
+  page-fault report, and the report prints every command list not finished (its operations from the
+  one it stopped at, and the last marker before it) and the faulting address with the allocations
+  alive or lately freed there (`port/rhi/vk/vk_cmd.c` (`rhi_cmd_checkpoint`);
+  `port/rhi/vk/vk_device.c` (`vkr_report_checkpoints`); `port/rhi/d3d12/d3d12_device.c`
+  (`dx_dred_enable`, `dx_report_breadcrumbs`); `port/rhi/d3d12/d3d12_cmd.c` (`rhi_cmd_checkpoint`)).
+
+The checkpoints cost one GPU write per pass (about 430 a replay) and the binding report a callback
+per resource, so they stay off unless asked for; the fault report costs nothing until a loss.
+**Robust access** (`gpu_robust`, Vulkan): `robustBufferAccess`, plus `robustImageAccess2` and
+`nullDescriptor` where `VK_EXT_robustness2` offers them, so an access out of a buffer's or image's
+range reads zero and writes nothing instead of reaching other memory; an A/B switch for a loss that
+an out-of-range access could explain. One start-up line says what is on:
+`rhi_vk: loss diagnostics: fault report on|not offered; checkpoints ...; resource addresses ...;
+robust access ...` (`port/rhi/vk/vk_device.c` (`vkr_create_device`)). Both switches come from the
+environment (`ICO_GPU_CHECKPOINTS`, `ICO_GPU_ROBUST`) or ico-pc.ini's `[dev]` keys
+([CONFIG.md](CONFIG.md#dev)).
+
 ## MoltenVK
 
 Apple builds link MoltenVK's static XCFramework instead of loading a Vulkan driver (iOS apps cannot
@@ -379,7 +439,7 @@ SHA-256, the licences of the libraries compiled into it, and builds a static SDL
 | test | checks |
 | --- | --- |
 | `rhi_test_common.c`, `rhi_test_common.h` | headless rendering on any backend, texel by texel: a 64x32 target in eight cells (dual-source blending, stencil wrap, reversed depth, colour mask, a copied texture drawn indexed), an RGBA8 UINT target, R8 copies and same-state ordering, a device-local buffer, depth readback, three frames |
-| `rhi_vk_test.c` | the common cells on Vulkan, a hazard-tracking cell, and the pipeline cache file (written, read back, another device's or garbage ignored); ctest `rhi_vk`, and `rhi_vk_nodual`, `rhi_vk_d24s8`, `rhi_vk_mali` under the fake switches |
+| `rhi_vk_test.c` | the common cells on Vulkan, a hazard-tracking cell, the render-area check (a pass wider than its colour target, one taller than its depth: each clamped and counted, no validation error; a fitting pass untouched), and the pipeline cache file (written, read back, another device's or garbage ignored); ctest `rhi_vk`, and `rhi_vk_nodual`, `rhi_vk_d24s8`, `rhi_vk_mali` under the fake switches |
 | `rhi_vk_swapchain_test.c` | the window path on SDL's offscreen driver: frames, readback order, surface release and recreation, suboptimal and lost presents, resizes, the surface poll, submits per frame, the present-wait stand-in and a hanging wait; ctest `rhi_vk_swapchain` |
 | `rhi_vk_present_mode_test.c` | `vkr_choose_present_mode` over the mode sets drivers offer, and `vkr_present_wait_wanted`; ctest `rhi_vk_present_mode` |
 | `rhi_vk_enum_test.c` | every `rhi.h` enumeration has a Vulkan mapping; the layer classifiers and `rhi_layer_switched_on`; ctest `rhi_vk_enum` |

@@ -56,6 +56,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "rd_internal.h"
+#include "rd_passring.h"
 #include "rd_mesh.h"
 #include "rd_tex.h"
 #include "shader_consts.h"
@@ -1219,6 +1220,8 @@ static void beginPass(Replay *r, RdTargetRec *c, RdTargetRec *d, uint32_t cid, u
     p.width = c->tw;
     p.height = c->th;
     rhi_cmd_begin_render_pass(s_cl, &p);
+    rhi_cmd_checkpoint(s_cl, rd__passring_push(RD_PASSK_PASS, cid, c->tw, c->th, d ? did : 0,
+                                               d ? d->tw : 0, d ? d->th : 0, storage, r->perfPost));
     setViewport(c->tw, c->th);
     r->passOpen = 1;
     r->passColor = cid;
@@ -2042,6 +2045,8 @@ static bool takeSnap(Replay *r, RdTargetRec *tc, RhiRect area)
     }
     rd__transition(s_cl, tc->color, &tc->colorState, RHI_STATE_COPY_SRC);
     rd__transition(s_cl, tc->snap, &tc->snapState, RHI_STATE_COPY_DST);
+    rhi_cmd_checkpoint(s_cl, rd__passring_push(RD_PASSK_SNAP, (uint32_t)(tc - g_rd.targets) + 1u,
+                                               tc->tw, tc->th, 0, area.w, area.h, 0, r->perfPost));
     rhi_cmd_copy_texture(s_cl, tc->color, area, tc->snap, area.x, area.y);
     rd__transition(s_cl, tc->snap, &tc->snapState, RHI_STATE_SHADER_READ);
     return true;
@@ -4355,6 +4360,8 @@ static void doExact(Replay *r, const RdCmd *c)
         return;
     }
     endPass(r);
+    rhi_cmd_checkpoint(s_cl, rd__passring_push(RD_PASSK_EXACT, c->u[0], src->tw, src->th, c->u[1],
+                                               dst->tw, dst->th, 0, r->perfPost));
     r->writeSerial++;
     uint32_t w = dst->tw, h = dst->th;
     if (src->tw != w || src->th != h) {
@@ -4485,6 +4492,8 @@ static void doCopy(Replay *r, const RdFrame *f, const RdCmd *c)
     r->writeSerial++;
     rd__transition(s_cl, src->color, &src->colorState, RHI_STATE_COPY_SRC);
     rd__transition(s_cl, dst->color, &dst->colorState, RHI_STATE_COPY_DST);
+    rhi_cmd_checkpoint(s_cl, rd__passring_push(RD_PASSK_COPY, c->u[0], src->tw, src->th, c->u[1],
+                                               dst->tw, dst->th, 0, r->perfPost));
     rhi_cmd_copy_texture(s_cl, src->color, (RhiRect){(int32_t)sx0, (int32_t)sy0, w, h}, dst->color,
                          (int32_t)dx0, (int32_t)dy0);
 }
@@ -5718,12 +5727,15 @@ static void uploadTextures(void)
 {
     const uint32_t pitchA = rhi_limits()->copyRowPitchAlign;
     const uint32_t offA = rhi_limits()->copyOffsetAlign;
-    if (g_rd.dummyState != RHI_STATE_SHADER_READ) {
-        uint64_t off = rd__ring_alloc(4, offA);
+    /* a full ring gives ~0, whose write would land past the map: the
+     * next replay uploads it */
+    const uint64_t dummyOff =
+        g_rd.dummyState != RHI_STATE_SHADER_READ ? rd__ring_alloc(4, offA) : ~0ull;
+    if (dummyOff != ~0ull) {
         static const uint8_t white[4] = {255, 255, 255, 255};
-        memcpy(g_rd.ringMap[s_slot] + off, white, 4);
+        memcpy(g_rd.ringMap[s_slot] + dummyOff, white, 4);
         rd__transition(s_cl, g_rd.dummy, &g_rd.dummyState, RHI_STATE_COPY_DST);
-        rhi_cmd_copy_buffer_to_texture(s_cl, g_rd.ring[s_slot], off, pitchA > 4 ? pitchA : 4,
+        rhi_cmd_copy_buffer_to_texture(s_cl, g_rd.ring[s_slot], dummyOff, pitchA > 4 ? pitchA : 4,
                                        g_rd.dummy, 0, (RhiRect){0, 0, 1, 1});
         rd__transition(s_cl, g_rd.dummy, &g_rd.dummyState, RHI_STATE_SHADER_READ);
     }
@@ -5990,6 +6002,8 @@ static bool replayFrame(const RdFrame *f, int keep, bool present)
     t = t1;
     s_slot = g_rd.replayCounter % RHI_FRAMES_IN_FLIGHT;
     g_rd.replayCounter++;
+    rd__passring_frame(g_rdPerf.replay, f->number, keep); /* the loss report's names */
+    rhi_set_submit_tag(g_rdPerf.replay, f->number);
     s_ringOff = 0;
     g_rd.deferText = false;
     if (present) {
@@ -6014,9 +6028,11 @@ static bool replayFrame(const RdFrame *f, int keep, bool present)
     rd__perf_stamp(s_cl, RD_PERF_TS_BEGIN);
     /* no shadow window from another replay (clearNewTargets reads it) */
     memset(&s_stencil, 0, sizeof(s_stencil));
+    rhi_cmd_checkpoint(s_cl, rd__passring_push(RD_PASSK_UPLOAD, 0, 0, 0, 0, 0, 0, 0, -1));
     uploadTextures();
     rd__join_parts(f, keep); /* the card test over a part's packets (rd_join.c) */
     uploadMeshes(f, keep);
+    rd__passring_bytes(s_ringOff);
     clearNewTargets();
     rd__perf_stamp(s_cl, RD_PERF_TS_LISTS);
     g_rdPerf.uploadMs += (t1 = rd__now_ms()) - t;
@@ -6036,6 +6052,7 @@ static bool replayFrame(const RdFrame *f, int keep, bool present)
     const uint32_t headHalf = sceneHeadHalf(f);
     for (int l = rd__first_list(keep); l < RD_LIST_COUNT; l++) {
         const RdCmdList *list = &f->lists[l];
+        rd__passring_list(l);
         for (uint32_t i = 0; i < list->count; i++) {
             const RdCmd *c = &list->cmds[i];
             if (c->type == RDC_TARGET) {
@@ -6113,6 +6130,12 @@ static bool replayFrame(const RdFrame *f, int keep, bool present)
     s_ms.r = NULL;
     s_vpExact = false; /* the present sets its own viewports */
     if (doPresent) {
+        uint32_t sw = 0, sh = 0; /* the pass ring's present entry: DISPLAY onto the window */
+        rhi_swapchain_size(&sw, &sh);
+        const RdTargetRec *dt = rd__target_rec(RD_TARGET_DISPLAY + 1);
+        rhi_cmd_checkpoint(s_cl,
+                           rd__passring_push(RD_PASSK_PRESENT, RD_TARGET_DISPLAY + 1,
+                                             dt ? dt->tw : 0, dt ? dt->th : 0, 0, sw, sh, 0, -1));
         rd__present_record(s_cl);
         rd__perf_stamp(s_cl, RD_PERF_TS_PRESENT);
     }

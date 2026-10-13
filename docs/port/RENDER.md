@@ -30,6 +30,7 @@ commands and [replays](ARCHITECTURE.md#terms) them on the [RHI](ARCHITECTURE.md#
 | `port/render/rd_screen_planes.c` | the attribute planes of screen-prim triangles |
 | `port/render/rd_camera_blend.h` | the blended camera, shared with the game's cull |
 | `port/render/rd_perf.c` | the per-replay performance records |
+| `port/render/rd_passring.h`, `rd_passring.c` | the pass ring: the last passes recorded, for the device-loss report |
 | `port/render/rd_dump.c`, `rd_png.c` | frame dumps; a minimal PNG writer |
 | `port/render/tools/rd_replay_tool.c` | [the replay tool](ARCHITECTURE.md#terms) |
 | `port/render/vu1_ref/` | the VU1 programs' CPU references ([VU1_PROGRAMS.md](VU1_PROGRAMS.md#the-cpu-oracles)) |
@@ -292,7 +293,10 @@ present and the camera probe keep the plain mapping.
 **Uploads.** Before the first pass the replay uploads pending textures and their levels through
 the frame's upload ring, and the static meshes the frame draws into the device arena (once, and
 again only after a morph rewrote them); the interpolation's scratch meshes stay on the ring
-(`port/render/rd_replay.c` (`uploadTextures`, `uploadMeshes`)).
+(`port/render/rd_replay.c` (`uploadTextures`, `uploadMeshes`)). Every `rd__ring_alloc` caller
+checks for `~0` (the ring is full) and skips its write and its draw or copy, the untextured draws'
+white texel included, which the next replay uploads (`port/render/rd_replay.c` (`rd__ring_alloc`,
+`uploadTextures`)).
 
 **Bind groups.** Bind groups are valid only in the [frame slot](ARCHITECTURE.md#terms) they were
 made in, so their caches are tagged with an epoch every `rhi_wait_frame` of the renderer starts anew
@@ -347,6 +351,25 @@ fog runs per sample inside the epoch when the device has sample-rate shading
 (`port/render/rd_replay.c`, "the MSAA epoch"; `msaaPass`, `msaaEnd`, `msaaSpriteExpand`). When no
 way of reading the multisampled depth passed the fog's self-test, rd draws without MSAA and
 `rd_aa_msaa_blocked` says so (`port/render/rd.h` (`rd_aa_msaa_blocked`)).
+
+### The pass ring
+
+The replay notes what it gives the GPU in a ring of the last 32 entries, always on (a few stores
+each): every render pass (`beginPass`), target copy (`doCopy`), snapshot copy (`takeSnap`), exact
+blend (`doExact`), the upload batch before the lists and the present. An entry holds its sequence
+number, the replay number (the performance record's, `g_rdPerf.replay`) and frame number, the keep
+flag, the list being walked, the colour and depth target ids and sizes (a copy's source and
+destination; the present's DISPLAY and window sizes), the storage-pass flag, the picture effect
+(`perfPost`), the last pipeline asked for while it was open (`rd__get_pipeline`) with its shaders
+and destination read, and an upload batch's bytes. A table of the last 8 replays keeps each one's
+first and last sequence numbers, so a number the ring has moved past still names its replay and
+frame. Each entry's sequence number is also the marker the replay gives `rhi_cmd_checkpoint` right
+after the pass begins (or before the copy), and every replay sets `rhi_set_submit_tag` to its replay
+and frame numbers, so the backend's [loss report](RHI.md#device-loss) and the ring name the same
+passes. The window prints the ring after a device loss, before the box
+([PLATFORM.md](PLATFORM.md#diagnostics)) (`port/render/rd_passring.h`, header comment;
+`port/render/rd_passring.c` (`rd_passring_print`); `port/render/rd_replay.c` (`replayFrame`,
+`beginPass`, `doCopy`, `takeSnap`, `doExact`); `port/render/rd_pipeline.c` (`rd__get_pipeline`)).
 
 ## Pipelines
 

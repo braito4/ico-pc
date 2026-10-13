@@ -5,12 +5,111 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* ------------------------------------------------------ allocation table
+ * Every VkDeviceMemory alive (one per buffer or image: there is no
+ * suballocation), with the object bound to it, its size and debug name, and
+ * the object's GPU address range when the address binding report gives it
+ * (VkrState.addressReport).  Read by the device-loss report only
+ * (vk_device.c vkr_lost_report): a fault address named by the driver
+ * (VK_EXT_device_fault) is matched to the resource holding it.  An array,
+ * the last entry moved into a freed one's place: a few hundred entries. */
+typedef struct VkrAllocRec {
+    uint64_t memory, object;
+    uint64_t size;
+    uint64_t base, span; /* GPU address range, 0: not reported */
+    char name[32];
+} VkrAllocRec;
+
+static VkrAllocRec *s_allocs;
+static uint32_t s_allocCount, s_allocCap;
+
+void vkr_alloc_note(VkDeviceMemory memory, uint64_t object, VkDeviceSize size, const char *name)
+{
+    if (s_allocCount == s_allocCap) {
+        const uint32_t cap = s_allocCap ? s_allocCap * 2u : 512u;
+        VkrAllocRec *a = realloc(s_allocs, (size_t)cap * sizeof(*a));
+        if (!a) {
+            return; /* the table is diagnostics only: this one goes unnamed */
+        }
+        s_allocs = a;
+        s_allocCap = cap;
+    }
+    VkrAllocRec *e = &s_allocs[s_allocCount++];
+    memset(e, 0, sizeof(*e));
+    e->memory = (uint64_t)memory;
+    e->object = object;
+    e->size = size;
+    snprintf(e->name, sizeof(e->name), "%s", name ? name : "?");
+}
+
+void vkr_alloc_forget(VkDeviceMemory memory)
+{
+    for (uint32_t i = 0; i < s_allocCount; i++) {
+        if (s_allocs[i].memory == (uint64_t)memory) {
+            s_allocs[i] = s_allocs[--s_allocCount];
+            return;
+        }
+    }
+}
+
+void vkr_alloc_bound(uint64_t object, uint64_t base, uint64_t size, bool bound)
+{
+    for (uint32_t i = 0; i < s_allocCount; i++) {
+        if (s_allocs[i].object == object) {
+            s_allocs[i].base = bound ? base : 0;
+            s_allocs[i].span = bound ? size : 0;
+            return;
+        }
+    }
+}
+
+void vkr_alloc_nearest(uint64_t address)
+{
+    const VkrAllocRec *in = NULL, *below = NULL;
+    uint32_t known = 0;
+    for (uint32_t i = 0; i < s_allocCount; i++) {
+        const VkrAllocRec *e = &s_allocs[i];
+        if (!e->span) {
+            continue;
+        }
+        known++;
+        if (address >= e->base && address - e->base < e->span) {
+            in = e;
+        } else if (e->base <= address && (!below || e->base > below->base)) {
+            below = e;
+        }
+    }
+    if (in) {
+        VKR_LOG("  0x%016llx is in \"%s\" (%.0f KB at 0x%016llx, offset %llu)",
+                (unsigned long long)address, in->name, (double)in->span / 1024.0,
+                (unsigned long long)in->base, (unsigned long long)(address - in->base));
+    } else if (below) {
+        VKR_LOG("  0x%016llx is past every resource; the nearest below is \"%s\" (%.0f KB at "
+                "0x%016llx, %llu bytes past its end)",
+                (unsigned long long)address, below->name, (double)below->span / 1024.0,
+                (unsigned long long)below->base,
+                (unsigned long long)(address - below->base - below->span));
+    } else {
+        VKR_LOG("  0x%016llx: no resource address known (%u of %u allocations reported; the "
+                "addresses come with gpu_checkpoints and the driver's binding report)",
+                (unsigned long long)address, known, s_allocCount);
+    }
+}
+
+void vkr_alloc_table_free(void)
+{
+    free(s_allocs);
+    s_allocs = NULL;
+    s_allocCount = s_allocCap = 0;
+}
+
 /* every vkFreeMemory, so the live counts stay right */
 void vkr_free_memory(VkDeviceMemory memory, VkDeviceSize size)
 {
     if (!memory) {
         return;
     }
+    vkr_alloc_forget(memory);
     vkFreeMemory(g_vkr.device, memory, NULL);
     if (g_vkr.memLive) {
         g_vkr.memLive--;
@@ -74,7 +173,7 @@ static void vkr_memory_counted(VkDeviceSize size)
    each kind is logged.  *coherent: whether the type taken is
    host-coherent. */
 static bool vkr_allocate(const VkMemoryRequirements *req, RhiMemory kind, VkDeviceMemory *out,
-                         bool *coherent)
+                         bool *coherent, uint64_t object, const char *name)
 {
     *out = VK_NULL_HANDLE;
     if (!vkr_memory_room(req->size)) {
@@ -121,6 +220,7 @@ static bool vkr_allocate(const VkMemoryRequirements *req, RhiMemory kind, VkDevi
                              VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0;
             }
             vkr_memory_counted(req->size);
+            vkr_alloc_note(*out, object, req->size, name);
             return true;
         }
         *out = VK_NULL_HANDLE;
@@ -341,7 +441,8 @@ RhiBuffer rhi_create_buffer(const RhiBufferDesc *desc)
     }
     VkMemoryRequirements req;
     vkGetBufferMemoryRequirements(g_vkr.device, b->buffer, &req);
-    if (!vkr_allocate(&req, desc->memory, &b->memory, &b->coherent) ||
+    if (!vkr_allocate(&req, desc->memory, &b->memory, &b->coherent, VKR_H(b->buffer),
+                      desc->debugName) ||
         !VKR_CHECK(vkBindBufferMemory(g_vkr.device, b->buffer, b->memory, 0))) {
         vkDestroyBuffer(g_vkr.device, b->buffer, NULL);
         vkr_free_memory(b->memory, req.size);
@@ -511,7 +612,7 @@ RhiTexture rhi_create_texture(const RhiTextureDesc *desc)
     }
     VkMemoryRequirements req;
     vkGetImageMemoryRequirements(g_vkr.device, t->image, &req);
-    if (!vkr_allocate(&req, RHI_MEM_DEVICE, &t->memory, NULL) ||
+    if (!vkr_allocate(&req, RHI_MEM_DEVICE, &t->memory, NULL, VKR_H(t->image), desc->debugName) ||
         !VKR_CHECK(vkBindImageMemory(g_vkr.device, t->image, t->memory, 0))) {
         goto fail;
     }

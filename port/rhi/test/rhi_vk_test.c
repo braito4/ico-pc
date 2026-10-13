@@ -1,5 +1,6 @@
 /* rhi_vk_test.c: the exact-texel RHI checks (rhi_test_common.c) on the
- * Vulkan backend, headless, then a hazard-tracking cell and the pipeline
+ * Vulkan backend, headless, then a hazard-tracking cell, the render-area
+ * check (a pass larger than an attachment is clamped) and the pipeline
  * cache file (rhi_set_pipeline_cache_path: written at shutdown with a version
  * one header, read back at the next init, a file of another device or of
  * garbage ignored and replaced).
@@ -10,6 +11,7 @@
 #include "rhi.h"
 #include "rhi_test_common.h"
 #include "vk/rhi_vk.h"
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -74,6 +76,77 @@ static int hazardCell(void)
     rhi_wait_idle();
     rhi_destroy_texture(a);
     rhi_destroy_texture(b);
+    rhi_shutdown();
+    failures += (int)rhi_vk_validation_error_count();
+    return failures;
+}
+
+/* The render-area check (vk_cmd.c vkr_pass_area_fits): a pass larger than
+ * its attachments is counted, logged once and clamped (no validation error
+ * follows: the area the driver sees fits); a pass that fits is untouched.
+ * rhi_cmd_checkpoint and rhi_set_submit_tag are no-ops to the picture
+ * (checkpoints off, or not offered: lavapipe has no
+ * VK_NV_device_diagnostic_checkpoints). */
+static int passAreaCell(void)
+{
+    if (!rhi_create_backend("vulkan")) {
+        return 0;
+    }
+    RhiDeviceDesc dd = {NULL, false, true, "rhi_vk_test pass area"};
+    if (!rhi_init(&dd)) {
+        return 0;
+    }
+    int failures = 0;
+    vkr_test_pass_area_no_assert(true); /* the debug build's assert: the bad passes are wanted */
+    RhiTextureDesc td = {16, 16, 1, RHI_FMT_RGBA8_UNORM, RHI_TEX_RENDER_TARGET, "areaColour", 0};
+    RhiTexture col = rhi_create_texture(&td);
+    RhiTextureDesc dd2 = {16, 8, 1, RHI_FMT_D32F_S8, RHI_TEX_DEPTH_STENCIL, "areaDepth", 0};
+    RhiTexture dep = rhi_create_texture(&dd2);
+    rhi_set_submit_tag(7, 3);
+    RhiCommandList cl = rhi_begin_commands();
+    if (!col.id || !dep.id || !cl.id) {
+        rhi_test_log("FAIL pass area cell: setup\n");
+        failures++;
+    } else {
+        const RhiTextureBarrier to[2] = {{col, RHI_STATE_UNDEFINED, RHI_STATE_RENDER_TARGET},
+                                         {dep, RHI_STATE_UNDEFINED, RHI_STATE_DEPTH_WRITE}};
+        rhi_cmd_barrier(cl, to, 2);
+        const uint32_t n0 = vkr_test_pass_area_count();
+        RhiRenderPassDesc p = {0};
+        p.color[0].texture = col;
+        p.color[0].load = RHI_LOAD_CLEAR;
+        p.colorCount = 1;
+        p.width = p.height = 16; /* fits */
+        rhi_cmd_begin_render_pass(cl, &p);
+        rhi_cmd_checkpoint(cl, (const void *)(uintptr_t)1);
+        rhi_cmd_end_render_pass(cl);
+        const uint32_t n1 = vkr_test_pass_area_count();
+        p.width = 32; /* wider than the colour */
+        p.height = 24;
+        rhi_cmd_begin_render_pass(cl, &p);
+        rhi_cmd_end_render_pass(cl);
+        const uint32_t n2 = vkr_test_pass_area_count();
+        p.width = p.height = 16; /* the colour fits, the depth is 8 high */
+        p.depth.texture = dep;
+        p.depth.depthLoad = RHI_LOAD_CLEAR;
+        p.depth.stencilLoad = RHI_LOAD_CLEAR;
+        p.depth.clearDepth = 1.0f;
+        rhi_cmd_begin_render_pass(cl, &p);
+        rhi_cmd_end_render_pass(cl);
+        const uint32_t n3 = vkr_test_pass_area_count();
+        rhi_test_log("pass area cell: fitting +%u, too wide +%u, depth too short +%u\n", n1 - n0,
+                     n2 - n1, n3 - n2);
+        if (n1 != n0 || n2 != n1 + 1 || n3 != n2 + 1) {
+            rhi_test_log("FAIL pass area cell: want +0, +1, +1\n");
+            failures++;
+        }
+        rhi_end_commands(cl);
+        rhi_submit(cl);
+    }
+    rhi_wait_idle();
+    vkr_test_pass_area_no_assert(false);
+    rhi_destroy_texture(col);
+    rhi_destroy_texture(dep);
     rhi_shutdown();
     failures += (int)rhi_vk_validation_error_count();
     return failures;
@@ -241,5 +314,5 @@ int main(void)
     if (rc != 0) {
         return rc;
     }
-    return (hazardCell() || cacheCell() || limitsCell()) ? 1 : 0;
+    return (hazardCell() || passAreaCell() || cacheCell() || limitsCell()) ? 1 : 0;
 }

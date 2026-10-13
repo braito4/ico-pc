@@ -73,6 +73,8 @@
 #define rhi_cmd_resolve_color     RHI__NAME(cmd_resolve_color)
 #define rhi_cmd_begin_label       RHI__NAME(cmd_begin_label)
 #define rhi_cmd_end_label         RHI__NAME(cmd_end_label)
+#define rhi_cmd_checkpoint        RHI__NAME(cmd_checkpoint)
+#define rhi_set_submit_tag        RHI__NAME(set_submit_tag)
 #define rhi_readback_texture     RHI__NAME(readback_texture)
 #define rhi_get_stats            RHI__NAME(get_stats)
 #define rhi_timestamps_supported RHI__NAME(timestamps_supported)

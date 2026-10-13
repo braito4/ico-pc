@@ -478,7 +478,67 @@ static const struct {
     /* the renderer backend of the window build, "vulkan" (default) or "d3d12"
        (window_host.c, port/rhi/rhi.h rhi_create_backend) */
     {"video.backend", "backend"},
+    /* the A/B switches a bug report may ask for (ico_dev_env_value):
+       fixed-function blending, the fog's depth path, the GPU loss
+       diagnostics */
+    {"dev.blend", "blend"},
+    {"dev.fog_path", "fog_path"},
+    {"dev.gpu_checkpoints", "gpu_checkpoints"},
+    {"dev.gpu_robust", "gpu_robust"},
 };
+
+/* the [dev] keys exported as the environment switches the renderer and the
+   graphics backends read (docs/port/CONFIG.md): ini key, variable */
+static const struct {
+    const char *key;
+    const char *env;
+} dev_env[] = {
+    {"blend", "ICO_RD_BLEND"},                  /* port/render/rd_dst_read.c rd__dst_init */
+    {"fog_path", "ICO_RD_FOG_PATH"},            /* port/render/rd_fog_path.c rd__fog_path_init */
+    {"gpu_checkpoints", "ICO_GPU_CHECKPOINTS"}, /* port/rhi vk_device.c, d3d12_device.c */
+    {"gpu_robust", "ICO_GPU_ROBUST"},           /* port/rhi/vk/vk_device.c */
+};
+
+static int value_is(const char *v, const char *const *words)
+{
+    for (; *words != NULL; words++) {
+        if (strcmp(v, *words) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+const char *ico_dev_env_name(const char *key)
+{
+    size_t i;
+
+    for (i = 0; key != NULL && i < sizeof(dev_env) / sizeof(dev_env[0]); i++) {
+        if (strcmp(dev_env[i].key, key) == 0) {
+            return dev_env[i].env;
+        }
+    }
+    return NULL;
+}
+
+const char *ico_dev_env_value(const char *key, const char *value)
+{
+    static const char *const on[] = {"1", "true", "on", "yes", NULL};
+    static const char *const off[] = {"0", "false", "off", "no", NULL};
+    static const char *const paths[] = {"inplace", "copy", "buffer", NULL};
+
+    if (key == NULL || value == NULL || ico_dev_env_name(key) == NULL) {
+        return NULL;
+    }
+    if (strcmp(key, "blend") == 0) {
+        /* exact is the default (the best exact path the device has) */
+        return strcmp(value, "fixed") == 0 ? "fixed" : NULL;
+    }
+    if (strcmp(key, "fog_path") == 0) {
+        return value_is(value, paths) ? value : NULL;
+    }
+    return value_is(value, on) ? "1" : value_is(value, off) ? "0" : NULL;
+}
 
 const char *ico_config_ini_key(const char *toml_path)
 {
@@ -610,6 +670,20 @@ void ico_ini_export(const IcoIni *ini, const char *path, int r)
            it reads ICO_UI_POPUP_TEST (1, true, on, yes) */
         if (ico_ini_get(ini, "popup_test") != NULL) {
             put_env("ICO_UI_POPUP_TEST", ico_ini_get(ini, "popup_test"));
+        }
+        /* blend=, fog_path=, gpu_checkpoints=, gpu_robust= (the A/B
+           switches a bug report asks for: a double-clicked program has no
+           environment of its own to set them in) */
+        {
+            size_t i;
+
+            for (i = 0; i < sizeof(dev_env) / sizeof(dev_env[0]); i++) {
+                const char *v = ico_dev_env_value(dev_env[i].key, ico_ini_get(ini, dev_env[i].key));
+
+                if (v != NULL) {
+                    put_env(dev_env[i].env, v);
+                }
+            }
         }
     }
 }

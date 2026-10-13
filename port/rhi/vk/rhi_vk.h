@@ -60,6 +60,14 @@ uint32_t vkr_test_limit(const char *name);
  * height), as a device out of memory does.  0 turns it off. */
 void vkr_test_fail_texels_above(uint64_t texels);
 
+/* For rhi_vk_test's render-area cell (vk_cmd.c vkr_pass_area_fits): the
+ * render passes since rhi_init whose area was larger than an attachment
+ * (each clamped to the attachments).  vkr_test_pass_area_no_assert(true)
+ * keeps the debug build's assert quiet while a test makes such a pass on
+ * purpose. */
+uint32_t vkr_test_pass_area_count(void);
+void vkr_test_pass_area_no_assert(bool on);
+
 #ifdef __cplusplus
 }
 

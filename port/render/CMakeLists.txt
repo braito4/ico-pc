@@ -104,6 +104,7 @@ add_library(ico_render STATIC
     rd_interp.c # interpolation between the retained frames
     rd_join.c
     rd_mesh.c
+    rd_passring.c # the last passes recorded, for the device-loss report
     rd_content_hide.c # the content table: stage geometry made for the 4:3 picture
     rd_content_chain.c # Natural chains: the chains a stage animation lets down
     modelpack.c # model packs, the index, the glTF conversion, the dump
@@ -573,6 +574,12 @@ target_compile_options(rd_debug_test PRIVATE ${ICO_SEMANTIC_OPTIONS} ${ICO_GAME_
 # sifdev_host.c opens host0: files through host_fs (ico_widen, ico_mkdir)
 target_link_libraries(rd_debug_test PRIVATE ico_render ico_math ico_host_fs)
 
+# rd_passring_test: the pass ring the device-loss report prints
+# (rd_passring.c): order, wrap, the replay table, the line format; pure.
+add_executable(rd_passring_test test/rd_passring_test.c rd_passring.c)
+target_include_directories(rd_passring_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_options(rd_passring_test PRIVATE ${ICO_SEMANTIC_OPTIONS} ${ICO_PORT_WARNINGS})
+
 # rd_mip_test: rdtex_mip_chain_bytes against the level sum and
 # rdtex_build_mip_chain inside it for non-square textures (128x4, 512x2).
 # CPU only.
@@ -620,7 +627,7 @@ ico_copy_sdl3_dll(texpack_test texpack_e2e_test rd_replay_tool rd_state_test rd_
                   rd_shadow_test rd_fog_test rd_fog_selftest_test rd_blur_test rd_water_test rd_raw_test rd_debug_test
                   rd_present_test rd_filter_test rd_interp_test rd_mirror_test rd_msaa_test rd_mip_test
                   rd_perf_test rd_boot_present_test rd_crt_test texpack_load_test gsb_cull_test
-                  rd_native_test)
+                  rd_native_test rd_passring_test)
 
 if(ICO_RUN_TESTS)
     add_test(NAME rd_state COMMAND rd_state_test "${CMAKE_CURRENT_BINARY_DIR}")
@@ -630,6 +637,7 @@ if(ICO_RUN_TESTS)
     add_test(NAME rd_layout COMMAND rd_layout_test)
     set_tests_properties(rd_layout PROPERTIES SKIP_RETURN_CODE 77)
     add_test(NAME rd_mip COMMAND rd_mip_test)
+    add_test(NAME rd_passring COMMAND rd_passring_test)
     add_test(NAME rd_tex COMMAND rd_tex_test)
     add_test(NAME texpack COMMAND texpack_test "${CMAKE_CURRENT_BINARY_DIR}")
     get_filename_component(_ico_texpack_textures "${ICO_TEXPACK_DIR}/../.." ABSOLUTE)

@@ -48,9 +48,207 @@ bool vkr_check(VkResult r, const char *what, const char *file, int line)
     fprintf(stderr, "rhi_vk: %s failed (VkResult %d) at %s:%d\n", what, (int)r, file, line);
     if (r == VK_ERROR_DEVICE_LOST && !g_vkr.deviceLost) {
         g_vkr.deviceLost = true;
+        g_vkr.lostNs = vkr_now_ns();
         fprintf(stderr, "rhi_vk: device lost\n");
+        vkr_lost_report();
     }
     return false;
+}
+
+/* a switch from the environment (ico-pc.ini's [dev] keys arrive there,
+ * port/platform/host_config.c ico_ini_export): on for 1, true, on, yes */
+static bool vkr_env_on(const char *name)
+{
+    const char *v = getenv(name);
+    return v && (strcmp(v, "1") == 0 || strcmp(v, "true") == 0 || strcmp(v, "on") == 0 ||
+                 strcmp(v, "yes") == 0);
+}
+
+/* ------------------------------------------------------------ device loss
+ * The report vkr_check prints once, at the first VK_ERROR_DEVICE_LOST
+ * (docs/port/RHI.md, "Device loss"): the last submissions with the frames
+ * they carried and whether the GPU finished them, the driver's fault report
+ * (VK_EXT_device_fault: the faulting addresses, each matched to a resource
+ * through the allocation table, vk_resource.c), and the checkpoints the GPU
+ * reached (VK_NV_device_diagnostic_checkpoints, under gpu_checkpoints).
+ * The renderer's pass ring follows from the window (port/render
+ * rd_passring.h, port/platform/window_host.c device_lost_quit). */
+static const char *vkr_fault_type_name(VkDeviceFaultAddressTypeEXT t)
+{
+    switch (t) {
+    case VK_DEVICE_FAULT_ADDRESS_TYPE_NONE_EXT:
+        return "none";
+    case VK_DEVICE_FAULT_ADDRESS_TYPE_READ_INVALID_EXT:
+        return "invalid read";
+    case VK_DEVICE_FAULT_ADDRESS_TYPE_WRITE_INVALID_EXT:
+        return "invalid write";
+    case VK_DEVICE_FAULT_ADDRESS_TYPE_EXECUTE_INVALID_EXT:
+        return "invalid execute";
+    case VK_DEVICE_FAULT_ADDRESS_TYPE_INSTRUCTION_POINTER_UNKNOWN_EXT:
+        return "instruction pointer (unknown)";
+    case VK_DEVICE_FAULT_ADDRESS_TYPE_INSTRUCTION_POINTER_INVALID_EXT:
+        return "instruction pointer (invalid)";
+    case VK_DEVICE_FAULT_ADDRESS_TYPE_INSTRUCTION_POINTER_FAULT_EXT:
+        return "instruction pointer (fault)";
+    default:
+        return "unknown type";
+    }
+}
+
+static const char *vkr_stage_name(VkPipelineStageFlagBits s)
+{
+    switch (s) {
+    case VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT:
+        return "top of pipe (started)";
+    case VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT:
+        return "bottom of pipe (finished)";
+    default:
+        return "another stage";
+    }
+}
+
+static void vkr_report_submits(void)
+{
+    uint64_t reached = 0;
+    const bool known =
+        vkGetSemaphoreCounterValue(g_vkr.device, g_vkr.timeline, &reached) == VK_SUCCESS;
+    const uint32_t n =
+        g_vkr.submitCount < VKR_SUBMIT_HISTORY ? g_vkr.submitCount : VKR_SUBMIT_HISTORY;
+    VKR_LOG("loss report: the last %u submissions (timeline reached %s%llu%s):", n,
+            known ? "" : "unknown, ", (unsigned long long)(known ? reached : 0ull),
+            g_vkr.lostWaitValue ? "" : "; no wait failed");
+    for (uint32_t k = 0; k < n; k++) {
+        const uint32_t i = (g_vkr.submitCount - n + k) % VKR_SUBMIT_HISTORY;
+        const uint64_t v = g_vkr.submits[i].value;
+        VKR_LOG("  timeline %llu: replay %u, frame %u, %u command list%s%s, %s%s",
+                (unsigned long long)v, g_vkr.submits[i].replay, g_vkr.submits[i].frame,
+                g_vkr.submits[i].lists, g_vkr.submits[i].lists == 1 ? "" : "s",
+                g_vkr.submits[i].present ? " + the present signal" : "",
+                !known         ? "state unknown"
+                : v <= reached ? "finished"
+                               : "not finished",
+                v == g_vkr.lostWaitValue ? " (the wait that failed)" : "");
+    }
+}
+
+static void vkr_report_fault(void)
+{
+    if (!g_vkr.deviceFault || !g_vkr.getFaultInfo) {
+        VKR_LOG("loss report: no fault report (VK_EXT_device_fault not offered by the driver)");
+        return;
+    }
+    VkDeviceFaultCountsEXT counts = {.sType = VK_STRUCTURE_TYPE_DEVICE_FAULT_COUNTS_EXT};
+    VkResult r = g_vkr.getFaultInfo(g_vkr.device, &counts, NULL);
+    if (r != VK_SUCCESS && r != VK_INCOMPLETE) {
+        VKR_LOG("loss report: vkGetDeviceFaultInfoEXT (counts) returned %d", (int)r);
+        return;
+    }
+    VkDeviceFaultAddressInfoEXT *addr =
+        calloc(counts.addressInfoCount ? counts.addressInfoCount : 1, sizeof(*addr));
+    VkDeviceFaultVendorInfoEXT *vend =
+        calloc(counts.vendorInfoCount ? counts.vendorInfoCount : 1, sizeof(*vend));
+    if (!addr || !vend) {
+        free(addr);
+        free(vend);
+        return;
+    }
+    counts.vendorBinarySize = 0; /* the vendor binary is not asked for */
+    VkDeviceFaultInfoEXT info = {
+        .sType = VK_STRUCTURE_TYPE_DEVICE_FAULT_INFO_EXT,
+        .pAddressInfos = addr,
+        .pVendorInfos = vend,
+    };
+    r = g_vkr.getFaultInfo(g_vkr.device, &counts, &info);
+    if (r != VK_SUCCESS && r != VK_INCOMPLETE) {
+        VKR_LOG("loss report: vkGetDeviceFaultInfoEXT returned %d", (int)r);
+    } else {
+        info.description[VK_MAX_DESCRIPTION_SIZE - 1] = '\0';
+        VKR_LOG("loss report: the driver's fault report: \"%s\", %u address%s, %u vendor "
+                "entr%s",
+                info.description, counts.addressInfoCount, counts.addressInfoCount == 1 ? "" : "es",
+                counts.vendorInfoCount, counts.vendorInfoCount == 1 ? "y" : "ies");
+        for (uint32_t i = 0; i < counts.addressInfoCount; i++) {
+            const uint64_t a = addr[i].reportedAddress;
+            const uint64_t prec = addr[i].addressPrecision ? addr[i].addressPrecision : 1;
+            VKR_LOG("  %s at 0x%016llx (precision %llu bytes: 0x%016llx..0x%016llx)",
+                    vkr_fault_type_name(addr[i].addressType), (unsigned long long)a,
+                    (unsigned long long)prec, (unsigned long long)(a & ~(prec - 1)),
+                    (unsigned long long)((a & ~(prec - 1)) + prec - 1));
+            if (addr[i].addressType != VK_DEVICE_FAULT_ADDRESS_TYPE_NONE_EXT) {
+                vkr_alloc_nearest(a & ~(prec - 1));
+            }
+        }
+        for (uint32_t i = 0; i < counts.vendorInfoCount; i++) {
+            vend[i].description[VK_MAX_DESCRIPTION_SIZE - 1] = '\0';
+            VKR_LOG("  vendor: \"%s\" code 0x%llx data 0x%llx", vend[i].description,
+                    (unsigned long long)vend[i].vendorFaultCode,
+                    (unsigned long long)vend[i].vendorFaultData);
+        }
+    }
+    free(addr);
+    free(vend);
+}
+
+static void vkr_report_checkpoints(void)
+{
+    if (!g_vkr.checkpoints || !g_vkr.getCheckpointData) {
+        VKR_LOG("loss report: no checkpoints (gpu_checkpoints = true in ico-pc.ini turns them on "
+                "where the driver offers them)");
+        return;
+    }
+    uint32_t n = 0;
+    g_vkr.getCheckpointData(g_vkr.queue, &n, NULL);
+    VkCheckpointDataNV *cp = calloc(n ? n : 1, sizeof(*cp));
+    if (!cp) {
+        return;
+    }
+    for (uint32_t i = 0; i < n; i++) {
+        cp[i].sType = VK_STRUCTURE_TYPE_CHECKPOINT_DATA_NV;
+    }
+    g_vkr.getCheckpointData(g_vkr.queue, &n, cp);
+    VKR_LOG("loss report: %u checkpoint%s reached (markers are pass numbers of the pass ring "
+            "below)",
+            n, n == 1 ? "" : "s");
+    for (uint32_t i = 0; i < n; i++) {
+        VKR_LOG("  %s: pass #%llu", vkr_stage_name(cp[i].stage),
+                (unsigned long long)(uintptr_t)cp[i].pCheckpointMarker);
+    }
+    free(cp);
+}
+
+void vkr_lost_report(void)
+{
+    if (g_vkr.lostReported || !g_vkr.device) {
+        return;
+    }
+    g_vkr.lostReported = true;
+    vkr_report_submits();
+    vkr_report_fault();
+    vkr_report_checkpoints();
+    fflush(stderr);
+}
+
+/* VK_EXT_device_address_binding_report: each buffer's and image's GPU
+ * address range into the allocation table (vk_resource.c vkr_alloc_bound) */
+static VKAPI_ATTR VkBool32 VKAPI_CALL vkr_bind_callback(
+    VkDebugUtilsMessageSeverityFlagBitsEXT severity, VkDebugUtilsMessageTypeFlagsEXT types,
+    const VkDebugUtilsMessengerCallbackDataEXT *data, void *user)
+{
+    (void)severity;
+    (void)user;
+    if (!(types & VK_DEBUG_UTILS_MESSAGE_TYPE_DEVICE_ADDRESS_BINDING_BIT_EXT) || !data ||
+        data->objectCount == 0) {
+        return VK_FALSE;
+    }
+    for (const VkBaseInStructure *p = data->pNext; p; p = p->pNext) {
+        if (p->sType == VK_STRUCTURE_TYPE_DEVICE_ADDRESS_BINDING_CALLBACK_DATA_EXT) {
+            const VkDeviceAddressBindingCallbackDataEXT *b =
+                (const VkDeviceAddressBindingCallbackDataEXT *)p;
+            vkr_alloc_bound(data->pObjects[0].objectHandle, b->baseAddress, b->size,
+                            b->bindingType == VK_DEVICE_ADDRESS_BINDING_TYPE_BIND_EXT);
+        }
+    }
+    return VK_FALSE;
 }
 
 /* ------------------------------------------------------------ handle pools */
@@ -266,6 +464,10 @@ static bool vkr_core13(uint32_t deviceApi)
 #endif
 }
 
+/* VK_EXT_debug_utils is enabled on the instance (validation, or
+ * gpu_checkpoints for the address binding report) */
+static bool s_debugUtilsExt;
+
 static bool vkr_create_instance(const RhiDeviceDesc *desc)
 {
     const char *exts[16];
@@ -318,6 +520,14 @@ static bool vkr_create_instance(const RhiDeviceDesc *desc)
             exts[extCount++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
             g_vkr.debugUtils = true;
         }
+    }
+    /* gpu_checkpoints: the debug utils messenger carries the address
+     * binding report (vkr_create_device), without the validation layer */
+    s_debugUtilsExt = g_vkr.debugUtils;
+    if (!s_debugUtilsExt && vkr_env_on("ICO_GPU_CHECKPOINTS") &&
+        vkr_has_instance_ext(VK_EXT_DEBUG_UTILS_EXTENSION_NAME)) {
+        exts[extCount++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
+        s_debugUtilsExt = true;
     }
 
 #ifdef ICO_RHI_MOLTENVK
@@ -994,10 +1204,105 @@ static bool vkr_create_device(void)
         }
     }
 
+    /* GPU loss diagnostics (VkrState): the fault report whenever offered;
+     * robust access under gpu_robust; checkpoints and the address binding
+     * report under gpu_checkpoints.  Queried, then the queries' structures
+     * become the enables with only what is used on. */
+    VkPhysicalDeviceFaultFeaturesEXT qFault = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT};
+    VkPhysicalDeviceRobustness2FeaturesEXT qRobust2 = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT};
+    VkPhysicalDeviceAddressBindingReportFeaturesEXT qBind = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ADDRESS_BINDING_REPORT_FEATURES_EXT};
+    {
+        const bool wantRobust = vkr_env_on("ICO_GPU_ROBUST");
+        const bool wantCheck = vkr_env_on("ICO_GPU_CHECKPOINTS");
+        const bool extFault = vkr_device_has_ext(g_vkr.phys, VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
+        const bool extRobust2 =
+            wantRobust && vkr_device_has_ext(g_vkr.phys, VK_EXT_ROBUSTNESS_2_EXTENSION_NAME);
+        const bool extBind =
+            wantCheck && s_debugUtilsExt &&
+            vkr_device_has_ext(g_vkr.phys, VK_EXT_DEVICE_ADDRESS_BINDING_REPORT_EXTENSION_NAME);
+        const bool extCheck =
+            wantCheck &&
+            vkr_device_has_ext(g_vkr.phys, VK_NV_DEVICE_DIAGNOSTIC_CHECKPOINTS_EXTENSION_NAME);
+        void *chain = NULL;
+        if (extFault) {
+            qFault.pNext = chain;
+            chain = &qFault;
+        }
+        if (extRobust2) {
+            qRobust2.pNext = chain;
+            chain = &qRobust2;
+        }
+        if (extBind) {
+            qBind.pNext = chain;
+            chain = &qBind;
+        }
+        if (chain) {
+            VkPhysicalDeviceFeatures2 q = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+                                           .pNext = chain};
+            vkGetPhysicalDeviceFeatures2(g_vkr.phys, &q);
+        }
+        g_vkr.deviceFault = extFault && qFault.deviceFault;
+        g_vkr.robust = wantRobust && avail.robustBufferAccess == VK_TRUE;
+        const bool image2 = g_vkr.robust && extRobust2 && qRobust2.robustImageAccess2;
+        const bool nullDesc = g_vkr.robust && extRobust2 && qRobust2.nullDescriptor;
+        g_vkr.robust2 = image2 || nullDesc;
+        g_vkr.addressReport = extBind && qBind.reportAddressBinding;
+        g_vkr.checkpoints = extCheck;
+        memset(&qFault, 0, sizeof(qFault));
+        qFault.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT;
+        qFault.deviceFault = VK_TRUE;
+        memset(&qRobust2, 0, sizeof(qRobust2));
+        qRobust2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT;
+        qRobust2.robustImageAccess2 = image2 ? VK_TRUE : VK_FALSE;
+        qRobust2.nullDescriptor = nullDesc ? VK_TRUE : VK_FALSE;
+        memset(&qBind, 0, sizeof(qBind));
+        qBind.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ADDRESS_BINDING_REPORT_FEATURES_EXT;
+        qBind.reportAddressBinding = VK_TRUE;
+        if (g_vkr.deviceFault) {
+            exts[extCount++] = VK_EXT_DEVICE_FAULT_EXTENSION_NAME;
+        }
+        if (g_vkr.robust2) {
+            exts[extCount++] = VK_EXT_ROBUSTNESS_2_EXTENSION_NAME;
+        }
+        if (g_vkr.addressReport) {
+            exts[extCount++] = VK_EXT_DEVICE_ADDRESS_BINDING_REPORT_EXTENSION_NAME;
+        }
+        if (g_vkr.checkpoints) {
+            exts[extCount++] = VK_NV_DEVICE_DIAGNOSTIC_CHECKPOINTS_EXTENSION_NAME;
+        }
+        VKR_LOG("loss diagnostics: fault report %s; checkpoints %s; resource addresses %s; robust "
+                "access %s",
+                g_vkr.deviceFault ? "on" : "not offered",
+                g_vkr.checkpoints ? "on (gpu_checkpoints)"
+                : wantCheck       ? "asked for, not offered"
+                                  : "off",
+                g_vkr.addressReport ? "on (gpu_checkpoints)"
+                : wantCheck         ? "asked for, not offered"
+                                    : "off",
+                g_vkr.robust ? (image2 ? "on with images (gpu_robust)" : "on, buffers (gpu_robust)")
+                : wantRobust ? "asked for, not offered"
+                             : "off");
+    }
+
     VkPhysicalDeviceDynamicRenderingFeatures dyn = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES,
         .dynamicRendering = VK_TRUE,
     };
+    if (g_vkr.deviceFault) {
+        qFault.pNext = dyn.pNext;
+        dyn.pNext = &qFault;
+    }
+    if (g_vkr.robust2) {
+        qRobust2.pNext = dyn.pNext;
+        dyn.pNext = &qRobust2;
+    }
+    if (g_vkr.addressReport) {
+        qBind.pNext = dyn.pNext;
+        dyn.pNext = &qBind;
+    }
     if (g_vkr.presentWait) {
         qPw.pNext = dyn.pNext;
         qPid.pNext = &qPw;
@@ -1036,6 +1341,9 @@ static bool vkr_create_device(void)
                 /* a fragment shader storing to an image (the interlock's
                  * destination read) */
                 .fragmentStoresAndAtomics = g_vkr.interlock ? VK_TRUE : VK_FALSE,
+                /* gpu_robust: out-of-range buffer reads give zero and
+                 * writes are dropped instead of reaching other memory */
+                .robustBufferAccess = g_vkr.robust ? VK_TRUE : VK_FALSE,
             },
     };
 #ifdef ICO_RHI_MOLTENVK
@@ -1084,6 +1392,34 @@ static bool vkr_create_device(void)
     }
     if (g_vkr.presentWaitFake) {
         g_vkr.presentWait = true; /* the extensions stay off (vkr_present_wait_fake) */
+    }
+    /* the loss diagnostics' entry points (through the device, so a build
+     * linked straight to its driver needs none of them) */
+    if (g_vkr.deviceFault) {
+        g_vkr.getFaultInfo = (PFN_vkGetDeviceFaultInfoEXT)vkGetDeviceProcAddr(
+            g_vkr.device, "vkGetDeviceFaultInfoEXT");
+    }
+    if (g_vkr.checkpoints) {
+        g_vkr.cmdSetCheckpoint =
+            (PFN_vkCmdSetCheckpointNV)vkGetDeviceProcAddr(g_vkr.device, "vkCmdSetCheckpointNV");
+        g_vkr.getCheckpointData = (PFN_vkGetQueueCheckpointDataNV)vkGetDeviceProcAddr(
+            g_vkr.device, "vkGetQueueCheckpointDataNV");
+        g_vkr.checkpoints = g_vkr.cmdSetCheckpoint && g_vkr.getCheckpointData;
+    }
+    if (g_vkr.addressReport) {
+        VkDebugUtilsMessengerCreateInfoEXT mci = {
+            .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
+            .messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT |
+                               VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT |
+                               VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
+                               VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT,
+            .messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_DEVICE_ADDRESS_BINDING_BIT_EXT,
+            .pfnUserCallback = vkr_bind_callback,
+        };
+        if (!VKR_CHECK(
+                vkCreateDebugUtilsMessengerEXT(g_vkr.instance, &mci, NULL, &g_vkr.bindMessenger))) {
+            g_vkr.bindMessenger = VK_NULL_HANDLE;
+        }
     }
     {
         /* GPU timestamps when the queue writes them */
@@ -1365,8 +1701,12 @@ void rhi_shutdown(void)
         if (g_vkr.messenger) {
             vkDestroyDebugUtilsMessengerEXT(g_vkr.instance, g_vkr.messenger, NULL);
         }
+        if (g_vkr.bindMessenger) {
+            vkDestroyDebugUtilsMessengerEXT(g_vkr.instance, g_vkr.bindMessenger, NULL);
+        }
         vkDestroyInstance(g_vkr.instance, NULL);
     }
+    vkr_alloc_table_free();
     uint32_t errors = g_vkr.validationErrors;
     memset(&g_vkr, 0, sizeof(g_vkr));
     g_vkr.validationErrors = errors; /* readable after shutdown, for tests */
