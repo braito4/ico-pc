@@ -27,7 +27,10 @@
  *      next rd_begin_frame logs it ("fog: probe <path> ... idx=135,0,15,
  *      240,255": the centre cell, 119, 120, 135 or 136 as the centre texel
  *      falls by the cells' edges, and the four corner cells), and the fogged
- *      pixels at every cell centre equal the GS arithmetic;
+ *      pixels at every cell centre equal the GS arithmetic (the probe's
+ *      fog reads the exact entry, rd__fog_exact); the next fogged frame,
+ *      the same draws, reads between entries above 1x (above1xDraws grows
+ *      by its fog);
  *   3. the scene made again at another GS size runs the self-test again
  *      and arms the probe again (a second pair of lines).
  * The log lines themselves are matched by test/rd_fog_selftest.cmake. */
@@ -254,15 +257,26 @@ int main(int argc, char **argv)
               (int)!msaa);
     }
 
-    /* 2. a recorded fog frame: the probe and the pixels */
+    /* 2. a recorded fog frame: the probe and the pixels.  The probe's fog
+       reads the exact entry (rd__fog_exact), so the cells equal the GS
+       arithmetic at any scale; the next fogged frame, the same draws, reads
+       between entries above 1x (its fog counted in above1xDraws) */
+    const bool scaled = t && (t->sx != 1.0f || t->sy != 1.0f);
+    const uint32_t a0 = g_rd.above1xDraws;
     recordFogFrame(w, h);
+    const uint32_t probeA1x = g_rd.above1xDraws - a0;
     CHECK(rd__fog_probe_pending(), "the fogged replay recorded the probe");
     checkCells();
     rd_begin_frame(); /* logs the probe */
     CHECK(!rd__fog_probe_pending(), "the probe read back");
     rd_end_frame(0);
+    const uint32_t a1 = g_rd.above1xDraws;
     recordFogFrame(w, h);
+    const uint32_t nextA1x = g_rd.above1xDraws - a1;
     CHECK(!rd__fog_probe_pending(), "one probe for each scene size");
+    CHECK(scaled ? nextA1x > probeA1x : nextA1x == probeA1x,
+          "above 1x draws: %u on the probe's frame, %u on the next (scaled %d)", probeA1x, nextA1x,
+          (int)scaled);
 
     /* 3. another scene size: the self-test and the probe again */
     rd_reset_scene(w + 64, h);

@@ -4996,8 +4996,11 @@ static void doFog(Replay *r, const RdFrame *f, const RdCmd *c)
         return;
     }
     rhi_cmd_set_vertex_buffer(s_cl, 0, g_rd.ring[s_slot], vOff);
-    /* above 1x: the colour or the depth target scaled (never at scale 1) */
-    const bool fogAbove1x = tc->sx != 1.0f || tc->sy != 1.0f || tz->sx != 1.0f || tz->sy != 1.0f;
+    /* above 1x: the colour or the depth target scaled (never at scale 1);
+     * the self-test's and the probe's fog read the exact entry
+     * (rd_fog_path.c rd__fog_exact): they measure the depth read */
+    const bool fogAbove1x =
+        (tc->sx != 1.0f || tc->sy != 1.0f || tz->sx != 1.0f || tz->sy != 1.0f) && !rd__fog_exact();
     for (int i = 0; i < np; i++) {
         RhiPipeline pipe = rd__get_pipeline(&dp[i].key);
         if (!pipe.id) {

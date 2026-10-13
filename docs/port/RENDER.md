@@ -584,7 +584,9 @@ fixed point, and a one-unit 8x8 ordered dither carries the fraction the 8-bit al
 target's centre texel, so the 4:3 columns of a wide frame carry the pattern of the 4:3 frame. At
 an entry (`f = 0`) with factor 128 the value is the entry's own. Every fog variant (the dual-source,
 `_nodual`, `_dstrov` and `_dstatt` entries, `FOG_BUFFER`, `FOG_MS`) shares the code before the
-output. At scale 1 `param[3]` is 0 and the entry is read as the GS reads it.
+output. At scale 1 `param[3]` is 0 and the entry is read as the GS reads it; so it is for the fog
+self-test's draws and the probe's frame at any scale (`port/render/rd_fog_path.c`
+(`rd__fog_exact`)).
 
 **The present.** Without anti-aliasing, a scaled scene with more than two texels a window pixel on
 an axis (a fixed resolution above the window's) is box-averaged to the box first, as
@@ -659,7 +661,10 @@ after `rd_precreate_pipelines` and again whenever SCENE is made at a new size. `
 or `ICO_RD_DEPTH_COPY` names a path to try first; `ICO_RD_FOG_PATH=test` tries every path
 (`port/render/rd_fog_path.c`; `port/render/rd.h` (`rd_fog_selftest`)). The probe logs five
 texels' Z, index and colour on the first fogged replay after start and after a new scene size
-(`fog: probe`) (`port/render/rd_fog_path.c`).
+(`fog: probe`) (`port/render/rd_fog_path.c`). Both draw the fog at the exact table entry of
+each index, not read between entries above 1x, since what they measure is the depth read; the
+probe's frame is one game frame drawn that way (`port/render/rd_fog_path.c` (`rd__fog_exact`),
+`port/render/rd_replay.c` (`doFog`)).
 
 ## Content tables
 

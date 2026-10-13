@@ -312,6 +312,11 @@ bool rd__fog_probe_wanted(void)
     return g_rd.hasDevice && s_probe.armed && !s_probe.pending && !s_st.running;
 }
 
+bool rd__fog_exact(void)
+{
+    return s_st.running || rd__fog_probe_wanted();
+}
+
 bool rd__fog_probe_pending(void)
 {
     return s_probe.pending;

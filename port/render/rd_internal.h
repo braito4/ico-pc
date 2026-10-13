@@ -1935,6 +1935,10 @@ bool rd__fog_probe_wanted(void);
 void rd__fog_probe_record(RhiCommandList cl, const RdTargetRec *tz, uint32_t zid,
                           const RdFogSource *src, RdTargetRec *tc);
 void rd__fog_probe_finish(void);
+/* The self-test's replays (rd_fog_selftest) and the probe's fogged replay:
+ * doFog reads the table at the exact entry of the depth's index (Z >> 16),
+ * not between entries above 1x, so both measure the depth read alone. */
+bool rd__fog_exact(void);
 /* Copies recorded and not read back yet (rd_begin_frame then calls
  * rd__fog_probe_finish on the host). */
 bool rd__fog_probe_pending(void);
