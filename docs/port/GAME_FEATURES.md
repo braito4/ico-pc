@@ -1,0 +1,461 @@
+# Game features
+
+The port's own features that reach into the game: the gameplay options and the places in `ico2/`
+that read them, achievements over a read-only view of the game state, photo mode, the model
+viewer and the characters' colours, the music gallery, the credits, the title logo, and the two
+desktop and Android extras. The menus that show them are [UI.md](UI.md)'s; the picture options are
+[DISPLAY.md](DISPLAY.md)'s.
+
+## Files
+
+| path | what it holds |
+| --- | --- |
+| `port/game/options.h`, `options.c` | the gameplay options, their config keys and defaults, the mirror flag per save slot, the stereo/mono choice |
+| `port/game/door_grace.h`, `door_grace.c` | the doorway fix's arm and arrival grace |
+| `port/render/rd_chain.h`, `rd_content_chain.c` | Natural chains: the two chains, the Null's transform, the links' clip planes |
+| `port/game/achievements.h`, `achievements.c` | the achievement table, its conditions, the counters, `achievements.toml`, the popups |
+| `port/include/ico_gamestate.h`, `port/game/gamestate.c` | the read-only game-state view: the snapshot, the signals, the run, the retail address table |
+| `port/game/photo_mode.h`, `photo_mode.c` | photo mode's state: the free and orbit cameras, the controls, the `[photo]` keys |
+| `port/game/photo_view.h`, `photo_view.c` | photo mode's camera put into the game's own matrices |
+| `port/game/model_viewer.h`, `model_viewer.c` | Extras > Models and the game side of Extras > Characters |
+| `port/game/model_viewer_table.c` | the viewer's models and the motion-kind blocks |
+| `port/game/model_viewer_cam.h`, `model_viewer_cam.c` | the viewer's camera step, a pure function |
+| `port/game/appearance.h`, `appearance.c` | the characters' colours: the parts, the palette, the recolour of the CLUTs |
+| `port/ui/gallery.h`, `gallery.c`, `gallery_play.c` | the music gallery's list and its engine |
+| `port/data/df_pack.h` | reading one member of a `DATA.DF` stage pack outside the game's disc thread |
+| `port/include/ico_credits.h`, `port/game/credits.c`, `credits_live.c` | the staff roll's port credit and the Extras credits playback |
+| `port/game/title_logo.h`, `title_logo.c` | the title logo hidden under the port's menus, the title's full-frame models |
+| `port/platform/steam_shortcut.h` | Add to Steam |
+| `port/platform/gpu_driver.h` | the Android build's graphics driver packages |
+
+## Gameplay options
+
+Each option is read once from `config.toml` the first time it is asked for and can be set at run
+time; `ico_opt_reload` forgets every value so the next read goes back to the file
+(`port/game/options.h`, header comment; `port/game/options.c`, `get_or`, `ico_opt_reload`). Every
+default is the original game's behaviour, Circle back excepted. The Settings menu shows them
+and writes their keys (`port/ui/settings.c`, the `UI_OPT_*` cases).
+
+| key | default | what it does | read by |
+| --- | --- | --- | --- |
+| `[gameplay] stick_fix` | `false` on every platform | the analog stick's diagonal reach | `port/input/pad_host.c` |
+| `[gameplay] yorda_safe` | `false` | the shadows never take Yorda | `ebrain.c`, `enemy_act.c`, `backStage.c` |
+| `[gameplay] door_fix` | `false` | an arrival holding hands does not fire the door back | `door_grace.c`, from `boyact.c` |
+| `[gameplay] natural_chains` | `false` | a chain let down keeps its links' size | `BgAnimation.c` ([window build](ARCHITECTURE.md#terms)) |
+| `[gameplay] mirror` | `false` | mirrored play | `pad_host.c`, `audio_host.c`, [rd](ARCHITECTURE.md#terms), `photo_ui.c` |
+| `[gameplay] developer_mode` | `false` | the development build's debug menu and options | `main.c`, `debug.c`, the port |
+| `[game] circle_back` | `true` | Circle backs out of the game's menus as Triangle does | `layout_action.c`, `layout_texture.c` |
+| `[dev] debug_option` | `0` | with developer mode, loads the saved debug option table | `debug.c` |
+| `[audio] output` | `"auto"` | stereo or mono over the memory card's value | `mcard.c`, `layout_action.c` |
+
+The game code reads the options through `extern` declarations of the `ico_opt_*` functions, never
+through a port header (`ico2/common/src/backStage.c`, the `ico_opt_yorda_safe` declaration). The
+hook sites, grouped by option, follow.
+
+### Stick fix
+
+`ico_input_stick_fix` scales a live stick vector by `1 + 0.2 * d / 45`, with `d` the angle in
+degrees to the nearest axis, so the game's own divisor in `iosPadNormalizeStick` cancels; it never
+shrinks a vector and is capped so neither component leaves -1..+1 (`port/input/input.h`,
+`ico_input_stick_fix`). It applies to the live sources only: `ico_input_frame` passes
+`ico_opt_stick_fix()` to `ico_input_vpad_to_frame`, while a [pad script](ARCHITECTURE.md#terms)'s
+bytes are used as written (`port/input/pad_host.c`, `ico_input_frame`). The default is off on
+every platform, Android included, and a file that names the key keeps its value
+(`port/game/options.c`, `ico_opt_stick_fix_default_for`). There is no hook in `ico2/`.
+
+### Yorda safe
+
+Seven sites under `ico2/` return early when `ico_opt_yorda_safe()` is on:
+
+- `ico2/omori/src/ebrain.c` (`eBrainGetTarget`), four sites: the target case 2 (no enemy takes the
+  girl as its target), case 6, the sight check of the girl in the target loop, and the chase that
+  turns to her after 181 frames;
+- `ico2/fumi/src/enemy_act.c` (`enemyKidnapCheckGirl`, `enemyPickupCheckGirl`): a shadow never
+  grabs her;
+- `ico2/common/src/backStage.c` (`backStageProcessMain`): the off-screen kidnap and carry timers
+  do not run, so the shadows never take her while the boy is in another room.
+
+`port/game/test/options_test.c` compiles `ebrain.c` in and drives `eBrainGetTarget` with the option
+off and on over a synthetic slot set. Yorda safe does not suspend achievements
+(`port/include/ico_gamestate.h`, `ico_gs_achievements_suspended`).
+
+### Door fix and the arrival grace
+
+One doorway of the original game sends Ico and Yorda straight back out when they arrive through it
+holding hands: exits are floor attributes Ico checks every frame, the first exit floor touched
+after an arrival is only remembered, and Yorda is placed on Ico's arrival point with the hand
+connect starting at once, so a push onto the door-back floor fires it (`port/game/door_grace.h`,
+header comment). With `door_fix` on, an exit taken holding hands arms a grace; the next stage start
+begins it when that stage is the exit's destination; during the grace an exit floor leading back
+to the stage just left is only remembered, as the game does with the first floor after an arrival
+(`port/game/door_grace.c`, `ico_door_grace_begin`, `ico_door_grace_holds`). Scripted stage changes
+never arm it, and nothing enters a save.
+
+The hooks are all in `ico2/fumi/src/boyact.c`:
+
+- `CheckCollisionAttr`: `ico_door_grace_tick` once per frame of the check, before its early
+  returns; `ico_door_grace_holds(exitData[e].nextStage)` before the game's own first-floor rule;
+  `ico_door_grace_arm(stage_no, nextStage, ACTGame_FLAG_TETSUNAGI())` after a
+  `RequestStageChange` that succeeded, on both the escorted and the alone path.
+- `actBoyStart`: `ico_door_grace_begin(stage_no, ...)` with 3 seconds of game frames, from the
+  frame-rate expression the game uses there.
+
+`port/game/test/door_grace_test.c` runs the arm and grace with the option off and on, holding
+hands or not, and a copy of the exit check's guard.
+
+### Natural chains
+
+Two stage animations let a chain down for the player, `st10l_chain_down` (stage 17) and
+`st19a_chain` (stage 32): 21 links under a Null whose keyed Y scale grows to 1 while the chain
+comes down, so the disc draws the links squashed until it is fully down (`port/render/rd_chain.h`,
+header comment; the table is `port/render/rd_content_chain.c`, `rd__chains`). With the option on,
+the Null takes no scale along the chain and its children are moved along it instead
+(`rd_chain_null`), and each link gets a clip plane in its own space where the disc's squashed top
+link begins (`rd_chain_link`); the VU shaders discard what lies above it. Nothing is drawn where
+the disc's chain is not, and at full length the two pictures are the same.
+
+The hooks are in `ico2/seki/src/BgAnimation.c`, under `ICO_RD` only (the
+window build): `bga_CalcAnimation` sets `bgaHostChain =
+rd_chain_find(p->group)` and `bgaHostNatural = bgaHostChain != 0 && ico_opt_natural_chains()`;
+`bga_CalcObject` reads them at the Null and at its children. The plane travels from
+`RegistPacket.c`'s `regHostMesh` to `rd_draw_vu_mesh`. Being a draw-only change, the key is not
+recorded in a pad recording's header (`port/game/options.h`, the key table).
+
+### Mirror
+
+Mirror mode negates the stick X of the live sources (`port/input/pad_host.c`, `ico_input_frame`),
+swaps the audio pan (`port/audio/audio_host.c`, `ico_audio_pan_mirror`), flips the
+[presented](ARCHITECTURE.md#terms) picture with the port's UI pre-flipped (`port/render/rd.h`,
+mirror mode section, `rd_set_mirror`), and mirrors the mouse look in photo mode
+(`port/ui/photo_ui.c`). The renderer learns the value through the one listener the Settings module
+registers (`ico_opt_set_mirror_listener`).
+
+The value belongs to the run: `[gameplay] mirror` until the player picks at New Game or loads a
+save. Each save slot's flag is kept in `config.toml`, never in the card files, as `[mirror] slot_N`
+with `slot_N_sum`, the save's game-block checksum, so a slot overwritten elsewhere reads Off
+(`port/game/options.h`, `ico_mirror_slot_saved`, `ico_mirror_slot_loaded`). The hooks are in
+`ico2/common/src/layout_action.c`: `la_save_processing` calls `ico_mirror_slot_saved`,
+`la_load_processing` calls `ico_mirror_slot_loaded`, and `la_title_continue_or_new` and
+`la_title_new_game_only` call `ico_opt_mirror_reset`, because the title belongs to no run.
+
+### Circle back
+
+With `[game] circle_back` on, Circle is an alias of the game menus' Triangle back action. The game
+reads the back buttons through `lt_ext_back_buttons()` in place of a constant
+(`ico2/common/src/layout_action.c`, `LA_BACK`; `ico2/common/src/layout_texture.c`,
+`LT_BACK_BUTTONS`), and the Settings module hands the option to `port/ui` with
+`lt_ext_set_circle_back` at install and on a change (`port/ui/layout_ext.h`,
+`lt_ext_back_buttons`).
+
+### Developer mode
+
+Developer mode turns on what the development build had and the retail build left as stubs:
+
+- `ico2/common/src/main.c` (`Main`) calls `debug_Menu` each tick; SELECT opens it.
+- `ico2/common/src/debug.c` (`debug_PrintfDummy`) prints the retail build's dummy debug prints
+  through the debug font.
+- `debug.c` (`debug_VariableInit`) loads `<pref>/dev/thisIsYourDebugOption` when `[dev]
+  debug_option` is non-zero (`ico_opt_debug_option`).
+- `debug.c` (`debugSceOpen`) opens files on the development kit's `host0:`, which
+  `port/data/sifdev_host.c` maps to `dev/` in the [user folder](ARCHITECTURE.md#terms); off, the
+  retail `cdrom0:` path, which finds nothing.
+
+On the port's side it suspends achievements (`port/game/gamestate.c`, `ico_gs_developer_mode`),
+is written in the [trace](ARCHITECTURE.md#terms)'s header (`port/platform/trace_host.c`,
+`# developer_mode`), gates the texture and model dumps (`port/platform/window_host.c`,
+`dumpTextures`, `dumpModels`) and the Settings rows for them (`port/ui/settings.c`,
+`UI_OPT_DUMP_TEXTURES`), adds a log line per pack replacement (`port/render/texpack.h`,
+`TexpackConfig.developer`) and enables the model viewer's "save this model's files"
+(`port/game/model_viewer.c`, `saveAvailable`).
+
+### Stereo or mono
+
+`[audio] output` is `auto` (the game decides, as on the PS2), `stereo` or `mono`. The memory card
+hook records the card's mode and returns the mode in force (`ico2/fumi/ios/mcard.c`,
+`gameblock_read`, `ico_opt_output_card`); the game's own Stereo/Mono row records the new mode and,
+with an explicit key, saves the key at once so the file and the card never disagree
+(`ico2/common/src/layout_action.c`, `la_game_option`, `ico_opt_output_toggled`).
+
+## Achievements and the game-state view
+
+The achievements are a data table of 30 entries, each an id (the key in `achievements.toml`, never
+renamed), a title and description string, a condition and a hidden flag
+(`port/game/achievements.c`, `s_defs`):
+
+| group | ids |
+| --- | --- |
+| story | `opening`, `hand_in_hand`, `gate`, `windmill`, `graveyard`, `waterfall`, `gondola`, `water_tower`, `cliff`, `east_and_west`, `queen`, `queen_defeated`, `shore`, `finish`, `finish_again` |
+| shadows and Yorda | `first_shadow`, `shadows_25`, `shadows_100`, `rescue`, `hand_10_minutes`, `hand_60_minutes` |
+| couches | `first_save`, `couches_5` |
+| weapons | `sword`, `queen_sword`, `light_blade` (hidden) |
+| challenges | `never_taken`, `unbroken`, `swift`, `shore_secret` (hidden) |
+
+The conditions read only the game-state view and the persisted counters: a stage by its
+`stageData` number, a story flag, a signalled event, a run property (fresh from a new game, no
+capture, no game over, every opening part watched) or a counter (enemies, milliseconds holding
+hands, saves, distinct couches) (`port/game/achievements.c`, the `c_*` functions). The host loop
+calls `ico_ach_host_poll` once per vsync, which runs `ico_ach_tick` once per new
+[Main tick](ARCHITECTURE.md#terms): `ico_gs_tick`, every locked condition, the popup queue, and
+the counters' write every 750 ticks when changed (`port/platform/host_loop.c`;
+`port/game/achievements.h`, `ICO_ACH_STATS_FLUSH_TICKS`). Popups are at least 125 ticks apart and
+can be turned off with `[game] achievements = false`; unlocks are recorded either way
+(`ICO_ACH_POPUP_GAP_TICKS`, `ico_ach_popups_enabled`).
+
+The file is `<user folder>/achievements.toml`: `version`, a `[stats]` table (the counters, the
+couches as a list of ids, the visited stages as a 128-bit hex set) and one `[unlocked.<id>]` table
+per unlock with its time and the game's play time (`port/game/achievements.c`, the file section).
+The run state of each save slot is kept there too, keyed by the save's checksum as the mirror
+flag is: `la_save_processing` calls `ico_ach_slot_saved` and `la_load_processing`
+`ico_ach_slot_loaded` (`ico2/common/src/layout_action.c`).
+
+Achievements are suspended, no counter advancing and nothing unlocking, while developer mode or
+`[dev] start_stage` is on, the model viewer is up or the Extras credits are playing, and for the
+rest of a run in which any of them was; Yorda safe, the stick fix and mirror do not suspend them
+(`port/include/ico_gamestate.h`, `ico_gs_achievements_suspended`, `ico_gs_run_suspended`).
+
+### The game-state view
+
+`port/include/ico_gamestate.h` is a typed, read-only view of the state the achievements need.
+Nothing in it writes game state: `ico_gs_tick` takes a snapshot once per Main tick, and a signal
+only appends to a port-side queue (`port/include/ico_gamestate.h`, header comment;
+`port/game/gamestate.c`, header comment). The snapshot holds fixed globals (`stage_no`,
+`gameover_flag`, `frame_count`, the language, `gamesysTimeCount`, `gFlagGameClear`,
+`current_layout_id`, `systemStatus[12]`, `IosMcPreviewInfo`, the 50 bytes of `gflags`) and, when
+the boy's and girl's objects are safe to follow, values derived through the game's own accessors
+(the weapon kind, holding hands, Yorda carried by an enemy) (`IcoGsSnapshot`).
+
+`gamestate.c` is built twice: with `ICO_GS_LIVE` for the program, where the sampler reads the
+game's globals, and without it for the tests, which install a synthetic sampler with
+`ico_gs_set_sampler` (`port/game/CMakeLists.txt`, `ico_gamestate_live`).
+
+The game raises signals through one-line calls (`ico_gs_signal(event, arg)`):
+
+| event | site |
+| --- | --- |
+| `STAGE_ENTER`, `CHECKPOINT` | `ico2/common/src/StageManager.c` (`start_stage_Load_thread`, `CheckPoint`) |
+| `ENEMY_KILLED`, `GAME_OVER` | `ico2/fumi/src/commonact.c` |
+| `YORDA_GRABBED` | `ico2/fumi/src/enemy_act.c` |
+| `ENDING` | `ico2/script/src/end.c` (the argument is `gFlagGameClear`) |
+| `FMV_END` | `ico2/common/src/main.c` |
+| `DEMO_END` | `ico2/script/src/op.c` (three parts), `st13b.c`, `deja.c` |
+| `WEAPON` | `ico2/sugipon/src/weapon.c` |
+
+`SAVE_DONE`, `YORDA_RESCUED`, `NEW_GAME` and `LOAD` are derived from the snapshot by `ico_gs_tick`
+(`IcoGsEvent`). The queue takes no lock: every caller is a [fiber](ARCHITECTURE.md#terms) on the
+host thread or the host loop between scheduler runs (`ico_gs_signal`). `ico_gs_peek` serves a few
+bytes at a retail PAL EE address from the snapshot's fixed globals, with its table from
+`ico_gs_peek_table`; every other address is refused (`ico_gs_peek`).
+
+## Photo mode
+
+The pause menu's Photo mode row opens a port layout (`port/ui/photo_ui.c`) whose proc calls
+`ico_photo_enter`, then `ico_photo_update` once a Main tick with the pad, and `ico_photo_exit` on
+the way back. The game stays paused and its logic reads none of photo mode's state; the module has
+no renderer dependency, so the [headless build](ARCHITECTURE.md#terms) walks the same menu and logs
+the same lines (`port/game/photo_mode.h`, header comment).
+
+There are two cameras, each keeping its own state, L3 switching between them: the free camera
+(moves along the view and the camera's right at 400 cm a second times the speed, R3 cycling Slow
+x0.25, Normal and Fast x4; the right stick looks; Up and Down rise and sink) and the orbit camera
+(the left stick orbits a pivot, the right stick dollies and pans; the pivot is the game camera's
+look-at point nearest the object it follows, or 400 cm in front without one). L1 and R1 roll, L2
+and R2 change the field of view between 10 and 100 degrees, Select resets the current camera,
+Square hides the help panel, Right cycles the Film effect, Cross takes a capture, and Triangle,
+Circle or Start leave (`port/game/photo_mode.h`, the controls). Each tick's step is held to 250
+units of the eye and 25 degrees of the view, under the renderer's camera-cut thresholds, so the
+presenter blends it (`ico_photo_camera`).
+
+| key | default | what |
+| --- | --- | --- |
+| `[photo] stick_speed` | `1.0` | every rate times this |
+| `[photo] invert_y` | `false` | the looking stick's up and down swapped |
+| `[photo] hide_ui` | `false` | the help panel hidden at enter; Square saves it |
+| `[photo] film_effect` | `0` | the Film effect photo mode shows, 0 to 4; the game's own setting is untouched |
+| `[photo] png_dir` | `"screenshots"` | the captures' folder in the user folder |
+
+Captures are named `ico-YYYYMMDD-HHMMSS.png`, then `-2`, `-3` (`ico_photo_file_name`), and taken
+by the window (`port/platform/window_host.c`, `ico_photo_take_capture`).
+
+### The re-render from the photo camera
+
+Photo mode does not move a picture; the game draws the paused scene from the photo camera with all
+its passes, so culling, shadows, reflections, the sun, the flare and every full-screen pass follow
+it (`port/game/photo_view.h`, header comment). `ico_photo_view_tick` runs once a Main tick between
+the objects' update and the draw (`ico2/common/src/main.c`, `Main`):
+
+- enter (photo mode on, the game paused): the game camera is saved with `gsb_PushView` and kept as
+  the photo camera's base (its view at `matrixptr + 0x80`, its screen matrix at `+0xC0`, its
+  distance `gsb_ViewFocus`), and the stage number noted;
+- each tick: the photo camera's view goes into `+0x80`, the projection is rebuilt at the saved
+  distance times the zoom (`gsb_SetVSMatrix`) and the common matrices with
+  `gsb_MakeCommonMatrix`;
+- leave: `gsb_PopView`, `gsb_MakeCommonMatrix`, `gsb_PopView` again so the eleven matrices are the
+  game's byte for byte, and a camera cut for the presenter; when the stage changed or the game runs
+  again the save is dropped instead (`port/game/photo_view.c`, `enter`, `leave`).
+
+`ico_photo_left` is 1 for the tick that left photo mode, so the aura's feedback area
+(`staticBlur.c`), which the pause does not refresh, takes the game camera's picture once
+(`port/game/photo_mode.h`, `ico_photo_left`). In the window build a camera that has moved or
+zoomed is marked as a free camera (`rd_free_camera`, `RdCamera.freeCamera`): the renderer then
+keeps the triangles with a vertex behind it, which the game's own cameras rely on being dropped;
+the game's rule stays while the aspect sweep runs and while the photo camera is still the game's
+(`port/game/photo_view.c`, `ico_photo_view_tick`, `photoIsGameCamera`).
+
+## The model viewer and Characters
+
+Settings > Extras > Models shows the game's character and object models on the game's own motion
+system (`port/game/model_viewer.h`). Each model is an object that one stage builds when it loads,
+its host stage, found again by its object kind, its model and, where the stage has several, its
+layout row; its animations are a block of motion-kind ids played with the motion-orient rows of
+that block, as the development build's Motion Viewer plays them (`sugipon/src/motionViewer.c`,
+`objMenu`) (`port/game/model_viewer_table.c`, `mv_models`, `mv_blocks`). Only numbers are in the
+table; the names are the port's strings.
+
+Picking a model loads its host stage with `ico_mv_active` set: the stage's scripts do not start
+(`ico2/common/src/sceneManager.c`, `initSceneGObj`) and achievements are suspended. Once the object
+is up every other object is parked, pause and fog are off, and the renderer keeps only the object's
+own draws (`rd_set_draw_filter`) over a grey backdrop recorded in [list](ARCHITECTURE.md#terms) 0;
+the camera orbits it (`port/game/model_viewer.c`, header comment, `MV_VIEW`). Triangle goes back to
+the list, and from the list to the title the way the pause menu's End Game does. The game side runs
+from `ico_mv_tick`, called by `Main` after the pad is read (`ico2/common/src/main.c`). The camera
+step is a pure function of the held buttons and sticks so a CPU test drives it
+(`port/game/model_viewer_cam.h`, `mv_cam_step`). Nothing is saved, and the viewer's own buffers are
+host memory, not the game's [arena](ARCHITECTURE.md#terms) (`port/game/model_viewer.c`, header
+comment).
+
+Settings > Extras > Characters from the title runs in the viewer: Ico's model is loaded, the
+Characters page becomes a panel at the left with the model beside it, L1 and R1 switch characters,
+and Triangle returns to the title, where Settings opens again on Extras
+(`ico_mv_characters_enter`, `ico_mv_characters_switch`, `ico_mv_characters_leave`).
+
+### The characters' colours
+
+Nine parts of Ico and Yorda each take Original or one target colour: `ico_skin`,
+`ico_poncho_navy`, `ico_poncho_pink`, `ico_poncho_light`, `ico_poncho_dark`, `ico_tunic`,
+`ico_shorts`, `yorda_skin`, `yorda_dress` (`port/game/appearance.h`, `IcoAppPart`). A clothing part
+takes one of 24 named palette colours ("red" to "black", in hue families from red through blue,
+green and gold to the neutrals); a skin part also takes `tone1` to `tone12`, the lightest to the
+darkest (`appearance.h`, the palette and tone table). The keys live in `config.toml`'s
+`[characters]` section, one string per part, absent meaning `"original"`; an unknown value reads as
+Original and is logged once.
+
+The recolour works on a copy of the texture's CLUT before the decode, in the window build's texture
+upload (`ico2/seki/src/Texture.c`, `texHostTexture`, `ico_appearance_recolour`). A rule table names
+for each covered texture the part it follows, the CLUT entries that belong to the part and soft
+limits on saturation and lightness; each entry moves to the target's hue, with saturation and
+lightness mapped through the part's anchor colour, and alpha is never written
+(`port/game/appearance.c`, header comment). The rules were read from the disc's palettes; no colour
+or pixel of the disc is kept in the source. Every change bumps `ico_appearance_serial`, and
+`tex_ResetVram` re-decodes the covered textures when it moves (`ico2/seki/src/Texture.c`,
+`tex_ResetVram`).
+
+`ico_appearance_randomize` sets every part to a random non-Original value from a seed, the four
+poncho groups all different, and logs `appearance: randomize (seed N)`;
+`ico_appearance_randomize_character` does the same for one character, and `ico_appearance_reset`
+and `ico_appearance_reset_character` put parts back to Original (`port/game/appearance.h`).
+
+## The music gallery
+
+Settings > Extras > Music lists everything the game's sound system plays, built at run time from
+the game's own tables and played through the game's own engines (`port/ui/gallery.h`, header
+comment). The groups are Soundtrack (the score's streams, the title theme included), Scene sounds
+(the machinery stingers), Ambience (each stage sound environment's sounds), Voice (Yorda's hint
+voices and the `com_v` bank) and Sound effects (one headed group per bank). Every entry is named by
+its asset, the names coming from the disc and the ELF tables: a stream by its file under
+`sound/ICO_ADPCM/` without `.int` (`event/39_8`), an effect by its `seDef` name
+(`gallery_label`). The PAL disc has no sequenced music, so there is no sequence group.
+
+The list (`gallery.c`) holds no game code: the tables come in a `GalleryTables`, and the engine in
+a `GalleryEngine`, so `port/ui/test/gallery_test.c` builds it from the base ELF's tables. The
+engine (`port/ui/gallery_play.c`) fades the title theme as the opening's demo step does, requests a
+stream through `scpAdpcmPlayRequestFunc` and the script daemon's thread, and plays an effect with
+`soundSeDefPlay` once its bank is resident; a bank that is not resident is read from a stage pack
+on the disc into sound RAM in segment 1, the closed banks being read back into their segments on
+leaving (`port/ui/gallery_play.c`, header comment). A stream pauses the way the pause menu pauses
+the game's streams; an effect cannot pause, so the page stops it.
+
+`port/data/df_pack.h` reads a pack member outside the game's disc thread: `DATA.DF`'s directory
+gives loose files and packs, a pack is a raw deflate stream with a 16-byte header and 0x224-byte
+member entries, and the index of every pack's members is built once by inflating each header and
+directory (about 70 packs) (`port/data/df_pack.h`, header comment). The gallery uses it to check
+that a stream's file is on the disc (`ico_df_has`), to read a bank's header and body
+(`ico_df_find_member`, `ico_df_read_member`), and to find a stream's blank tail by halving over its
+sectors (`gallery_stream_blank_from`).
+
+The environment variable `ICO_GALLERY_PLAY` holds a script of items to play and leave, which the
+headless `gallery_sweep` test drives (`port/ui/gallery.c`, `scriptParse`; [TESTING.md](TESTING.md)).
+
+## The credits
+
+The staff roll posts the lines of the disc's `staffRollNameData` and then the port's own lines, in
+every roll, the real ending's and the Extras playback's; the disc's table is not changed
+(`port/include/ico_credits.h`, header comment). The port lines are twelve blank lines, the heading
+`{R}< Decompilation and PC Port > `, four blank lines and the name `{R}Nathanial Fine `, in the
+roll's own forms and ASCII only, because the roll draws with `font_Print`'s bitmap font
+(`port/game/credits.c`, `s_lines`). The game's side is three host lines in
+`ico2/common/src/staffroll.c`: `staffRollStart` logs the roll's length through `ico_roll_started`,
+`staffRollNameOut` takes `ico_roll_port_line(rollNameIdx - staffRollNameDataNum)` past the disc's
+lines, and the roll ends after `staffRollNameDataNum + ico_roll_port_count()` lines.
+
+Settings > Extras > Credits starts the ending's first staff-roll stage (60, STAFF1) from the title,
+and the ending's scripts run as they do in the real ending with `ico_credits_active()` set
+(`ICO_CREDITS_STAGE`). The row is unlocked by `[dev] unlock_credits`, the `finish` achievement or a
+clear count above 0 (`port/game/credits.c`, `ico_credits_unlocked`). Under the flag:
+
+- `ico2/script/src/end.c` (`actStaff1Chk`) requests the ending's song through
+  `ico_credits_song_start`, which opens it where the real ending has it when the roll starts;
+- `end.c` (`actStaff3RollChk`) goes back to the title when the roll ends;
+- `end.c` (`actEndingSave`) saves nothing.
+
+The engine (`port/game/credits_live.c`) keeps everything a save holds with the game's own
+`gamesysMemorySave`, plus the checkpoint image, `gFlagGameClear` and `systemStatus[2..4]`, changes
+stage as a load from the title does and puts the boy at the entrance the real ending uses. As stage
+1 is entered again, `ico_credits_stage_enter` (`ico2/common/src/StageManager.c`,
+`start_stage_Load_thread`) puts the state back with `gamesysMemoryLoad`. A start that never reaches
+STAFF1 is logged as a failure and the title requested (`port/game/credits_live.c`, header comment,
+`REACH_TICKS`). Achievements are suspended while it plays.
+
+## The title logo
+
+The logo is nine stage animations of the title's stage (I, C and O, their glows and shadows). While
+a Settings or Extras page opened from the title is up, or the model list the Extras page opens, it
+is not drawn; its animation runs on, so back on the title it shows settled. Once hidden it stays
+hidden until the title's menu (layout 12 or 13) is back or the stage changes, so Extras > Credits
+and a model's stage load do not show it while the title fades. The pause menu's Settings never
+hides anything (`port/game/title_logo.h`, header comment).
+
+`Main` calls `ico_title_logo_update` once a tick after the layouts ran (`ico2/common/src/main.c`),
+and `ico2/seki/src/RegistPacket.c` (`reg_DispObj`) skips an object whose model `ico_title_logo_skip`
+names. The same function widens the title's full-frame model `title_back`, built for the 4:3
+screen, to the [native frame](ARCHITECTURE.md#terms) by scaling its node matrices' x row by
+`gsFrame.w / 512` when `ico_title_fullframe_model` names it (`port/game/title_logo.h`,
+`ico_title_fullframe_model`).
+
+## Add to Steam
+
+Settings > Extras > Add to Steam writes a non-Steam shortcut named "ICO" for the program into the
+most recent Steam user's `userdata/<id>/config/shortcuts.vdf`, after a copy to `shortcuts.vdf.bak`,
+inserting one entry so every existing entry keeps its bytes; nothing is written while Steam runs,
+and no artwork is added. The result is one of `ICO_STEAM_ADDED`, `_EXISTS`, `_RUNNING`,
+`_NOT_FOUND`, `_NO_USER`, `_FAILED`; the shortcut's id is the CRC-32 of the quoted Exe and the
+name with the top bit set (`port/platform/steam_shortcut.h`, `ico_steam_add_this_game`,
+`ico_steam_appid`). It is desktop only; [PLATFORM.md](PLATFORM.md#steam-shortcut) has the build
+detail and `port/platform/test/steam_shortcut_test.c` the checks.
+
+## Android driver packages
+
+The Android build loads a community Vulkan driver for Adreno GPUs through libadrenotools from a zip
+the player adds on the Settings page: a flat package of `meta.json`, the driver library it names
+(`libraryName`, matching `^[A-Za-z0-9._-]+\.so$`) and that library's dependencies, at most 64
+files of at most 64 MB each. An install is checked whole, unpacked into `<folder>.tmp/` and moved
+into place; the folder is the package's name and driver version made safe. A trial marker names the
+driver a start is trying, so a start that died inside the driver is noticed at the next one
+(`port/platform/gpu_driver.h`, `ico_gpu_driver_install_zip`, `ico_gpu_driver_trial_crashed`). The
+package handling is pure C, built and tested on every platform; the loading itself and the fallback
+are [PLATFORM.md](PLATFORM.md#android-graphics-driver-packages)'s.
+
+## Video options
+
+The picture options (`[video]`, the [presets](ARCHITECTURE.md#terms), aspect, resolution,
+anti-aliasing, the CRT filter, frame rate) are `port/game/video_options.h`'s and are described in
+[DISPLAY.md](DISPLAY.md).
