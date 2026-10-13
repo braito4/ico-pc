@@ -22,7 +22,12 @@
  *                 fetch (addressing and TEXA are the caller's), each axis
  *                 its kernel, combined in integers: per row
  *                 R' = (16 sum(wx t) + Dx / 2) / Dx, then
- *                 (sum(wy R') + 8 Dy) / (16 Dy) */
+ *                 (sum(wy R') + 8 Dy) / (16 Dy)
+ * a1x_fog         one channel of the fog above 1x (fog_lut.hlsl): the
+ *                 table's entries lo and hi (n and n + 1) at the fraction
+ *                 f / 256 between them, times the texture function's factor
+ *                 mul / 128, plus the ordered dither's threshold
+ *                 (bayer + 0.5) / 64, rounded down, at most 255 */
 #ifndef PORT_RENDER_TEST_ABOVE1X_REF_H
 #define PORT_RENDER_TEST_ABOVE1X_REF_H
 
@@ -43,6 +48,7 @@ int a1x_bspline_w(uint32_t f, uint32_t k);
 int a1x_box_w(int lo32, int hi32, int i);
 uint32_t a1x_step32(double du, double dx, double ss, double ts);
 int a1x_kind(uint32_t step32, int linear);
+uint32_t a1x_fog(uint32_t lo, uint32_t hi, uint32_t f, uint32_t mul, uint32_t bayer);
 void a1x_resample(A1xFetch fetch, void *user, int c16x, int c16y, uint32_t step32x,
                   uint32_t step32y, int linear, uint32_t out[4]);
 

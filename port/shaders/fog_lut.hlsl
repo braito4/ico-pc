@@ -29,6 +29,20 @@
 //   g_param.z  1: the depth read is replaced by 0 (a test switch,
 //              ICO_RD_FOG_SABOTAGE: the reads of a device that returns
 //              nothing), else 0
+//   g_param.w  1 above 1x (the colour or the depth target scaled,
+//              rd_replay.c doFog), else 0
+//   g_uvRect.xy with g_param.w, the bound target's centre texel (its
+//              texture size halved, rounded down: the native frame's
+//              centre, rd_core.c rd__target_scale_of), the dither's origin
+// Above 1x the table is read between entries: n = Z bits 16..23 and the
+// next eight bits f interpolate LUT[n] .. LUT[n + 1] (ZFog.c builds the
+// table as a linear ramp sampled at 256 depths, and the scaled depth
+// carries Z between them), the texture function applied in the same fixed
+// point, and a one-unit 8x8 ordered dither (common.hlsli gs_fog_channel,
+// gs_bayer8) carries the fraction the 8-bit alpha cannot hold. The dither
+// is indexed from the target's centre texel, so the 4:3 columns of a wide
+// frame carry the same pattern as the 4:3 frame. At scale 1 g_param.w is 0
+// and the entry is read as the GS reads it.
 // fog_lut_buffer_ps (FOG_BUFFER) reads t1 as an R32_UINT colour texture
 // instead: the depth aspect copied out to a buffer and back into a colour
 // texture (rd_fog_path.c), for a device whose depth reads fail.  The words
@@ -141,7 +155,24 @@ GS_PS_ATTR GS_PS_OUT fog_lut_ps(FogPSIn i)
     uint idx = (z >> 16) & 0xFFu;
     uint4 t = uint4(floor(g_fogLut.Load(int3(int(idx), 0, 0)) * 255.0 + 0.5));
     uint4 col = uint4(floor(i.col + 0.5));
-    col = gs_texture_function(t, col, g_mode.x);
+    if (g_param.w > 0.5) {
+        // above 1x: between the entries, dithered (the header)
+        const uint4 hi =
+            uint4(floor(g_fogLut.Load(int3(int(min(idx + 1u, 255u)), 0, 0)) * 255.0 + 0.5));
+        const uint f = (z >> 8) & 0xFFu;
+        const int2 p = int2(floor(i.pos.xy)) - int2(g_uvRect.xy);
+        const uint b = gs_bayer8(uint(p.x), uint(p.y));
+        const bool decal = (g_mode.x & DF_DECAL) != 0u;
+        uint4 o;
+        o.r = gs_fog_channel(t.r, hi.r, f, decal ? 128u : col.r, b);
+        o.g = gs_fog_channel(t.g, hi.g, f, decal ? 128u : col.g, b);
+        o.b = gs_fog_channel(t.b, hi.b, f, decal ? 128u : col.b, b);
+        o.a = (g_mode.x & DF_TCC_RGBA) != 0u ? gs_fog_channel(t.a, hi.a, f, decal ? 128u : col.a, b)
+                                              : col.a;
+        col = o;
+    } else {
+        col = gs_texture_function(t, col, g_mode.x);
+    }
     if (gs_alpha_discard(g_mode.z, g_mode.w, col.a)) {
         discard;
     }

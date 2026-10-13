@@ -37,12 +37,19 @@
  *   f  at scene scale 4 the first blur level's integral of a
  *      rectangle moved by quarter pixels varies by under 0.5 % (the count is
  *      box-reduced to the GS size before level 1 samples it).
+ *   s  above 1x at scene scale 4: each composite against above1x_ref.c's
+ *      B-spline of its level within 2 LSB (3 on the fixed-function
+ *      blender), a row across the shadow falling
+ *      and rising once; the softening's AA0 (at the work scale 2) the area
+ *      box of SCENE within 1 LSB and its composite back the B-spline within
+ *      2; the passes counted (g_rd.above1xDraws), none in the 1x run.
  * Every pipeline created is enumerated; no validation errors. */
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "above1x_ref.h"
 #include "rd_internal.h"
 #include "shader_consts.h"
 #include "vk/rhi_vk.h"
@@ -997,6 +1004,254 @@ static void checkLevelScale(void)
     g_rd.workScale = keep;
 }
 
+/* ----------------------------------------------- (s) above 1x at 4x
+ *
+ * The composites at scene scale 4 (Enhanced): each level (scale 1, the
+ * PS2's size) is magnified into SCENE by 8, 16 or 32 texels a level
+ * texel, which the replay draws with the cubic B-spline (common.hlsli
+ * DF_ABOVE1X): SCENE against above1x_ref.c's B-spline of the level as read
+ * back, at each texel's GS sample point, then MODULATE and the LERP,
+ * within 2 LSB (the B-spline is four bilinear taps of the sampler there);
+ * a row across the shadow falls and rises once (no bump the bilinear's
+ * corners would leave across a diagonal, no overshoot).  Then the
+ * softening's passes (rd_post.c AA_DOWNSAMPLE and AA_COMPOSITE: SCENE at 4
+ * into AA0 at 2, a step of 4 texels, the area box; AA0 back over SCENE, a
+ * quarter texel, the B-spline) against the same reference: AA0 within 1
+ * LSB of the box, SCENE within 2 of the composite. */
+#define S4 4
+#define S4W (W * S4)
+#define S4H (H * S4)
+
+static uint8_t s_big[S4W * S4H * 4], s_pic[S4W * S4H * 4];
+
+typedef struct A1xImg {
+    const uint8_t *px;
+    int w, h;
+} A1xImg;
+
+/* CLAMP, as the level and SCENE are sampled */
+static void a1xFetch(void *user, int x, int y, uint32_t out[4])
+{
+    const A1xImg *m = (const A1xImg *)user;
+    x = x < 0 ? 0 : (x >= m->w ? m->w - 1 : x);
+    y = y < 0 ? 0 : (y >= m->h ? m->h - 1 : y);
+    for (int c = 0; c < 4; c++) {
+        out[c] = m->px[((size_t)y * m->w + x) * 4 + c];
+    }
+}
+
+/* the sample point of texel p of a target at scale s, in GS pixels: the
+ * replay moves a scaled sprite's UVs so that the texel's centre samples
+ * the GS's coordinate (rd_replay.c setUvShift) */
+static double gsAt(int p, int s)
+{
+    return ((double)p + 0.5) / (double)s - 0.5;
+}
+
+/* the level-l composite's texel at SCENE texel (x, y) (the sprite's U is
+ * 0.25 + X / 2^l at GS X, as checkComposite reads it): the B-spline
+ * (a1x) or the GS's bilinear */
+static void compositeTexel(const A1xImg *lv, int l, int x, int y, int a1x, int tie, uint32_t t[4])
+{
+    /* at an exact half sixteenth the shader's float coordinate rounds
+     * either way: tie bit 0 (x) and 1 (y) take the lower */
+    const double ux = 16.0 * (0.25 + gsAt(x, S4) / (double)(1 << l));
+    const double uy = 16.0 * (0.25 + gsAt(y, S4) / (double)(1 << l));
+    const int c16x = (int)floor(ux + 0.5) - ((tie & 1) && ux - floor(ux) == 0.5);
+    const int c16y = (int)floor(uy + 0.5) - ((tie & 2) && uy - floor(uy) == 0.5);
+    const uint32_t step = a1x ? (uint32_t)(32 / (S4 << l)) : 32u;
+    a1x_resample(a1xFetch, (void *)lv, c16x, c16y, step, step, 1, t);
+}
+
+static void checkComposite4x(int l)
+{
+    int one[4] = {0, 0, 0, 0};
+    one[l] = kBlend[l];
+    s_subOff = 0;
+    const uint32_t before = g_rd.above1xDraws;
+    recordFrame(VOL_SUB, one);
+    const int n = 256 >> (l - 1);
+    if (!readTarget(rd_target((RdTargetId)(RD_TARGET_SHADOW0 + l - 1)), s_lv[l - 1], (uint32_t)n,
+                    (uint32_t)n) ||
+        !readTarget(rd_target(RD_TARGET_SCENE), s_big, S4W, S4H)) {
+        return;
+    }
+    CHECK(g_rd.above1xDraws > before, "(s) level %d: the composite drawn above 1x", l);
+    const A1xImg lv = {s_lv[l - 1], n, n};
+    int worst = 0, wx = 0, wy = 0, shadowed = 0, worstTent = 0;
+    for (int y = 0; y < S4H; y++) {
+        for (int x = 0; x < S4W; x++) {
+            const uint8_t *g = &s_big[((size_t)y * S4W + x) * 4];
+            int best = 999, bestTent = 999;
+            for (int k = 0; k < 16; k++) {
+                /* k bit 0: the bilinear (else the B-spline); bits 1..2: the
+                 * ties; bit 3: a float blender's LERP (else the GS's) */
+                int o[3] = {kRecv[0], kRecv[1], kRecv[2]};
+                uint32_t t[4];
+                compositeTexel(&lv, l, x, y, !(k & 1), (k >> 1) & 3, t);
+                const int as = mod7((int)t[3], one[l]);
+                if (as != 0 && x < S4W / 2) {
+                    for (int c = 0; c < 3; c++) {
+                        const int cs = mod7((int)t[c], kShadowCol[c]);
+                        o[c] = (k & 8) ? (int)floorf(((float)cs * (float)as +
+                                                      (float)o[c] * (float)(128 - as)) /
+                                                         128.0f +
+                                                     0.5f)
+                                       : (((cs - o[c]) * as) >> 7) + o[c];
+                    }
+                }
+                int d = 0;
+                for (int c = 0; c < 3; c++) {
+                    const int e = abs((int)g[c] - o[c]);
+                    d = e > d ? e : d;
+                }
+                if (k & 1) {
+                    bestTent = d < bestTent ? d : bestTent;
+                } else {
+                    best = d < best ? d : best;
+                }
+            }
+            if (best > worst) {
+                worst = best, wx = x, wy = y;
+            }
+            worstTent = bestTent > worstTent ? bestTent : worstTent;
+            shadowed += memcmp(g, kRecv, 3) != 0;
+        }
+    }
+    /* a row through the shadow (GS y 120): one fall, one rise */
+    int turns = 0;
+    for (int c = 0; c < 3; c++) {
+        const uint8_t *row = &s_big[(size_t)(120 * S4 + 1) * S4W * 4];
+        int dir = 0;
+        for (int x = 1; x < S4W / 2; x++) {
+            const int d = (int)row[x * 4 + c] - (int)row[(x - 1) * 4 + c];
+            const int sg = d > 0 ? 1 : (d < 0 ? -1 : 0);
+            if (sg != 0 && dir != 0 && sg != dir) {
+                turns++;
+            }
+            dir = sg != 0 ? sg : dir;
+        }
+    }
+    printf("  (s) 4x level %d: %d texels shadowed, max %d LSB from the B-spline reference (at "
+           "%d,%d), %d from the bilinear's; the row at GS y 120 turns %d times in 3 channels\n",
+           l, shadowed, worst, wx, wy, worstTent, turns);
+    CHECK(shadowed > 0, "(s) level %d: the receiver is shadowed at 4x", l);
+    /* the fixed-function blender rounds its LERP once more (checkComposite) */
+    const int tol = rd_blend_exact() != RD_BLEND_EXACT_OFF ? 2 : 3;
+    CHECK(worst <= tol, "(s) level %d at 4x: max difference %d from the B-spline at (%d,%d)", l,
+          worst, wx, wy);
+    CHECK(turns <= 3, "(s) level %d at 4x: the row turns %d times (a fall and a rise a channel)", l,
+          turns);
+}
+
+/* a picture with detail below the GS pixel: sprites on a 12.4 grid of
+ * quarter pixels, hashed colours, over the receiver colour */
+static void drawPicture(void)
+{
+    dl_SetDLPriority(0);
+    rd_set_target(rd_target(RD_TARGET_SCENE), rd_target(RD_TARGET_SCENE), W, H, RD_TARGET_OFFSET);
+    rd_clear_target(rd_target(RD_TARGET_SCENE), kRecv, 1, 0);
+    rd_sampler_wrap(RD_WRAP_CLAMP, RD_WRAP_CLAMP);
+    rd_texture_off();
+    rd_abe(0);
+    rd_test_gs(0x30000);
+    rd_z_write(1);
+    rd_fba(0);
+    for (int k = 0; k < 600; k++) {
+        const uint32_t h = (uint32_t)k * 2654435761u;
+        const uint8_t col[4] = {(uint8_t)(h >> 8), (uint8_t)(h >> 16), (uint8_t)(h >> 24),
+                                (uint8_t)(h & 0x7F)};
+        RdScreenVtx v[2] = {sv(0, 0, kZr, col), sv(0, 0, kZr, col)};
+        const int32_t x0 = (int32_t)((h >> 3) % (uint32_t)(W * 16 - 256)) & ~3;
+        const int32_t y0 = (int32_t)((h >> 11) % (uint32_t)(H * 16 - 256)) & ~3;
+        v[0].x = (2048 - W / 2) * 16 + x0;
+        v[0].y = (2048 - H / 2) * 16 + y0;
+        v[1].x = v[0].x + 4 + (int32_t)((h >> 5) % 120u) * 4;
+        v[1].y = v[0].y + 4 + (int32_t)((h >> 13) % 120u) * 4;
+        rd_screen_prims(RD_PRIM_SPRITES, v, 2, RD_SPACE_WORLD, 0, 0);
+    }
+}
+
+static void checkSoftening4x(void)
+{
+    drawPicture();
+    dl_Swap();
+    if (!readTarget(rd_target(RD_TARGET_SCENE), s_pic, S4W, S4H)) {
+        return;
+    }
+    const RdTargetRec *aa = rd__target_rec(rd_target(RD_TARGET_AA0).id);
+    CHECK(aa && aa->sx == 2.0f, "(s) AA0 at the work scale 2 (%.2f)", aa ? (double)aa->sx : 0.0);
+    const uint32_t before = g_rd.above1xDraws;
+    drawPicture();
+    RdPostParams pp;
+    dl_SetDLPriority(10);
+    memset(&pp, 0, sizeof(pp));
+    pp.lines = 1;
+    rd_post(RD_POST_AA_DOWNSAMPLE, &pp);
+    memset(&pp, 0, sizeof(pp));
+    pp.rgba[0] = 64;
+    rd_post(RD_POST_AA_COMPOSITE, &pp);
+    dl_Swap();
+    static uint8_t aa0[(W / 2) * 2 * 256 * 2 * 4];
+    const int aw = W / 2 * 2, ah = 256 * 2;
+    if (!readTarget(rd_target(RD_TARGET_AA0), aa0, (uint32_t)aw, (uint32_t)ah) ||
+        !readTarget(rd_target(RD_TARGET_SCENE), s_big, S4W, S4H)) {
+        return;
+    }
+    CHECK(g_rd.above1xDraws >= before + 2, "(s) softening: %u passes drawn above 1x",
+          g_rd.above1xDraws - before);
+    /* AA0: the sprite spans GS -0.25 .. W / 2 - 0.25 with U 0.25 .. W +
+     * 0.25 (rd_post.c postAaDownsample), the box of 4 SCENE texels about
+     * each texel's sample point */
+    const A1xImg pic = {s_pic, S4W, S4H};
+    int worstA = 0, ax = 0, ay = 0;
+    for (int y = 0; y < ah; y++) {
+        for (int x = 0; x < aw; x++) {
+            const double gx = gsAt(x, 2), gy = gsAt(y, 2);
+            const double u = 0.25 + (gx + 0.25) * 2.0, v = 0.25 + (gy + 0.25) * 2.0;
+            uint32_t t[4];
+            a1x_resample(a1xFetch, (void *)&pic, (int)lrint(u * 16.0 * S4),
+                         (int)lrint(v * 16.0 * S4), 32u * 2u * S4 / 2u, 32u * 2u * S4 / 2u, 1, t);
+            const uint8_t *g = &aa0[((size_t)y * aw + x) * 4];
+            for (int c = 0; c < 4; c++) {
+                const int d = abs((int)g[c] - (int)t[c]);
+                if (d > worstA) {
+                    worstA = d, ax = x, ay = y;
+                }
+            }
+        }
+    }
+    /* SCENE: AA0 (texels at 2; the sprite spans GS -0.25 .. W - 0.25 with
+     * U 0.25 .. W / 2 + 0.25, rd_post.c postAaComposite) at a quarter
+     * texel a texel, LERP_FIX 64 over the picture */
+    const A1xImg a0 = {aa0, aw, ah};
+    int worstS = 0, sx = 0, sy = 0;
+    for (int y = 0; y < S4H; y++) {
+        for (int x = 0; x < S4W; x++) {
+            const double gx = gsAt(x, S4), gy = gsAt(y, S4);
+            const double u = 0.25 + (gx + 0.25) * 0.5, v = 0.25 + (gy + 0.25) * 0.5;
+            uint32_t t[4];
+            a1x_resample(a1xFetch, (void *)&a0, (int)lrint(u * 32.0), (int)lrint(v * 32.0),
+                         32u * 2u / S4 / 2u, 32u * 2u / S4 / 2u, 1, t);
+            const uint8_t *g = &s_big[((size_t)y * S4W + x) * 4];
+            const uint8_t *p = &s_pic[((size_t)y * S4W + x) * 4];
+            for (int c = 0; c < 3; c++) {
+                const int want = ((((int)t[c] - (int)p[c]) * 64) >> 7) + (int)p[c];
+                const int d = abs((int)g[c] - want);
+                if (d > worstS) {
+                    worstS = d, sx = x, sy = y;
+                }
+            }
+        }
+    }
+    printf("  (s) 4x softening: AA0 (at 2) max %d LSB from the box (at %d,%d), SCENE max %d from "
+           "the B-spline composite (at %d,%d)\n",
+           worstA, ax, ay, worstS, sx, sy);
+    CHECK(worstA <= 1, "(s) AA0 at 4x: max difference %d from the box at (%d,%d)", worstA, ax, ay);
+    CHECK(worstS <= 2, "(s) SCENE at 4x: max difference %d from the composite at (%d,%d)", worstS,
+          sx, sy);
+}
+
 /* The count of a rectangle at scale 4 (Enhanced), after
  * the box reduction to the GS size, gives the first blur level the integral
  * the area gives however the rectangle sits against the GS pixel grid
@@ -1037,6 +1292,12 @@ static void checkScaledIntegral(void)
     }
     CHECK(hi > 0.0 && (hi - lo) / hi < 0.005, "level 1 integral varies by %.2f %% with the offset",
           hi > 0.0 ? 100.0 * (hi - lo) / hi : 0.0);
+    for (int l = 1; l <= 3; l++) {
+        checkComposite4x(l);
+    }
+    checkSoftening4x();
+    CHECK(rhi_vk_validation_error_count() == 0, "scale 4: %u validation errors",
+          rhi_vk_validation_error_count());
     rd_shutdown();
 }
 
@@ -1247,6 +1508,7 @@ int main(void)
     }
 
     checkPipelines();
+    CHECK(g_rd.above1xDraws == 0, "1x: %u passes drawn above 1x", g_rd.above1xDraws);
     CHECK(rhi_vk_validation_error_count() == 0, "%u validation errors",
           rhi_vk_validation_error_count());
     CHECK(rd__not_implemented_count() == 0, "no stubbed command replayed");

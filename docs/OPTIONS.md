@@ -55,7 +55,10 @@ How the picture looks.
   would look like a fine mesh.
   [Why](FAQ.md#why-does-the-crt-filter-switch-the-picture-back-to-the-original-resolution).
   The menus' lettering follows it too: from 2x up to 4x it is drawn that
-  much finer, so it stays crisp, in the same style.
+  much finer, so it stays crisp, in the same style. Above 1x, the game's
+  glow, blur, shadow and fog effects are drawn to suit the finer picture,
+  so they look soft instead of showing a grid; at 1x they are the PS2's
+  exactly.
 - **Aspect ratio** is the picture's shape: 4:3 (the PS2's), 16:10, 16:9,
   21:9, 32:9 or 48:9. **Auto** follows the shape of your window or screen,
   up to 60:9.

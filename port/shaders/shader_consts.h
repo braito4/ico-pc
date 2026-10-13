@@ -140,6 +140,12 @@ enum {
  * applies the mask (common.hlsli gs_dst_out). */
 #define ICO_DF_WMASK_SHIFT 19u
 
+/* DrawCB.mode[0] bit 25 (common.hlsli DF_ABOVE1X): a bilinear draw of
+ * sprite_ps, sprite_aa1_ps or sprite_stq_ps sampling a target whose scale is
+ * not the bound target's (rd_replay.c fillDrawCB), resampled by the step
+ * (sprite.hlsl sprite_above1x), the wrap in ICO_DF_TEXA_CLAMP_S/T. */
+enum { ICO_DF_ABOVE1X = 33554432 };
+
 /* DrawCB.mode[1] bits 8..: TEXFMT_* in gs_math.hlsli. */
 enum { ICO_TEXFMT_RGBA32 = 0, ICO_TEXFMT_RGB24 = 1, ICO_TEXFMT_RGBA16 = 2 };
 

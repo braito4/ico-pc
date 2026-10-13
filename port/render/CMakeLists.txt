@@ -420,7 +420,7 @@ target_link_libraries(modelpack_test PRIVATE ico_render ico_vu1_ref ico_math)
 # and the composites against CPU references, the DATE receiver mask, and
 # the commands Shadow.c's host path records (77 without a device, after the
 # recording checks).
-add_executable(rd_shadow_test test/rd_shadow_test.c
+add_executable(rd_shadow_test test/rd_shadow_test.c test/above1x_ref.c
     "${CMAKE_SOURCE_DIR}/ico2/seki/src/Shadow.c"
     "${CMAKE_SOURCE_DIR}/ico2/seki/src/Matrix.c"
     "${CMAKE_SOURCE_DIR}/ico2/seki/src/GifPacket.c"
@@ -439,7 +439,7 @@ target_link_libraries(rd_shadow_test PRIVATE ico_render ico_math)
 # PSMT8H read of the Z copy selects (a CPU model of the GS swizzle), the
 # CLUT order, the recording, and on a device quads at known Z fogged
 # against a CPU reference (77 without one, after the CPU checks).
-add_executable(rd_fog_test test/rd_fog_test.c
+add_executable(rd_fog_test test/rd_fog_test.c test/above1x_ref.c
     "${CMAKE_SOURCE_DIR}/ico2/seki/src/ZFog.c"
     "${CMAKE_SOURCE_DIR}/ico2/seki/src/GifPacket.c"
     "${CMAKE_SOURCE_DIR}/ico2/seki/src/DisplayList.c"

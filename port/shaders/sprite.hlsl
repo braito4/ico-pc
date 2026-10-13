@@ -161,6 +161,64 @@ SamplerState g_sampler : register(s1, space2);
 // 1x1 dummy is bound and never fetched.
 Texture2D<float> g_dateSnap : register(t2, space2);
 
+// Above 1x (DF_ABOVE1X: a bilinear draw sampling a target at another scale
+// than the bound target's, rd_replay.c fillDrawCB): the texel at the
+// normalised uv, after TEXA, resampled by the step, in t1's texels per
+// bound texel per axis (the footprint of the pixel, ddx/ddy of the texel
+// coordinate: constant over a sprite) through common.hlsli's kernels about
+// the sample point (the coordinate in t1's 12.4 texels, as
+// gs_texa_texture rounds it):
+//   both axes under half a texel  the cubic B-spline as four bilinear taps
+//                                 of the draw's own sampler
+//                                 (gs_bspline_bilinear4), TEXA after
+//   an axis over two texels       the area box on that axis (the other
+//                                 axis its own kernel), every tap loaded
+//                                 with the draw's wrap reproduced on t1's
+//                                 size and TEXA per texel (gs_texa_load),
+//                                 combined separably in integers as
+//                                 fx_sprite_ps combines them
+// Returns false (t untouched) without the flag or when neither axis leaves
+// the GS's filter: the caller samples as before.
+bool sprite_above1x(float2 uv, out uint4 t)
+{
+    t = uint4(0u, 0u, 0u, 0u);
+    if ((g_mode.x & DF_ABOVE1X) == 0u) {
+        return false;
+    }
+    uint w, h;
+    g_texture.GetDimensions(w, h);
+    const int2 size = max(int2(int(w), int(h)), int2(1, 1));
+    const float2 tc = uv * float2(size);
+    const float2 dx = ddx(tc), dy = ddy(tc);
+    const float2 k = max(abs(dx), abs(dy)) * 32.0 + 0.5;
+    const int sx = int(min(floor(k.x), 4095.0)), sy = int(min(floor(k.y), 4095.0));
+    const int kx = gs_rs_kind(sx, 1u), ky = gs_rs_kind(sy, 1u);
+    if (kx == GS_RS_GS && ky == GS_RS_GS) {
+        return false;
+    }
+    if (kx == GS_RS_BSPLINE && ky == GS_RS_BSPLINE) {
+        const float4 f = gs_bspline_bilinear4(g_texture, g_sampler, tc, float2(size));
+        t = gs_texa_expand(uint4(floor(saturate(f) * 255.0 + 0.5)), g_mode.y & 0xFFu,
+                           g_mode.y >> 8);
+        return true;
+    }
+    const int2 c16 = int2(floor(tc * 16.0 + 0.5));
+    const GsAxis ax = gs_resample_axis(c16.x, sx, true);
+    const GsAxis ay = gs_resample_axis(c16.y, sy, true);
+    const uint divx = gs_resample_div(ax), divy = gs_resample_div(ay);
+    uint4 sum = uint4(0u, 0u, 0u, 0u);
+    [loop] for (int j = 0; j < ay.count; j++) {
+        uint4 row = uint4(0u, 0u, 0u, 0u);
+        [loop] for (int i = 0; i < ax.count; i++) {
+            row += gs_texa_load(g_texture, int2(ax.first + i, ay.first + j), size, g_mode.x) *
+                   gs_resample_weight(ax, i);
+        }
+        sum += ((row * 16u + divx / 2u) / divx) * gs_resample_weight(ay, j);
+    }
+    t = (sum + 8u * divy) / (16u * divy);
+    return true;
+}
+
 GS_PS_ATTR GS_PS_OUT sprite_ps(SpriteVSOut i)
 {
     float3 st = float3(i.uv, 1.0);
@@ -173,10 +231,14 @@ GS_PS_ATTR GS_PS_OUT sprite_ps(SpriteVSOut i)
     }
     uint4 col = uint4(floor(i.col + 0.5));
     if ((g_mode.x & DF_TEXTURED) != 0u) {
-        // UV primitives: the GS's level of detail with Q = 1 (gs_sample)
-        const float4 tf = gs_sample(g_texture, g_sampler, i.uv, 1.0);
-        uint4 t = uint4(floor(tf * 255.0 + 0.5));
-        t = gs_texa_expand(t, g_mode.y & 0xFFu, g_mode.y >> 8);
+        // UV primitives: the GS's level of detail with Q = 1 (gs_sample);
+        // above 1x the step's kernel (sprite_above1x)
+        uint4 t;
+        if (!sprite_above1x(i.uv, t)) {
+            const float4 tf = gs_sample(g_texture, g_sampler, i.uv, 1.0);
+            t = uint4(floor(tf * 255.0 + 0.5));
+            t = gs_texa_expand(t, g_mode.y & 0xFFu, g_mode.y >> 8);
+        }
         col = gs_texture_function(t, col, g_mode.x);
     }
     if (gs_alpha_discard(g_mode.z, g_mode.w, col.a)) {
@@ -216,8 +278,7 @@ GS_PS_ATTR GS_PS_OUT sprite_texa_ps(SpriteVSOut i)
 // ------------------------------------------------------------------- PRIM.AA1
 
 // sprite_ps's DATE, texture function and TEXA: the fragment's colour before
-// the alpha test, or a discard. (sprite_ps keeps its own copy, so that its
-// SPIR-V and DXIL stay what they were.)
+// the alpha test, or a discard (sprite_ps keeps its own copy).
 uint4 sprite_colour(float4 pos, float4 vcol, float2 uv, float q)
 {
     if ((g_mode.x & DF_DATE) != 0u) {
@@ -233,7 +294,7 @@ uint4 sprite_colour(float4 pos, float4 vcol, float2 uv, float q)
             // GS levels in the Original preset (rd_pipeline.c
             // rd__gs_filter_int): the GS's integer filter at its LOD
             t = gs_texa_texture_lod(g_texture, uv, q, g_mode.x);
-        } else {
+        } else if (!sprite_above1x(uv, t)) {
             t = uint4(floor(gs_sample(g_texture, g_sampler, uv, q) * 255.0 + 0.5));
             t = gs_texa_expand(t, g_mode.y & 0xFFu, g_mode.y >> 8);
         }

@@ -542,6 +542,62 @@ and the B-spline for FEED128 and AURA_TAP back over the frame (1/8 to 5/32 texel
 every comparison at scale 1 finds no sprite flagged (`port/render/test/rd_blur_test.c`
 (`checkAbove1x`, `compareAll`)).
 
+**The sprite passes over targets.** `fillDrawCB` sets `DF_ABOVE1X` (`ICO_DF_ABOVE1X`, bit 25) on a
+pass of `sprite_ps`, `sprite_aa1_ps` or `sprite_stq_ps` whose texture is a colour view of a target,
+both filters linear, no GS levels, and the texture's scale is not the bound target's, with the
+draw's wrap in `DF_TEXA_CLAMP_S/T` (`port/render/rd_replay.c` (`spriteAbove1x`, `fillDrawCB`)).
+These are the shadow composites (the levels at scale 1 into SCENE, 1/2s to 1/8s texel a pixel), the
+softening's SCENE into AA0 and AA0 or AA1 back over SCENE when the scene's scale is above the work
+targets' (above 2x), and a work target drawn into SCENE. The shader takes the step of each axis
+from the pixel's footprint (`ddx`/`ddy` of the texel coordinate, constant over a sprite, so a draw
+of several sprites gets each one's own step), in 1/32 texel (`port/shaders/sprite.hlsl`
+(`sprite_above1x`)):
+
+- both axes below half a texel: the B-spline as four bilinear taps of the draw's own sampler
+  (`gs_bspline_bilinear4`), TEXA after, as `sprite_ps` applies it; within 2 LSB of the integer
+  kernel;
+- an axis above two texels: the area box on that axis, every tap loaded with the wrap reproduced on
+  the texture's size and TEXA per texel (`gs_texa_load`), combined separably as `fx_sprite_ps`
+  combines them, exact;
+- otherwise the pass samples as before (`gs_sample`).
+
+The B-spline serves the shadow composites as well as the glows: it spreads a level texel with a
+standard deviation of 0.58 texel against the bilinear's 0.41, so the penumbra is a little softer,
+without the bilinear's corners along a diagonal; `rd_shadow_test` checks each composite at 4x
+against the CPU B-spline and that a row across the shadow falls and rises once
+(`port/render/test/rd_shadow_test.c` (`checkComposite4x`)). The GS
+levels' integer filter of the Original preset (`rd__gs_filter_int`) is for images only, so it never
+meets the flag (`port/render/rd_pipeline.c` (`rd__gs_filter_int`)). The flag is never set when the
+two scales are equal, so never with every target at scale 1. `g_rd.above1xDraws` counts these
+passes too.
+
+**The fog.** `doFog` sets `DrawCB.param[3]` to 1 when SCENE or the depth target is scaled, with
+the bound target's centre texel (its texture size halved, rounded down: the native frame's centre,
+`rd__target_scale_of`) in `uvRect[0..1]` (`port/render/rd_replay.c` (`doFog`)). ZFog.c builds the
+table as a linear alpha ramp sampled at 256 depths with fewer alpha values than entries
+(`ico2/seki/src/ZFog.c` (`fog_MakeFogClut`)), so at 1x the fog bands by the 8-bit index. Above 1x
+`fog_lut_ps` reads the table between its entries: `n` the Z bits 16..23 (the GS's index) and `f`
+the next eight bits interpolate `LUT[n]`..`LUT[n + 1]`, MODULATE (or DECAL) applies in the same
+fixed point, and a one-unit 8x8 ordered dither carries the fraction the 8-bit alpha cannot hold,
+`floor(ramp * factor / 128 + (bayer + 0.5) / 64)`, at most 255 (`port/shaders/common.hlsli`
+(`gs_fog_channel`), `port/shaders/fog_lut.hlsl` (`fog_lut_ps`)). The dither is indexed from the
+target's centre texel, so the 4:3 columns of a wide frame carry the pattern of the 4:3 frame. At
+an entry (`f = 0`) with factor 128 the value is the entry's own. Every fog variant (the dual-source,
+`_nodual`, `_dstrov` and `_dstatt` entries, `FOG_BUFFER`, `FOG_MS`) shares the code before the
+output. At scale 1 `param[3]` is 0 and the entry is read as the GS reads it.
+
+**The present.** Without anti-aliasing, a scaled scene with more than two texels a window pixel on
+an axis (a fixed resolution above the window's) is box-averaged to the box first, as
+anti-aliasing does, since the box blit's one bilinear tap would skip texels there
+(`port/render/rd_present.c` (`reduceRecord`)). Never at scale 1.
+
+**Left as they are.** The reduction SCENE to DISPLAY is never above 2:1 in texels
+(`port/render/rd_blur.c` (`rd__blur_screen_fallback`)), where the GS's bilinear is already the area
+average, so it keeps the GS's filter. The shadow levels stay at scale 1 (their resolution is the
+penumbra, `port/render/rd_core.c` (`shadowLevel`)), and the first level reads the count already
+box-averaged to its GS size (`port/render/rd_replay.c` (`shadowReduce`)), so the chain between them
+is the PS2's at every scale; only the composites back into SCENE resample.
+
 ## Shadows
 
 The PS2 adds each shadow-volume face into a scene-sized buffer (FBP 0x142) with ALPHA 0x68 FIX

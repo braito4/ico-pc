@@ -140,3 +140,13 @@ void a1x_resample(A1xFetch fetch, void *user, int c16x, int c16y, uint32_t step3
         out[ch] = (sum[ch] + 8u * (uint32_t)dy) / (16u * (uint32_t)dy);
     }
 }
+
+/* the ramp between the entries at f / 256, scaled by mul / 128, the
+ * threshold added: every term a multiple of 2^-15, so the double is exact */
+uint32_t a1x_fog(uint32_t lo, uint32_t hi, uint32_t f, uint32_t mul, uint32_t bayer)
+{
+    const double t = (double)f / 256.0;
+    const double ramp = (double)lo + ((double)hi - (double)lo) * t;
+    const double v = floor(ramp * (double)mul / 128.0 + ((double)bayer + 0.5) / 64.0);
+    return v > 255.0 ? 255u : (uint32_t)v;
+}

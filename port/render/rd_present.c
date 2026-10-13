@@ -579,7 +579,10 @@ void rd__present_blit(RhiCommandList cl, RhiTexture src, uint32_t sw, uint32_t s
  * for the integer ratios), and step 2 then draws that texture into the box
  * one texel a pixel, nearest, mirrored as the box blit is.  The crop (sourceCrop) is
  * taken in the reduce.  Off, or at 1 texel a pixel or fewer, nothing here
- * runs and the box blit samples DISPLAY itself. */
+ * runs and the box blit samples DISPLAY itself.  Without anti-aliasing the
+ * same reduce runs when the scene is scaled and has more than two texels a
+ * pixel on an axis (a resolution above the window's), where the box blit's
+ * one bilinear tap would skip texels; never at scale 1. */
 static struct {
     RhiTexture tex;
     RhiState state;
@@ -601,10 +604,18 @@ static void reduceAxis(uint32_t s16, uint32_t b, uint32_t c16, uint32_t out[4])
 static bool reduceRecord(RhiCommandList cl, RhiTexture *src, uint32_t *sw, uint32_t *sh,
                          const RhiRect *box, float crop)
 {
-    if (rd__aa_mode() == RD_AA_OFF || box->w == 0 || box->h == 0) {
+    if (box->w == 0 || box->h == 0) {
         return false;
     }
     const float ew = (float)*sw - 2.0f * (crop > 0.0f ? crop : 0.0f);
+    /* without anti-aliasing, a scaled scene more than two texels a pixel
+     * on an axis (a fixed resolution above the window's): the box blit's
+     * one bilinear tap would skip texels there */
+    if (rd__aa_mode() == RD_AA_OFF &&
+        !((g_rd.sceneSx != 1.0f || g_rd.sceneSy != 1.0f) &&
+          (ew > 2.0f * (float)box->w || (float)*sh > 2.0f * (float)box->h))) {
+        return false;
+    }
     float su0, su1;
     if (snapWindow(*sw, crop, box->w, &su0, &su1)) {
         return false; /* a texel a pixel: the box blit's whole-texel window */
@@ -1736,10 +1747,10 @@ void rd__present_record(RhiCommandList cl)
         /* the frame's columns past its exact width left out (none at 4:3) */
         float crop = sourceCrop(disp, sw);
         RdFilter scaleFilter = pr->scaleFilter;
-        /* anti-aliasing: the source box-averaged to the box first when it
-         * has more than a texel a pixel (the reduce takes the crop; the box
-         * blit is then one texel a pixel, nearest) */
-        if (rd__aa_mode() != RD_AA_OFF && reduceRecord(cl, &src, &sw, &sh, &box, crop)) {
+        /* anti-aliasing (or a scaled scene over two texels a pixel): the
+         * source box-averaged to the box first (reduceRecord; the reduce
+         * takes the crop; the box blit is then one texel a pixel, nearest) */
+        if (reduceRecord(cl, &src, &sw, &sh, &box, crop)) {
             crop = 0.0f;
             scaleFilter = RD_FILTER_NEAREST;
         }

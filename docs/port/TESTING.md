@@ -234,7 +234,10 @@ program under an environment switch ([Environment switches](#environment-switche
   scale with the width; with the disc, a stage (`gsb_cull`, `gsb_cull_stage`).
 - `modelpack_test.c`: model packs end to end on synthetic models under the build tree
   (`modelpack`).
-- `rd_blur_test.c`: `staticBlur.c`'s full-screen effects on rd (`rd_blur`, sharded).
+- `rd_blur_test.c`: `staticBlur.c`'s full-screen effects on rd (`rd_blur`, sharded); the
+  `above1x` shard runs the aura's chain at Enhanced 4x against the CPU model with the above-1x
+  kernels (`above1x_ref.c`), and every scale-1 comparison checks that no sprite took them
+  (`checkAbove1x`, `compareAll`).
 - `rd_boot_present_test.c`: a saved start-up through the presenter, present by present; needs
   `ICO_BOOT_DUMP_DIR` (`rd_boot_present`).
 - `rd_crt_test.c`: the CRT filter's options and its shader (`rd_crt`, `rd_crt_fixed`).
@@ -244,7 +247,9 @@ program under an environment switch ([Environment switches](#environment-switche
   matched for each path, MSAA counts, odd widths and [Full pixel](ARCHITECTURE.md#terms)
   (`rd_fog_selftest*`).
 - `rd_fog_test.c`: the depth fog of `fog_DrawFog` on the CPU and on the device, every depth path
-  (`rd_fog`, `rd_fog_*`).
+  (`rd_fog`, `rd_fog_*`); at 2x a depth ramp's fog alpha equals the above-1x formula (the table
+  interpolated, the ordered dither) texel for texel, and the 1x cases count no above-1x draw
+  (`checkRamp`).
 - `rd_gsbase_test.c`: `GsBase.c`'s host path driving a synthetic scene (`rd_gsbase`).
 - `rd_interp_test.c`: presentation between [ticks](ARCHITECTURE.md#terms) on two synthetic frames
   (`rd_interp`).
@@ -268,7 +273,10 @@ program under an environment switch ([Environment switches](#environment-switche
   (`rd_replay_tool_pass_dump`).
 - `rd_depth_copy_dump.cmake`: a player dump with the fog replayed with the depth in place, copied
   and through a buffer, SCENE byte for byte the same (`rd_fog_depth_copy_dump`, `_d24s8`).
-- `rd_shadow_test.c`: the shadow count on the stencil (`rd_shadow`).
+- `rd_shadow_test.c`: the shadow count on the stencil (`rd_shadow`); at scene scale 4 each
+  composite against the CPU B-spline within 2 LSB and a row across the shadow falling and rising
+  once, the softening's AA0 (work scale 2) the area box of SCENE and its composite back the
+  B-spline (`checkComposite4x`, `checkSoftening4x`).
 - `rd_state_test.c`: the recording half of rd without a GPU: list order, defaults, state leakage
   (`rd_state`).
 - `rd_tex_test.c`: the texture cache and `Texture.c` on synthetic TIM2 files, and the menu text's
@@ -282,7 +290,8 @@ program under an environment switch ([Environment switches](#environment-switche
 - `texpack_name_test.c`: XXH3, the swizzle and the names against PCSX2's rules (`texpack_name`).
 - `texpack_test.c`: the pack's index and loader on fake files (`texpack`).
 - Helpers: `mesh_env.h` (the mesh tests' game stubs), `vu_models.h` (synthetic models),
-  `sheet_ref.c`/`.h` (the sheet-text shader and the halo on the CPU).
+  `sheet_ref.c`/`.h` (the sheet-text shader and the halo on the CPU), `above1x_ref.c`/`.h` (the
+  above-1x kernels and the fog's formula on the CPU, written from their definitions).
 
 ### port/rhi/test
 
@@ -310,7 +319,9 @@ program under an environment switch ([Environment switches](#environment-switche
 - `gs_math_test.c`: `gs_math.hlsli` compiled as C against the [GS](ARCHITECTURE.md#terms) formulas
   (`gs_math`); `hlsl_shim.h` makes it compile.
 - `shaders_pixel_test.c`: sprite, blit and blend shaders through the Vulkan RHI
-  (`shaders_pixel`, `_nodual`, `_mali`).
+  (`shaders_pixel`, `_nodual`, `_mali`); first, on the CPU, `common.hlsli`'s above-1x kernels
+  compiled as C against `above1x_ref.c`: the Bayer matrix, the B-spline's weights, the box, the
+  axes and the separable combine, and the fog's `gs_fog_channel` (`checkAbove1xKernels`).
 - `vu1_test.c`: the [VU1](ARCHITECTURE.md#terms) program shaders against their CPU references and
   hand traces (`vu1`, `vu1_mali`).
 

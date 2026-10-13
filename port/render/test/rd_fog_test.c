@@ -41,7 +41,17 @@
  *      clear's pixels of the same frame drawn without the fog, so the fog's
  *      edge sits on the geometry's row at both edges of the band (the fog
  *      sprite reads the depth texel under each pixel: with the half pixel
- *      it stood one row off at 2x).
+ *      it stood one row off at 2x);
+ *   a  above 1x, at 2x: a depth ramp across SCENE (one Z a GS column, the
+ *      table's sloped part crossed with Z bits 8..15 varying), fogged at
+ *      strength 0x60; every texel's alpha is the CPU formula
+ *      (above1x_ref.c a1x_fog: the entries n and n + 1 interpolated by Z
+ *      bits 8..15, MODULATE, the 8x8 ordered dither from the target's
+ *      centre texel) exactly, the colour the LERP by it within 2 LSB (the
+ *      fixed-function blend's rounding, as case 1), and
+ *      the draws counted (g_rd.above1xDraws); the 1x cases above count
+ *      none.  On a 24-bit depth the depth's step can read back one GS Z
+ *      unit low, so there the formula at Z - 256 is accepted too.
  * The same checks and tolerances hold on a 24-bit depth buffer
  * (rd_fog_d24s8 and rd_fog_nodual_d24s8: ICO_VK_FAKE_D24S8=1, the Vulkan
  * fallback of a phone GPU without a sampled D32S8): there Z is stored in
@@ -56,6 +66,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "above1x_ref.h"
 #include "rd_internal.h"
 #include "shader_consts.h"
 #include "vk/rhi_vk.h"
@@ -403,10 +414,11 @@ static void checkSwizzle(void)
 }
 
 /* ===================================================== (c) the CLUT */
-static const int kFog[2][9] = {
+static const int kFog[3][9] = {
     /* on, R, G, B, A, offsetA, near, far, strength */
     {1, 200, 150, 100, 250, 0, 40, 200, 0x80},
     {1, 90, 120, 230, 128, 0x30, 10, 120, 0xFF},
+    {1, 200, 150, 100, 250, 0, 40, 200, 0x60}, /* (a) above 1x */
 };
 
 static void setFog(int k)
@@ -923,6 +935,107 @@ static void checkEdge(void)
           EDGE_S, bad);
 }
 
+/* ============================================ (a) above 1x */
+#define RAMP_S 2
+
+static uint8_t s_ramp[W * RAMP_S * H * RAMP_S * 4];
+
+/* GS column c's Z: entries 0x37 .. 0xD7 (the table's slope at case 2's
+ * near and far) across the frame, bits 8..15 stepping by 0x50 */
+static uint32_t rampZ(int c)
+{
+    return 0x370000u + (uint32_t)c * 0x5000u;
+}
+
+static void recordRamp(void)
+{
+    dl_SetDLPriority(0);
+    rd_set_target(rd_target(RD_TARGET_SCENE), rd_target(RD_TARGET_SCENE), W, H, RD_TARGET_OFFSET);
+    rd_clear_target(rd_target(RD_TARGET_SCENE), kClear, 1, 0);
+    rd_texture_off();
+    rd_abe(0);
+    rd_test_gs(0x30000);
+    rd_z_write(1);
+    rd_fba(0);
+    for (int c = 0; c < W; c++) {
+        RdScreenVtx v[2] = {sv(c, 0, rampZ(c), kClear), sv(c + 1, H, rampZ(c), kClear)};
+        rd_screen_prims(RD_PRIM_SPRITES, v, 2, RD_SPACE_WORLD, 0, 0);
+    }
+    setFog(2);
+    fog_MakeFogClut();
+    dl_SetDLPriority(3);
+    fog_DrawFog();
+    dl_Swap();
+}
+
+/* the alpha of texel (x, y) of the ramp at GS Z z (a1x_fog) */
+static uint32_t rampAlpha(const uint8_t *lut, uint32_t z, uint32_t x, uint32_t y, uint32_t tw,
+                          uint32_t th)
+{
+    const uint32_t n = (z >> 16) & 0xFFu, f = (z >> 8) & 0xFFu;
+    const uint32_t lo = lut[n * 4 + 3], hi = lut[(n < 255u ? n + 1u : 255u) * 4 + 3];
+    return a1x_fog(lo, hi, f, (uint32_t)kFog[2][8], a1x_bayer8(x - tw / 2u, y - th / 2u));
+}
+
+static void checkRamp(void)
+{
+    const uint32_t before = g_rd.above1xDraws;
+    recordRamp();
+    uint32_t w = 0, h = 0;
+    const uint32_t tw = W * RAMP_S, th = H * RAMP_S;
+    if (!rd__read_target(rd_target(RD_TARGET_SCENE), s_ramp, sizeof(s_ramp), &w, &h) || w != tw ||
+        h != th) {
+        CHECK(0, "SCENE readback at %dx (%ux%u)", RAMP_S, w, h);
+        return;
+    }
+    CHECK(g_rd.above1xDraws > before, "%dx: the fog counted above 1x (%u)", RAMP_S,
+          g_rd.above1xDraws - before);
+    uint8_t lut[256 * 4];
+    logicalLut(2, lut);
+    const bool d24 = rd__depth_unorm_steps() > 0.0f;
+    int bad = 0, badRgb = 0, levels[256] = {0}, distinct = 0, low = 0;
+    for (uint32_t y = 0; y < th; y++) {
+        for (uint32_t x = 0; x < tw; x++) {
+            const uint32_t z = rampZ((int)(x / RAMP_S));
+            const uint8_t *g = &s_ramp[(y * tw + x) * 4];
+            uint32_t a = rampAlpha(lut, z, x, y, tw, th);
+            if (g[3] != a && d24 && g[3] == rampAlpha(lut, z - 256u, x, y, tw, th)) {
+                a = g[3];
+                low++;
+            }
+            if (g[3] != a) {
+                if (bad < 5) {
+                    printf("  (a) texel (%u,%u) Z %08X: alpha %u, the formula %u\n", x, y, z, g[3],
+                           a);
+                }
+                bad++;
+            }
+            levels[g[3]]++;
+            for (int ch = 0; ch < 3; ch++) {
+                const int want = lerp(kFog[2][1 + ch], kClear[ch], (int)a);
+                if (abs((int)g[ch] - want) > 2) {
+                    if (badRgb < 5) {
+                        printf("  (a) texel (%u,%u) channel %d: %u, want %d\n", x, y, ch, g[ch],
+                               want);
+                    }
+                    badRgb++;
+                }
+            }
+        }
+    }
+    for (int v = 0; v < 256; v++) {
+        distinct += levels[v] > 0;
+    }
+    printf("  (a) %dx: %u texels, %d alpha values, %d beyond the formula, %d colours beyond 2 "
+           "LSB%s\n",
+           RAMP_S, tw * th, distinct, bad, badRgb, d24 ? " (24-bit depth)" : "");
+    if (low) {
+        printf("  (a) %d texels at the formula for Z - 256 (the 24-bit step)\n", low);
+    }
+    CHECK(bad == 0, "%dx: %d texels' alpha beyond the formula", RAMP_S, bad);
+    CHECK(badRgb == 0, "%dx: %d texels' colour beyond 2 LSB", RAMP_S, badRgb);
+}
+
 static void checkPipelines(void)
 {
     static RdPipeKeyInt keys[RD_PIPELINE_REACHABLE_MAX];
@@ -1033,6 +1146,7 @@ int main(void)
     }
 
     checkPipelines();
+    CHECK(g_rd.above1xDraws == 0, "1x: %u draws above 1x", g_rd.above1xDraws);
     CHECK(rhi_vk_validation_error_count() == 0, "%u validation errors",
           rhi_vk_validation_error_count());
     CHECK(rd__not_implemented_count() == 0, "no stubbed command replayed");
@@ -1050,6 +1164,7 @@ int main(void)
         gif_HostFrameReset();
         dl_Clear();
         checkEdge();
+        checkRamp();
         CHECK(rhi_vk_validation_error_count() == 0, "%dx: %u validation errors", EDGE_S,
               rhi_vk_validation_error_count());
         rd_shutdown();

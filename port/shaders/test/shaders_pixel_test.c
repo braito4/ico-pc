@@ -20,7 +20,9 @@
  *           block), gs_bspline_w the B-spline's distance form (each fraction's weights summing to
  *           24576, mirror-symmetric), gs_box_w the counted overlap, the
  *           axes' kinds and taps, and fx_sprite_ps's separable combine over
- *           a noise texture, every step from 0 to past the box's widest
+ *           a noise texture, every step from 0 to past the box's widest;
+ *           gs_fog_channel (the fog above 1x) against a1x_fog's formula
+ *           over entries, fractions, factors and every dither threshold
  *
  * --nodual (ctest shaders_pixel_nodual): sprite_ps_nodual,
  * and the draws that read the second output (the lerps, Cd*FIX + Cs, the
@@ -319,8 +321,32 @@ static void checkAbove1xKernels(void)
             }
         }
     }
-    printf("  above1x kernels (CPU): %s (GS %d, box %d, B-spline %d steps)\n",
-           failures == f0 ? "ok" : "FAILED", kinds[0], kinds[1], kinds[2]);
+    /* the fog's channel against the formula, and the GS's MODULATE at the
+     * table's own entries without the dither's carry (f = 0, mul 128) */
+    static const uint muls[] = {0u, 1u, 0x40u, 0x60u, 0x80u, 0xC0u, 0xFFu};
+    int fogN = 0;
+    for (uint lo = 0; lo < 256; lo += 5) {
+        for (uint hi = 0; hi < 256; hi += 9) {
+            for (uint f = 0; f < 256; f += 3) {
+                for (uint m = 0; m < sizeof(muls) / sizeof(muls[0]); m++) {
+                    for (uint b = 0; b < 64; b++) {
+                        const uint got = gs_fog_channel(lo, hi, f, muls[m], b);
+                        const uint want = a1x_fog(lo, hi, f, muls[m], b);
+                        fogN++;
+                        if ((got != want || (f == 0 && muls[m] == 0x80u && got != lo)) &&
+                            failures < f0 + 20) {
+                            printf("FAIL above1x: gs_fog_channel(%u, %u, %u, %u, %u) = %u, the "
+                                   "formula %u\n",
+                                   lo, hi, f, muls[m], b, got, want);
+                            failures++;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    printf("  above1x kernels (CPU): %s (GS %d, box %d, B-spline %d steps; %d fog channels)\n",
+           failures == f0 ? "ok" : "FAILED", kinds[0], kinds[1], kinds[2], fogN);
 }
 
 int main(int argc, char **argv)

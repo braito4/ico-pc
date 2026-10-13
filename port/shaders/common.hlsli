@@ -158,6 +158,21 @@ GS_FN int gs_rs_div(int kind, int step32, uint bilinear)
            : 1;
 }
 
+// The fog above 1x (fog_lut.hlsl, g_param.w): one channel of the fog's
+// texel between the table's neighbours lo = LUT[n] and hi = LUT[n + 1] at
+// the depth's next eight bits f (Z bits 8..15), times the texture
+// function's factor mul in 1/128 (MODULATE: the vertex colour; DECAL:
+// 128), with the ordered dither's threshold b (gs_bayer8, 0..63) before
+// the rounding down:
+//   floor((lo (256 - f) + hi f) / 256 * mul / 128 + (2 b + 1) / 128),
+// at most 255. In 1/32768 throughout (the sum below 2^24): at f = 0 and
+// mul = 128 it is lo exactly, whatever b.
+GS_FN uint gs_fog_channel(uint lo, uint hi, uint f, uint mul, uint b)
+{
+    const uint x = (lo * (256u - f) + hi * f) * mul;
+    return min((x + 256u * (2u * (b & 63u) + 1u)) >> 15, 255u);
+}
+
 #ifndef ICO_GS_MATH_C // the rest is HLSL only
 
 // Vulkan-only attributes: DXC rejects them (as warnings, which are errors
@@ -289,6 +304,12 @@ cbuffer DrawCB : register(b1, space1)
 // takes the texel the GS takes (gs_nearest_uv; with DF_GS_LOD
 // gs_sample_lod_nearest, which reads DF_TEXA_CLAMP_S/T for the wrap)
 #define DF_NEAREST 16777216u
+// Above 1x (rd_replay.c fillDrawCB): a bilinear draw sampling a target
+// whose scale is not the bound target's, without GS levels; sprite_ps and
+// sprite_colour resample it by the step (sprite.hlsl sprite_above1x), the
+// wrap in DF_TEXA_CLAMP_S/T. Never set when the two scales are equal, so
+// never when every target is at scale 1.
+#define DF_ABOVE1X 33554432u
 
 // TEST.DATE. snap is the R8 DATE snapshot (1.0 where the destination alpha
 // had its MSB set when the snapshot was taken). Returns true when the

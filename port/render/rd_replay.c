@@ -2838,6 +2838,37 @@ static void sheetParam(const RdTexRec *t, float param[4])
     }
 }
 
+/* Above 1x (common.hlsli DF_ABOVE1X): a pass of sprite_ps, sprite_aa1_ps
+ * or sprite_stq_ps whose texture is a colour view of a target, both filters
+ * linear, no GS levels, the texture's scale not the bound target's: the
+ * shadow levels (scale 1) composited into SCENE, the softening's SCENE into
+ * AA0 and AA0 or AA1 back (when the scene's scale is above the work
+ * targets'), a work target drawn into SCENE.  The shadow chain's first
+ * level reads the count already box-averaged to its GS size (shadowReduce),
+ * at scale 1 as the levels are.  The scales are equal for every target at
+ * scale 1, so never there. */
+static int spriteAbove1x(const Replay *r, const RdDrawPass *dp, const DrawSetup *ds)
+{
+    const RdDrawState *d = &r->st.ds;
+    if (!ds->textured || !d->texEnabled || ds->gsLevels || ds->replacement || !ds->tc ||
+        d->magFilter != RD_FILTER_LINEAR || d->minFilter != RD_FILTER_LINEAR ||
+        (dp->key.fs != RD_FS_SPRITE && dp->key.fs != RD_FS_SPRITE_AA1 &&
+         dp->key.fs != RD_FS_SPRITE_STQ)) {
+        return 0;
+    }
+    const RdTexRec *t = rd__tex_rec(r->st.tex);
+    if (!t || t->kind != RD_TEXKIND_TARGET || t->view == RD_VIEW_DEPTH) {
+        return 0;
+    }
+    const RdTargetRec *src = rd__target_rec(t->target);
+    if (!src) {
+        return 0;
+    }
+    /* the shadow count at its GS size (resolveTexture) is at scale 1 */
+    const int red = s_shadowRed.id && ds->tex.id == s_shadowRed.id;
+    return (red ? 1.0f : src->sx) != ds->tc->sx || (red ? 1.0f : src->sy) != ds->tc->sy;
+}
+
 /* DrawCB for one planned pass: sprite_ps and vu_ps read the same fields. */
 static void fillDrawCB(const Replay *r, const RdDrawPass *dp, const DrawSetup *ds, IcoDrawCB *cb)
 {
@@ -2888,6 +2919,16 @@ static void fillDrawCB(const Replay *r, const RdDrawPass *dp, const DrawSetup *d
             cb->mode[0] |= (drawWrap(r, ds, (RdWrap)r->st.ds.wrap.s) ? ICO_DF_TEXA_CLAMP_S : 0u) |
                            (drawWrap(r, ds, (RdWrap)r->st.ds.wrap.t) ? ICO_DF_TEXA_CLAMP_T : 0u);
         }
+    }
+    if (spriteAbove1x(r, dp, ds)) {
+        /* above 1x: the step's kernel (sprite.hlsl sprite_above1x), the
+         * wrap its loads reproduce */
+        cb->mode[0] |=
+            ICO_DF_ABOVE1X |
+            (drawWrap(r, ds, (RdWrap)r->st.ds.wrap.s) != RD_WRAP_REPEAT ? ICO_DF_TEXA_CLAMP_S
+                                                                        : 0u) |
+            (drawWrap(r, ds, (RdWrap)r->st.ds.wrap.t) != RD_WRAP_REPEAT ? ICO_DF_TEXA_CLAMP_T : 0u);
+        g_rd.above1xDraws++;
     }
     cb->mode[2] = dp->modeZ;
     cb->mode[3] = dp->aref;
@@ -4955,6 +4996,8 @@ static void doFog(Replay *r, const RdFrame *f, const RdCmd *c)
         return;
     }
     rhi_cmd_set_vertex_buffer(s_cl, 0, g_rd.ring[s_slot], vOff);
+    /* above 1x: the colour or the depth target scaled (never at scale 1) */
+    const bool fogAbove1x = tc->sx != 1.0f || tc->sy != 1.0f || tz->sx != 1.0f || tz->sy != 1.0f;
     for (int i = 0; i < np; i++) {
         RhiPipeline pipe = rd__get_pipeline(&dp[i].key);
         if (!pipe.id) {
@@ -4970,6 +5013,16 @@ static void doFog(Replay *r, const RdFrame *f, const RdCmd *c)
         cb.param[2] = src.sabotaged ? 1.0f : 0.0f; /* ICO_RD_FOG_SABOTAGE: reads give 0 */
         cb.scale[0] = tz->sx;                      /* the depth's texels per GS pixel */
         cb.scale[1] = tz->sy;
+        if (fogAbove1x) {
+            /* above 1x: the table read between its entries and dithered
+             * from the target's centre texel (fog_lut.hlsl) */
+            cb.param[3] = 1.0f;
+            cb.uvRect[0] = (float)(tc->tw / 2u);
+            cb.uvRect[1] = (float)(tc->th / 2u);
+            if (!rd__no_dual_second(dp, i)) {
+                g_rd.above1xDraws++;
+            }
+        }
         dstPassMode(r, &dp[i].key); /* a storage pass for a storage destination read */
         rhi_cmd_set_pipeline(s_cl, pipe);
         rd__bind_uniform(s_cl, 0, frame);

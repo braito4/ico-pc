@@ -1492,8 +1492,10 @@ typedef struct RdContext {
     RdTexRec *textures; /* RD_MAX_TEXTURES */
     RdMeshRec *meshes;  /* RD_MAX_MESHES */
     RdStats stats;
-    /* staticBlur sprites drawn with RD_FXF_ABOVE1X since rd_init (rd_replay.c
-     * doBlurSpriteDraw): 0 while every target is at scale 1 */
+    /* draws resampled above 1x since rd_init: the staticBlur sprites with
+     * RD_FXF_ABOVE1X (rd_replay.c doBlurSpriteDraw), the sprite passes with
+     * ICO_DF_ABOVE1X (fillDrawCB) and the fog passes above 1x (doFog): 0
+     * while every target is at scale 1 */
     uint32_t above1xDraws;
     uint32_t onceFlags;
 
