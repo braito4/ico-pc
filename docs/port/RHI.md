@@ -14,6 +14,7 @@ window paces and presents is [DISPLAY.md](DISPLAY.md).
 | `port/rhi/rhi_backend.h` | the backend table (`RHI_BACKEND_FUNCS`, `RhiBackendTable`, `RHI_BACKEND_DEFINE`) |
 | `port/rhi/rhi_backend_names.h` | the renaming of every entry point to `rhi_<prefix>_*` inside a backend |
 | `port/rhi/rhi_backend.c` | the real `rhi_*` functions, forwarding to the selected table; the layer classifiers |
+| `port/rhi/rhi_driver_version.h`, `rhi_driver_version.c` | a Vulkan `driverVersion` decoded the way its vendor writes it, for the adapter log line |
 | `port/rhi/CMakeLists.txt` | the libraries, SDL3's prefix per target, the tests |
 | `port/rhi/vk/rhi_vk.h` | Vulkan extras for tests and tools only |
 | `port/rhi/vk/vk_device.c` | instance, device pick, features, limits, validation, the `ICO_VK_*` switches, handle pools |
@@ -36,14 +37,17 @@ window paces and presents is [DISPLAY.md](DISPLAY.md).
 
 ## The interface
 
-`rhi.h` keeps the surface small: about a dozen shader programs, under a hundred pipelines, about
-fifteen render targets, ring buffers for per-frame data and no compute. Its rules for additions:
-nothing Vulkan-only (no input attachments, no framebuffer feedback loops, no push descriptors;
-anything added must be expressible in D3D12 and Metal); explicit state transitions
-(`rhi_cmd_barrier`: the caller knows the frame graph and backends do not track state); opaque 32-bit
-handles with a generation, 0 being null; byte layouts fixed by rd and shared with the shaders
-through `port/shaders/shader_consts.h` (`port/rhi/rhi.h`, header comment). The destination read's
-input attachment (`RHI_BIND_INPUT_ATTACHMENT`, Vulkan only) sits behind its own limits bit (below).
+`rhi.h` keeps the surface small: fourteen shader files, a reachable set of a few hundred pipelines
+(held under `RD_PIPELINE_REACHABLE_MAX`, 768, `port/render/rd_state.h`), about twenty render
+targets, ring buffers for per-frame data and no compute. Its rules for additions: nothing
+Vulkan-only (no input attachments, no framebuffer feedback loops, no push descriptors; anything
+added must be expressible in D3D12 and Metal); explicit state transitions (`rhi_cmd_barrier`: the
+caller knows the frame graph and records every texture transition; a backend adds none of its own
+for textures, though D3D12 keeps a record of each texture's state to fill in a transition from
+UNDEFINED, and orders buffer copies and same-state copies itself); opaque 32-bit handles with a
+generation, 0 being null; byte layouts fixed by rd and shared with the shaders through
+`port/shaders/shader_consts.h` (`port/rhi/rhi.h`, header comment). The destination read's input
+attachment (`RHI_BIND_INPUT_ATTACHMENT`, Vulkan only) sits behind its own limits bit (below).
 
 **Handles and frames.** `RhiBuffer`, `RhiTexture`, `RhiSampler`, `RhiShader`, `RhiPipeline`,
 `RhiBindGroupLayout`, `RhiBindGroup`, `RhiCommandList`, `RhiFence`. `RHI_FRAMES_IN_FLIGHT` is 2;
@@ -138,8 +142,9 @@ D3D12 reports none (`port/rhi/rhi.h`, GPU timestamps).
 
 **Present mode and timing.** `rhi_prefer_mailbox` asks for mailbox with vsync from the next
 swapchain (D3D12: not offered); `rhi_present_mailbox` and `rhi_present_mode_name` say what the
-swapchain has. `rhi_present_timing`, `_use`, `rhi_present_last_id` and `rhi_present_timing_next` are
-the display's timing of presents (Vulkan's present wait, below; D3D12: false, nothing, 0, -1).
+swapchain has. `rhi_present_timing`, `rhi_present_timing_use`, `rhi_present_last_id` and
+`rhi_present_timing_next` are the display's timing of presents (Vulkan's present wait, below; D3D12:
+false, nothing, 0, -1).
 `rhi_present_statistics(&presentCount, &presentRefresh, &syncRefresh, &syncNs)` is the swapchain's
 own count of the pictures it showed, read after each present: D3D12's `GetFrameStatistics`, with the
 last vblank's QPC time moved onto `SDL_GetTicksNS`'s clock; false on Vulkan, before the first
@@ -169,15 +174,20 @@ backends are listed by `ICO_RHI_HAVE_VK` and `ICO_RHI_HAVE_D3D12`, Vulkan first.
 `ICO_RHI_BACKEND` when it names a linked backend, else the first linked one. It refuses a backend
 not in the build and any change while a device is up; `rhi_backend_name(i)` lists the linked ones
 (`port/rhi/rhi_backend.c` (`find`, `defaultBackend`, `rhi_create_backend`)). The window passes
-`[video] backend` (default "vulkan"), so `ICO_RHI_BACKEND` reaches only callers that pass none
-(`port/platform/window_host.c` (`ico_window_open`)).
+`[video] backend` (default "vulkan"); after a graphics driver crash at start the relaunch's retry
+step may name "d3d12" instead when the player chose none (`STARTUP_RETRY_ENV`,
+`startup_retry_parse`); a name the build lacks logs
+`window: renderer backend "<name>" is not in this build; using vulkan` and takes Vulkan.
+`ICO_RHI_BACKEND` reaches only callers that pass no name (`port/platform/window_host.c`
+(`ico_window_open`); [DISPLAY.md](DISPLAY.md#the-window-host)).
 
 `port/rhi/CMakeLists.txt` builds `ico_rhi_vulkan` (option `ICO_RHI_VULKAN`, on), `ico_rhi_d3d12`
 (`ICO_RHI_D3D12`, on for 64-bit Windows) and `ico_rhi` (the forwarders, linking the backends);
-`ico_rhi_vk` is what `port/render` and the shader tests link. Vulkan-Headers and volk come from
-`tools/fetch_deps.sh` (the backend loads the Vulkan library at run time); without SDL3 the backends
-are headless-only. The D3D12 backend uses mingw-w64's own headers and loads `d3d12.dll` and
-`dxgi.dll` at run time (`port/rhi/CMakeLists.txt`, header comment).
+`ico_rhi_vk` is what `port/render` and the shader tests link. `ICO_RHI_MOLTENVK` (on for Apple
+targets) links the Vulkan backend to MoltenVK instead of compiling volk (`cmake/IcoMoltenVK.cmake`).
+Vulkan-Headers and volk come from `tools/fetch_deps.sh` (the backend loads the Vulkan library at run
+time); without SDL3 the backends are headless-only. The D3D12 backend uses mingw-w64's own headers
+and loads `d3d12.dll` and `dxgi.dll` at run time (`port/rhi/CMakeLists.txt`, header comment).
 
 ## Vulkan
 
@@ -185,10 +195,15 @@ are headless-only. The D3D12 backend uses mingw-w64's own headers and loads `d3d
 the extension), timeline semaphores, the swapchain extension on a window, a graphics queue that can
 present, and RGBA8, RGBA8 UINT, R8, D32F and D32F_S8 or D24S8 formats. Devices score discrete 1000,
 integrated 500, virtual 200, CPU 100, plus 10 for core 1.3 and 5 for dual-source blending
-(`vkr_rate_device`). Only the features used are enabled; the destination read takes
-`VK_EXT_fragment_shader_interlock` or rasterization-order attachment access with
-`VK_KHR_dynamic_rendering_local_read`. The scene's depth-stencil is D32_SFLOAT_S8_UINT, or
-D24_UNORM_S8_UINT when only that has the sampled and transfer features (`vkr_choose_depth_stencil`).
+(`vkr_rate_device`). The adapter line gives the driver's name and version, decoded by
+`rhi_driver_version_text`: NVIDIA's own driver as major 10 bits, minor 8, a third part 8 and a
+fourth 6, Intel's Windows driver as major 18 bits and minor 14, every other driver in the Vulkan
+version packing; `VkDriverId` decides, and the vendor id alone when it is 0
+(`port/rhi/rhi_driver_version.h`; `port/rhi/vk/vk_device.c` (`vkr_driver_text`)). Only the features
+used are enabled; the destination read takes `VK_EXT_fragment_shader_interlock` or
+rasterization-order attachment access with `VK_KHR_dynamic_rendering_local_read`. The scene's
+depth-stencil is D32_SFLOAT_S8_UINT, or D24_UNORM_S8_UINT when only that has the sampled and
+transfer features (`vkr_choose_depth_stencil`).
 
 | variable | effect |
 | --- | --- |
@@ -200,7 +215,7 @@ D24_UNORM_S8_UINT when only that has the sampled and transfer features (`vkr_cho
 | `ICO_VK_FAKE_NO_MSAA` | 1 reports single sampling only |
 | `ICO_VK_FAKE_NO_DST` | 1 reports no destination read |
 | `ICO_VK_STORAGE_BARRIERS` | 1 puts the by-region barrier before a destination-read draw that only the validation layer needs |
-| `ICO_VK_GLOBAL_BARRIERS` | 1 records a global barrier before every pass (`vk_cmd.c`) |
+| `ICO_VK_GLOBAL_BARRIERS` | 1 records a global barrier before every render pass and copy (`vk_cmd.c`) |
 | `ICO_VK_PRESENT_WAIT` | 1 uses `VK_KHR_present_id` and `VK_KHR_present_wait` where offered (off otherwise) |
 | `ICO_VK_FIFO_LATEST_READY` | 1 uses `VK_PRESENT_MODE_FIFO_LATEST_READY_EXT` where FIFO would be taken, when offered |
 | `ICO_VK_POLL_SURFACE` | 1 polls the surface size after presents, as Android always does (`vk_swapchain.c`) |
@@ -240,15 +255,17 @@ header (`VkPipelineCacheHeaderVersionOne`: header size, version one, vendor id, 
 starts empty, as does data the driver refuses. Every pipeline is created through it, and
 `rhi_shutdown` writes it back to `<path>.tmp` and renames it over the file
 (`port/rhi/vk/vk_pipeline.c` (`vkr_cache_load`, `vkr_pipeline_cache_init`,
-`vkr_pipeline_cache_shutdown`)).
+`vkr_pipeline_cache_shutdown`)). `rhi_pipeline_cache_loaded` says whether a file was loaded; the
+window passes it to the crash diagnostics, whose start-up retry deletes the file first
+(`port/platform/window_host.c` (`ico_window_open`)).
 
 **Bindings and synchronisation.** A layout slot is a descriptor binding at the slot plus its type's
-shift (`vkr_bindTypeMap`: b 0, t 16, s 32, u 48, the shifts DXC compiles with). Each frame slot owns
-a command pool, descriptor pools and the objects destroyed while it recorded; every submit signals
-the next value of one timeline semaphore that `rhi_wait_frame` waits on; the first submit after an
-acquire waits on its semaphore and the present on the image's `renderDone`
-(`port/rhi/vk/vk_pipeline.c`; `port/rhi/vk/vk_cmd.c`, header comment). Every buffer and texture has
-its own `VkDeviceMemory` (`port/rhi/vk/vk_resource.c`, header comment).
+shift (`port/rhi/vk/vk_enums.h` (`vkr_bindTypeMap`): b 0, t 16, s 32, u 48, the shifts DXC compiles
+with). Each frame slot owns a command pool, descriptor pools and the objects destroyed while it
+recorded; every submit signals the next value of one timeline semaphore that `rhi_wait_frame` waits
+on; the first submit after an acquire waits on its semaphore and the present on the image's
+`renderDone` (`port/rhi/vk/vk_pipeline.c`; `port/rhi/vk/vk_cmd.c`, header comment). Every buffer and
+texture has its own `VkDeviceMemory` (`port/rhi/vk/vk_resource.c`, header comment).
 
 **Android surface.** With a driver the app loaded itself the instance belongs to another loader, so
 `vk_surface_android.c` makes the surface through the `vkGetInstanceProcAddr` given to volk instead
@@ -266,7 +283,11 @@ that makes texture creation fail as out of memory.
 the Vulkan path of the same executable never depends on them. A module loaded from outside the
 system directory (ReShade's `dxgi.dll` beside the program) makes `rhi_injector_name` "ReShade".
 Adapters are enumerated discrete first (`EnumAdapterByGpuPreference`); a software adapter or one
-without feature level 11_0 is skipped; with none the device runs on WARP (`dx_pick_adapter`).
+without feature level 11_0 is skipped; with none the device runs on WARP (`dx_pick_adapter`). Each
+enumerated adapter logs `rhi_d3d12: adapter N: <name>`, followed by
+`(unsuitable: a software adapter, or no feature level 11_0)` for one it skips, and the device line
+is `rhi_d3d12: <adapter> (D3D12, feature level 11_0[, WARP][; driver version a.b.c.d])[, headless]`,
+the user-mode driver's version in four 16-bit parts (`dx_driver_text`, `rhi_init`).
 
 | variable | effect |
 | --- | --- |
@@ -276,8 +297,17 @@ without feature level 11_0 is skipped; with none the device runs on WARP (`dx_pi
 | `ICO_D3D12_FRAME_LATENCY` | the swapchain's frame latency (below) |
 
 The debug layer's info queue keeps corruption, errors and warnings and drops the clear-value
-performance notes (`dx_setup_info_queue`). A lost device (removed, reset, hung, driver internal
-error) is logged once with the removed reason; later failures are counted, not logged (`dx_check`).
+performance notes (`port/rhi/d3d12/d3d12_device.c` (`dx_setup_info_queue`)). A failed call logs
+`rhi_d3d12: <call> failed (HRESULT 0x...) at <file>:<line>`; a lost device (removed, reset, hung,
+driver internal error) is logged once with the removed reason; later failures are counted, not
+logged (`port/rhi/d3d12/d3d12_device.c` (`dx_check`)).
+
+**Frames and fences** (`port/rhi/d3d12/d3d12_cmd.c`). One `ID3D12Fence` on the direct queue: every
+`rhi_submit` executes its list and stores the next signalled value in the current frame slot
+(`dx_signal`); `rhi_wait_frame` moves to the next slot, waits for that slot's value and then resets
+its command allocators, descriptor rings and deferred destroys (`dx_recycle_frame`,
+`dx_wait_fence`); `rhi_wait_idle` signals and waits at once. Each wait is counted into `fenceWaits`
+and `fenceWaitNs`.
 
 **Bookkeeping** (`port/rhi/d3d12/d3d12_plan.h`), header-free so it is tested on every host: the
 `RhiState` to `D3D12_RESOURCE_STATES` table (depth SHADER_READ and DEPTH_READ are one state, PRESENT
@@ -296,20 +326,32 @@ window's HWND, `DX_SWAP_BUFFERS` (3) BGRA8 buffers, stretch scaling, DXGI's Alt+
 `DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT` when a frame latency is wanted; the same flags
 go to `ResizeBuffers`, since DXGI refuses a change of the waitable flag (`dx_swap_flags`).
 `ICO_D3D12_FRAME_LATENCY` "0" makes no waitable object (Present blocks on a full queue), "1" to "3"
-that latency, anything else 2 (`dx_frame_latency_wanted`). After creation `SetMaximumFrameLatency`
-and `GetFrameLatencyWaitableObject`; a failure logs one line and Present waits for the display
-(`dx_frame_latency_open`). With the object and vsync on, `rhi_acquire_backbuffer` waits on it (1 s
-at most, logged once) before the [replay](ARCHITECTURE.md#terms) records, timed into `acquireNs`, so
-`Present` returns at once and the picture is drawn after the wait rather than before it; the first
-acquire waits too. `rhi_present` calls `Present(1)` with vsync and `Present(0)` without
-(`DXGI_PRESENT_ALLOW_TEARING` where allowed), times it into `presentNs`, treats
-`DXGI_STATUS_OCCLUDED` as not shown, reads the frame statistics (`PresentCount`,
+that latency (1 serialises the CPU and the GPU), anything else 2, which logs
+`ICO_D3D12_FRAME_LATENCY=<v> is not 0..3: frame latency 2` (`dx_frame_latency_wanted`). After
+creation `SetMaximumFrameLatency` and `GetFrameLatencyWaitableObject`: a failed
+`SetMaximumFrameLatency` logs `frame latency N not set: no waitable object` after the `DX_CHECK`
+line, a missing object `no frame latency waitable object: Present waits for the display`; either way
+the swapchain goes on without the wait (`dx_frame_latency_open`). Creation logs
+`swapchain WxH, 3 buffers, frame latency N (waitable)` or `..., no waitable object`
+(`dx_swapchain_create`). While the object exists, `rhi_acquire_backbuffer` waits on it before each
+acquire, skipped after an occluded Present; the wait comes before the
+[replay](ARCHITECTURE.md#terms) records and is timed into `acquireNs`, so `Present` returns at once,
+the picture is drawn after the wait rather than before it, and the wait for the display lands in the
+replay's "acquire" phase; the first acquire waits too. `rhi_present` calls `Present(1)` with vsync
+and `Present(0)` without (`DXGI_PRESENT_ALLOW_TEARING` where allowed), times it into `presentNs`,
+treats `DXGI_STATUS_OCCLUDED` as not shown, reads the frame statistics (`PresentCount`,
 `PresentRefreshCount`, `SyncRefreshCount`, `SyncQPCTime`) after a shown present, and resizes the
-buffers when the window's pixel size changed, as DXGI has no out-of-date result. The surface calls
-do nothing: a DXGI swapchain stays on its window (`port/rhi/d3d12/d3d12_swapchain.c`).
+buffers when the window's pixel size changed, as DXGI has no out-of-date result.
+`rhi_resize_swapchain` calls `rhi_wait_idle` before `ResizeBuffers` and returns false for a zero
+size (minimised), which the caller retries at the next resize. `rhi_present_mode_name` reports
+`fifo` with vsync, `immediate` without vsync where tearing is allowed, else `mailbox`. The surface
+calls do nothing: a DXGI swapchain stays on its window (`port/rhi/d3d12/d3d12_swapchain.c`).
 
 **Not implemented on D3D12**: timestamps, mailbox with vsync, the display's timing of presents, the
-pipeline cache file, and the stats beyond those above (`port/rhi/d3d12/d3d12_device.c`).
+pipeline cache file, and the stats beyond those above (`port/rhi/d3d12/d3d12_device.c`). On Windows
+the vsync lock takes the display's vblanks from the window's own clock thread on
+`IDXGIOutput::WaitForVBlank`, outside the RHI and for both backends
+(`port/platform/display_clock_win.c`; [DISPLAY.md](DISPLAY.md#the-vblank-clock)).
 
 **Test extras** (`port/rhi/d3d12/rhi_d3d12.h`): the debug layer's error count, whether it is active,
 and whether the device runs on WARP.
@@ -331,15 +373,18 @@ SHA-256, the licences of the libraries compiled into it, and builds a static SDL
 
 | test | checks |
 | --- | --- |
-| `rhi_test_common.c`, `.h` | headless rendering on any backend, texel by texel: a 64x32 target in eight cells (dual-source blending, stencil wrap, reversed depth, colour mask, a copied texture drawn indexed), an RGBA8 UINT target, R8 copies and same-state ordering, a device-local buffer, depth readback, three frames |
+| `rhi_test_common.c`, `rhi_test_common.h` | headless rendering on any backend, texel by texel: a 64x32 target in eight cells (dual-source blending, stencil wrap, reversed depth, colour mask, a copied texture drawn indexed), an RGBA8 UINT target, R8 copies and same-state ordering, a device-local buffer, depth readback, three frames |
 | `rhi_vk_test.c` | the common cells on Vulkan, a hazard-tracking cell, and the pipeline cache file (written, read back, another device's or garbage ignored); ctest `rhi_vk`, and `rhi_vk_nodual`, `rhi_vk_d24s8`, `rhi_vk_mali` under the fake switches |
-| `rhi_vk_swapchain_test.c` | the window path on SDL's offscreen driver: frames, readback order, surface release and recreation, suboptimal and lost presents, resizes, the surface poll, submits per frame, the present-wait stand-in and a hanging wait |
-| `rhi_vk_present_mode_test.c` | `vkr_choose_present_mode` over the mode sets drivers offer |
-| `rhi_vk_enum_test.c` | every `rhi.h` enumeration has a Vulkan mapping; the layer classifiers and `rhi_layer_switched_on` |
-| `rhi_d3d12_plan_test.c` | `d3d12_plan.c` on every host; with the shader table, every vertex shader's DXIL inputs against its SPIR-V locations and every DXIL blob signed |
-| `rhi_d3d12_test.c` | Windows, double-clickable: the cells on WARP, on the hardware adapter, the swapchain on a hidden window, then Vulkan for comparison; writes `rhi_d3d12_test.log` and shows a message box (`--console` for ctest) |
-| `compare_backends.cmd`, `compare_png.ps1` | Windows: every dump in `dumps\` rendered by `rd_replay_tool` on both backends, compared texel by texel: DISPLAY identical, the presented picture within 1 LSB |
+| `rhi_vk_swapchain_test.c` | the window path on SDL's offscreen driver: frames, readback order, surface release and recreation, suboptimal and lost presents, resizes, the surface poll, submits per frame, the present-wait stand-in and a hanging wait; ctest `rhi_vk_swapchain` |
+| `rhi_vk_present_mode_test.c` | `vkr_choose_present_mode` over the mode sets drivers offer, and `vkr_present_wait_wanted`; ctest `rhi_vk_present_mode` |
+| `rhi_vk_enum_test.c` | every `rhi.h` enumeration has a Vulkan mapping; the layer classifiers and `rhi_layer_switched_on`; ctest `rhi_vk_enum` |
+| `rhi_driver_version_test.c` | the driver version text of each vendor's encoding; ctest `rhi_driver_version` |
+| `rhi_d3d12_plan_test.c` | `d3d12_plan.c` on every host; with the shader table, every vertex shader's DXIL inputs against its SPIR-V locations and every DXIL blob signed; ctest `rhi_d3d12_plan` |
+| `rhi_d3d12_test.c` | Windows, double-clickable: the cells on WARP, on the hardware adapter, the swapchain on a hidden window, then Vulkan for comparison; writes `rhi_d3d12_test.log` and shows a message box (`--console` for ctest); ctest `rhi_d3d12` |
+| `compare_backends.cmd`, `compare_png.ps1` | Windows: every dump in `dumps\` rendered by `rd_replay_tool` on both backends, DISPLAY and the presented picture, each pair compared texel by texel and passing within 1 LSB (DISPLAY is expected identical) |
 | `shaders/rhi_test.hlsl`, `gen_shaders.sh` | the tests' shaders, committed as `rhi_test_spv.h` and `rhi_test_dxil.h` so the tests build without DXC |
 
 The Vulkan tests exit 77 (skipped) without a device; under the fetched validation layer `rhi_vk`
 fails on any validation error (`port/rhi/CMakeLists.txt`; `port/rhi/test/*`, header comments).
+`ctest --test-dir <build> -R '^rhi_'` runs them; [TESTING.md](TESTING.md#portrhitest) lists every
+test of the tree.

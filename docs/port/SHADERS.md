@@ -71,7 +71,7 @@ each file's header comment):
 | file | entries | what it draws |
 | --- | --- | --- |
 | `sprite.hlsl` | `sprite_ui_vs`, `sprite_world_vs`, `sprite_ps`, `sprite_texa_ps`, `date_snap_ps`, `sprite_aa1_*`, `sprite_stq_*`, `sprite_plane_*_vs`, `sprite_stq_plane_*_vs` | screen-space prims in GS window coordinates: TEXA per texel before the filter, the DATE snapshot, PRIM.AA1 lines and triangles with a coverage attribute, perspective-correct STQ, and screen-prim triangles evaluated from their planes the same at every frame width |
-| `blit.hlsl` | `blit_vs`, `blit_ps`, `blit_depth_ps`, `box_reduce_ps`, `aa_reduce_ps`, `depth_resolve_ps`, `depth_upsample_ps`, `camera_probe_ps` | fullscreen copies with a tint (reduction, keep, fade); the present's blit with the scene's depth; the shadow count box-reduced to the GS size; the supersampled DISPLAY box-averaged; the MSAA depth resolved (smallest sample) and spread over samples; a test probe |
+| `blit.hlsl` | `blit_vs`, `blit_ps`, `blit_depth_ps`, `box_reduce_ps`, `aa_reduce_ps`, `depth_resolve_ps`, `depth_upsample_ps`, `camera_probe_ps` | the present's box blit, the MSAA resolve's colour copy and the shadow count's resolve passes (`blit_ps`); the present's blit with the scene's depth (`blit_depth_ps`); the shadow count box-reduced to the GS size; the supersampled DISPLAY box-averaged; the MSAA depth resolved (smallest sample) and spread over samples; a test probe |
 | `blend_int.hlsl` | `blend_int_vs`, `blend_int_ps` | the GS integer blend between two RGBA8 UINT textures for feedback passes, no hardware blending |
 | `fx_sprite.hlsl` | `fx_rect_vs`, `fx_sprite_ps` | one GS sprite of `staticBlur.c`'s passes in the GS integer arithmetic (`port/render/rd_blur.c`) |
 | `fog_lut.hlsl` | `fog_lut_ps` and its `FOG_BUFFER` (`fog_lut_buffer_ps`) and `FOG_MS` (`fog_lut_ms_ps`) builds | the depth fog: bits 16..23 of the 32-bit Z through the fog CLUT, from the depth, an R32 UINT copy of it, or per sample |
@@ -104,6 +104,23 @@ header comment).
   (Vulkan only; its DXIL is the ROV build, never used).
 
 The replay looks entries up by the names in `s_vsNames` and `s_fsNames` (`port/render/rd_replay.c`).
+
+## Adding a shader
+
+1. Write the entry in the family's `.hlsl` (or a new file) with `common.hlsli`'s bindings; a new
+   constant block gets its C struct and offset asserts (`_Static_assert`) in `shader_consts.h`.
+2. Register it with `ico_add_shader` in `port/shaders/CMakeLists.txt`, and its `_nodual` and
+   `_dstrov`/`_dstatt` builds when it calls `gs_dual_out` or takes the destination read.
+3. Give rd a name for it: an `RD_VS_*` or `RD_FS_*` value (`port/render/rd_internal.h` (`RdVsId`,
+   `RdFsId`)) and the same position in `s_vsNames` or `s_fsNames` (`port/render/rd_replay.c`); add
+   its pipeline keys to the reachable enumeration (`port/render/rd_pipeline.c`
+   (`rd__enumerate_reachable`)) so `rd_precreate_pipelines` creates them.
+4. Add the name to the expected lists of `port/shaders/test/shaders_table_test.c` (`expected`, or
+   the list of its kind: `expectedPlanes`, `expectedAa`, `expectedVariants`, `expectedNoDual`,
+   `expectedDst`).
+5. Run `shaders_table`, `gs_math`, `shaders_pixel*`, `vu1*` (a VU entry) and `rhi_d3d12_plan` (every
+   vertex shader's DXIL inputs against its SPIR-V locations), then the render tests
+   ([TESTING.md](TESTING.md#portrendertest)).
 
 ## The binding scheme
 
@@ -151,10 +168,10 @@ destination read's write mask (bits 19..22), `DF_PLANE` (a clip plane) and `DF_N
 **Functions.** Vector forms of the GS arithmetic (`gs_texture_function`, `gs_texa_expand`,
 `gs_bilerp`, `gs_texa_texture`: the GS's bilinear filter with TEXA applied per texel first,
 `gs_blend_int`); GS mipmapping (`gs_lod`, `gs_sample_lod_nearest`, `gs_sample`); DATE
-(`gs_date_discard`). **Outputs**: `DualOut` writes the colour with the stored GS alpha and, on the
-second output, the blend factor As/128 or FIX/128 in all four lanes; a factor above 1.0 does not
-survive the blender, so `DF_PREMUL` moves the multiply into the shader for the additive and
-subtractive forms. **The destination read** (`gs_dst_pixel`, `gs_dst_out`): the GS's
+(`gs_date_discard`). **Outputs**: `gs_dual_out` fills `DualOut` with the colour and the stored GS
+alpha and, on the second output, the blend factor As/128 or FIX/128 in all four lanes; a factor
+above 1.0 does not survive the blender, so `DF_PREMUL` moves the multiply into the shader for the
+additive and subtractive forms. **The destination read** (`gs_dst_pixel`, `gs_dst_out`): the GS's
 `((A - B) * C >> 7) + D` computed exactly from the fragment's own pixel, with COLCLAMP, PABE, FBA
 and the write mask, written with blending off; `_dstrov` runs under `[earlydepthstencil]` with a
 globally coherent view. `GS_PS_OUT`, `GS_PS_ATTR` and `GS_RETURN` pick the output per build.
@@ -189,9 +206,9 @@ index marks `ICO_VU_INDEX_LATER`, `_HIDE`, `_JOINED` (`vu_common.hlsli`), and `I
 
 The [GS](ARCHITECTURE.md#terms) integer arithmetic, scalar only, written to be valid HLSL and valid
 C (scalar int, uint and float, `min`/`max`/`clamp`, `?:` and constants), so `gs_math_test.c`
-compiles it through `hlsl_shim.h` (which defines `ICO_GS_MATH_C`, `uint` and the three functions)
-and `common.hlsli` wraps it in vector forms. Conventions: colours and alpha are 0..255 with alpha
-0x80 = 1.0; the texture function is `min((tex * col) >> 7, 255)`; the blend is
+compiles it through `hlsl_shim.h` (which defines `ICO_GS_MATH_C`, the `uint` type and `min`, `max`,
+`clamp` as macros) and `common.hlsli` wraps it in vector forms. Conventions: colours and alpha are
+0..255 with alpha 0x80 = 1.0; the texture function is `min((tex * col) >> 7, 255)`; the blend is
 `((A - B) * C >> 7) + D` with an arithmetic shift (`port/shaders/gs_math.hlsli`, header comment).
 Functions: `gs_tfx_mod`, `gs_texa_alpha` (the alpha of a 24- or 16-bit texel under TEXA,
 `TEXA_80_80`, `TEXA_7F_81_AEM`, `TEXA_80_80_AEM`), `gs_alpha_pass` (the `ATST_*` tests),
@@ -205,7 +222,7 @@ The texel arithmetic of `font_sheet_ps`: the menu sheets' text style as integer 
 and `port/render/test/sheet_ref.c` (the tests' oracle, which includes the file with
 `ICO_SHEET_TEXT_C`) agree exactly; only the bilinear weights are float. The rim is a weighted
 dilation of the coverage: the largest `c(p + d) * WX[|dx|] * WY[|dy|]` (per mille) within `SHEET_RX`
-(6) texels across and `SHEET_RY` (4) down, the falloff being the English sheets' measured rim alpha.
+(6) texels across and `SHEET_RY` (4) down, the falloff following the English sheets' rim alpha.
 Opacity and the rim-to-fill mix are quantised to `SHEET_LEVELS` (8) with a 4x4 Bayer threshold; a
 strip drawn at a scale of 1..`ICO_SHEET_SCALE_MAX` (4) keeps the 1x rim magnified. Functions:
 `sheet_wx`, `sheet_wy`, `sheet_rim`, `sheet_threshold`, `sheet_quantise`, `sheet_texel`,

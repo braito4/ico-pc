@@ -13,7 +13,7 @@ shaders, and what the port draws of what the programs drop.
 | `ico2/vusrc/{normal_c,normal_l,cluster,mesh,particle}.vsm` | the program texts, labelled and commented |
 | `ico2/vusrc/vu1_common.h` | the routines every program carries: `SET_GSREGISTER`, `SET_UVOFFSET`, the debug font |
 | `ico2/vusrc/scissorcommcut.h` | `SCISSOR_COMMON`: the six-plane clipper of normal_c and normal_l |
-| `ico2/vusrc/*.dsm` | the DMA wrappers the PS2 build assembles |
+| `ico2/vusrc/*.dsm` | the DMA wrappers of the decompilation's PS2 build |
 | `ico2/seki/src/MicroCode.c` | program selection (`mc_SetMicroCode`), residency, the host VIF reader |
 | `port/render/rd_mesh.h`, `rd_mesh.c` | the mesh path: meshes, per-list VU images, the draws, the strip marks |
 | `port/render/vu1_ref/vu1_ref.h` | the CPU references' interface, and the CPU mirror of the region rule |
@@ -35,11 +35,14 @@ per code (`ico2/vusrc/mesh.vsm`, header comment). Codes 0 and 2 are the same in 
 [GIF](ARCHITECTURE.md#terms) packet; `SET_UVOFFSET` writes `mem[2].xy`, the texture's UV scroll
 (`ico2/vusrc/vu1_common.h`).
 
-On the host `MicroCodeAddress[]` is all zeros: `ico2/vusrc` is assembled only by the PS2 build.
+On the host `MicroCodeAddress[]` is all zeros: nothing in this tree assembles `ico2/vusrc`.
 `mc_TransMicroCode` tells [rd](ARCHITECTURE.md#terms) the resident program of each list
 (`rd_vu_program`), and `mc_HostDma` passes each MSCAL code to `rd_vu_call` with the quadwords the
 UNPACKs left at TOP; code 0 goes to the [GS](ARCHITECTURE.md#terms) register decoder instead
-([GS.md](GS.md#the-vu1-side-of-the-chains); `ico2/seki/src/MicroCode.c` (`mcHostVif`)).
+([GS.md](GS.md#the-vu1-side-of-the-chains); `ico2/seki/src/MicroCode.c` (`mcHostVif`)). At
+[replay](ARCHITECTURE.md#terms), `doVuDraw` binds the draw's vertex shader and draws the batch range
+of the mesh with the recorded `VuCB` ([RENDER.md](RENDER.md#the-replay); `port/render/rd_replay.c`
+(`doVuDraw`)).
 
 ## The programs
 
@@ -135,24 +138,27 @@ again from semantic transforms, so no rounding differs from the PS2's before the
 **Static meshes.** One mesh per model packet, built once from the packet's UNPACK payloads
 (`rd_create_vu_mesh`): the batches' vertices without their GIF tags, numbered across the mesh, and
 an index list with, for each vertex k of a batch with k >= 2 and neither k nor k-1 carrying the
-strip flag (`ST.w < 1`), the three indices `ICO_VU_INDEX(K, corner) = K * 4 + corner`. Each shader
-invocation evaluates all three vertices of its triangle, so the per-triangle decisions (region
-test, scissor) are the same in all three (`port/render/rd_mesh.h` (`rd_create_vu_mesh`);
-`port/shaders/vu_common.hlsli`, header comment). The morph path rewrites a mesh's stream each
-[tick](ARCHITECTURE.md#terms)
+strip flag (`ST.w < 1`), the three indices `ICO_VU_INDEX(K, corner) = K * 4 + corner`
+(`port/shaders/shader_consts.h` (`ICO_VU_INDEX`)). Each shader invocation evaluates all three
+vertices of its triangle, so the per-triangle decisions (region test, scissor) are the same in all
+three (`port/render/rd_mesh.h` (`rd_create_vu_mesh`); `port/shaders/vu_common.hlsli`, header
+comment). The morph path rewrites a mesh's stream each [tick](ARCHITECTURE.md#terms)
 (`rd_update_vu_mesh`), and a mesh no frame drew for a while may be evicted, which tells the seki
 side to build it again (`rd_vu_mesh_valid`) (`port/render/rd_mesh.h`).
 
-**Marks on the index list.** At creation `rd_mesh.c` adds bits to the indices the device draws:
-- `ICO_VU_INDEX_LATER`: a triangle that overlaps an earlier triangle of its mesh in the same plane
-  (double-sided faces split along other diagonals). `vu_later_out` raises its depth past ftoi4's
-  rounding bound so the later face wins every frame, as on an exact GS (`port/render/rd_mesh.c`
-  (`markLaterOverlaps`));
-- `ICO_VU_INDEX_HIDE`: a triangle of the content table, drawn nowhere
+**Marks on the index list.** At creation `rd_mesh.c` adds bits to the indices the device draws
+(`port/shaders/shader_consts.h`; the shaders spell them `VU_INDEX_*` in
+`port/shaders/vu_common.hlsli`):
+- `ICO_VU_INDEX_LATER` (0x40000000): a triangle that overlaps an earlier triangle of its mesh in the
+  same plane (double-sided faces split along other diagonals). `vu_later_out` raises its depth past
+  ftoi4's rounding bound so the later face wins every frame, as on an exact GS
+  (`port/render/rd_mesh.c` (`markLaterOverlaps`));
+- `ICO_VU_INDEX_HIDE` (0x20000000): a triangle of the content table, drawn nowhere
   ([RENDER.md](RENDER.md#content-tables); `markContentHidden`);
-- `ICO_VU_INDEX_JOINED`: a triangle of a strip that shares a vertex position with a strip of
-  another shape in its mesh, so it is not a card (`port/render/rd_mesh.c` (`markJoinedStrips`)),
-  joined across a part's packets at replay (`port/render/rd_join.c`).
+- `ICO_VU_INDEX_JOINED` (0x10000000): a triangle of a strip that shares a vertex position with a
+  strip of another shape in its mesh, so it is not a card (`port/render/rd_mesh.c`
+  (`markJoinedStrips`)), joined across a part's packets at replay
+  ([RENDER.md](RENDER.md#strip-joining); `port/render/rd_join.c`).
 
 **The VU image per list.** VU memory and the VF registers persist across draws and lists on the
 PS2, but every list's chain re-establishes what its draws read: the common block is referenced
@@ -170,13 +176,11 @@ state that leaks as on the GS (`port/render/rd_mesh.h` (`rd_draw_vu_mesh`)). Gri
 (`rd_draw_vu_grid`) and particles (`rd_draw_vu_particles`) copy the frame's packet buffer into the
 command; particles are drawn non-indexed, six vertices each (`port/render/rd_mesh.h`).
 
-**Not reproduced.** A particle batch that stores no sprite writes its end tag through an earlier
-program's `vi04`, which after a normal or mesh loop is VU memory 0, and the cluster region test
-then rejects every skinned triangle of the list until the next common block. The port does not
-reproduce it: the shaders take `mem[0..1]` from the list image. `rd_draw_vu_particles` runs the CPU
-reference on a copy of the image to see whether a batch would have clobbered the block, and a later
-skinned draw in that list logs once (`port/render/rd_mesh.c`, header comment). normal_c's code 38
-lands on `SET_GSREGISTER`'s first bundle and has no row (`port/render/rd_mesh.h`).
+**Not reproduced.** The particle end-tag quirk is not reproduced
+([DIVERGENCES.md](DIVERGENCES.md#video), VD-3); `rd_draw_vu_particles` runs the CPU reference on a
+copy of the image and a later skinned draw in that list logs once (`port/render/rd_mesh.c`, header
+comment). normal_c's code 38 lands on `SET_GSREGISTER`'s first bundle and has no row
+(`port/render/rd_mesh.h`).
 
 ## The CPU oracles
 
@@ -191,12 +195,12 @@ accumulator order (`port/render/vu1_ref/vu1_ref.h`). The helpers are one instruc
 accumulator chain each, named after it (`port/render/vu1_ref/vu1_ref_internal.h`).
 
 `Vu1Ref` holds VU memory, the VF and VI registers; the `SET_*` routines are the upload functions
-(`vu1ref_normal_set_matrix`, `vu1ref_cluster_set_matrix`, ...), and the loops are
-`vu1ref_normal_c`, `vu1ref_normal_l`, `vu1ref_cluster`, `vu1ref_mesh`, `vu1ref_particle`
-(`port/render/vu1_ref/vu1_ref.c`, `vu1_normal.c`, `vu1_cluster.c`, `vu1_mesh.c`,
-`vu1_particle.c`, `vu1_scissor.c`). `vu1ref_static_kicks` is the strip rule the index list encodes.
-Besides the tests, `rd_mesh.c` keeps its per-list images in a `Vu1Ref` and runs `vu1ref_particle`
-for the end-tag check.
+(`vu1ref_normal_set_matrix`, `vu1ref_cluster_set_matrix`, ...), and the loops are `vu1ref_normal_c`,
+`vu1ref_normal_l`, `vu1ref_cluster`, `vu1ref_mesh`, `vu1ref_particle`
+(`port/render/vu1_ref/vu1_ref.c`, `vu1_normal.c`, `vu1_cluster.c`, `vu1_mesh.c`, `vu1_particle.c`,
+`vu1_scissor.c`). `vu1ref_static_kicks` (`port/render/vu1_ref/vu1_ref.h`) is the strip rule the
+index list encodes. Besides the tests, `rd_mesh.c` keeps its per-list images in a `Vu1Ref` and runs
+`vu1ref_particle` for the end-tag check.
 
 ## The region rule
 
@@ -275,8 +279,8 @@ device (`port/shaders/test/vu1_test.c`, header comment).
 `rd_native_test` (`port/render/test/rd_native_test.c`) renders one synthetic frame in absolute GS
 geometry at native widths 512, 688, 1376, 2048 and 2560, in Original 1x and Enhanced 1x and 2x. It
 checks that the 4:3 columns equal the 512-wide render byte for byte, that a narrower frame is the
-centre of a wider one, that there is no step at the old band edges, the strip test (a wall drawn as
-the PS2 out of the box and clipped in every other state; a card and a behind-the-eye strip adding
-nothing; a card joined to a passing strip or through another packet of its part drawn as the
-wall), and the attribute planes' anchor (`port/render/test/rd_native_test.c`, header comment).
-Running the tests is [TESTING.md](TESTING.md).
+centre of a wider one, that SCENE has no step across either edge of the 4:3 band, the strip test (a
+wall drawn as the PS2 out of the box and clipped in every other state; a card and a behind-the-eye
+strip adding nothing; a card joined to a passing strip or through another packet of its part drawn
+as the wall), and the attribute planes' anchor (`port/render/test/rd_native_test.c`, header
+comment). Running the tests is [TESTING.md](TESTING.md).

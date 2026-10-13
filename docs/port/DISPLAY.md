@@ -62,7 +62,7 @@ the box's width over the exact width (2.8125 at 1080p 16:9), held to a 1/4096 st
 the box's width, and the scene-class targets hold the exact width alone, so one texel is one output
 pixel and nothing is cropped. Without it the scene is the box's width times `w / wExact`, rounded to
 a whole texel (`port/render/rd_present.c` (`rd__apply_display`); the targets:
-[RENDER.md](RENDER.md)).
+[RENDER.md](RENDER.md#frames-and-targets)).
 
 **The [scene scale](ARCHITECTURE.md#terms)** comes from the Resolution row in `rd__apply_display`:
 "Nx" is the GS size times N; "WxH" that size; "window" the presentation box (only with the Enhanced
@@ -77,32 +77,11 @@ until the multisampled pair fits `RD_MSAA_TILER_BUDGET`. A change logs one `disp
 
 `port/game/video_options.h` holds the `[video]` keys in one place, so the window, the game's native
 frame and the Settings menu read and write the same values (`port/game/video_options.h`, header
-comment). The keys:
-
-| key | default | values |
-| --- | --- | --- |
-| `preset` | `original` | `original`, `enhanced`, `custom` (a shortcut, below) |
-| `resolution` | `window` (`auto` on mobile) | `window`, `WxH` (64..7680 x 64..4320), `Nx` (1..16), `auto` |
-| `aspect` | `4:3` | `4:3`, `16:10`, `16:9`, `21:9` (64:27), `32:9`, `48:9`, `auto` |
-| `window_mode` | `windowed` | `windowed`, `borderless`, `fullscreen` (ignored on Android) |
-| `fullscreen` | false | read when `window_mode` is absent |
-| `vsync` | true | |
-| `texture_filter` | `original` | `original`, `trilinear`, `anisotropic` |
-| `full_height` | false | the reduction's vertical halving skipped |
-| `full_pixel` | from the preset | above |
-| `framerate` | `uncapped` (60 on mobile) | `original`, `uncapped`, 30..1000 |
-| `anti_aliasing` | `off` | `off`, `ssaa2`, `ssaa4`, `msaa2`, `msaa4`, `msaa8` |
-| `crt`, `crt_mode`, `crt_strength` | false, `consumer`, 1.0 | the CRT filter; modes `scanlines`, `consumer`, `trinitron`, `pvm`, `shadow` |
-| `crt_scanlines`, `crt_mask`, `crt_halation`, `crt_bloom`, `crt_curvature` | -1 | config only: the mode's own value when below 0 |
-| `texture_pack`, `dump_textures`, `model_pack`, `dump_models` | true, false, true, false | [PACKS.md](PACKS.md) |
-| `texture_pack_budget_mb`, `texture_pack_precache`, `texture_pack_cache_mb` | 2048, true, 0 | config only |
-| `effect_glow`, `effect_depth_of_field`, `effect_softening`, `effect_motion_blur`, `effect_fog`, `effect_cinematic_bars` | true | the game's own picture effects |
-| `effects_depth` | true | config only: the scene's depth for an effects program |
-
-(`port/game/video_options.h`, key table; `port/game/video_options.c` (`read_config`,
-`ico_video_parse_resolution`, `kAspect`)). "Mobile" is the Android and iOS builds
-(`port/game/video_options.c` (`s_android`)). `[video] backend` picks the
-[RHI](ARCHITECTURE.md#terms) backend (`port/platform/window_host.c` (`ico_window_open`)).
+comment). Each key's type, default and values are [CONFIG.md](CONFIG.md#video)'s; a `WxH` resolution
+is 64..7680 by 64..4320 (`port/game/video_options.c` (`read_config`, `ico_video_parse_resolution`)).
+"Mobile" is the Android and iOS builds (`port/game/video_options.c` (`s_android`)).
+`[video] backend` picks the [RHI](ARCHITECTURE.md#terms) backend (`port/platform/window_host.c`
+(`ico_window_open`)).
 
 **The preset.** A preset is not an option but a shortcut over four rows: resolution, aspect, texture
 filter and height. `ico_video_preset` derives it: Original when the rows are 1x, 4:3, original and
@@ -112,11 +91,15 @@ pixel off, Enhanced turns Full pixel on (`port/game/video_options.c` (`ico_video
 `set_preset`)). On reading the config only `enhanced` and `custom` take the rows as written;
 `original`, no key or a misspelling puts them at the PS2's values whatever the file says, keeping a
 saved Full pixel. Full pixel without its key is on when the rows add up to Enhanced
-(`port/game/video_options.c` (`read_config`)). `ico_video_original` is the test for
-[out of the box](ARCHITECTURE.md#terms): `GsBase.c`'s frame latch hands its opposite to
-`GifPacket.c`, and the window gives [rd](ARCHITECTURE.md#terms) the same test as `RdSettings.preset`
-(`port/game/video_options.h` (`ico_video_original`); `port/platform/window_host.c`
-(`video_settings`)).
+(`port/game/video_options.c` (`read_config`)). With no `config.toml` the preset is Original, so the
+four rows are 1x, 4:3, original and half; an absent `resolution` key reads as `window` (`auto` on
+mobile) only under `enhanced` or `custom` (`port/game/video_options.c` (`ico_video_defaults_for`,
+`read_config`)). `ico_video_save` writes `original` when the rows are the PS2's, else `enhanced`
+with the rows, which read back as Enhanced or Custom (`port/game/video_options.c`
+(`ico_video_save`)). `ico_video_original` is the test for [out of the box](ARCHITECTURE.md#terms):
+`GsBase.c`'s frame latch hands its opposite to `GifPacket.c`, and the window gives
+[rd](ARCHITECTURE.md#terms) the same test as `RdSettings.preset` (`port/game/video_options.h`
+(`ico_video_original`); `port/platform/window_host.c` (`video_settings`)).
 
 **The AA lock.** `ico_video_anti_alias` returns off whenever the preset is Original, whatever the
 key says; the renderer draws an MSAA count the device lacks as off (`port/game/video_options.c`
@@ -160,13 +143,21 @@ Original, else 1/60 s; the rule is off under the CRT filter (`port/platform/wind
 ## The window host
 
 `ico_window_open` creates one SDL3 window titled "ICO", first 960 x 720 (4:3, three times 320 x
-240), resizable and high pixel density on the desktop and always fullscreen on mobile; a configured
-fullscreen mode is asked for at creation so the window manager sees it before mapping. It picks the
-backend from `[video] backend`, makes the device through `rd_init`, points the Vulkan pipeline cache
-at `pipelines.vkcache` in the [user folder](ARCHITECTURE.md#terms) (the app's cache folder on
-Android), creates the whole reachable pipeline set before the first frame, runs the fog's self-test
-and logs one start-up line with the backend, adapter and options (`port/platform/window_host.c`
+240), resizable and high pixel density on the desktop and always fullscreen on mobile, where
+`window_mode` is ignored; a configured fullscreen mode is asked for at creation so the window
+manager sees it before mapping. It picks the backend from `[video] backend`, makes the device
+through `rd_init`, points the Vulkan pipeline cache at `pipelines.vkcache` in the [user
+folder](ARCHITECTURE.md#terms) (the app's cache folder on Android), creates the whole reachable
+pipeline set before the first frame, runs the fog's self-test and logs one start-up line with the
+backend, adapter and options, then `window: present mode M` (`port/platform/window_host.c`
 (`ico_window_open`, `window_flags`)).
+
+After a graphics driver crash while the pipelines are built, the crash handler starts the program
+again with `ICO_STARTUP_RETRY=<step>:<backend>`: `cache` deletes the loaded pipeline cache, `d3d12`
+takes Direct3D 12 when the player chose no backend, `lazy` builds each pipeline when a frame first
+needs it instead of before the first frame. `ico_window_open` takes the retry's backend unless the
+player chose one, logs the step and skips the up-front pipeline set on `lazy`
+(`port/platform/startup_retry.h`; `port/platform/window_host.c` (`ico_window_open`)).
 
 `ico_window_pump` drains SDL's events once per vsync: the close button quits; F11, F12 and Shift+F12
 are the diagnostic keys; Alt+Enter flips between Windowed and the last other mode (in memory, not
@@ -197,6 +188,8 @@ lock held (grid G ms, n presents a step, mailbox|fifo, audio rate xR, CLOCK,
            W waited for the display, S skipped)
 ```
 
+(one line)
+
 - the line above, CLOCK one of
   `display clock vblank (output NAME, measured T ms, slot +P ppm, phase +F ms)` (the slot against
   the report, positive when longer, and the step's offset after the last vblank),
@@ -220,7 +213,8 @@ first part reads `no display clock`, `display clock on, no vblanks yet` or `disp
 (k 2 or 3) counts as k refreshes; a longer one is missed and left out of the mean
 (`port/platform/pace_policy.c` (`pace_intervals_add`)). `pace_shown_add` counts the DXGI repeats as
 the refreshes minus the pictures between two samples when positive, starting again on a count that
-went back or a gap over `PACE_SHOWN_GAP` (240) refreshes.
+went back or a gap over `PACE_SHOWN_GAP` (240) refreshes (`port/platform/pace_policy.c`
+(`pace_shown_add`)).
 
 **The replays line**:
 
@@ -256,17 +250,20 @@ the step's parts and the pump's (`slow_step`).
 `ico_window_pace(hz)` runs after every simulated vsync: it presents until the vsync's deadline (50
 Hz PAL: 20 ms; NTSC: 16.683 ms) as often as the frame rate and vsync allow, then sleeps to it; more
 than 100 ms behind (`RESYNC_NS`) the lag is dropped and counted instead of run off fast
-(`port/platform/window_host.c` (`ico_window_pace`, `pace`, `resync`)). Three paths:
+(`port/platform/window_host.c` (`ico_window_pace`, `pace`, `resync`)). A pacing rule is written in
+`port/platform/pace_policy.c`, which has no SDL, so `pace_policy_test` and `pace_loop_test` drive it
+with a fake clock and swapchain; `window_host.c` only supplies its I/O (`pace`, `pace_locked`, the
+`lock_io_*` callbacks of `PaceLockIo`). Three paths:
 
 1. **Frame rate Original**: `rd_end_frame` presented the frame once inside the step; the window only
    sleeps to the deadline (`pace`).
 2. **The timer path** (any other frame rate without the lock): presents at the current alpha until
    the deadline. No further present of a frame already shown once the deadline has passed, while
-   presents are slow, off the screen, or when the last present's cost would end past the deadline
-   (`pace`). Presents are slow when the median of the last 8 present costs is above
-   `max(refresh, period) + period / 2` (a refresh more with an effects program loaded), entering
-   after 3 such presents in a row and leaving below 80 % of it (`port/platform/pace_policy.h`
-   (`pace_slow_present`, `pace_slow_threshold`)).
+   presents are slow, off the screen, or (except with a cap equal to the refresh) when the last
+   present's cost would end past the deadline (`pace`). Presents are slow when the median of the
+   last 8 present costs is above `max(refresh, period) + period / 2` (a refresh more with an effects
+   program loaded), entering after 3 such presents in a row and leaving below 80 % of it
+   (`port/platform/pace_policy.h` (`pace_slow_present`, `pace_slow_threshold`)).
 3. **The vsync lock** (below).
 
 **The present gap** on the timer path: "uncapped" with vsync on is a sixteenth of a refresh less
@@ -278,17 +275,17 @@ later one back; a stall restarts the grid).
 
 **Cap versus refresh.** `pace_cap_equals_refresh` treats a numeric cap as the display's rate within
 0.5 Hz, and up to 1 Hz above a whole reported rate of 100 Hz or more (Windows cuts such rates down:
-a 143.9 Hz screen reads 143). Below 100 Hz SDL turns 29, 59 and 119 into x / 1.001, so a whole 59 is
-a true 59.00 Hz mode (`port/platform/pace_policy.h` (`pace_cap_equals_refresh`)). With vsync on and
-interpolation, a cap equal to the refresh takes the vsync lock when it is a whole multiple n of the
-simulation's rate (`pace_lock_presents`: within 1 %; 60 and 120 on 59.94, 50 and 100 on 50) and n
-refreshes are within 1 % of the simulation's period (`pace_grid_period_ok`). A cap equal to the
-refresh without a whole multiple (144 on 59.94) presents FIFO with no gap: the blocking present is
-the timer, and when the refresh is shorter than the period `pace_fifo_hold` holds back a present
-that would return on a vblank past the deadline, a new frame at most once and never once the
-deadline has passed (`port/platform/window_host.c` (`video_settings`, `pace`);
-`port/platform/pace_policy.c` (`pace_fifo_hold`)). Any other cap prefers mailbox
-(`rhi_prefer_mailbox`).
+a 143.9 Hz screen reads 143). SDL turns Windows' whole 29, 59 and 119 into x / 1.001, so a rate that
+reads as a whole 59 is a true 59.00 Hz mode and keeps the 0.5 Hz bound
+(`port/platform/pace_policy.h` (`pace_cap_equals_refresh`)). With vsync on and interpolation, a cap
+equal to the refresh takes the vsync lock when it is a whole multiple n of the simulation's rate
+(`pace_lock_presents`: within 1 %; 60 and 120 on 59.94, 50 and 100 on 50) and n refreshes are within
+1 % of the simulation's period (`pace_grid_period_ok`). A cap equal to the refresh without a whole
+multiple (144 on 59.94) presents FIFO with no gap: the blocking present is the timer, and when the
+refresh is shorter than the period `pace_fifo_hold` holds back a present that would return on a
+vblank past the deadline, a new frame at most once and never once the deadline has passed
+(`port/platform/window_host.c` (`video_settings`, `pace`); `port/platform/pace_policy.c`
+(`pace_fifo_hold`)). Any other cap prefers mailbox (`rhi_prefer_mailbox`).
 
 ### The vsync lock
 
@@ -319,10 +316,10 @@ present mode follows: mailbox with SHOWN, FIFO otherwise (`video_settings`).
 - **phase**: the step is wanted `slot / PACE_VB_OFFSET_DIV` (1/16 of a slot) after a vblank, the
   most time before the next one, so a picture finished within 15/16 of a refresh of its step is
   never a refresh late and a full queue cannot ratchet. For each vblank `v`,
-  `ph = (v - due) mod slot` and the error `e = wrap_half(ph + slot / 16)` less the moves still owed;
-  the steps move later by `e * PACE_VB_KP_PHASE` (1/16), at most `PACE_GRID_NUDGE_MAX_NS` (20 us) a
-  step. The first time 64 refreshes are in, and again after a resync or a pause, the grid moves by
-  `e` at once (`phaseSet`, half a slot at most).
+  `ph = (v - due) mod slot` and the error `e = wrap_half(ph + slot / 16 - nudgeLeft)`, `nudgeLeft`
+  the moves the steps still owe; the steps move later by `e * PACE_VB_KP_PHASE` (1/16), at most
+  `PACE_GRID_NUDGE_MAX_NS` (20 us) a step. The first time 64 refreshes are in, and again after a
+  resync or a pause, the grid moves by `e` at once (`phaseSet`, half a slot at most).
 
 **The 1 % bound.** The clock is left, and the slot goes back to the report, when `Tm` is more than 1
 % off the report at its first use (another output's vblanks) or the slot drifts past 1 % of it, so a
@@ -338,16 +335,17 @@ pictures shown. At each step the loop takes the presents the display showed; the
 one, against the slot it was presented in and the wanted offset, wrapped to half a refresh, is the
 error `e`; the steps move by `PACE_GRID_KP * e` (1/64, at most 20 us a step) and the slot by
 `PACE_GRID_KI * e` (1/8192), within the same 1 % bound. The wanted offset is the first one seen,
-moved a 64th of a refresh each time a picture is shown a refresh later or earlier than the median of
-the last `PACE_GRID_RING` (31), until `PACE_GRID_CLEAN` (300) pictures in a row are shown with the
-run, and half a refresh at most. A present that started half a slot late or took a whole slot is not
-counted (`port/platform/pace_policy.c` (`clock_take`, `clock_seen`)). When this clock stops or is
-left the window presents FIFO until the next settings change (`port/platform/window_host.c`
-(`pace_locked`, `clockGone`)).
+moved a 64th of a refresh each time a picture is shown more than half a refresh later or earlier
+than the median of the last `PACE_GRID_RING` (31), once `PACE_GRID_RING_MIN` (15) are in, until
+`PACE_GRID_CLEAN` (300) pictures in a row are shown with the run, and half a refresh at most. A
+present that started half a slot late or took a whole slot is not counted
+(`port/platform/pace_policy.c` (`clock_take`, `clock_seen`)). When this clock stops or is left the
+window presents FIFO until the next settings change (`port/platform/window_host.c` (`pace_locked`,
+`clockGone`)).
 
-**Without a clock** (Linux, macOS, Android, a clock that did not start) the grid stays on the report
-and the presents go FIFO, which shows them in order whatever their phase against the refreshes
-(`port/platform/pace_policy.h`; `pace_loop_test` `testNoClockMode`).
+**Without a clock** (every platform but Windows, and a Windows clock that did not start) the grid
+stays on the report and the presents go FIFO, which shows them in order whatever their phase against
+the refreshes (`port/platform/pace_policy.h`; `pace_loop_test` `testNoClockMode`).
 
 **Waited.** A present that waited a quarter of a slot or more waited for the display (FIFO's queue
 was full) and is counted (`waited`, `waitedMaxNs`). The wait is the backend's own blocked time where
@@ -386,12 +384,21 @@ window: vsync lock: the game steps every X ms (n refreshes of Y ms), n presents 
         present mode M, CLOCK
 ```
 
+(one line)
+
 and, on Windows, `window: vsync lock: DWM reports H Hz (P ms); SDL reports H Hz (P ms)`, the
 compositor's refresh of the primary display as a cross-check, not a clock
 (`ico_display_dwm_refresh`). A clock that stops or is left logs one line, and the first 48 presents
 of a lock are logged as their intervals between returns, with the time from the slot to the refresh
 that showed each where the clock saw it (`PACE_LOCK_TRACE_FIRST`, `pace_lock_trace_text`)
-(`port/platform/window_host.c` (`pace_locked`, `lock_clock_words`)).
+(`port/platform/window_host.c` (`pace_locked`, `lock_clock_words`)). The lock line, the DWM line,
+the trace and the display clock's start line are logged for the first 8 locks of a session, a clock
+change for the first 16 (`pace_locked`, `disp_clock_start`). Other pacing lines:
+`window: the cap equals the refresh: the game steps every X ms (n refreshes), present mode M` or
+`window: the cap ... the refresh: present mode ...` when `video_settings` changes its decision,
+`window: present mode M` once at start, `window: display clock: stopped (...)` when the vblank
+thread stops itself, and `window: off the screen` / `back on the screen`
+(`port/platform/window_host.c` (`video_settings`, `ico_window_open`, `disp_take`, `pace`)).
 
 ### The vblank clock
 
@@ -430,31 +437,16 @@ in output pixels), the deferred text (Enhanced: the frame's text items laid out 
 the top layer (the touch controls); `rd_present_blank` draws the overlay alone (the start-up
 screens). With supersampling `aa_reduce_ps` box-averages DISPLAY to the box; with an effects program
 and `effects_depth` `blit_depth_ps` writes the scene's depth beside it (`port/render/rd_present.c`).
-The UI box is the 4:3 part of the presentation box (`rd_ui_box_of`).
+The UI box is the 4:3 part of the presentation box (`port/render/rd_present.c` (`rd_ui_box_of`)).
+Movies draw their own box ([FMV.md](FMV.md#the-picture-on-screen)).
 
-**Present modes.** With vsync the Vulkan backend takes mailbox when the window prefers it and the
-surface offers it, FIFO latest ready when `ICO_VK_FIFO_LATEST_READY=1` asks for it and the device
-has it (where FIFO would be taken: the queue is drained to the newest ready picture at each vblank),
-else FIFO; without vsync immediate, then mailbox, then FIFO (`port/rhi/vk/vk_present_mode.c`
-(`vkr_choose_present_mode`)). D3D12 presents `Present(1)` with vsync ("fifo") and sync interval 0
-without it (with tearing allowed where DXGI offers it: "immediate", else "mailbox"); it has no
-mailbox mode with vsync (`port/rhi/d3d12/d3d12_swapchain.c` (`rhi_present`,
-`rhi_present_mode_name`)). A vsync change idles the device and rebuilds the swapchain
+**Present modes.** The window asks for mailbox through `rhi_prefer_mailbox`; what each backend then
+takes is [RHI.md](RHI.md#vulkan)'s (Vulkan: mailbox when preferred, FIFO latest ready with
+`ICO_VK_FIFO_LATEST_READY=1`, else FIFO; immediate without vsync) and [RHI.md](RHI.md#direct3d-12)'s
+(D3D12: `fifo` with vsync and no mailbox mode with it; the waitable chain, `ICO_D3D12_FRAME_LATENCY`
+default 2, puts the wait for the display in the replay's "acquire" phase). `ICO_VK_PRESENT_WAIT=1`
+gives the lock its SHOWN clock. A vsync change idles the device and rebuilds the swapchain
 (`port/render/rd_present.c` (`rd__apply_display`)).
-
-**The D3D12 waitable chain.** The swapchain is made with
-`DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT` and a maximum frame latency of 2;
-`rhi_acquire_backbuffer` waits on the latency object (vsync on, 1 s timeout, logged once) before the
-replay records, so `Present` returns at once and the wait for the display lands in the replay's
-"acquire" phase, before the picture is drawn rather than after. `ICO_D3D12_FRAME_LATENCY` sets the
-latency: `0` makes no waitable object (Present blocks on a full queue), `1` to `3` that latency (1
-serialises the CPU and the GPU), anything else 2 (`port/rhi/d3d12/d3d12_swapchain.c`
-(`dx_frame_latency_wanted`, `dx_frame_latency_open`, `rhi_acquire_backbuffer`)).
-
-**`ICO_VK_PRESENT_WAIT=1`** turns on `VK_KHR_present_id` and `VK_KHR_present_wait` where the device
-offers them: a thread waits on each present's id and notes when it reached the screen, the vsync
-lock's SHOWN clock. Off unless asked for (`port/rhi/vk/vk_device.c`; `port/rhi/vk/vk_swapchain.c`;
-[RHI.md](RHI.md)).
 
 ## Interpolation between ticks
 
@@ -505,19 +497,15 @@ shadow (a dot-triad mask, gently curved). `crt_strength` 0 draws nothing; the co
 replace the mode's scanline, mask, halation, bloom and curvature values (`rd__crt_resolve`). The
 mask fades in with the box: none at 720 output lines or fewer, full at 1080 or more
 (`rd__crt_mask_fade`). `crt.hlsl` binds `CrtCB` at b1 space1 (DrawCB's slot and size, `IcoCrtCB`),
-the source at t1, the blurred target at t2 and a bilinear clamped sampler at s1; it does not include
-`common.hlsli` (`port/shaders/crt.hlsl`, header comment).
+the source at t1, the blurred target at t2 and a bilinear clamped sampler at s1, all in space2; it
+does not include `common.hlsli` (`port/shaders/crt.hlsl`, header comment).
 
 ## Hotkeys for pictures
 
-Kept free of SDL so `hotkeys_test` checks them; neither F11 nor F12 is bindable and a held key's
-repeats do nothing (`port/platform/hotkeys.h`, header comment):
-
-| key | does |
-| --- | --- |
-| F12 | the frame shown: a [.rddump](ARCHITECTURE.md#terms) of the last closed frame and a PNG of DISPLAY, `<pref>/dumps/frame-<time>-v<vsync>.rddump` and `.png`, a zip of the dump and the log, and at the next present `frame-<time>-present.png`, the picture as presented without the port's UI (`port/platform/window_host.c` (`frame_dump`)) |
-| Shift+F12 | in photo mode, the aspect sweep: the paused frame re-rendered at 4:3, 16:9, 32:9, 48:9 and 60:9 into `<pref>/dumps/sweep-<time>.zip` (an `.rddump` and a `.png` per aspect); PC only (`sweep_start`, `sweep_pump`) |
-| F11 | the stats lines every second for 30 s instead of every 10 s; again turns it off (`stats_fast_toggle`) |
+F12 (the frame shown), Shift+F12 (the aspect sweep in photo mode, below) and F11 (the stats lines
+every second for 30 s) are [PLATFORM.md](PLATFORM.md#hotkeys-and-dump-zips)'s; `hotkeys_test` checks
+them (`port/platform/hotkeys.h`, header comment; `port/platform/window_host.c` (`frame_dump`,
+`sweep_start`, `stats_fast_toggle`)).
 
 The sweep forces the native frame's aspect (`ico_video_frame_force_aspect`); the next flip latches
 the new width and remakes the scene-sized targets, and the paused photo camera rebuilds the game's
@@ -529,20 +517,21 @@ the sweep's zip.
 
 ## The perf CSV
 
-With `[dev] perf_log = true` the window writes one line per replay to `logs/ico-pc-perf.csv` beside
-the executable (not on iOS) and logs its path. The columns are the `RdPerfRecord`: the replay and
-frame numbers, interpolated, keep, presented, the total and each CPU phase in ms, the backend's
-fence wait, the creation, bind, draw, barrier, copy and upload counts, the upload bytes,
-`gpu_valid`, the GPU total, uploads, each list `gpu_list<N>_ms`, the present, the replay's start,
-alpha, `first_of_tick`, each picture effect `gpu_<effect>_ms` and `gpu_effects_partial`
-(`port/platform/window_host.c` (`perf_csv_open`, `perf_csv_line`)). The file is flushed after each
-drain, every vsync (`perf_drain`).
+With `[dev] perf_log = true` the window writes one line per replay to `ico-pc-perf.csv` in the logs
+folder (`logs/` beside the executable, in the [user folder](ARCHITECTURE.md#terms) on macOS; none on
+iOS) and logs its path (`port/platform/host_config.c` (`ico_host_logs_dir`)). The columns are the
+`RdPerfRecord`: the replay and frame numbers, interpolated, keep, presented, the total and each CPU
+phase in ms, the backend's fence wait, the creation, bind, draw, barrier, copy and upload counts,
+the upload bytes, `gpu_valid`, the GPU total, uploads, each list `gpu_list<N>_ms`, the present, the
+replay's start, alpha, `first_of_tick`, each picture effect `gpu_<effect>_ms` and
+`gpu_effects_partial` (`port/platform/window_host.c` (`perf_csv_open`, `perf_csv_line`)). The file
+is flushed after each drain, every vsync (`perf_drain`).
 
 ## Tests
 
 | test | checks |
 | --- | --- |
-| `port/platform/test/pace_loop_test.c` | the vsync lock's loop under a fake clock and swapchain (mailbox, FIFO, a FIFO queue, a vblank clock): grid, alphas, phase, drift (`testFifoDrift`), the ratchet (`testFifoRatchet`), D3D12's full queue (`testQueueBlocking`), the skip guard (`testSkipGuard`), clocks left, off the screen, long steps, pauses |
+| `port/platform/test/pace_loop_test.c` | the vsync lock's loop under a fake clock and swapchain (mailbox, FIFO, a FIFO queue, a vblank clock): grid, alphas, phase, drift (`testFifoDrift`), the ratchet (`testFifoRatchet`), D3D12's full queue (`testQueueBlocking`), the skip guard (`testSkipGuard`), clocks left, off the screen, long steps, pauses; FIFO latest ready (`testLatestReady`), the timer path's FIFO hold (`testFifoHold`), the audio's starting ratio (`testNominalRatio`), the log's trace (`testTrace`) |
 | `port/platform/test/pace_policy_test.c` | the slow-present rule, Auto resolution's steps, the present gap, cap versus refresh, the limiter grid, the lock's n and alphas, the grid's period check, the lock's pause, the vblank laws, the first-present pause, the display's intervals |
 | `port/platform/test/perf_block_test.c` | a block's sums and maxima, the replays over the threshold, the longest-phase text, a reset |
 | `port/platform/test/window_video_test.c` | the window mode requests and their readback on SDL's offscreen driver (77 without one) |
@@ -551,3 +540,18 @@ drain, every vsync (`perf_drain`).
 | `port/render/test/rd_interp_test.c` | blending two synthetic frames: the ends, half way, the snaps, ordinals, grids, meshes, particles, shadows, the present clock |
 | `port/render/test/rd_crt_test.c` | the CRT keys, the modes' table and overrides, and each mode's hash at two sizes on a Vulkan device |
 | `port/render/test/rd_boot_present_test.c` | a saved start-up through the presenter, present by present, with DISPLAY's probe points |
+| `port/rhi/test/rhi_vk_present_mode_test.c` | `vkr_choose_present_mode` (mailbox, FIFO latest ready, FIFO, immediate) and `vkr_present_wait_wanted` |
+
+The ctest names are the file names without `_test`: `pace_loop`, `pace_policy`, `perf_block`,
+`window_video`, `hotkeys` (`port/platform/CMakeLists.txt`), `rd_present`, `rd_interp`, `rd_crt`,
+`rd_boot_present` (`port/render/CMakeLists.txt`), `rhi_vk_present_mode` (`port/rhi/CMakeLists.txt`).
+A pacing change runs ([BUILDING.md](../BUILDING.md#building-one-package)):
+
+```sh
+tools/dev_build.sh . pace_policy_test pace_loop_test perf_block_test \
+    -- -R '^(pace_policy|pace_loop|perf_block)$'
+```
+
+`display_clock_win.c` and the D3D12 waitable chain have no test of their own: `pace_loop_test`
+drives the lock with a fake vblank clock and a fake FIFO queue, and on hardware the 10 s `lock held`
+and `window: display:` lines are the check.

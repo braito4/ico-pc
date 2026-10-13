@@ -32,10 +32,10 @@ commands and [replays](ARCHITECTURE.md#terms) them on the [RHI](ARCHITECTURE.md#
 | `port/render/rd_perf.c` | the per-replay performance records |
 | `port/render/rd_dump.c`, `rd_png.c` | frame dumps; a minimal PNG writer |
 | `port/render/tools/rd_replay_tool.c` | [the replay tool](ARCHITECTURE.md#terms) |
+| `port/render/vu1_ref/` | the VU1 programs' CPU references ([VU1_PROGRAMS.md](VU1_PROGRAMS.md#the-cpu-oracles)) |
+| `port/render/test/` | the renderer's tests ([TESTING.md](TESTING.md#portrendertest)) |
 | `port/render/rd_interp.c`, `rd_present.c`, `rd_crt.c`, `rd_video.c` | presentation ([DISPLAY.md](DISPLAY.md)) |
-| `port/render/texpack*.c`, `modelpack.c`, `gltf.c` | texture and model packs ([PACKS.md](PACKS.md)) |
-
-The file table in `port/render/rd_internal.h` lists only part of these.
+| `port/render/texpack*.c`, `modelpack.c`, `gltf.c`, `xxh3.c` | texture and model packs ([PACKS.md](PACKS.md)) |
 
 ## The model
 
@@ -87,10 +87,11 @@ runs on the host stack in the host FP mode (`port/render/rd.h` (`RdHostCall`);
 ## Recording
 
 A list is an array of fixed-size `RdCmd` records (40 bytes: a type, seven bytes, the draw's key,
-four words, two floats); variable data (vertices, transforms, post parameters) lives in the
-frame's payload arena, addressed by byte offset. Every field has a fixed width and there are no
-pointers, so a frame can be written to a file as it is and a dump reads the same on 32-bit and
-64-bit builds (`port/render/rd_internal.h` (`RdCmd`, `RdCmdType`)).
+four words, two floats); variable data (vertices, transforms, post parameters) lives in the frame's
+payload arena (rd's own buffer, not the EE [arena](ARCHITECTURE.md#terms)), addressed by byte
+offset. Every field has a fixed width and there are no pointers, so a frame can be written to a file
+as it is and a dump reads the same on 32-bit and 64-bit builds (`port/render/rd_internal.h`
+(`RdCmd`, `RdCmdType`)).
 
 | kind | commands |
 | --- | --- |
@@ -100,6 +101,7 @@ pointers, so a frame can be written to a file as it is and a dump reads the same
 | shadows | `RDC_SHADOW_RESET`, `RDC_SHADOW_STRIP`, `RDC_SHADOW_RESOLVE` |
 | post and text | `RDC_POST_STUB` (fog and blur sprites), `RDC_OVERLAY_TEXT` (collected by the present) |
 | recorded only | `RDC_WORLD_PRIMS` (tests; no replay model) |
+| no-op | `RDC_NOP` (the unused copy of the frame head; `rd_replay_tool --nop`) |
 
 State calls record deltas and change nothing at once (`port/render/rd_core.c`). The callers of
 each are listed in `port/render/rd.h` ("state deltas"); the ones that set one GS register alone
@@ -107,8 +109,8 @@ each are listed in `port/render/rd.h` ("state deltas"); the ones that set one GS
 `rd_aa1`) exist for the register decoder (`port/render/rd.h`).
 
 **The frame ring.** The two most recent closed frames are retained for
-[interpolation](ARCHITECTURE.md#terms); the frame
-being recorded takes a third slot (`RD_FRAME_RING` 3) (`port/render/rd_core.c`).
+[interpolation](ARCHITECTURE.md#terms); the frame being recorded takes a third slot
+(`port/render/rd_internal.h` (`RD_FRAME_RING`, 3); `port/render/rd_core.c`).
 
 **`rd_begin_frame`** applies pending settings (a texture pack switched off reverts its replacements;
 the model pack and its dump switch; a change of the targets' scales recreates them on the host stack
@@ -275,9 +277,10 @@ shaders carry their own colour and STQ planes (below) (`port/render/rd_replay.c`
 
 **Passes.** Render passes stay open across draws to the same colour and depth pair and close on a
 target change, a clear, a copy, or a draw that samples a target whose state must change. rd tracks
-every texture's RHI state (the backends do not). A draw that samples its own render target samples
-a copy taken just before it, as the GS reads the live buffer (`port/render/rd_replay.c`, header
-comment).
+every texture's RHI state and records every transition; a backend adds no texture transition of its
+own (D3D12 keeps a record only to fill in a transition from UNDEFINED,
+[RHI.md](RHI.md#direct3d-12)). A draw that samples its own render target samples a copy taken just
+before it, as the GS reads the live buffer (`port/render/rd_replay.c`, header comment).
 
 **The exact viewport.** While a frame's lists replay, every pass has one viewport size, the
 largest power of two the GPU takes, centred on the target, and FrameCB maps positions to it; the
@@ -325,7 +328,11 @@ bones for a skinned draw, and sets the draw's flags: a chain clip plane, the fre
 (`vuExtended`), and `ICO_VU_TICKS` for a draw seen through a camera blended between two
 [ticks](ARCHITECTURE.md#terms). A grid draw builds its index list here and marks every triangle of a
 grid of two strips or more joined (`port/render/rd_replay.c` (`doVu`, `doVuDraw`, `vuExtended`)).
-What the flags do is [VU1_PROGRAMS.md](VU1_PROGRAMS.md#the-region-rule).
+What the flags do is [VU1_PROGRAMS.md](VU1_PROGRAMS.md#the-region-rule). `ICO_RD_VU_OFFGRID=1`, a
+developer switch, lets the [VU1](ARCHITECTURE.md#terms) programs output X and Y off the GS's 1/16
+grid on a scaled target under the Enhanced preset; otherwise every preset keeps the GS's
+quantisation (`port/render/rd_interp.c` (`rd__vu_off_grid`); `port/render/rd_replay.c`
+(`rd__frame_group_ex`)).
 
 **The MSAA epoch.** With an MSAA setting (never under the Original
 [preset](ARCHITECTURE.md#terms)), SCENE has a
@@ -361,14 +368,16 @@ PABE writes Cs unblended for a pixel whose As MSB is clear, through the second o
 premultiplied and Ad forms cannot, and those pixels blend (reported once). On a device without
 dual-source blending the LERPs and mode 3 draw in two passes: colour with the factor in c0.a, then
 when the mask has A an alpha pass with blending off and no Z write under a Z test that admits the
-colour pass's fragments (`port/render/rd_pipeline.c` (`rd__expand_no_dual`)). Where the
-destination read is available these paths give way to it (next section).
+colour pass's fragments (`port/render/rd_pipeline.c` (`rd__expand_no_dual`)). `ICO_RD_NO_DUAL=1`
+forces the two-pass form on any device (`port/render/rd_core.c` (`rd_init`)). Where the destination
+read is available these paths give way to it (next section).
 
-The cache holds four times the enumerated reachable set (`RD_PIPELINE_REACHABLE_MAX` 768); a key
-past it or one whose creation failed is logged once and drawn as nothing, never an abort
-(`port/render/rd_state.h`; `port/render/rd_pipeline.c` (`rd__get_pipeline`)).
-`rd_precreate_pipelines` creates the whole reachable set at start so the first frames do not stall
-on the driver (`port/render/rd.h` (`rd_precreate_pipelines`)).
+The cache holds `RD_PIPELINE_CACHE_MAX` keys, four times `RD_PIPELINE_REACHABLE_MAX` (768, the
+ceiling the tests hold the reachable set under, `rd__enumerate_reachable`); a key past it or one
+whose creation failed is logged once and drawn as nothing, never an abort (`port/render/rd_state.h`;
+`port/render/rd_pipeline.c` (`rd__get_pipeline`)). `rd_precreate_pipelines` creates the whole
+reachable set at start so the first frames do not stall on the driver (`port/render/rd.h`
+(`rd_precreate_pipelines`)).
 
 ## Destination reads and blend paths
 
@@ -397,6 +406,11 @@ epoch's passes, targets other than RGBA8, the port's presentation overlay. The s
 and `blend_int` keep their own exact paths (`port/render/rd_dst_read.c`; `port/render/rd_replay.c`
 (`dstPassMode`, `passWantsReadable`)).
 
+`ICO_RD_BLEND` names the path instead: `fixed` (also `off`, `0`), `storage` (also `interlock`,
+`rov`) or `attachment`; a value that is none of these or a path the device lacks logs
+`rd: blend: ICO_RD_BLEND=<v> is not fixed, storage or attachment` or `... is not on this device` and
+keeps the default (`port/render/rd_dst_read.c` (`rd__dst_init`)).
+
 ## Post passes
 
 `rd_post` records the post kinds that are plain GS sprites in the original as the register writes
@@ -409,7 +423,7 @@ the other post sprites snap (`port/render/rd_post.c` (`s_spriteKey`)).
 
 | kind | source | what it records |
 | --- | --- | --- |
-| REDUCTION | `gsb_Reduction` | DISPLAY cleared, SCENE drawn into it at half height, bilinear, tinted, inside a 2-pixel border crop; both sprites through the GS sprite model |
+| REDUCTION | `gsb_Reduction` | DISPLAY cleared, SCENE drawn into it at half height, bilinear, tinted, inside the border-crop scissor (2 pixels left and right; 8 lines top and bottom on a 512-line scene, 2 on 448); both sprites through the GS sprite model |
 | KEEP | `gsb_KeepFrameBuffer` | DISPLAY read as PSMCT24 drawn back over the scene at 112 grey |
 | FADE | `gsb_fade` | a full-scene sprite, ALPHA 0x44, PABE 0, the fade colour |
 | LETTERBOX | `gsb_scissorOnDemo` | two 58-line bars, ALPHA 0x64 with FIX the band level |
@@ -510,16 +524,19 @@ texels' Z, index and colour on the first fogged replay after start and after a n
 
 ## Content tables
 
-**Hidden stage faces.** A few stage faces relied on the PS2's 4:3 picture: closing planes that
-seal a model where the 4:3 camera never looks. They are listed in `rd__content_hide` by the
-stream bits of their corners; `markContentHidden` marks a triangle whose three vertices are black
-and corners of one entry with `ICO_VU_INDEX_HIDE`, drawn nowhere. Black alone does not identify
-such a face, and a model pack's replacement never matches. An entry is listed only when 4:3 dumps
-with it hidden equal those without, byte for byte, in Original 1x and Enhanced 2x
-(`tools/content_table_check.py decide`) (`port/render/rd_content_hide.c`; `port/render/rd_mesh.c`
-(`markContentHidden`)). A new entry comes from a report: find the mesh with
-`rd_replay_tool --list` and `--mesh` on the player's dump, list its black corners, and run the
-check.
+**Hidden stage faces.** A few stage faces relied on the PS2's 4:3 picture: closing planes that seal
+a model where the 4:3 camera never looks. They are listed in `rd__content_hide` by the stream bits
+of their corners; `markContentHidden` marks a triangle whose three vertices are black and corners of
+one entry with `ICO_VU_INDEX_HIDE`, drawn nowhere. Black alone does not identify such a face, and a
+model pack's replacement never matches. An entry is listed only when 4:3 dumps with it hidden equal
+those without, byte for byte, in Original 1x and Enhanced 2x (`tools/content_table_check.py decide`)
+(`port/render/rd_content_hide.c`; `port/render/rd_mesh.c` (`markContentHidden`)). To add an entry:
+find the mesh with `rd_replay_tool --list` and `--mesh` on a dump that shows the face, list its
+black corners in `rd__content_hide`, and run `tools/content_table_check.py decide`.
+`ICO_RD_CONTENT_HIDE` overrides the table's verbs for the check: comma-separated `off`, `hide` or
+`table` for every entry, or `N=verb` for entry N; a bad value logs
+`rd: ICO_RD_CONTENT_HIDE="..." not understood: the table as listed` and keeps the table
+(`port/render/rd_mesh.c` (`rd__content_hide_set`, `rd__content_hide_verb`)).
 
 **Natural chains.** Two stage animations let a chain down by scaling a Null's Y, which squashes
 the links. With the option on the Null takes no scale along the chain, its children move along
@@ -565,24 +582,23 @@ cut, and `RD_CULL_MARGIN` is the cull's frustum margin (`port/render/rd_camera_b
 ## Interpolation and presentation
 
 With `RdSettings.interpolate` on, `rd_end_frame` only closes the frame and the host calls
-`rd_present(alpha)` (the [present](ARCHITECTURE.md#terms)) as often as the display allows: the last
-closed frame is replayed with every keyed draw blended from its match in the frame before, so the
-picture runs one tick behind the simulation and never feeds back into it
+`rd_present(alpha)` (the [present](ARCHITECTURE.md#terms)) as often as the display allows; what
+blends and how is [DISPLAY.md](DISPLAY.md#interpolation-between-ticks)'s
 (`port/render/rd_interp.c`). `rd_present.c` shows DISPLAY in a box of the frame's aspect on the
 output, `rd_crt.c` replaces that blit under the CRT filter, and `rd_video.c` shows the FMV picture.
 All of it is [DISPLAY.md](DISPLAY.md).
 
 ## Performance records
 
-A record (`RdPerfRecord`) is filled while a replay runs (its CPU phases and counts), closed with
-the RHI's counters, and then waits in a slot per frame in flight until its GPU timestamps can be
-read without waiting. The timestamps carry the effect whose work they end, so the record has a GPU
-time per list, for the uploads, for the present, and per picture effect (`RD_PERF_POST_*`:
-reduction, fog, motion blur, aura, glow, depth of field, softening, CRT, MSAA resolve)
-(`port/render/rd_perf.c`; `port/render/rd.h` (`RdPerfRecord`, `rd_perf_pop`)). The window sums
-them into its 10 s statistics line and, with `[dev] perf_log = true`, writes one line per replay to
-`logs/ico-pc-perf.csv` beside the executable (`port/platform/window_host.c` (`perf_csv_open`,
-`perf_drain`)). The [replay tool](ARCHITECTURE.md#terms)'s `--stats` prints the same record.
+A record (`RdPerfRecord`) is filled while a replay runs (its CPU phases and counts), closed with the
+RHI's counters, and then waits in a slot per frame in flight until its GPU timestamps can be read
+without waiting. The timestamps carry the effect whose work they end, so the record has a GPU time
+per list, for the uploads, for the present, and per picture effect (`RD_PERF_POST_*`: reduction,
+fog, motion blur, aura, glow, depth of field, softening, CRT, MSAA resolve)
+(`port/render/rd_perf.c`; `port/render/rd.h` (`RdPerfRecord`, `rd_perf_pop`)). The window sums them
+into its 10 s statistics line, and `[dev] perf_log` writes one line per replay
+([DISPLAY.md](DISPLAY.md#the-perf-csv)). The [replay tool](ARCHITECTURE.md#terms)'s `--stats` prints
+the same record.
 
 ## Dumps and the replay tool
 
@@ -593,13 +609,13 @@ contents are not written: a frame that reads a retained target replays from what
 context holds. Loading creates the textures and targets anew and rewrites every id. Dumps hold game
 assets and are never committed (`port/render/rd_dump.c`, header comment).
 
-Dumps are written by F12 (a PNG of the picture and a zip of the dump and the log, in
-`<pref>/dumps`) and by `[dev] dump_every = N` (with `dump_dir`, `dump_interp`, `dump_from`),
-which the host hands to rd as `ICO_RD_DUMP_EVERY`, `ICO_RD_DUMP_DIR`, `ICO_RD_DUMP_INTERP` and
-`ICO_RD_DUMP_FROM`; `dump_interp` also writes the frame before (`-prev`) and the frame blended half
-way (`-i50`) (`port/platform/window_host.c` (`frame_dump`); `port/platform/host_config.c`
-(`export_dump_keys`); `port/render/rd_core.c` (`readDumpConfig`, `rd_end_frame`)). `rd_png.c`
-writes uncompressed PNGs for the tool and the tests (`port/render/rd_png.c`).
+Dumps are written by F12 and Shift+F12 ([PLATFORM.md](PLATFORM.md#hotkeys-and-dump-zips)) and by
+`[dev] dump_every = N` (with `dump_dir`, `dump_interp`, `dump_from`), which the host hands to rd as
+`ICO_RD_DUMP_EVERY`, `ICO_RD_DUMP_DIR`, `ICO_RD_DUMP_INTERP` and `ICO_RD_DUMP_FROM`; `dump_interp`
+also writes the frame before (`-prev`) and the frame blended half way (`-i50`)
+(`port/platform/window_host.c` (`frame_dump`); `port/platform/host_config.c` (`export_dump_keys`);
+`port/render/rd_core.c` (`readDumpConfig`, `rd_end_frame`)). `rd_png.c` writes uncompressed PNGs for
+the tool and the tests (`port/render/rd_png.c`).
 
 `rd_replay_tool <dump> <out.png>` loads a dump (or the first `.rddump` in an F12 zip) and renders
 it headless (`port/render/tools/rd_replay_tool.c`, usage comment):
@@ -620,17 +636,22 @@ it headless (`port/render/tools/rd_replay_tool.c`, usage comment):
 | `--prev DUMP` | replays earlier dumps first so retained targets hold the run's pictures |
 | `--no-half`, `--no-aa1` | the frame without the field's half pixel or without PRIM.AA1 |
 | `--interp T PREV` | the frame the presenter builds between PREV and the dump at alpha T |
+| `--interp-any`, `--no-reproject` | with `--interp`: PREV taken as the tick before whatever its frame number; the CPU-projected draws blended in screen space |
+| `--aa MODE` | (with `--enhanced`) the anti-aliasing setting: off, ssaa2, ssaa4, msaa2, msaa4, msaa8 |
+| `--crt-strength K` | after `--crt`, the strength 0..1 |
+| `--overlay-test` | (with `--present`) a test pattern and a popup drawn as a presentation overlay |
+| `--vu-ref L:I` | the CPU mirror's vertices of prelit draw I of list L |
 
 ## Shader families
 
 The entries the replay binds are named in `s_vsNames` and `s_fsNames` (`port/render/rd_replay.c`).
-The families used outside the VU path (`port/shaders`; detail in [SHADERS.md](SHADERS.md)):
+The families and what each entry draws are [SHADERS.md](SHADERS.md#the-families)'s.
 
-| file | what it draws |
-| --- | --- |
-| `sprite.hlsl` | screen-space prims in GS window coordinates: `sprite_ui_vs`/`sprite_world_vs` and `sprite_ps`; the AA1 fringe entries; the plane entries |
-| `blit.hlsl` | fullscreen copies: `blit_ps`, `blit_depth_ps` (the effects depth), `aa_reduce_ps` (the supersampled DISPLAY box-averaged) |
-| `fx_sprite.hlsl` | one GS sprite in the GS integer arithmetic: `fx_rect_vs`, `fx_sprite_ps` |
-| `fog_lut.hlsl` | the depth fog: `fog_lut_ps`, `fog_lut_buffer_ps`, `fog_lut_ms_ps` |
-| `raw_wrap.hlsl` | COLCLAMP 0 prims: `wrap_acc_ps` then `wrap_resolve_ps` |
-| `blend_int.hlsl` | the integer blend of `RDC_EXACT_BLEND` |
+## Tests
+
+The renderer's tests are `port/render/test/`, listed with their ctest names in
+[TESTING.md](TESTING.md#portrendertest); the pixel gates on dumps are
+[TESTING.md](TESTING.md#render-gates). The variants run the same program under `ICO_RD_NO_DUAL=1`
+(`_nodual`), `ICO_VK_FAKE_LIMITS=min` (`_minlimits`) or `mali` (`_mali`), `ICO_RD_BLEND=fixed`
+(`_fixed`) or `storage` (`_storage`) and `ICO_VK_FAKE_D24S8=1` (`_d24s8`)
+(`port/render/CMakeLists.txt`). `ctest --test-dir <build> -R '^rd_'` runs rd's own.

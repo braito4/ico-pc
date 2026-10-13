@@ -27,14 +27,15 @@ game hands work to `port/render`. rd itself is [RENDER.md](RENDER.md).
 ## The layer in both builds
 
 Both the [headless build](ARCHITECTURE.md#terms) and the [window build](ARCHITECTURE.md#terms)
-compile the whole layer: the packets are built byte for byte, so the state the draw phase changes
-(fades, view matrices, heap allocations made by the packet builders) is the same with or without a
-renderer. Under it, Sony's libgraph and libdma are stubs: a [DMA](ARCHITECTURE.md#terms) kick does
-nothing, the [GS](ARCHITECTURE.md#terms) is always idle, and `sceGsSyncV` keeps the
-[EE](ARCHITECTURE.md#terms)'s busy wait for the next [vsync](ARCHITECTURE.md#terms) through the
-scheduler (`port/null/gfx_null.c` (`sceGsSyncV`, `sceGsSyncPath`, `sceDmaSend`)). The DMA channel
-register blocks are plain writable memory because `dma_init` sets `CHCR.TIE` in them
-(`port/null/gfx_null.c` (`sceDmaGetChan`)).
+compile the whole layer, so the state the draw phase changes (fades, view matrices, heap allocations
+made by the packet builders) is the same with or without a renderer; the headless build writes its
+packets as on the PS2, and the window build sends the register writes to the decoder instead
+([below](#the-register-decoder)). Under it, Sony's libgraph and libdma are stubs: a
+[DMA](ARCHITECTURE.md#terms) kick does nothing, the [GS](ARCHITECTURE.md#terms) is always idle, and
+`sceGsSyncV` keeps the [EE](ARCHITECTURE.md#terms)'s busy wait for the next
+[vsync](ARCHITECTURE.md#terms) through the scheduler (`port/null/gfx_null.c` (`sceGsSyncV`,
+`sceGsSyncPath`, `sceDmaSend`)). The DMA channel register blocks are plain writable memory because
+`dma_init` sets `CHCR.TIE` in them (`port/null/gfx_null.c` (`sceDmaGetChan`)).
 
 The window build defines `ICO_RD`. Under it the same functions also record into rd: register writes
 go through the decoder in `GifPacket.c`, [VU1](ARCHITECTURE.md#terms) chains through the
@@ -43,6 +44,15 @@ passes become `rd_post` calls (`ico2/seki/include/GifHost.h`). The frame latch, 
 strips' rule below are in every build, because they are game logic: a headless run culls and kicks
 as a window run does (`ico2/seki/src/GsBase.c` (`gsbHostCullMargin`); `ico2/seki/src/GifPacket.c`
 (`gifHostFrameW`)).
+
+One frame in the window build: `dl_Clear` drops a frame never kicked and opens the next
+(`rd_discard_frame`, `rd_begin_frame`); the game's `gif_*` helpers feed `gsWrite`, which turns
+register writes into rd state and primitives in the list `dl_SetDLPriority` selected
+(`rd_select_list`); model packets record `rd_draw_vu_mesh` through `RegistPacket.c`; the VU1 chains
+go through `mc_HostDma`; `dl_Swap` flushes the decoder (`gif_HostFlush`) and ends the frame with
+`rd_end_frame`, after which rd [replays](ARCHITECTURE.md#terms) lists 0..12 onto the
+[RHI](ARCHITECTURE.md#terms) ([RENDER.md](RENDER.md#the-replay)) (`ico2/seki/src/DisplayList.c`
+(`dl_Clear`, `dl_Swap`)).
 
 ## The native frame and the frame latch
 
@@ -173,8 +183,8 @@ FRAME.FBP selects a named rd target (`ico2/seki/src/GifPacket.c` (`gsTargetOfFbp
 | --- | --- | --- |
 | 0x000 | 0x0000 | DISPLAY |
 | 0x040 | 0x0800 | SCENE (with its depth) |
-| 0x140 | 0x2800 | WORK0 when 128 high, else AA0 |
-| 0x160 | 0x2C00 | AA1 at a quarter of the frame width, else WORK1 |
+| 0x140 | 0x2800 | WORK0 when at most 128 high, else AA0 |
+| 0x160 | 0x2C00 | AA1 when at most a quarter of the frame width wide, else WORK1 |
 | 0x180 | 0x3000 | WORK2 |
 | 0x1F8 | 0x3F00 | FEED128 |
 
@@ -246,11 +256,12 @@ rule](ARCHITECTURE.md#terms), in [VU1_PROGRAMS.md](VU1_PROGRAMS.md).
 
 ## The 2D layer's scopes
 
-The 640-grid helpers (`gif_Sprite*`, `gif_Point*`, `gif_Line*`) map x to the centred 4:3 box:
-grid x times `ScreenWidth / 640`. Between `gif_FullFrameBegin` and `gif_FullFrameEnd` they map it
-to the whole native frame, and the window build tags those primitives `RD_SPACE_FULLFRAME`. Only
-an item that covers the frame by its layout data enters the scope (`layout_texture.c`); scopes nest
-(`ico2/seki/include/GifPacket.h` (`gif_FullFrameBegin`); `ico2/seki/src/GifPacket.c` (`gifUiW`)).
+The 640-grid helpers (`gif_Sprite*`, `gif_Point*`, `gif_Line*`) map x to the centred 4:3 box: grid x
+times `ScreenWidth / 640`. Between `gif_FullFrameBegin` and `gif_FullFrameEnd` they map it to the
+whole native frame, and the window build tags those primitives `RD_SPACE_FULLFRAME`. Only an item
+that covers the frame by its layout data enters the scope (`ico2/common/src/layout_texture.c`);
+scopes nest (`ico2/seki/include/GifPacket.h` (`gif_FullFrameBegin`); `ico2/seki/src/GifPacket.c`
+(`gifUiW`)).
 
 ## Display lists and packet banks
 
@@ -317,9 +328,9 @@ box that fails selects the clipping program (code 36) instead (`ico2/seki/src/Re
 
 ## The VU1 side of the chains
 
-`MicroCodeAddress[]` is all zeros on the host: `ico2/vusrc` is assembled only by the PS2 build, and
-the renderer replaces the programs with shaders. `mc_TransMicroCode` still writes the tags and
-tells rd which program is resident in each list (`rd_vu_program`)
+`MicroCodeAddress[]` is all zeros on the host: nothing in this tree assembles `ico2/vusrc`, and the
+renderer replaces the [microprograms](ARCHITECTURE.md#terms) with shaders. `mc_TransMicroCode` still
+writes the tags and tells rd which program is resident in each list (`rd_vu_program`)
 (`ico2/seki/src/MicroCode.c` (`MicroCodeAddress`, `mc_TransMicroCode`)).
 
 `mc_HostDma` reads the chains the seki layer builds for path 1 (id 5: a call into `cnt` tags ending
