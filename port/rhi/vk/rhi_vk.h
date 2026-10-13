@@ -26,6 +26,9 @@ uint32_t rhi_vk_validation_error_count(void);
 #define RHI_VK_TEST_OUT_OF_DATE (-1000001004)  /* VK_ERROR_OUT_OF_DATE_KHR */
 void vkr_test_force_present_result(int32_t result);
 uint32_t vkr_test_swapchain_creations(void);
+/* 1 while a swapchain retired by a recreation is still held (until the
+ * first present on the new one succeeds), else 0 */
+uint32_t vkr_test_retired_swapchain(void);
 
 /* For rhi_vk_swapchain_test: the display's timing of presents
  * (rhi_present_timing) on a stand-in for vkWaitForPresentKHR, which

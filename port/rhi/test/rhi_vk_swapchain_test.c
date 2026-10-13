@@ -425,8 +425,20 @@ static int run(SDL_Window *win)
                 failures++;
                 break;
             }
+            /* the swapchain it replaced stays until the first present on the
+               new one: the screen keeps its last picture through the rebuild
+               (a frame rate change went black for the rebuild's length) */
+            if (!vkr_test_retired_swapchain()) {
+                printf("FAIL the replaced swapchain was not kept until the first present\n");
+                failures++;
+                break;
+            }
         }
         failures += frame(win, fmt, n);
+        if (n == 3 && vkr_test_retired_swapchain()) {
+            printf("FAIL the replaced swapchain is still held after a present\n");
+            failures++;
+        }
     }
     if (!failures) {
         failures += submitCounts(win, fmt);

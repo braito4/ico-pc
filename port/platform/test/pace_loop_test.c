@@ -975,6 +975,115 @@ static void testFirstFrame(void)
     CHECK(L.perFrame == 2);
 }
 
+/* A host pause between vsyncs (a swapchain rebuilt at a frame rate change,
+   ~140 ms on some drivers) is taken out of the grid with pace_lock_pause:
+   the next step is on time, no lag is dropped (a resync) and no steps run
+   back to back to catch up; without the pause the same stall is a resync
+   that drops it */
+static void testPause(void)
+{
+    for (int paused = 0; paused < 2; paused++) {
+        Fake f = fake(D60);
+        PaceLock L;
+        const PaceLockIo io = {&f, f_now, f_present, f_sleep, NULL, NULL, NULL};
+        uint64_t due;
+
+        f.cost = 2 * MS;
+        f.gpu = 6 * MS;
+        pace_lock_reset(&L, 1, R60, NTSC, f.now, true, false);
+        for (unsigned v = 0; v < 30; v++) {
+            f.now += 1 * MS;
+            (void)pace_lock_vsync(&L, &io, v % 2 == 0);
+        }
+        due = L.due;
+        /* the stall */
+        f.now += 140 * MS;
+        if (paused) {
+            pace_lock_pause(&L, 140 * MS);
+            CHECK(L.due == due + 140 * MS);
+        }
+        const unsigned stepsBefore = L.steps, presentsBefore = L.presents;
+        const uint64_t next = pace_lock_vsync(&L, &io, true);
+
+        if (paused) {
+            /* on the grid: one step and its present, a period on from the
+               moved due time, nothing dropped */
+            CHECK(L.resyncs == 0 && L.droppedNs == 0);
+            CHECK(L.steps == stepsBefore + 1 && L.presents == presentsBefore + 1);
+            CHECK(next == due + 140 * MS + R60);
+            CHECK(L.skipped == 0 && L.held == 0);
+        } else {
+            /* the lag is dropped: a resync */
+            CHECK(L.resyncs == 1 && L.droppedNs > 100 * MS);
+        }
+    }
+}
+
+/* FIFO latest ready (VK_EXT_present_mode_fifo_latest_ready, opt-in):
+   presents never wait, and at each vblank the display shows the newest
+   picture that is ready, dropping older ones.  On the grid with one
+   present a step: steps never late, one picture a refresh at a phase
+   clear of the vblank.  A phase that puts the pictures' readiness around a
+   vblank alternates repeats and drops, as mailbox does (nothing steers the
+   phase without the display clock), and the display's drift sweeps the
+   phase through that zone once per 5.5 minutes at 50 ppm, for ~20 s each
+   time, where FIFO slips one picture once: so the mode stays opt-in; the
+   numbers are measured here, not hidden. */
+static void testLatestReady(void)
+{
+    unsigned badPhases = 0, worst = 0;
+
+    for (unsigned p = 0; p < 16; p++) {
+        Fake f = fake(D60);
+        Opt o = opt(1, R60, 60.0);
+
+        f.mode = F_MAILBOX; /* presents return at once; the newest ready is shown */
+        f.phase = 5 * SEC - (uint64_t)((double)p * D60 / 16.0);
+        f.cost = 2 * MS;
+        f.gpu = 7 * MS;
+        f.gpuJitter = 2 * MS;
+        o.fifo = true; /* the lock treats it as FIFO: the hold never fires on an at-once return */
+        const Run r = run(&f, &o);
+
+        CHECK(r.lateMax == 0);
+        CHECK(r.presents == r.steps);
+        CHECK(r.held == 0 && r.skipped == 0 && r.resyncs == 0);
+        CHECK(r.alphaBad == 0);
+        if (r.repeats + r.drops) {
+            badPhases++;
+            if (r.repeats + r.drops > worst) {
+                worst = r.repeats + r.drops;
+            }
+        }
+    }
+    printf("fifo latest ready, 16 phases x 60 s: %u phases with repeats or drops, worst %u\n",
+           badPhases, worst);
+    CHECK(badPhases < 16); /* a phase clear of the vblank shows one picture a refresh */
+    {
+        /* 50 ppm of drift: a slip every few minutes, not every second */
+        const double d = D60 * (1.0 - 50e-6);
+        Fake f = fake(d);
+        Opt o = opt(1, R60, 300.0);
+
+        f.mode = F_MAILBOX;
+        f.phase = 5 * SEC - (uint64_t)(D60 * 0.5);
+        f.cost = 2 * MS;
+        f.gpu = 6 * MS;
+        f.gpuJitter = 1 * MS;
+        o.fifo = true;
+        const Run r = run(&f, &o);
+
+        printf("fifo latest ready, a display 50 ppm fast, 5 min: %u repeated, %u dropped\n",
+               r.repeats, r.drops);
+        CHECK(r.lateMax == 0);
+        /* measured, and why the mode stays opt-in: the phase sweeps through
+           the vblank once per 5.5 minutes at 50 ppm and alternates repeats
+           and drops for the ~20 s it takes the GPU's jitter zone to pass
+           (a few hundred pictures), where FIFO slips one picture once */
+        CHECK(r.repeats + r.drops > 0 && r.repeats + r.drops < 1000);
+    }
+}
+
 /* Without the lock under FIFO at 144 Hz: the window's present loop for one
    simulated vsync, as window_host.c's pace() (the rule pace_fifo_hold; rc1
    is the same call with frameShown always true).  Returns the new frames
@@ -1106,6 +1215,8 @@ int main(void)
     testFifoHold();
     testNominalRatio();
     testTrace();
+    testPause();
+    testLatestReady();
     if (fails) {
         printf("pace_loop_test: %d failures\n", fails);
         return 1;

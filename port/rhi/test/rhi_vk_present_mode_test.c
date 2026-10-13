@@ -18,7 +18,7 @@ static int s_failures;
 static void expect(const char *what, const VkPresentModeKHR *modes, uint32_t n, bool vsync,
                    bool preferMailbox, VkPresentModeKHR want)
 {
-    const VkPresentModeKHR got = vkr_choose_present_mode(modes, n, vsync, preferMailbox);
+    const VkPresentModeKHR got = vkr_choose_present_mode(modes, n, vsync, preferMailbox, false);
     const char *g = vkr_present_mode_name(got), *w = vkr_present_mode_name(want);
 
     if (got != want) {
@@ -28,8 +28,46 @@ static void expect(const char *what, const VkPresentModeKHR *modes, uint32_t n, 
     }
 }
 
+/* FIFO latest ready only when asked for (ICO_VK_FIFO_LATEST_READY) and
+   offered, where FIFO would be taken; mailbox preferred still wins; vsync
+   off never takes it */
+static void latestReady(void)
+{
+    static const VkPresentModeKHR nv[] = {
+        VK_PRESENT_MODE_FIFO_KHR, VK_PRESENT_MODE_FIFO_RELAXED_KHR, VK_PRESENT_MODE_MAILBOX_KHR,
+        VK_PRESENT_MODE_IMMEDIATE_KHR, VK_PRESENT_MODE_FIFO_LATEST_READY_EXT};
+    static const VkPresentModeKHR plain[] = {VK_PRESENT_MODE_FIFO_KHR, VK_PRESENT_MODE_MAILBOX_KHR};
+
+    const struct {
+        const VkPresentModeKHR *m;
+        uint32_t n;
+        bool vsync, mailbox, latest;
+        VkPresentModeKHR want;
+    } c[] = {
+        {nv, 5, true, false, true, VK_PRESENT_MODE_FIFO_LATEST_READY_EXT},
+        {nv, 5, true, false, false, VK_PRESENT_MODE_FIFO_KHR},
+        {nv, 5, true, true, true, VK_PRESENT_MODE_MAILBOX_KHR},
+        {nv, 5, false, false, true, VK_PRESENT_MODE_IMMEDIATE_KHR},
+        {plain, 2, true, false, true, VK_PRESENT_MODE_FIFO_KHR},
+    };
+
+    for (unsigned i = 0; i < sizeof c / sizeof c[0]; i++) {
+        const VkPresentModeKHR got =
+            vkr_choose_present_mode(c[i].m, c[i].n, c[i].vsync, c[i].mailbox, c[i].latest);
+        if (got != c[i].want) {
+            printf("FAIL latest ready case %u: got %d, want %d\n", i, (int)got, (int)c[i].want);
+            s_failures++;
+        }
+    }
+    if (strcmp(vkr_present_mode_name(VK_PRESENT_MODE_FIFO_LATEST_READY_EXT), "fifo latest ready")) {
+        printf("FAIL the name of fifo latest ready\n");
+        s_failures++;
+    }
+}
+
 int main(void)
 {
+    latestReady();
     /* Mesa (RADV, lavapipe on X11): every common mode */
     static const VkPresentModeKHR mesa[] = {VK_PRESENT_MODE_IMMEDIATE_KHR,
                                             VK_PRESENT_MODE_MAILBOX_KHR, VK_PRESENT_MODE_FIFO_KHR,

@@ -607,6 +607,23 @@ uint64_t pace_lock_vsync(PaceLock *L, const PaceLockIo *io, bool newFrame)
     return next;
 }
 
+void pace_lock_pause(PaceLock *L, uint64_t ns)
+{
+    L->due += ns;
+    if (L->lastReturn != 0) {
+        L->lastReturn += ns;
+    }
+    if (L->rateFirst != 0) {
+        L->rateFirst += ns;
+    }
+    if (L->rateLast != 0) {
+        L->rateLast += ns;
+    }
+    for (unsigned i = 0; i < L->pendCount; i++) {
+        L->pendSlot[i] += (double)ns;
+    }
+}
+
 double pace_lock_nominal_ratio(const PaceLock *L)
 {
     if (L->n == 0 || L->refreshNs == 0 || L->periodNs == 0) {

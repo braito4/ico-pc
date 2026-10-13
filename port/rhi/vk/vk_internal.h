@@ -247,6 +247,11 @@ typedef struct VkrState {
     void *window;
     VkSurfaceKHR surface;
     VkSwapchainKHR swapchain;
+    /* the swapchain a recreation retired, kept until the first present on
+     * the new one succeeds (destroying it at once took the last picture off
+     * the screen for the length of the rebuild: a black flash at every
+     * frame rate change); vkr_test_retired_swapchain */
+    VkSwapchainKHR retired;
     VkFormat swapFormat;
     RhiFormat swapRhiFormat;
     VkColorSpaceKHR swapColorSpace;
@@ -287,6 +292,10 @@ typedef struct VkrState {
      * across swapchains), vkWaitForPresentKHR */
     bool presentWait;
     bool presentWaitFake; /* vkr_test_fake_present_wait: no ids chained */
+    /* VK_PRESENT_MODE_FIFO_LATEST_READY (VK_EXT_present_mode_fifo_latest_ready)
+     * enabled on the device, asked for with ICO_VK_FIFO_LATEST_READY=1:
+     * vkr_choose_present_mode takes it where FIFO would be taken */
+    bool fifoLatestReady;
     uint64_t presentId;
     PFN_vkWaitForPresentKHR waitForPresent;
 
@@ -386,7 +395,7 @@ void vkr_image_barrier(VkrCmdList *c, VkrTexture *t, RhiState before, RhiState a
  * vkr_present_mode_name: "immediate", "mailbox", "fifo", "fifo_relaxed", or
  * NULL for any other mode. */
 VkPresentModeKHR vkr_choose_present_mode(const VkPresentModeKHR *modes, uint32_t n, bool vsync,
-                                         bool preferMailbox);
+                                         bool preferMailbox, bool preferLatestReady);
 const char *vkr_present_mode_name(VkPresentModeKHR m);
 /* vk_present_mode.c: whether the display's timing of presents
  * (VK_KHR_present_id + VK_KHR_present_wait, rhi_present_timing) is used:

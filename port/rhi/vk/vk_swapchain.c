@@ -412,6 +412,8 @@ uint64_t rhi_present_last_id(void)
     return vkr_pw_wanted() ? g_vkr.presentId : 0;
 }
 
+static void vkr_destroy_retired(void);
+
 static void vkr_destroy_swap_resources(void)
 {
     for (uint32_t i = 0; i < g_vkr.swapImageCount; i++) {
@@ -425,6 +427,21 @@ static void vkr_destroy_swap_resources(void)
     g_vkr.swapImageCount = 0;
 }
 
+/* the retired swapchain (vkr_swapchain_create), once the new one has put
+   a picture on the screen or the swapchain goes away */
+static void vkr_destroy_retired(void)
+{
+    if (g_vkr.retired) {
+        vkDestroySwapchainKHR(g_vkr.device, g_vkr.retired, NULL);
+        g_vkr.retired = VK_NULL_HANDLE;
+    }
+}
+
+uint32_t vkr_test_retired_swapchain(void)
+{
+    return g_vkr.retired != VK_NULL_HANDLE;
+}
+
 void vkr_swapchain_destroy(void)
 {
     if (!g_vkr.device) {
@@ -432,6 +449,7 @@ void vkr_swapchain_destroy(void)
     }
     vkr_pw_pause();
     vkr_destroy_swap_resources();
+    vkr_destroy_retired();
     if (g_vkr.swapchain) {
         vkDestroySwapchainKHR(g_vkr.device, g_vkr.swapchain, NULL);
         g_vkr.swapchain = VK_NULL_HANDLE;
@@ -622,7 +640,8 @@ bool vkr_swapchain_create(uint32_t w, uint32_t h, bool vsync)
         .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
         .preTransform = pre,
         .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
-        .presentMode = vkr_choose_present_mode(modes, nModes, vsync, s_preferMailbox),
+        .presentMode =
+            vkr_choose_present_mode(modes, nModes, vsync, s_preferMailbox, g_vkr.fifoLatestReady),
         .clipped = VK_TRUE,
         .oldSwapchain = old,
     };
@@ -638,6 +657,7 @@ bool vkr_swapchain_create(uint32_t w, uint32_t h, bool vsync)
              * (the device is idle, rhi_resize_swapchain), so the next acquire
              * returns id 0 and the caller's retry creates from scratch */
             vkr_destroy_swap_resources();
+            vkr_destroy_retired();
             vkDestroySwapchainKHR(g_vkr.device, old, NULL);
             g_vkr.swapchain = VK_NULL_HANDLE;
             g_vkr.swapAcquired = false;
@@ -649,9 +669,12 @@ bool vkr_swapchain_create(uint32_t w, uint32_t h, bool vsync)
     s_creations++;
     s_swapMadeNs = vkr_now_ns(); /* the poll runs at every present again */
     vkr_destroy_swap_resources();
-    if (old) {
-        vkDestroySwapchainKHR(g_vkr.device, old, NULL);
-    }
+    /* the old swapchain stays until the first present on the new one
+     * succeeds (rhi_present): the screen keeps its last picture through the
+     * rebuild and the first replay instead of going black (a retired one
+     * already held is long off the screen: destroyed now) */
+    vkr_destroy_retired();
+    g_vkr.retired = old;
     g_vkr.swapchain = sc;
     g_vkr.mailbox = vsync && ci.presentMode == VK_PRESENT_MODE_MAILBOX_KHR;
     g_vkr.presentMode = ci.presentMode;
@@ -1049,6 +1072,11 @@ void rhi_present(void)
     g_vkr.stats.presents++;
     g_vkr.swapAcquired = false;
     g_vkr.presentSignalled = false;
+    if (g_vkr.retired && (r == VK_SUCCESS || r == VK_SUBOPTIMAL_KHR)) {
+        /* the new swapchain's picture is on its way to the screen: the one
+         * it replaced can go */
+        vkr_destroy_retired();
+    }
     if (s_forcePresent != VK_SUCCESS && (r == VK_SUCCESS || r == VK_SUBOPTIMAL_KHR)) {
         r = s_forcePresent; /* a test's result for this present, once */
         s_forcePresent = VK_SUCCESS;

@@ -176,6 +176,11 @@ static struct {
     uint32_t heldFrame;   /* a new frame pace_fifo_hold held back (+1; 0: none) */
     unsigned lockResyncs; /* lock.resyncs already counted in statResyncs */
     Uint64 lockDroppedNs; /* lock.droppedNs already counted in statDropped */
+    /* a host pause to take out of the pacing (pace_paused): the time a
+       swapchain rebuild took (video_apply), applied before the next pace,
+       and the first present on the new chain's excess over a refresh */
+    Uint64 pausePendingNs;
+    int rebuilt; /* a swapchain rebuilt: the next present's cost is its first */
     /* the lock's counts at the 10 s block's start */
     double lockNudgeAt;
     unsigned lockSeenAt, lockLateAt, lockEarlyAt, lockHeldAt, lockSkippedAt;
@@ -518,8 +523,43 @@ static void video_apply(int force)
     rd_set_settings(&rs);
     if (mailbox != s_pres.mailbox && w > 0 && h > 0) {
         /* the present mode follows the frame rate option (the swapchain
-           is recreated) */
+           is recreated); the time that takes (the device idle, the new
+           chain: ~100 ms on some drivers) is a pause of the host, not lag
+           of the game */
+        const Uint64 t0 = SDL_GetTicksNS();
+
         rd_resize_output((uint32_t)w, (uint32_t)h);
+        s_pres.pausePendingNs += SDL_GetTicksNS() - t0;
+        s_pres.rebuilt = 1;
+    }
+}
+
+/* A pause of the host (a swapchain rebuild): the deadline, the frame's
+   times and the present grid move by it, so the simulation neither drops
+   that time (a resync: a jump) nor runs it off in a burst of steps */
+static void pace_paused(Uint64 ns)
+{
+    if (ns == 0) {
+        return;
+    }
+    s_deadline += ns;
+    if (s_pres.tickAt != 0) {
+        s_pres.tickAt += ns;
+    }
+    if (s_pres.tickPrev != 0) {
+        s_pres.tickPrev += ns;
+    }
+    if (s_pres.nextPresent != 0) {
+        s_pres.nextPresent += ns;
+    }
+    if (s_pres.lastPresent != 0) {
+        s_pres.lastPresent += ns;
+    }
+    if (s_pres.lastReturn != 0) {
+        s_pres.lastReturn += ns;
+    }
+    if (s_pres.lockN != 0) {
+        pace_lock_pause(&s_pres.lock, ns);
     }
 }
 
@@ -2474,7 +2514,17 @@ void ico_window_pace(int hz)
             slow_step(ms);
         }
     }
+    if (s_pres.pausePendingNs) {
+        /* a swapchain rebuilt in the pump (video_apply): paused out */
+        pace_paused(s_pres.pausePendingNs);
+        s_pres.pausePendingNs = 0;
+    }
     pace(hz);
+    if (s_pres.pausePendingNs) {
+        /* the first present after a rebuild (present_once) */
+        pace_paused(s_pres.pausePendingNs);
+        s_pres.pausePendingNs = 0;
+    }
     if (s_pres.presentModeApply) {
         /* the vsync lock wants another present mode (the display's timing
            came up with the device, or stopped; the game's rate changed):
@@ -2536,6 +2586,15 @@ static int present_once(float a, Uint64 refresh, Uint64 period)
     const Uint64 now = SDL_GetTicksNS();
 
     s_pres.cost = now - t0;
+    if (s_pres.rebuilt) {
+        /* the first present on a rebuilt swapchain (the first acquire and
+           the pipelines' warm-up on it): what it took past a refresh is
+           the rebuild's, paused out of the pacing after this pace */
+        s_pres.rebuilt = 0;
+        if (s_pres.cost > refresh) {
+            s_pres.pausePendingNs += s_pres.cost - refresh;
+        }
+    }
     if (!ok) {
         return 0;
     }

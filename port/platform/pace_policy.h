@@ -264,6 +264,13 @@ typedef struct PaceLockIo {
  * (the caller steps at once). */
 uint64_t pace_lock_vsync(PaceLock *L, const PaceLockIo *io, bool newFrame);
 
+/* The host paused for ns (a swapchain rebuilt at a frame rate change: the
+ * device waited idle, the new chain made, its first picture drawn): the
+ * grid and everything timed on it move by ns, so the pause is neither lag
+ * to drop (a jump in game time) nor lag to catch up (a burst of steps).
+ * Called between vsyncs, never inside pace_lock_vsync. */
+void pace_lock_pause(PaceLock *L, uint64_t ns);
+
 /* The trace as text: "16.67 (12.40) 16.66 (12.38) 1.20 ..." (ms since the
  * return before, and in brackets ms from the present's slot to the refresh
  * that showed it where the clock saw it).  Returns the presents written. */

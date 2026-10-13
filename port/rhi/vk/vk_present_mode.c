@@ -15,7 +15,7 @@ static bool vkr_offered(const VkPresentModeKHR *modes, uint32_t n, VkPresentMode
 }
 
 VkPresentModeKHR vkr_choose_present_mode(const VkPresentModeKHR *modes, uint32_t n, bool vsync,
-                                         bool preferMailbox)
+                                         bool preferMailbox, bool preferLatestReady)
 {
     if (vsync) {
         /* FIFO is always available; mailbox when asked for (rhi_prefer_mailbox)
@@ -23,6 +23,15 @@ VkPresentModeKHR vkr_choose_present_mode(const VkPresentModeKHR *modes, uint32_t
          * display */
         if (preferMailbox && vkr_offered(modes, n, VK_PRESENT_MODE_MAILBOX_KHR)) {
             return VK_PRESENT_MODE_MAILBOX_KHR;
+        }
+        /* FIFO latest ready (VK_EXT_present_mode_fifo_latest_ready, opt-in:
+         * ICO_VK_FIFO_LATEST_READY=1) where FIFO would be taken: the queue
+         * is drained to the newest ready picture at each vblank, so a present
+         * never waits for the display and nothing tears; what a present that
+         * started near a vblank does to the picture's cadence is the same as
+         * under mailbox (pace_loop_test testLatestReady) */
+        if (preferLatestReady && vkr_offered(modes, n, VK_PRESENT_MODE_FIFO_LATEST_READY_EXT)) {
+            return VK_PRESENT_MODE_FIFO_LATEST_READY_EXT;
         }
         return VK_PRESENT_MODE_FIFO_KHR;
     }
@@ -50,6 +59,8 @@ const char *vkr_present_mode_name(VkPresentModeKHR m)
         return "fifo";
     case VK_PRESENT_MODE_FIFO_RELAXED_KHR:
         return "fifo_relaxed";
+    case VK_PRESENT_MODE_FIFO_LATEST_READY_EXT:
+        return "fifo latest ready";
     default:
         return NULL; /* a mode the backend never picks (the shared ones) */
     }

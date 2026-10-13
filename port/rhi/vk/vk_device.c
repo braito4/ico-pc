@@ -727,7 +727,7 @@ static bool vkr_create_device(void)
         g_vkr.apiVersion = s_instanceApi;
     }
 #endif
-    const char *exts[12];
+    const char *exts[16];
     uint32_t extCount = 0;
     if (g_vkr.surface) {
         exts[extCount++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
@@ -928,6 +928,36 @@ static bool vkr_create_device(void)
         }
     }
 
+    /* VK_PRESENT_MODE_FIFO_LATEST_READY (VK_EXT_present_mode_fifo_latest_ready):
+     * opt-in with ICO_VK_FIFO_LATEST_READY=1 (vkr_choose_present_mode takes it
+     * where FIFO would be taken, so a present never waits for the display
+     * and nothing tears); unverified on hardware, so never on by itself */
+    VkPhysicalDevicePresentModeFifoLatestReadyFeaturesEXT qLatest = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_MODE_FIFO_LATEST_READY_FEATURES_EXT};
+    g_vkr.fifoLatestReady = false;
+    if (g_vkr.surface) {
+        const char *asked = getenv("ICO_VK_FIFO_LATEST_READY");
+        const bool wanted = asked != NULL && asked[0] != '\0' && strcmp(asked, "0") != 0;
+
+        if (wanted &&
+            vkr_device_has_ext(g_vkr.phys, VK_EXT_PRESENT_MODE_FIFO_LATEST_READY_EXTENSION_NAME)) {
+            VkPhysicalDeviceFeatures2 q = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+                                           .pNext = &qLatest};
+            vkGetPhysicalDeviceFeatures2(g_vkr.phys, &q);
+            g_vkr.fifoLatestReady = qLatest.presentModeFifoLatestReady != 0;
+        }
+        if (wanted) {
+            VKR_LOG("present mode fifo latest ready: %s", g_vkr.fifoLatestReady
+                                                              ? "on (ICO_VK_FIFO_LATEST_READY=1)"
+                                                              : "asked for, not offered");
+        }
+        qLatest.pNext = NULL;
+        qLatest.presentModeFifoLatestReady = VK_TRUE;
+        if (g_vkr.fifoLatestReady) {
+            exts[extCount++] = VK_EXT_PRESENT_MODE_FIFO_LATEST_READY_EXTENSION_NAME;
+        }
+    }
+
     VkPhysicalDeviceDynamicRenderingFeatures dyn = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES,
         .dynamicRendering = VK_TRUE,
@@ -936,6 +966,10 @@ static bool vkr_create_device(void)
         qPw.pNext = dyn.pNext;
         qPid.pNext = &qPw;
         dyn.pNext = &qPid;
+    }
+    if (g_vkr.fifoLatestReady) {
+        qLatest.pNext = dyn.pNext;
+        dyn.pNext = &qLatest;
     }
     if (g_vkr.interlock) {
         qInterlock.pNext = dyn.pNext;

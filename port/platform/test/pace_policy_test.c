@@ -416,9 +416,31 @@ static void testGridPeriod(void)
     CHECK(!pace_grid_period_ok(1, 16666667ull, pal));
 }
 
+/* A host pause (pace_lock_pause): the grid moves by it, so the next vsync
+   is on time, not a resync nor a burst of steps */
+static void testLockPause(void)
+{
+    PaceLock L;
+    const uint64_t r60 = 16666667ull, ntsc = 16683333ull;
+
+    pace_lock_reset(&L, 1, r60, ntsc, 1000000000ull, false, false);
+    L.lastReturn = 1000000000ull + 100000ull;
+    L.rateFirst = 1000000000ull;
+    L.rateLast = 1000000000ull;
+    L.pendCount = 1;
+    L.pendSlot[0] = 1000000000.0;
+    pace_lock_pause(&L, 140000000ull);
+    CHECK(L.due == 1140000000ull);
+    CHECK(L.lastReturn == 1140100000ull);
+    CHECK(L.rateFirst == 1140000000ull && L.rateLast == 1140000000ull);
+    CHECK(L.pendSlot[0] == 1140000000.0);
+    CHECK(L.resyncs == 0 && L.droppedNs == 0);
+}
+
 int main(void)
 {
     PaceHist h = {0};
+    testLockPause();
     int i, flips;
     bool last;
 
