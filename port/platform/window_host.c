@@ -2356,7 +2356,7 @@ static void pace_log(Uint64 now)
        simulation runs at the display's rate over n (0.1 % fast on a 60.00
        Hz screen), and the audio plays the samples that much faster, so its
        queue neither grows nor runs dry; 1 otherwise */
-    char lock[256];
+    char lock[400]; /* timing (160) + the lock line (gcc -O2 counts the worst case) */
     double ratio = 1.0;
 
     if (s_pres.lockN > 0) {
