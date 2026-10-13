@@ -166,6 +166,7 @@ static struct {
     int paceHz;           /* the simulation's rate the last pace had (50 or 60; 0: none yet) */
     int clockGone;        /* the display's timing stopped or was not believed: FIFO */
     int presentModeApply; /* the lock wants another present mode: ico_window_pace applies it */
+    int timingUse;        /* rhi_present_timing_use as last set (presents carry ids) */
     PaceLock lock;
     unsigned lockN;       /* n the lock was started with (0: not locked at the last vsync) */
     Uint64 lockRefresh;   /* the refresh it was started with */
@@ -2612,13 +2613,22 @@ static const char *lock_clock_words(int clock)
         return "stopped (a wait on a present failed); presenting fifo until the display "
                "settings change";
     case PACE_CLOCK_LEFT_PERIOD:
-        return "left (it gave a refresh more than 1 % off the one the display reports); "
+        return "left (it gave a refresh more than 0.5 % off the one the display reports); "
                "presenting fifo until the display settings change";
     default:
-        return s_pres.clockGone ? "left earlier (fifo until the display settings change)"
-               : rhi_present_timing()
-                   ? "not used"
-                   : "not offered (the driver does not say when a picture reaches the screen)";
+        return s_pres.clockGone       ? "left earlier (fifo until the display settings change)"
+               : rhi_present_timing() ? "not used"
+                                      : "off";
+    }
+}
+
+/* presents carry ids for the display's timing only under the lock with the
+   timing in use (rhi_present_timing_use) */
+static void timing_use(int on)
+{
+    if (on != s_pres.timingUse) {
+        s_pres.timingUse = on;
+        rhi_present_timing_use(on != 0);
     }
 }
 
@@ -2677,6 +2687,7 @@ static void pace_locked(unsigned n, Uint64 period)
     if ((clock && !s_pres.clockGone) != s_pres.mailbox) {
         s_pres.presentModeApply = 1;
     }
+    timing_use(s_pres.lock.clock == PACE_CLOCK_ON);
     /* the frame closed in the step that was due at s_deadline */
     const int newFrame = frame_seen(s_deadline);
 
@@ -2781,6 +2792,7 @@ static void pace(int hz)
             return;
         }
         s_pres.lockN = 0;
+        timing_use(0); /* the presents below as without the timing */
     }
     s_deadline += period;
     s_pres.statVsyncs++;

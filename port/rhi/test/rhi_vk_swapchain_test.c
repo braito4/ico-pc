@@ -22,7 +22,8 @@
  * backbuffer to PRESENT signals the present semaphore with its own submit:
  * such a frame costs one submit, and a frame whose drawing list does not
  * present costs one submit per list and none more.  The display's timing
- * of presents on a stand-in for vkWaitForPresentKHR (presentTiming).  Exit
+ * of presents on a stand-in for vkWaitForPresentKHR (presentTiming, and a
+ * wait that does not keep its timeout: presentWaitHang).  Exit
  * 77 when SDL has no offscreen Vulkan surface or no device presents to it. */
 #include "rhi.h"
 #include "vk/rhi_vk.h"
@@ -498,6 +499,20 @@ static int presentTiming(SDL_Window *win)
         printf("FAIL present timing not in use with the stand-in\n");
         failures++;
     }
+    /* not in use (rhi_present_timing_use, the window outside its vsync
+       lock): presents carry no ids and nothing is noted */
+    for (int n = 0; n < 3 && !failures; n++) {
+        failures += frame(win, fmt, 20 + n);
+    }
+    SDL_Delay(10);
+    {
+        uint64_t id = 0, ns = 0;
+        if (rhi_present_last_id() != 0 || rhi_present_timing_next(&id, &ns) != 0) {
+            printf("FAIL presents carried ids with the timing not in use\n");
+            failures++;
+        }
+    }
+    rhi_present_timing_use(true);
     for (int n = 0; n < 8 && !failures; n++) {
         if (n == 4) {
             SDL_SetWindowSize(win, 96, 64);
@@ -547,6 +562,63 @@ static int presentTiming(SDL_Window *win)
     return failures;
 }
 
+/* A wait on a present that does not keep its timeout (a driver's, here the
+   stand-in's: 2 s whatever the timeout): a swapchain made again and
+   rhi_shutdown go on after 100 ms, the timing stopped, and frames are
+   presented meanwhile (the v0.7.0 rc4 build waited for the wait to end) */
+static int presentWaitHang(SDL_Window *win)
+{
+    RhiDeviceDesc dd = {win, true, true, "rhi_vk_swapchain_test"};
+    int failures = 0;
+
+    SDL_SetWindowSize(win, 64, 48);
+    SDL_SyncWindow(win);
+    vkr_test_fake_present_wait(1);
+    if (!rhi_init(&dd)) {
+        printf("FAIL rhi_init with the present wait stand-in\n");
+        vkr_test_fake_present_wait(0);
+        return 1;
+    }
+    const RhiFormat fmt = rhi_swapchain_format();
+    rhi_present_timing_use(true);
+    failures += frame(win, fmt, 50);
+    vkr_test_fake_present_wait_hang(2000);
+    failures += frame(win, fmt, 51); /* the thread now waits on it */
+    SDL_Delay(20);
+    uint64_t t0 = SDL_GetTicksNS();
+    SDL_SetWindowSize(win, 96, 64);
+    SDL_SyncWindow(win);
+    if (!rhi_resize_swapchain(96, 64, true)) {
+        printf("FAIL rhi_resize_swapchain\n");
+        failures++;
+    }
+    const double resizeMs = (double)(SDL_GetTicksNS() - t0) / 1e6;
+    if (resizeMs > 1000.0) {
+        printf("FAIL a swapchain made again waited %.0f ms for a stuck wait\n", resizeMs);
+        failures++;
+    }
+    if (rhi_present_timing()) {
+        printf("FAIL the timing not stopped after a stuck wait\n");
+        failures++;
+    }
+    for (int n = 0; n < 3; n++) {
+        failures += frame(win, fmt, 52 + n);
+    }
+    rhi_wait_idle();
+    t0 = SDL_GetTicksNS();
+    rhi_shutdown(); /* the thread is still in its 2 s wait: left */
+    const double shutMs = (double)(SDL_GetTicksNS() - t0) / 1e6;
+    if (shutMs > 1000.0) {
+        printf("FAIL rhi_shutdown waited %.0f ms for a stuck wait\n", shutMs);
+        failures++;
+    }
+    printf("present timing, a stuck wait: swapchain made again in %.0f ms, shutdown in %.0f ms\n",
+           resizeMs, shutMs);
+    vkr_test_fake_present_wait(0);
+    vkr_test_fake_present_wait_hang(0);
+    return failures;
+}
+
 int main(void)
 {
     SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "offscreen");
@@ -562,6 +634,9 @@ int main(void)
     }
     int rc = run(win);
     if (rc == 0 && presentTiming(win) != 0) {
+        rc = 1;
+    }
+    if (rc == 0 && presentWaitHang(win) != 0) {
         rc = 1;
     }
     SDL_DestroyWindow(win);

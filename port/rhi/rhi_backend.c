@@ -451,6 +451,13 @@ bool rhi_present_timing(void)
     return s_up && be()->present_timing();
 }
 
+void rhi_present_timing_use(bool on)
+{
+    if (s_up) {
+        be()->present_timing_use(on);
+    }
+}
+
 uint64_t rhi_present_last_id(void)
 {
     return s_up ? be()->present_last_id() : 0;

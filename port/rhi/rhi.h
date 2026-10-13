@@ -863,17 +863,24 @@ const char *rhi_present_mode_name(void);
 /* The display's timing of presents (VK_KHR_present_id and
  * VK_KHR_present_wait): a thread of the backend's waits on each present and
  * notes when the display showed it, on SDL_GetTicksNS's clock (the window's
- * vsync lock keeps its grid on it, port/platform/pace_policy.h).
- * rhi_present_timing: in use (both extensions on a window, SDL; not
- * NVIDIA's driver outside Windows, where waits on presents have hung
- * vkQueuePresentKHR; ICO_VK_NO_PRESENT_WAIT=1 leaves it off).
+ * vsync lock keeps its grid on it, port/platform/pace_policy.h).  Off
+ * unless asked for with ICO_VK_PRESENT_WAIT=1 (the v0.7.0 rc4 build had it
+ * on, and an RTX 3090 on Windows showed nothing usable with presents in
+ * mailbox mode).  rhi_present_timing: available (asked for, both
+ * extensions on a window, SDL, no wait failed).  rhi_present_timing_use:
+ * presents carry ids only while on (the window: under its vsync lock), so
+ * every other present is made as without the timing.
  * rhi_present_last_id: the id of the last present that queued an image (0:
- * none).  rhi_present_timing_next: the next present the display showed,
- * oldest first: its id and when (*ns 0: on the screen before its wait
- * began, at a time not known; a present passed over in mailbox mode is
- * noted when the one after it was shown); 1 one taken, 0 none yet, -1 the
- * timing stopped (a wait failed).  D3D12, no window: false, 0, -1. */
+ * none, or not in use).  rhi_present_timing_next: the next present the
+ * display showed, oldest first: its id and when (*ns 0: on the screen
+ * before its wait began, at a time not known; a present passed over in
+ * mailbox mode is noted when the one after it was shown); 1 one taken, 0
+ * none yet, -1 the timing stopped (a wait failed or did not end).  The
+ * thread never holds up a present or the swapchain: its waits are a few ms
+ * long, and a swapchain change or rhi_shutdown waits 100 ms for it at most.
+ * D3D12, no window: false, nothing, 0, -1. */
 bool rhi_present_timing(void);
+void rhi_present_timing_use(bool on);
 uint64_t rhi_present_last_id(void);
 int rhi_present_timing_next(uint64_t *id, uint64_t *ns);
 

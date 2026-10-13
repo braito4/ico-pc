@@ -877,60 +877,46 @@ static bool vkr_create_device(void)
 
     /* the display's timing of presents (rhi_present_timing): VK_KHR_present_id
      * and VK_KHR_present_wait on a window, with SDL for the thread that
-     * waits on each present (vk_swapchain.c).  Not NVIDIA's driver outside
-     * Windows: waits on presents there have hung vkQueuePresentKHR (NVIDIA
-     * developer forum, "VK_KHR_present_{id,wait} causes device loss on
-     * Nvidia 525.60.11" and bug 4924590, drivers 525 to 590 on X11).
-     * ICO_VK_NO_PRESENT_WAIT=1 leaves it off. */
+     * waits on each present (vk_swapchain.c).  Only when asked for
+     * (ICO_VK_PRESENT_WAIT=1, vkr_present_wait_wanted): the v0.7.0 rc4 build
+     * used them whenever the driver offered them, and on an RTX 3090 under
+     * Windows the screen then showed nothing usable with presents in mailbox
+     * mode at 120/144/240 and under the vsync lock.  Nothing is queried or
+     * enabled otherwise. */
     VkPhysicalDevicePresentIdFeaturesKHR qPid = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_ID_FEATURES_KHR};
     VkPhysicalDevicePresentWaitFeaturesKHR qPw = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_WAIT_FEATURES_KHR};
     g_vkr.presentWait = false;
     if (g_vkr.surface) {
-        const char *off = getenv("ICO_VK_NO_PRESENT_WAIT");
-        const char *why = NULL;
-        bool offered = vkr_device_has_ext(g_vkr.phys, VK_KHR_PRESENT_ID_EXTENSION_NAME) &&
-                       vkr_device_has_ext(g_vkr.phys, VK_KHR_PRESENT_WAIT_EXTENSION_NAME);
-        if (offered) {
+        const char *asked = getenv("ICO_VK_PRESENT_WAIT");
+#ifdef ICO_RHI_HAVE_SDL
+        const bool canThread = true;
+#else
+        const bool canThread = false;
+#endif
+        bool offered = false;
+        if (vkr_present_wait_wanted(true, asked, canThread) &&
+            vkr_device_has_ext(g_vkr.phys, VK_KHR_PRESENT_ID_EXTENSION_NAME) &&
+            vkr_device_has_ext(g_vkr.phys, VK_KHR_PRESENT_WAIT_EXTENSION_NAME)) {
             qPid.pNext = &qPw;
             VkPhysicalDeviceFeatures2 q = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
                                            .pNext = &qPid};
             vkGetPhysicalDeviceFeatures2(g_vkr.phys, &q);
             offered = qPid.presentId && qPw.presentWait;
         }
-#ifndef ICO_RHI_HAVE_SDL
-        why = "no thread to wait with";
-#endif
-#ifndef _WIN32
-        {
-            VkPhysicalDeviceDriverProperties drv = {
-                .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
-            VkPhysicalDeviceProperties2 p2 = {
-                .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, .pNext = &drv};
-            vkGetPhysicalDeviceProperties2(g_vkr.phys, &p2);
-            if (drv.driverID == VK_DRIVER_ID_NVIDIA_PROPRIETARY) {
-                why = "NVIDIA's driver outside Windows";
-            }
-        }
-#endif
-        if (off && off[0] && off[0] != '0') {
-            why = "ICO_VK_NO_PRESENT_WAIT";
-        }
-        g_vkr.presentWait = offered && !why;
+        g_vkr.presentWait = vkr_present_wait_wanted(offered, asked, canThread);
         if (vkr_present_wait_fake()) {
             /* a test's stand-in: the thread without the extensions */
             g_vkr.presentWait = false;
             g_vkr.presentWaitFake = true;
             g_vkr.waitForPresent = vkr_present_wait_fake();
             VKR_LOG("display timing (present wait): on (a test's stand-in)");
+        } else if (!vkr_present_wait_wanted(true, asked, canThread)) {
+            VKR_LOG("display timing (present wait): off (ICO_VK_PRESENT_WAIT=1 tries it)");
         } else {
-            VKR_LOG("display timing (present wait): %s%s%s",
-                    g_vkr.presentWait ? "on"
-                    : offered         ? "off"
-                                      : "not offered by the driver",
-                    !g_vkr.presentWait && offered && why ? ", " : "",
-                    !g_vkr.presentWait && offered && why ? why : "");
+            VKR_LOG("display timing (present wait): %s",
+                    g_vkr.presentWait ? "on (ICO_VK_PRESENT_WAIT=1)" : "asked for, not offered");
         }
         qPid.pNext = NULL;
         qPid.presentId = VK_TRUE;

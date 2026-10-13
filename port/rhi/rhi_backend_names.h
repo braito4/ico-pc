@@ -83,6 +83,7 @@
 #define rhi_present_shown        RHI__NAME(present_shown)
 #define rhi_present_mode_name     RHI__NAME(present_mode_name)
 #define rhi_present_timing       RHI__NAME(present_timing)
+#define rhi_present_timing_use   RHI__NAME(present_timing_use)
 #define rhi_present_last_id      RHI__NAME(present_last_id)
 #define rhi_present_timing_next  RHI__NAME(present_timing_next)
 #define rhi_set_pipeline_cache_path RHI__NAME(set_pipeline_cache_path)

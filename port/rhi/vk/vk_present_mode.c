@@ -1,6 +1,7 @@
 /* vk_present_mode.c: the swapchain's present mode from what the surface
- * offers.  Pure: no device and no Vulkan call, so
- * test/rhi_vk_present_mode_test.c compiles it on its own. */
+ * offers, and whether the display's timing of presents is used.  Pure: no
+ * device and no Vulkan call, so test/rhi_vk_present_mode_test.c compiles it
+ * on its own. */
 #include "vk_internal.h"
 
 static bool vkr_offered(const VkPresentModeKHR *modes, uint32_t n, VkPresentModeKHR m)
@@ -52,4 +53,12 @@ const char *vkr_present_mode_name(VkPresentModeKHR m)
     default:
         return NULL; /* a mode the backend never picks (the shared ones) */
     }
+}
+
+bool vkr_present_wait_wanted(bool offered, const char *asked, bool canThread)
+{
+    /* ICO_VK_PRESENT_WAIT set to anything but "" or "0" */
+    const bool on = asked != NULL && asked[0] != '\0' && !(asked[0] == '0' && asked[1] == '\0');
+
+    return on && offered && canThread;
 }

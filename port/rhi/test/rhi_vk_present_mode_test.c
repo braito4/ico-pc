@@ -98,6 +98,30 @@ int main(void)
         s_failures++;
     }
 
+    /* the display's timing of presents (vkr_present_wait_wanted): off
+       unless ICO_VK_PRESENT_WAIT asks for it, even where the driver offers
+       it (the v0.7.0 rc4 build used it whenever offered, and an RTX 3090 on
+       Windows showed nothing usable in mailbox mode); and only with the
+       extensions and a thread */
+    static const struct {
+        bool offered;
+        const char *asked;
+        bool thread, want;
+    } pw[] = {
+        {true, NULL, true, false}, {true, "", true, false},   {true, "0", true, false},
+        {true, "1", true, true},   {true, "yes", true, true}, {false, "1", true, false},
+        {true, "1", false, false}, {true, "00", true, true},
+    };
+
+    for (uint32_t i = 0; i < COUNT_OF(pw); i++) {
+        if (vkr_present_wait_wanted(pw[i].offered, pw[i].asked, pw[i].thread) != pw[i].want) {
+            printf("FAIL present wait: offered %d, asked %s, thread %d: want %s\n",
+                   (int)pw[i].offered, pw[i].asked ? pw[i].asked : "(unset)", (int)pw[i].thread,
+                   pw[i].want ? "on" : "off");
+            s_failures++;
+        }
+    }
+
     if (s_failures) {
         printf("rhi_vk_present_mode_test: %d failures\n", s_failures);
         return 1;

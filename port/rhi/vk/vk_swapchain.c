@@ -45,64 +45,89 @@ static uint64_t s_swapMadeNs, s_pollNs;
 static uint32_t s_pollStuckW, s_pollStuckH, s_pollMadeW, s_pollMadeH;
 
 /* ------------------------------------------------- the display's timing
- * (rhi_present_timing): a thread waits on each present's id in turn
- * (vkWaitForPresentKHR, which the spec lets run beside any other call on
- * the swapchain but vkDestroySwapchainKHR) and notes when it returned, on
- * SDL_GetTicksNS's clock, the window's.  A wait that returned at once found
- * the present on the screen already: the time of the one before when that
+ * (rhi_present_timing; only with ICO_VK_PRESENT_WAIT=1, vk_device.c): a
+ * thread waits on each present's id in turn (vkWaitForPresentKHR, which the
+ * spec lets run beside any other call on the swapchain but
+ * vkDestroySwapchainKHR) and notes when it returned, on SDL_GetTicksNS's
+ * clock, the window's.  Ids are given to presents only while the window
+ * uses the timing (rhi_present_timing_use: under its vsync lock), so every
+ * other present is made as without it.  A wait that returned at once found
+ * the present on the screen already: the time of the note before when that
  * was under half a millisecond before (the same refresh: a present passed
  * over in mailbox mode is satisfied by the one after it), else not known.
- * Before the swapchain is made again or destroyed the thread is held out of
- * its waits (vkr_pw_pause: a wait ends within VKR_PW_WAIT_NS); the new
- * swapchain's presents are waited on from its first. */
+ *
+ * The thread never holds up the presents or the swapchain: it holds its
+ * lock only between waits, each wait lasts VKR_PW_WAIT_NS at most, and
+ * before the swapchain is made again or destroyed the thread is held out
+ * of its waits for VKR_PW_HOLD_NS at most (vkr_pw_pause); a thread still in
+ * a wait then (a driver that does not keep the timeout) stops the timing
+ * and the swapchain goes on.  At rhi_shutdown the thread is asked to end
+ * and is waited for as long; one that does not end is left to end on its
+ * own, its state with it. */
 #ifdef ICO_RHI_HAVE_SDL
 #define VKR_PW_NOTES 64
-#define VKR_PW_WAIT_NS 10000000ull
+#define VKR_PW_WAIT_NS 4000000ull
+#define VKR_PW_HOLD_NS 100000000ull
 
-static struct {
+typedef struct VkrPw {
     SDL_Mutex *lock;
     SDL_Condition *cond;
     SDL_Thread *thread;
-    bool quit, pause, busy, failed;
+    VkDevice device;
+    PFN_vkWaitForPresentKHR wait;
+    bool quit, pause, busy, failed, exited, abandoned;
     VkSwapchainKHR swapchain; /* the one waited on (none: nothing to wait for) */
     uint64_t posted;          /* the last id presented to it */
     uint64_t next;            /* the next id to wait for */
     uint64_t lastNs;          /* the last note's time */
     uint64_t noteId[VKR_PW_NOTES], noteNs[VKR_PW_NOTES];
     unsigned head, count;
-} s_pw;
+} VkrPw;
 
-static void vkr_pw_note(uint64_t id, uint64_t ns)
+static VkrPw *s_pw;  /* NULL: no thread */
+static bool s_pwUse; /* rhi_present_timing_use */
+
+static void vkr_pw_note(VkrPw *p, uint64_t id, uint64_t ns)
 {
-    if (s_pw.count == VKR_PW_NOTES) {
-        s_pw.head = (s_pw.head + 1) % VKR_PW_NOTES; /* the oldest, never taken */
-        s_pw.count--;
+    if (p->count == VKR_PW_NOTES) {
+        p->head = (p->head + 1) % VKR_PW_NOTES; /* the oldest, never taken */
+        p->count--;
     }
-    const unsigned i = (s_pw.head + s_pw.count++) % VKR_PW_NOTES;
-    s_pw.noteId[i] = id;
-    s_pw.noteNs[i] = ns;
+    const unsigned i = (p->head + p->count++) % VKR_PW_NOTES;
+    p->noteId[i] = id;
+    p->noteNs[i] = ns;
+}
+
+static void vkr_pw_free(VkrPw *p)
+{
+    if (p->cond) {
+        SDL_DestroyCondition(p->cond);
+    }
+    if (p->lock) {
+        SDL_DestroyMutex(p->lock);
+    }
+    free(p);
 }
 
 static int SDLCALL vkr_pw_thread(void *u)
 {
-    (void)u;
-    SDL_LockMutex(s_pw.lock);
-    while (!s_pw.quit) {
-        if (s_pw.pause || s_pw.failed || !s_pw.swapchain || s_pw.next == 0 ||
-            s_pw.next > s_pw.posted) {
-            SDL_WaitCondition(s_pw.cond, s_pw.lock);
+    VkrPw *p = u;
+    SDL_LockMutex(p->lock);
+    while (!p->quit) {
+        if (p->pause || p->failed || !p->swapchain || p->next == 0 || p->next > p->posted) {
+            SDL_WaitCondition(p->cond, p->lock);
             continue;
         }
-        const uint64_t id = s_pw.next;
-        const VkSwapchainKHR sc = s_pw.swapchain;
-        s_pw.busy = true;
-        SDL_UnlockMutex(s_pw.lock);
+        const uint64_t id = p->next;
+        const VkSwapchainKHR sc = p->swapchain;
+        p->busy = true;
+        SDL_UnlockMutex(p->lock);
         const uint64_t t0 = SDL_GetTicksNS();
-        const VkResult r = g_vkr.waitForPresent(g_vkr.device, sc, id, VKR_PW_WAIT_NS);
+        const VkResult r = p->wait(p->device, sc, id, VKR_PW_WAIT_NS);
         const uint64_t t = SDL_GetTicksNS();
-        SDL_LockMutex(s_pw.lock);
-        s_pw.busy = false;
-        SDL_BroadcastCondition(s_pw.cond); /* vkr_pw_pause */
+        SDL_LockMutex(p->lock);
+        p->busy = false;
+        SDL_BroadcastCondition(p->cond); /* vkr_pw_pause */
         if (r == VK_TIMEOUT) {
             continue; /* not on the screen yet: waited for again */
         }
@@ -111,80 +136,109 @@ static int SDLCALL vkr_pw_thread(void *u)
             if (t - t0 < 100000ull) {
                 /* on the screen before the wait: the refresh of the note
                    before when that was just now, else not known */
-                ns = s_pw.lastNs != 0 && t - s_pw.lastNs < 500000ull ? s_pw.lastNs : 0;
+                ns = p->lastNs != 0 && t - p->lastNs < 500000ull ? p->lastNs : 0;
             }
             if (ns != 0) {
-                s_pw.lastNs = ns;
+                p->lastNs = ns;
             }
-            vkr_pw_note(id, ns);
-            s_pw.next = id + 1;
+            vkr_pw_note(p, id, ns);
+            p->next = id + 1;
         } else if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_ERROR_SURFACE_LOST_KHR) {
-            s_pw.next = s_pw.posted + 1; /* the swapchain is going: not timed */
+            p->next = p->posted + 1; /* the swapchain is going: not timed */
         } else {
             VKR_LOG("display timing: vkWaitForPresentKHR returned %d; stopped", (int)r);
-            s_pw.failed = true;
+            p->failed = true;
         }
     }
-    SDL_UnlockMutex(s_pw.lock);
+    p->exited = true;
+    const bool own = p->abandoned; /* rhi_shutdown did not wait for it */
+    SDL_BroadcastCondition(p->cond);
+    SDL_UnlockMutex(p->lock);
+    if (own) {
+        vkr_pw_free(p);
+    }
     return 0;
 }
 
-/* the thread out of its waits, and none started, until vkr_pw_resume */
+/* the thread out of its waits, and none started, until vkr_pw_resume; a
+   thread still in one after VKR_PW_HOLD_NS stops the timing */
 static void vkr_pw_pause(void)
 {
-    if (!s_pw.lock) {
+    VkrPw *p = s_pw;
+    if (!p) {
         return;
     }
-    SDL_LockMutex(s_pw.lock);
-    s_pw.pause = true;
-    while (s_pw.busy) {
-        SDL_WaitCondition(s_pw.cond, s_pw.lock);
+    SDL_LockMutex(p->lock);
+    p->pause = true;
+    const uint64_t until = SDL_GetTicksNS() + VKR_PW_HOLD_NS;
+    while (p->busy) {
+        const uint64_t now = SDL_GetTicksNS();
+        if (now >= until) {
+            VKR_LOG("display timing: a wait on a present did not end in %llu ms; stopped",
+                    (unsigned long long)(VKR_PW_HOLD_NS / 1000000ull));
+            p->failed = true;
+            break;
+        }
+        SDL_WaitConditionTimeout(p->cond, p->lock, (Sint32)((until - now) / 1000000ull + 1));
     }
-    s_pw.swapchain = VK_NULL_HANDLE;
-    SDL_UnlockMutex(s_pw.lock);
+    p->swapchain = VK_NULL_HANDLE;
+    SDL_UnlockMutex(p->lock);
 }
 
 /* waits on sc's presents from its first (the thread started the first
- * time) */
+   time) */
 static void vkr_pw_resume(VkSwapchainKHR sc)
 {
     if (!g_vkr.presentWait) {
         return;
     }
-    if (!s_pw.lock) {
-        s_pw.lock = SDL_CreateMutex();
-        s_pw.cond = SDL_CreateCondition();
-        if (s_pw.lock && s_pw.cond) {
-            s_pw.thread = SDL_CreateThread(vkr_pw_thread, "present-wait", NULL);
+    if (!s_pw) {
+        VkrPw *p = calloc(1, sizeof(*p));
+        if (p) {
+            p->device = g_vkr.device;
+            p->wait = g_vkr.waitForPresent;
+            p->lock = SDL_CreateMutex();
+            p->cond = SDL_CreateCondition();
+            if (p->lock && p->cond) {
+                p->thread = SDL_CreateThread(vkr_pw_thread, "present-wait", p);
+            }
+            if (!p->thread) {
+                VKR_LOG("display timing: no thread (%s); off", SDL_GetError());
+                vkr_pw_free(p);
+                p = NULL;
+            }
         }
-        if (!s_pw.thread) {
-            VKR_LOG("display timing: no thread (%s); off", SDL_GetError());
+        if (!p) {
             g_vkr.presentWait = false;
             return;
         }
+        s_pw = p;
     }
-    SDL_LockMutex(s_pw.lock);
-    s_pw.swapchain = sc;
-    s_pw.next = g_vkr.presentId + 1;
-    s_pw.pause = false;
-    SDL_BroadcastCondition(s_pw.cond);
-    SDL_UnlockMutex(s_pw.lock);
+    SDL_LockMutex(s_pw->lock);
+    s_pw->swapchain = sc;
+    s_pw->next = g_vkr.presentId + 1;
+    s_pw->pause = false;
+    SDL_BroadcastCondition(s_pw->cond);
+    SDL_UnlockMutex(s_pw->lock);
 }
 
 /* rhi_present: the id it gave sc's queue */
 static void vkr_pw_posted(uint64_t id)
 {
-    if (!s_pw.lock) {
+    if (!s_pw) {
         return;
     }
-    SDL_LockMutex(s_pw.lock);
-    s_pw.posted = id;
-    SDL_BroadcastCondition(s_pw.cond);
-    SDL_UnlockMutex(s_pw.lock);
+    SDL_LockMutex(s_pw->lock);
+    s_pw->posted = id;
+    SDL_BroadcastCondition(s_pw->cond);
+    SDL_UnlockMutex(s_pw->lock);
 }
 
-/* the test's stand-in (vkr_test_fake_present_wait) */
+/* the test's stand-in (vkr_test_fake_present_wait): a wait that returns
+   VK_SUCCESS 2 ms after it began (its timeout, if shorter: VK_TIMEOUT), or
+   one that hangs for s_pwFakeHangMs whatever its timeout */
 static int s_pwFake;
+static uint32_t s_pwFakeHangMs;
 static uint32_t s_pwMisuse;
 
 static VkResult VKAPI_CALL vkr_pw_fake_wait(VkDevice device, VkSwapchainKHR swapchain,
@@ -192,6 +246,10 @@ static VkResult VKAPI_CALL vkr_pw_fake_wait(VkDevice device, VkSwapchainKHR swap
 {
     (void)device;
     (void)presentId;
+    if (s_pwFakeHangMs) {
+        SDL_Delay(s_pwFakeHangMs);
+        return VK_TIMEOUT;
+    }
     const bool shown = timeout >= 2000000ull;
     SDL_DelayNS(shown ? 2000000ull : timeout);
     if (*(volatile VkSwapchainKHR *)&g_vkr.swapchain != swapchain) {
@@ -203,6 +261,11 @@ static VkResult VKAPI_CALL vkr_pw_fake_wait(VkDevice device, VkSwapchainKHR swap
 void vkr_test_fake_present_wait(int on)
 {
     s_pwFake = on;
+}
+
+void vkr_test_fake_present_wait_hang(uint32_t ms)
+{
+    s_pwFakeHangMs = ms;
 }
 
 uint32_t vkr_test_present_wait_misuse(void)
@@ -217,53 +280,84 @@ PFN_vkWaitForPresentKHR vkr_present_wait_fake(void)
 
 void vkr_present_wait_shutdown(void)
 {
-    if (s_pw.thread) {
-        SDL_LockMutex(s_pw.lock);
-        s_pw.quit = true;
-        SDL_BroadcastCondition(s_pw.cond);
-        SDL_UnlockMutex(s_pw.lock);
-        SDL_WaitThread(s_pw.thread, NULL);
+    VkrPw *p = s_pw;
+    s_pw = NULL;
+    s_pwUse = false;
+    if (!p) {
+        return;
     }
-    if (s_pw.cond) {
-        SDL_DestroyCondition(s_pw.cond);
+    SDL_LockMutex(p->lock);
+    p->quit = true;
+    SDL_BroadcastCondition(p->cond);
+    const uint64_t until = SDL_GetTicksNS() + VKR_PW_HOLD_NS;
+    while (!p->exited) {
+        const uint64_t now = SDL_GetTicksNS();
+        if (now >= until) {
+            break;
+        }
+        SDL_WaitConditionTimeout(p->cond, p->lock, (Sint32)((until - now) / 1000000ull + 1));
     }
-    if (s_pw.lock) {
-        SDL_DestroyMutex(s_pw.lock);
+    if (!p->exited) {
+        /* still in a wait: left to end on its own, and to free its state */
+        VKR_LOG("display timing: the waiting thread did not end in %llu ms; left",
+                (unsigned long long)(VKR_PW_HOLD_NS / 1000000ull));
+        p->abandoned = true;
+        SDL_UnlockMutex(p->lock);
+        SDL_DetachThread(p->thread);
+        return;
     }
-    memset(&s_pw, 0, sizeof(s_pw));
+    SDL_UnlockMutex(p->lock);
+    SDL_WaitThread(p->thread, NULL);
+    vkr_pw_free(p);
 }
 
 bool rhi_present_timing(void)
 {
     bool on = false;
-    if (g_vkr.presentWait && s_pw.lock) {
-        SDL_LockMutex(s_pw.lock);
-        on = !s_pw.failed;
-        SDL_UnlockMutex(s_pw.lock);
+    if (g_vkr.presentWait && s_pw) {
+        SDL_LockMutex(s_pw->lock);
+        on = !s_pw->failed;
+        SDL_UnlockMutex(s_pw->lock);
     }
     return on;
+}
+
+void rhi_present_timing_use(bool on)
+{
+    s_pwUse = on;
 }
 
 int rhi_present_timing_next(uint64_t *id, uint64_t *ns)
 {
     int r = -1;
-    if (g_vkr.presentWait && s_pw.lock) {
-        SDL_LockMutex(s_pw.lock);
-        r = s_pw.failed ? -1 : s_pw.count > 0;
+    if (g_vkr.presentWait && s_pw) {
+        SDL_LockMutex(s_pw->lock);
+        r = s_pw->failed ? -1 : s_pw->count > 0;
         if (r > 0) {
-            *id = s_pw.noteId[s_pw.head];
-            *ns = s_pw.noteNs[s_pw.head];
-            s_pw.head = (s_pw.head + 1) % VKR_PW_NOTES;
-            s_pw.count--;
+            *id = s_pw->noteId[s_pw->head];
+            *ns = s_pw->noteNs[s_pw->head];
+            s_pw->head = (s_pw->head + 1) % VKR_PW_NOTES;
+            s_pw->count--;
         }
-        SDL_UnlockMutex(s_pw.lock);
+        SDL_UnlockMutex(s_pw->lock);
     }
     return r;
+}
+
+/* rhi_present: an id for this present (the window uses the timing) */
+static bool vkr_pw_wanted(void)
+{
+    return g_vkr.presentWait && s_pw && s_pwUse;
 }
 #else
 void vkr_test_fake_present_wait(int on)
 {
     (void)on;
+}
+
+void vkr_test_fake_present_wait_hang(uint32_t ms)
+{
+    (void)ms;
 }
 
 uint32_t vkr_test_present_wait_misuse(void)
@@ -295,17 +389,27 @@ bool rhi_present_timing(void)
     return false;
 }
 
+void rhi_present_timing_use(bool on)
+{
+    (void)on;
+}
+
 int rhi_present_timing_next(uint64_t *id, uint64_t *ns)
 {
     (void)id;
     (void)ns;
     return -1;
 }
+
+static bool vkr_pw_wanted(void)
+{
+    return false;
+}
 #endif
 
 uint64_t rhi_present_last_id(void)
 {
-    return g_vkr.presentWait ? g_vkr.presentId : 0;
+    return vkr_pw_wanted() ? g_vkr.presentId : 0;
 }
 
 static void vkr_destroy_swap_resources(void)
@@ -932,7 +1036,7 @@ void rhi_present(void)
     /* the display's timing: an id the thread waits on (rhi_present_timing) */
     uint64_t presentId = 0;
     VkPresentIdKHR pid = {.sType = VK_STRUCTURE_TYPE_PRESENT_ID_KHR, .swapchainCount = 1};
-    if (g_vkr.presentWait) {
+    if (vkr_pw_wanted()) {
         presentId = ++g_vkr.presentId;
         pid.pPresentIds = &presentId;
         if (!g_vkr.presentWaitFake) {

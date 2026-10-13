@@ -681,6 +681,11 @@ bool rhi_present_timing(void)
     return false;
 }
 
+void rhi_present_timing_use(bool on)
+{
+    (void)on;
+}
+
 uint64_t rhi_present_last_id(void)
 {
     return 0;
