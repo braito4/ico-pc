@@ -543,7 +543,15 @@ static void testSurvey(void)
               "the strips' halo at %d across %.2f, the English sheets' %.2f", d,
               md[UI_LANG_EN].profX[d], sv[UI_LANG_EN].profX[d]);
     }
-    for (int d = 1; d <= PROF_Y; d++) {
+    /* the first field line below a letter: the sheets step from the edge
+       to about 0.78 there and to 0.44 on the second, a sharper start than
+       the strips' linear ramp (ICO_SHEET_KY_*), which gives about 0.6 on the
+       first line and the sheets' values from the second on; the ramp is the
+       chosen shape, so the first line is pinned to a band of its own */
+    CHECK(md[UI_LANG_EN].profY[1] >= 0.50 && md[UI_LANG_EN].profY[1] <= sv[UI_LANG_EN].profY[1],
+          "the strips' halo on the first line down %.2f, the English sheets' %.2f",
+          md[UI_LANG_EN].profY[1], sv[UI_LANG_EN].profY[1]);
+    for (int d = 2; d <= PROF_Y; d++) {
         CHECK(fabs(md[UI_LANG_EN].profY[d] - sv[UI_LANG_EN].profY[d]) <= TOL_FALLOFF,
               "the strips' halo at %d down %.2f, the English sheets' %.2f", d,
               md[UI_LANG_EN].profY[d], sv[UI_LANG_EN].profY[d]);

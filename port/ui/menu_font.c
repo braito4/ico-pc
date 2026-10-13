@@ -105,15 +105,14 @@ enum { MF_LIGHT = 0, MF_FAINT = 1, MF_PLAIN = 2, MF_CLASSES };
             (sheet 01 EN: 0x20 0x43 0x61 then 0x80; sheet 04 EN: 0x1D 0x3D
             0x5E then 0x7E): five levels; ICO_SHEET_LEVELS is 6
             (shader_consts.h).
-   ctest menu_look's survey re-measures these numbers within 0.1.
-   The rimGain values are provisional until HALOFIT (ctest menu_look
-   ICO_MENU_LOOK_HALOFIT=1). */
+   ctest menu_look's survey re-measures these numbers within 0.1 and pins
+   each language's halo mass against its sheets' (rimGain). */
 static const UiSheetInk kSheetInk[UI_LANG_COUNT] = {
     {1, 24, 255, 1, 0, 64}, /* English */
-    {1, 61, 255, 1, 0, 78}, /* French */
-    {1, 56, 255, 1, 0, 84}, /* German */
-    {1, 61, 255, 1, 0, 78}, /* Italian */
-    {1, 62, 255, 1, 0, 76}, /* Spanish */
+    {1, 61, 255, 1, 0, 70}, /* French */
+    {1, 56, 255, 1, 0, 74}, /* German */
+    {1, 61, 255, 1, 0, 72}, /* Italian */
+    {1, 62, 255, 1, 0, 69}, /* Spanish */
 };
 /* the dark, plain and grey inks and the light words without a halo: no
    rim, a white fill (the vertex colour makes them black, white or grey) */

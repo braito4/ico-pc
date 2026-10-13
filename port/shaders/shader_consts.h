@@ -167,8 +167,6 @@ enum { ICO_TEXFMT_RGBA32 = 0, ICO_TEXFMT_RGB24 = 1, ICO_TEXFMT_RGBA16 = 2 };
  * letters (port/ui/menu_font.c, above kSheetInk); a blur reads like it where
  * a dilation draws a hard-edged box.  The taps sum to 11 x 1024 across and
  * 8 x 1024 down. */
-/* provisional until HALOFIT (ctest menu_look ICO_MENU_LOOK_HALOFIT=1): the
-   gain and the levels below, and kSheetInk's rimGain */
 #define ICO_SHEET_RX 10 /* halo: sheet texels across */
 #define ICO_SHEET_RY 7  /* halo: sheet texels (field lines) down */
 #define ICO_SHEET_KX_0 1024
@@ -190,7 +188,9 @@ enum { ICO_TEXFMT_RGBA32 = 0, ICO_TEXFMT_RGB24 = 1, ICO_TEXFMT_RGBA16 = 2 };
 #define ICO_SHEET_KY_5 384
 #define ICO_SHEET_KY_6 256
 #define ICO_SHEET_KY_7 128
-#define ICO_SHEET_GAIN 109 /* the blur's gain, 64ths (1.70) */
+#define ICO_SHEET_GAIN                                                                             \
+    185 /* the blur's gain, 64ths (2.89): the survey's
+                              English profile and halo mass (ctest menu_look) */
 /* the levels the opacity and the halo-to-fill mix are quantised to (the
    sheets' 16 colours hold a few antialiasing steps between none and full) */
 #define ICO_SHEET_LEVELS 6
