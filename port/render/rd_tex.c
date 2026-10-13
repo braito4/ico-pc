@@ -2,10 +2,12 @@
  * rd_create_texture_sheet).  rd_tex.h describes the decoding and the cache. */
 #include "rd_tex.h"
 #include <math.h>
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 #include "rd_internal.h"
 #include "shader_consts.h"
+#include "sheet_noise.hlsli"
 #include "texpack.h"
 
 /* ------------------------------------------------------------ decoding */
@@ -867,7 +869,52 @@ RdTex rd_create_texture_sheet(uint32_t w, uint32_t h, const uint8_t *coverage,
 }
 
 /* The halo at the strip's own texels: the blur of rd.h rd_sheet_rim, across
-   then down (integer sums, exact in either order) */
+   then down (integer sums, exact in either order).  The interpolated taps
+   are the 1x ramp's taps s texels apart (KX[|q|] at i = q s) convolved with
+   the tent of width s (s - |m| for |m| < s, a box of s convolved with a box
+   of s): KXs[q s + m] = KX[q] (s - m) + KX[q + 1] m.  So each pass is two
+   box sums of s, then RX + 1 (RY + 1) taps s apart: the same integers as
+   the direct sum, in about a quarter of the work at 4x */
+
+/* the box sums of s along a line of n values (stride apart) that the tent
+   leaves valid at [s - 1, n - s + 1): in place, the box ending at each value
+   (backwards, from n - 1 down to s - 1), then the box starting at each
+   (forwards) */
+/* the sums' bounds: a row's sum across times the tent down under 2^32
+   (255 * 11264 * 4^4), the numerator of the quotient under 2^53
+   (255 * 1023 * 11264 * 8192 * 4^4) */
+_Static_assert(ICO_SHEET_SCALE_MAX <= 4 && ICO_SHEET_GAIN < 1024, "the halo's sums fit");
+
+static void sheetTent(uint32_t *v, size_t n, size_t stride, int32_t s)
+{
+    if (s <= 1 || n < (size_t)(2 * s - 1)) {
+        return;
+    }
+    for (size_t i = n - 1; i >= (size_t)(s - 1); i--) {
+        uint32_t *p = v + i * stride;
+        for (size_t c = 0; c < stride; c++) {
+            uint32_t sum = p[c];
+            for (int32_t b = 1; b < s; b++) {
+                sum += p[c - (size_t)b * stride];
+            }
+            p[c] = sum;
+        }
+        if (i == (size_t)(s - 1)) {
+            break;
+        }
+    }
+    for (size_t i = (size_t)(s - 1); i + (size_t)s <= n; i++) {
+        uint32_t *p = v + i * stride;
+        for (size_t c = 0; c < stride; c++) {
+            uint32_t sum = p[c];
+            for (int32_t a = 1; a < s; a++) {
+                sum += p[c + (size_t)a * stride];
+            }
+            p[c] = sum;
+        }
+    }
+}
+
 void rd_sheet_rim(const uint8_t *cov, uint32_t w, uint32_t h, uint32_t scale, int32_t x, int32_t y,
                   int32_t rw, int32_t rh, uint8_t *rim)
 {
@@ -888,65 +935,126 @@ void rd_sheet_rim(const uint8_t *cov, uint32_t w, uint32_t h, uint32_t scale, in
     if (!cov || !rim || x0 >= x1 || y0 >= y1) {
         return;
     }
-    /* the taps at the strip's texels: |i| < (RX + 1) s across, |j| <
-       (RY + 1) s down, in 1 / (1024 s) */
+    /* the taps reach |i| < (RX + 1) s across, |j| < (RY + 1) s down, in
+       1 / (1024 s); their totals are s^2 times the 1x taps' */
     const int32_t rx = (ICO_SHEET_RX + 1) * s - 1, ry = (ICO_SHEET_RY + 1) * s - 1;
-    uint32_t kx[(ICO_SHEET_RX + 1) * ICO_SHEET_SCALE_MAX];
-    uint32_t ky[(ICO_SHEET_RY + 1) * ICO_SHEET_SCALE_MAX];
-    for (int32_t i = 0; i <= rx; i++) {
-        kx[i] = kKx[i / s] * (uint32_t)(s - i % s) + kKx[i / s + 1] * (uint32_t)(i % s);
+    uint64_t sx = 0, sy = 0;
+    for (int32_t i = -rx; i <= rx; i++) {
+        const int32_t d = i < 0 ? -i : i;
+        sx += kKx[d / s] * (uint32_t)(s - d % s) + kKx[d / s + 1] * (uint32_t)(d % s);
     }
-    for (int32_t j = 0; j <= ry; j++) {
-        ky[j] = kKy[j / s] * (uint32_t)(s - j % s) + kKy[j / s + 1] * (uint32_t)(j % s);
+    for (int32_t j = -ry; j <= ry; j++) {
+        const int32_t d = j < 0 ? -j : j;
+        sy += kKy[d / s] * (uint32_t)(s - d % s) + kKy[d / s + 1] * (uint32_t)(d % s);
     }
-    /* the rows the column sums read, clipped to the coverage */
+    const uint64_t den = sx * sy, d64 = den * 64u;
+    const double dd = (double)d64;
+    /* the rows the sums down read: ry above and below the rectangle, 0
+       outside the coverage [cy0, cy1) */
     const int32_t cy0 = y0 - ry < 0 ? 0 : y0 - ry;
     const int32_t cy1 = y1 + ry > (int32_t)h ? (int32_t)h : y1 + ry;
-    const int32_t ow = x1 - x0;
-    /* across: each row's sum at the rectangle's columns (at most
-       255 * 4096 * 87, a uint32) */
-    uint32_t *hs = malloc(sizeof(uint32_t) * (size_t)ow * (size_t)(cy1 - cy0));
-    if (!hs) {
+    const size_t ow = (size_t)(x1 - x0), ny = (size_t)(y1 - y0 + 2 * ry);
+    const size_t nx = ow + 2u * (size_t)rx;
+    /* hs: each row's sum across at the rectangle's columns (at most
+       255 * 11264 s^2, then s^2 times that after the tent down: under
+       2^30 at 4x, a uint32); line: a row of coverage rx either side;
+       acc: a row of the sums down (a uint64) */
+    uint32_t *hs = calloc(ny * ow, sizeof(uint32_t));
+    uint32_t *line = malloc(sizeof(uint32_t) * nx);
+    uint64_t *acc = malloc(sizeof(uint64_t) * ow);
+    if (!hs || !line || !acc) {
+        free(hs);
+        free(line);
+        free(acc);
         return;
     }
     for (int32_t cy = cy0; cy < cy1; cy++) {
         const uint8_t *row = cov + (size_t)cy * w;
-        uint32_t *out = hs + (size_t)(cy - cy0) * (size_t)ow;
-        for (int32_t xx = x0; xx < x1; xx++) {
-            const int32_t k0 = xx - rx < 0 ? 0 : xx - rx;
-            const int32_t k1 = xx + rx + 1 > (int32_t)w ? (int32_t)w : xx + rx + 1;
-            uint32_t sum = 0;
-            for (int32_t k = k0; k < k1; k++) {
-                sum += row[k] * kx[k < xx ? xx - k : k - xx];
+        for (size_t i = 0; i < nx; i++) {
+            const int32_t k = x0 - rx + (int32_t)i;
+            line[i] = k >= 0 && k < (int32_t)w ? row[k] : 0u;
+        }
+        sheetTent(line, nx, 1, s);
+        /* the column xx is line[xx - x0 + rx]; the taps s apart */
+        uint32_t *out = hs + (size_t)(cy - (y0 - ry)) * ow;
+        const uint32_t *t = line + rx;
+        for (size_t c = 0; c < ow; c++) {
+            out[c] = kKx[0] * t[c];
+        }
+        for (int32_t q = 1; q <= ICO_SHEET_RX; q++) {
+            const uint32_t *lt = t - q * s, *rt = t + q * s, k = kKx[q];
+            for (size_t c = 0; c < ow; c++) {
+                out[c] += k * (lt[c] + rt[c]);
             }
-            out[xx - x0] = sum;
         }
     }
-    /* down: the column sums weighted (a uint64), normalised by the taps'
-       total (s^2 times the 1x taps' across and down) with the gain,
-       rounded, clamped */
-    uint64_t sx = kx[0], sy = ky[0];
-    for (int32_t i = 1; i <= rx; i++) {
-        sx += 2u * kx[i];
-    }
-    for (int32_t j = 1; j <= ry; j++) {
-        sy += 2u * ky[j];
-    }
-    const uint64_t den = sx * sy;
+    /* down: the tent over the rows, then the taps s rows apart; normalised
+       by the taps' total with the gain, rounded, clamped */
+    sheetTent(hs, ny, ow, s);
     for (int32_t yy = y0; yy < y1; yy++) {
-        const int32_t k0 = yy - ry < cy0 ? cy0 : yy - ry;
-        const int32_t k1 = yy + ry + 1 > cy1 ? cy1 : yy + ry + 1;
-        for (int32_t xx = x0; xx < x1; xx++) {
-            uint64_t sum = 0;
-            for (int32_t k = k0; k < k1; k++) {
-                sum += (uint64_t)hs[(size_t)(k - cy0) * (size_t)ow + (size_t)(xx - x0)] *
-                       ky[k < yy ? yy - k : k - yy];
+        const uint32_t *t = hs + (size_t)(yy - y0 + ry) * ow;
+        for (size_t c = 0; c < ow; c++) {
+            acc[c] = (uint64_t)kKy[0] * t[c];
+        }
+        for (int32_t q = 1; q <= ICO_SHEET_RY; q++) {
+            const uint32_t *up = t - (size_t)(q * s) * ow, *dn = t + (size_t)(q * s) * ow;
+            for (size_t c = 0; c < ow; c++) {
+                acc[c] += (uint64_t)kKy[q] * ((uint64_t)up[c] + dn[c]);
             }
-            const uint64_t r = (sum * ICO_SHEET_GAIN + den * 32u) / (den * 64u);
-            rim[(size_t)yy * w + (size_t)xx] = (uint8_t)(r > 255u ? 255u : r);
+        }
+        uint8_t *dst = rim + (size_t)yy * w + (size_t)x0;
+        for (size_t c = 0; c < ow; c++) {
+            /* (acc G + 32 D) / (64 D) in integers (acc G / 64 D rounded to
+               nearest): the quotient in double (both sides under 2^53, so
+               exact as doubles; within one of the integer quotient), then
+               at most one step to it */
+            const uint64_t num = acc[c] * ICO_SHEET_GAIN + den * 32u;
+            uint64_t r = (uint64_t)((double)num / dd);
+            r -= r * d64 > num;
+            r += (r + 1u) * d64 <= num;
+            dst[c] = (uint8_t)(r > 255u ? 255u : r);
         }
     }
     free(hs);
+    free(line);
+    free(acc);
+}
+
+/* the grain tile's uniform buffer (rd_internal.h rd__sheet_noise_binding):
+   written once, read by every font_sheet_ps draw */
+static RhiBuffer s_sheetNoise;
+
+bool rd__sheet_noise_binding(RhiBinding *b)
+{
+    static const uint32_t kWords[SHEET_NOISE_SIZE * SHEET_NOISE_SIZE / 4] = {SHEET_NOISE_WORDS};
+    if (!s_sheetNoise.id) {
+        const RhiBuffer buf = rhi_create_buffer(
+            &(RhiBufferDesc){sizeof(kWords), RHI_BUF_UNIFORM, RHI_MEM_UPLOAD, "rd sheet noise"});
+        void *map = buf.id ? rhi_map_buffer(buf) : NULL;
+        if (!map) {
+            if (buf.id) {
+                rhi_destroy_buffer(buf);
+            }
+            return false;
+        }
+        memcpy(map, kWords, sizeof(kWords));
+        s_sheetNoise = buf;
+    }
+    memset(b, 0, sizeof(*b));
+    b->slot = ICO_SHEET_NOISE_SLOT;
+    b->type = RHI_BIND_UNIFORM_BUFFER;
+    b->buffer = s_sheetNoise;
+    b->offset = 0;
+    b->size = sizeof(kWords);
+    return true;
+}
+
+void rd__sheet_noise_free(void)
+{
+    if (s_sheetNoise.id) {
+        rhi_destroy_buffer(s_sheetNoise);
+        s_sheetNoise.id = 0;
+    }
 }
 
 void rd_set_texture_sheet_style(RdTex t, const RdSheetStyle *style)

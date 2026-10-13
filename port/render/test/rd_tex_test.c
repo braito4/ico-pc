@@ -46,7 +46,9 @@
  *            strip texels and no further (the oracle's sum is 0 from
  *            (RX + 1) s on, rd_sheet_rim's halo too); the blue-noise tile
  *            holds each value 0..255 four times and its 8 x 8 blocks
- *            average 100 .. 155 (no clumps);
+ *            average 100 .. 155 (no clumps); rd_sheet_rim's time on a
+ *            full-width line, a popup body and a word at 4x and the line at
+ *            3x is printed (timeSheetRim; not checked);
  *   packs    (texture packs) rdtex_create_replacement moves the image into
  *            the texture's pending upload with the box chain for an RGBA8
  *            image without mips, rdtex_replacement_mips on a size that is
@@ -71,6 +73,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include "rd_internal.h"
 #include "rd_tex.h"
 #include "sheet_ref.h"
@@ -1338,6 +1341,41 @@ static int haloCompare(const uint8_t *cov, uint32_t w, uint32_t h, int s, int x,
     return bad;
 }
 
+/* rd_sheet_rim's time on a strip's whole coverage (sheet texels w x h at
+   scale s, so (w s) x (h s) strip texels): the best of three runs, printed,
+   not checked (a machine's speed is no test) */
+static void timeSheetRim(void)
+{
+    static const int kCase[][3] = {{1001, 30, 4}, {700, 80, 4}, {300, 20, 4}, {1001, 30, 3}};
+    for (size_t c = 0; c < sizeof(kCase) / sizeof(kCase[0]); c++) {
+        const int s = kCase[c][2];
+        const uint32_t w = (uint32_t)(kCase[c][0] * s), h = (uint32_t)(kCase[c][1] * s);
+        uint8_t *cov = malloc((size_t)w * h), *rim = malloc((size_t)w * h);
+        if (!cov || !rim) {
+            free(cov);
+            free(rim);
+            return;
+        }
+        for (uint32_t i = 0; i < w * h; i++) {
+            cov[i] = (uint8_t)(hash(i) & 0x1Fu ? 0 : hash(i + 1u));
+        }
+        double best = 1e9;
+        for (int run = 0; run < 3; run++) {
+            struct timespec t0, t1;
+            timespec_get(&t0, TIME_UTC);
+            rd_sheet_rim(cov, w, h, (uint32_t)s, 0, 0, (int32_t)w, (int32_t)h, rim);
+            timespec_get(&t1, TIME_UTC);
+            const double ms =
+                (double)(t1.tv_sec - t0.tv_sec) * 1e3 + (double)(t1.tv_nsec - t0.tv_nsec) / 1e6;
+            best = ms < best ? ms : best;
+        }
+        printf("  halo time: %dx%d sheet texels at %dx (%ux%u): %.2f ms\n", kCase[c][0],
+               kCase[c][1], s, w, h, best);
+        free(cov);
+        free(rim);
+    }
+}
+
 static void testSheetRim(void)
 {
     enum { SW = 52, SH = 26 };
@@ -1520,6 +1558,7 @@ int main(void)
     cacheChecks();
     r8Checks();
     testSheetRim();
+    timeSheetRim();
     textUploadLogChecks();
     replacementChecks();
     photoGrainChecks();

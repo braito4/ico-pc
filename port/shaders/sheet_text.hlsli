@@ -24,21 +24,31 @@
 
 #ifndef ICO_SHEET_TEXT_C
 
-// The 32 x 32 blue-noise tile (sheet_noise.hlsli): texel (x, y) is byte
-// x & 3 of word y * 8 + x / 4, 0..255.
-static const uint kSheetNoise[SHEET_NOISE_SIZE * SHEET_NOISE_SIZE / 4] = {SHEET_NOISE_WORDS};
+// The 32 x 32 blue-noise tile (sheet_noise.hlsli's words, which rd_tex.c
+// rd__sheet_noise_binding puts in a uniform buffer bound in every draw
+// group at group 1, slot 4: shader_consts.h ICO_SHEET_NOISE_SLOT): texel
+// (x, y) is byte x & 3 of word y * 8 + x / 4, 0..255, the word i component
+// i & 3 of vector i / 4.  A uniform block, not an array in the shader: DXC
+// makes a static array a per-invocation copy in SPIR-V (a Function
+// variable stored on every invocation), which a mobile GPU may keep in
+// scratch memory.
+cbuffer SheetNoiseCB : register(b4, space1)
+{
+    uint4 g_sheetNoise[SHEET_NOISE_SIZE * SHEET_NOISE_SIZE / 16];
+};
 
 // The threshold (in 512ths of a step) at texel p of the texture: the
 // tile's entry for p spread SHEET_GRAIN / 64 of a step round the half,
-// 256 + (2 rank + 1 - 256) * SHEET_GRAIN / 64 rounded down (kept unsigned);
-// dither 0: SHEET_T_OFF.
+// 256 + (2 rank + 1 - 256) * SHEET_GRAIN / 64 rounded to nearest (the + 32;
+// kept unsigned); dither 0: SHEET_T_OFF.
 uint sheet_threshold(int2 p, uint dither)
 {
     if (dither == 0u) {
         return SHEET_T_OFF;
     }
     const uint x = ((uint)p.x) & 31u, y = ((uint)p.y) & 31u;
-    const uint rank = (kSheetNoise[y * 8u + (x >> 2)] >> (8u * (x & 3u))) & 255u;
+    const uint i = y * 8u + (x >> 2);
+    const uint rank = (g_sheetNoise[i >> 2][i & 3u] >> (8u * (x & 3u))) & 255u;
     return ((2u * rank + 1u) * (uint)SHEET_GRAIN + 256u * (64u - (uint)SHEET_GRAIN) + 32u) / 64u;
 }
 

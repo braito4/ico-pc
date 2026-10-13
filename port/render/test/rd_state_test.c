@@ -28,6 +28,10 @@
  *   dump v10   the native frame (aspect, wExact, cullW) after gsH round-trips
  *              and peeks (rd__dump_peek); a version 9 dump loads as the 4:3
  *              frame; a header the renderer cannot size is refused
+ *   dump sheet a version 10 dump's sheets (1x: the coverage alone; 2x: the
+ *              coverage over an old halo; no gain) load as w x 2h with
+ *              their scale, the gain 64 and rd_sheet_rim's halo of the
+ *              coverage (rd_dump.c sheetRebuild)
  *   aa1 plans  PRIM.AA1 keys: the AA1 shaders, triangles, blending with ABE
  *              0 (DF_AA1_FULL), no Z write on lines; aa1 0 unchanged
  *   aura filter the model viewer's draw filter around the
@@ -841,6 +845,126 @@ static void testDumpV10(const char *dir)
     remove(path);
 }
 
+/* A sheet image of a version 10 dump (rd_dump.c sheetRebuild): at 1x
+ * the coverage alone (w x h), at 2x w x 2h with the coverage in the top
+ * half and an old halo below; no gain bits.  Written by hand from a
+ * version 11 dump of the same frame (the record's texels and height
+ * rewritten, the version word 10), the strips at the old gaps (7 sheet
+ * texels across, 5 down).  Loaded, each is w x 2h, its scale kept, its gain
+ * 64, its top half the coverage and its bottom half rd_sheet_rim of the
+ * coverage (the old halo dropped). */
+static void testDumpSheetV10(const char *dir)
+{
+    enum { W = 48, H = 20 };
+
+    static uint8_t cov[W * H], img[W * H * 2];
+    memset(cov, 0, sizeof(cov));
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            /* two strips 7 texels apart across, a third 5 rows below */
+            const int a = x >= 3 && x < 18 && y >= 2 && y < 8;
+            const int b = x >= 25 && x < 44 && y >= 2 && y < 8;
+            const int c = x >= 3 && x < 30 && y >= 13 && y < 18;
+            if (a || b || c) {
+                cov[y * W + x] = (uint8_t)(((x * 37 + y * 11) & 0xFF) | 0x40);
+            }
+        }
+    }
+    memcpy(img, cov, sizeof(cov));
+    memset(img + sizeof(cov), 0x55, sizeof(cov)); /* the halo the dump drops */
+    RdTex sh[2];
+    for (int k = 0; k < 2; k++) {
+        const RdSheetStyle st = {1, 24, 0xFF, 1, 0, (uint8_t)(k + 1), 74};
+        sh[k] = rd_create_texture_sheet(W, 2 * H, img, &st, k ? "sheet 2x" : "sheet 1x");
+    }
+    rd_begin_frame();
+    rd_select_list(7);
+    for (int k = 0; k < 2; k++) {
+        rd_texture(sh[k], RD_TEXFN_MODULATE, RD_TCC_RGBA);
+        draw((uint32_t)k + 1u);
+    }
+    rd_end_frame(0);
+    const RdFrame *f = rd__last_frame();
+    char path[1100], path10[1100];
+    snprintf(path, sizeof(path), "%s/rd_state_test_sheet.rddump", dir);
+    snprintf(path10, sizeof(path10), "%s/rd_state_test_sheet_v10.rddump", dir);
+    CHECK(rd__dump_frame(f, path), "sheet dump written");
+    long size = 0;
+    uint8_t *buf = slurp(path, &size);
+    remove(path);
+    if (!buf) {
+        CHECK(0, "sheet dump read back");
+        return;
+    }
+    /* the texture records: after the header (with the version 10 frame
+       fields), the two state blocks, the lists and the payload */
+    size_t o = V10_FIELDS_AT + 12 + 3 * 4 + sizeof(RdCamera) + 2 * sizeof(RdStateBlock);
+    for (int l = 0; l < RD_LIST_COUNT; l++) {
+        o += 4 + (size_t)rd32(buf + o) * sizeof(RdCmd);
+    }
+    o += 4 + rd32(buf + o);
+    const uint32_t nt = rd32(buf + o);
+    o += 4;
+    int sheets = 0;
+    for (uint32_t i = 0; i < nt; i++) {
+        const uint32_t kind = rd32(buf + o + 4), w = rd32(buf + o + 16), view = rd32(buf + o + 28);
+        uint32_t h = rd32(buf + o + 20);
+        const uint8_t fmt = (uint8_t)(view & 0xFFu);
+        if (kind == RD_TEXKIND_IMAGE && fmt == RD_TEXEL_SHEET && w == W && h == 2 * H) {
+            const uint32_t texa = rd32(buf + o + 12) & 0xFFFFu; /* no gain */
+            memcpy(buf + o + 12, &texa, 4);
+            if (((texa >> 8) & 0xFFu) == 0u) {
+                /* 1x: the coverage alone */
+                cutBytes(buf, &size, o + 32 + (size_t)W * H, (size_t)W * H);
+                h = H;
+                memcpy(buf + o + 20, &h, 4);
+            }
+            sheets++;
+        }
+        o += 32;
+        if (kind == RD_TEXKIND_IMAGE) {
+            o += (size_t)w * h * rd__texel_bytes(fmt);
+            const uint32_t nl = rd32(buf + o);
+            o += 4 + (nl > 1 ? rd__gs_chain_bytes(w, h, nl) : 0);
+        }
+    }
+    const uint32_t v10 = 10;
+    memcpy(buf + 8, &v10, 4);
+    CHECK(sheets == 2 && spit(path10, buf, size), "v10 sheet dump written (%d sheets)", sheets);
+    free(buf);
+    RdFrame g;
+    if (!rd__load_frame(path10, &g)) {
+        CHECK(0, "v10 sheet dump loaded");
+        remove(path10);
+        return;
+    }
+    static uint8_t rim[W * H];
+    int seen = 0;
+    for (uint32_t i = 0; i < g.lists[7].count; i++) {
+        const RdCmd *c = &g.lists[7].cmds[i];
+        const RdTexRec *t = c->type == RDC_TEXTURE ? rd__tex_rec(c->u[0]) : NULL;
+        if (!t || t->format != RD_TEXEL_SHEET || !t->pixels) {
+            continue;
+        }
+        const uint32_t s = t->sheetScale;
+        memset(rim, 0, sizeof(rim));
+        rd_sheet_rim(cov, W, H, s, 0, 0, W, H, rim);
+        const int top = memcmp(t->pixels, cov, sizeof(cov)) == 0;
+        const int halo = memcmp(t->pixels + sizeof(cov), rim, sizeof(rim)) == 0;
+        CHECK(t->w == W && t->h == 2 * H && (s == 1 || s == 2) && t->sheetGain == 64 &&
+                  t->sheet[0] == 64 && top && halo,
+              "v10 sheet at %ux: %ux%u, gain %u, coverage %s, halo %s rd_sheet_rim's", s, t->w,
+              t->h, t->sheetGain, top ? "kept" : "changed", halo ? "is" : "is not");
+        seen |= 1 << (s - 1);
+    }
+    CHECK(seen == 3, "v10 sheets at 1x and 2x loaded (%d)", seen);
+    rd__frame_free(&g);
+    remove(path10);
+    for (int k = 0; k < 2; k++) {
+        rd_destroy_texture(sh[k]);
+    }
+}
+
 static void testAa1Plans(void)
 {
     RdStateBlock s;
@@ -1536,6 +1660,7 @@ int main(int argc, char **argv)
     testPlans();
     testDump(dir);
     testDumpV10(dir);
+    testDumpSheetV10(dir);
     testAa1Plans();
     testEnumeration();
     testRegionScale();

@@ -149,7 +149,12 @@ static uint32_t sheetTexa(const RdTexRec *t)
 /* A sheet image of a dump before version 11: its coverage (the whole image
    at 1x, the top half above it) over a halo made now (rd_sheet_rim), as
    the version 11 texture is; NULL without the memory.  *hOut the new
-   height. */
+   height.  Such a page keeps the strip gaps it was laid out with (7 sheet
+   texels across, 5 down), inside the halo's reach (shader_consts.h
+   ICO_SHEET_RX, ICO_SHEET_RY: 10 and 7; port/ui/menu_font.c MF_GAP_X,
+   MF_GAP_Y lay strips 11 and 8 apart), so a neighbouring strip's ink can
+   show in the tails of a halo made here: replays only, the game makes its
+   pages anew. */
 static uint8_t *sheetRebuild(const uint8_t *px, uint32_t w, uint32_t h, uint32_t scale,
                              uint32_t *hOut)
 {

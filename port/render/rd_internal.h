@@ -647,6 +647,15 @@ RdTex rd__create_texture_replacement(struct TexpackImage *img, uint32_t uvW, uin
 /* Frees a replacement's pending levels (texpack_free_image) and the
  * TexpackImage holding them; t->pending is null afterwards. */
 void rd__free_pending(RdTexRec *t);
+/* The menu text's grain tile for font_sheet_ps (rd_tex.c): b, the binding
+ * of a uniform buffer holding sheet_noise.hlsli's 256 words at
+ * ICO_SHEET_NOISE_SLOT (group 1, register b4: sheet_text.hlsli
+ * SheetNoiseCB), made on the first call; false when the buffer cannot be
+ * made.  Every group of g_rd.layoutDraw carries it (rd_replay.c
+ * dynamicGroup, rd_video.c).  rd__sheet_noise_free destroys it (the GPU
+ * idle: rd__gpu_shutdown). */
+bool rd__sheet_noise_binding(RhiBinding *b);
+void rd__sheet_noise_free(void);
 
 /* --------------------------------------------------------------- meshes
  * rd_mesh.c.  A VU mesh keeps its vertex stream (the
