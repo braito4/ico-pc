@@ -311,7 +311,7 @@ static __inline__ void dvCheckPacket(char *p) /* derived name */
     }
 #ifdef ICO_RD
 
-/* PC port (wave 5, R5c).  The
+/* PC port (docs/port/GS.md, "Effects recorded on rd directly").  The
    packets below are VU1 SET_GSREGISTER packets (VIF UNPACK V4-32 of the GIF
    tag and its A+D pairs to TOP, MSCALF 0) and the spheres are raw GIF writes
    (gif_SetGsReg); both reach the GS register decoder as on the PS2, the
@@ -324,7 +324,7 @@ static __inline__ void dvCheckPacket(char *p) /* derived name */
        UVs FST) is a scene-sized
        VRAM block, not the anti-alias buffer the decoder names for that FBP
        (AA0, 256 x 256): rd_block_target stands for it, aliased in for the
-       effect's packets (R5b's rd_gs_named_block / rd_alias_target), so the
+       effect's packets (rd_gs_named_block / rd_alias_target), so the
        clear, the spheres and the TEX0 read of 0x2800 all use it;
      - ZBUF ZBP 0xC0 is the scene's Z buffer: the spheres are Z-tested
        against SCENE's depth (the decoder binds depth only with SCENE).

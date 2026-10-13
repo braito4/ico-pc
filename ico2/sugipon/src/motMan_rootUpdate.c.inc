@@ -186,7 +186,7 @@ static inline int clipFieldWallAndReset(struct MotRoot *cur, float *last) /* der
     }
     CopyVector(w.pt[1], cur->pos);
     w.filter = InitialColInfo;
-    /* PC port (X4): the original never sets the radius
+    /* PC port: the original never sets the radius
        here; inlined into rootUpdateStepSolution, its record shares the stack
        slot clipFuchiWallAndReact just stored rad * skelScale in (sp+0x250,
        0x1EA808), so the EE clips with the fuchi probe's radius. */
@@ -1744,7 +1744,7 @@ static ObjNode rootUpdateY(void)
         }
     }
 
-    /* PC port (G2): the plane is copied whether or not
+    /* PC port: the plane is copied whether or not
        the ray hit, and a miss leaves w.normal as the frame held it (_Clip
        sets the normal only for a hit). On the EE w is at sp+240 of this
        864-byte frame (0x1EB540 passes s8 = sp+240), so w.normal is the

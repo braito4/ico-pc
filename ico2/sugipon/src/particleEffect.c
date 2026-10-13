@@ -195,12 +195,12 @@ static void _setParticleEffect(PEPartRec *out, PEPackage *pkg, char *m, float k)
    (more than 2048 pixels off the centre) as its last update left it,
    frozen.  The particles of an effect drawn near the window's edge are
    cut by the VU program's own window, as on the PS2. */
-/* VIS-RULES item 10 (v0.6.1), kept: the PS2's gate on the GS window,
-   parity (an effect is drawn exactly when it is updated).  VIS-WINDOW
-   (v0.6.1) keeps it in every state too: it gates the update, which draws
-   from the shared _GetRandom (game logic, the same at every display
-   setting); the sprites of an effect it passes are drawn clipped outside
-   the out-of-the-box state (vu_particle.hlsl) */
+/* The PS2's gate on the GS window, with parity (an effect is drawn
+   exactly when it is updated), in every display state: it gates the
+   update, which draws from the shared _GetRandom (game logic, the same at
+   every display setting); the sprites of an effect it passes are drawn
+   clipped outside the out-of-the-box state (vu_particle.hlsl;
+   docs/port/VU1_PROGRAMS.md, "The region rule") */
 static inline int particleEffectOffScreen(PEGeo *geo) /* derived name */
 {
     float v[4];
@@ -486,11 +486,11 @@ static void dispParticleEffect(PEGeo *geo)
     dl_OpenDma(5, PacketBufferStruct.dma.c, 0);
     dl_CloseDma();
 #ifdef ICO_RD
-    /* PC port (wave 5, R5c): the
+    /* PC port: the
        packet is a VU1 SET_GSREGISTER packet (PABE 0 and the effect's ALPHA,
        mode 5, 6 or 4 by alphaMode); mc_HostDma hands its A+D pairs to the GS
        register decoder ahead of the batch prim_DispParticle chains (already
-       read by Primitive.c's host path, R3ab) */
+       read by Primitive.c's host path) */
     mc_HostDma(5, PacketBufferStruct.dma.c, 0);
     {
         static int reported;

@@ -188,12 +188,12 @@ typedef struct {     /* field names derived */
 extern const MotOriParallelEnt parallelMotionOrient[];
 extern MotOriAlt mirrorMotionTable[];
 extern const MotOriSub blendMotionKind[];
-/* PC port (AN-19e): not const. The table is .rodata in the PS2 build, but
+/* PC port: not const. The table is .rodata in the PS2 build, but
    SetNodeRotationLimitDataTable reorders its rows in place (the EE has no
    page protection). Declared const, those stores are writes to constant
    memory, which clang (the Android build) deletes: Ico's and Yorda's
-   shoulder limits stayed in the disc's order and their arms went straight
-   up while they held hands (issue 19). gcc kept the stores. */
+   shoulder limits stay in the disc's order and their arms go straight
+   up while they hold hands. gcc keeps the stores. */
 extern MotOriLimit motionLimitDef[];
 
 /* The declarations below lead this header because their order is load-bearing:

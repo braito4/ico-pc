@@ -44,7 +44,7 @@
 #include "Texture.h"
 #include "debug_exception.h"
 #include <assert.h>
-/* PC port (renderer wave 6, R6a): debug.c is compiled on the host.  Its EE-only parts have ICO_HOST bodies:
+/* PC port: debug.c is compiled on the host.  Its EE-only parts have ICO_HOST bodies:
    varargs through va_list, the VU1 register dumps, the snapshot (an rd
    readback to PNG), host0: files under <pref>/dev/, the csv windows' record
    layouts, and the debug font's VU1 routine (debugHostFont*, ICO_RD). */
@@ -880,7 +880,7 @@ inline void debug_SaveStartStageFile(int stage)
 
 inline int debug_TryToGetStartStage(void)
 {
-    /* PC port (renderer wave 5, R5b): the developer key [dev] start_stage, which host_config.c hands over as
+    /* PC port: the developer key [dev] start_stage, which host_config.c hands over as
        ICO_START_STAGE, takes the place of the development build's
        start-stage file: Main (common/src/main.c) clamps the value to 1..105
        and switches to that stage instead of stage 1.  Unset or not a number:
@@ -1085,10 +1085,10 @@ void debug_VariableInit(void)
     game_pause = 0;
     ChangeFieldCollisionDebugMode(0);
     ChangeGirlControlMode(debug_girl_pad_control);
-    /* PC port (R6a): in developer mode, [dev] debug_option non-zero loads
+    /* PC port: in developer mode, [dev] debug_option non-zero loads
        the option table the Debug Mode page saved (TRIANGLE), as the
        development build's start-up check of its option file did.  Off: the
-       retail values above, as before. */
+       retail values above. */
     if (ico_opt_developer_mode() && ico_opt_debug_option() != 0) {
         debug_GetDebugOption();
     }
@@ -1232,15 +1232,14 @@ typedef unsigned long long GifTag[2] __attribute__((aligned(16))); /* derived na
    debug_exception's fontTag */
 static GifTag debugFontTag = {0x2000400000008000LL, 0x51}; /* derived name */
 
-/* PC port (renderer wave 6, R6a): the glyph packets live in this buffer, not
+/* PC port: the glyph packets live in this buffer, not
    in the stage partition.  On the PS2 debug_Init (every stage_initialize,
    common/src/StageManager.c) allocated them from ios_partition_seki, the
    "stage" partition; the host's partition holds pointer-wide block headers
    and records and is fuller than the EE's, and the
-   extra 256 blocks exhausted it in stage 42 of the boot run.  Until R6a the
-   host never allocated them (debug_Init was port/null's empty stub), so the
-   game heap stays as it was.  The packets are rebuilt identically on every
-   call, into the same buffer. */
+   extra 256 blocks exhausted it in stage 42 of the boot run.  Here they
+   take nothing from the game heap.  The packets are rebuilt identically on
+   every call, into the same buffer. */
 static unsigned char debugHostFontMem[16 + 256 * (90 + 3) * 16] __attribute__((aligned(16)));
 
 static unsigned int debugHostFontUsed;
@@ -1353,7 +1352,7 @@ static void debug_makeBackImage(void)
 
 #ifdef ICO_RD
 
-/* PC port (renderer wave 6, R6a): the debug font's VU1 side.  On the PS2
+/* PC port: the debug font's VU1 side.  On the PS2
    debug_PrintCharacter's chain sets the font state with MSCAL 8 and each
    glyph packet runs MSCAL 10 or 12 of the resident microprogram (every
    program carries the same three routines, ico2/vusrc/vu1_common.h):
@@ -2170,7 +2169,7 @@ int debug_SnapShot(int idx)
     if (debug_snapshot_size == 0) {
         return -1;
     }
-    /* PC port (renderer wave 6, R6a): the PS2 stored the scene buffer
+    /* PC port: the PS2 stored the scene buffer
        (sceGsStoreImage of TBP 0x800) into EE memory at 0x2000000, tiled
        SnapSize x SnapSize frames and wrote a TIM2 or BMP to
        host0:snapshot/.  The host reads back rd's DISPLAY target (the frame
@@ -2351,7 +2350,7 @@ inline void debug_ResizeFontWindowHeight(int val)
 
 inline void debug_SetBarDummy(void) {}
 
-/* PC port (R6a): the retail build compiled the development build's
+/* PC port: the retail build compiled the development build's
    debug_Printf calls (the debug menu, its tools and a few status lines) to
    this empty function.  In developer mode it prints them through the debug
    font, as the development build did; off, it does nothing, as retail. */
@@ -2550,7 +2549,7 @@ static int debug_Mode(void)
     return ret;
 }
 
-/* PC port (renderer wave 6, R6a): the csv windows on a 64-bit host.
+/* PC port: the csv windows on a 64-bit host.
 
    The callers pass each table's PS2 record layout: the stride in bytes, the
    offset of the line's text and whether that field is a char * (deref 1)
@@ -3934,11 +3933,11 @@ static int sceFd = -1; /* derived name */
 
 inline int debugSceOpen(const char *name, int mode)
 {
-    /* PC port (R6a): in developer mode the development kit's host0:, which
+    /* PC port: in developer mode the development kit's host0:, which
        port/data/sifdev_host.c maps to <pref>/dev/ (the debug option file,
        the start stage, snapshots, way_tool.c's and camera-editor.c's files,
        GsBase.c's stage settings).  Off: the retail build's cdrom0: path,
-       which finds nothing, as before. */
+       which finds nothing. */
     if (ico_opt_developer_mode()) {
         snprintf(sceOpenPath, sizeof(sceOpenPath), "host0:%s", name);
         return sceFd = sceOpen((unsigned char *)sceOpenPath, mode);

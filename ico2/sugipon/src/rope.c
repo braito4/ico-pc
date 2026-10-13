@@ -123,7 +123,7 @@ void *InitRopeGeo(GObj *o, const float *p)
         sceVu0FVECTOR v1 = {0.0f, 0.0f, 10.0f, 1.0f};
         ClipWork cw;
 
-        /* PC port (X4): the original sets only the two
+        /* PC port: the original sets only the two
            points, so ClipWall's radius was a stale stack word; the host
            starts from radius 0 (a segment test) and no filter */
         memset(&cw, 0, sizeof(cw));
@@ -281,7 +281,7 @@ void HoldRope(GObj *rope, GObj *holder)
 inline void ReleaseRope(void) {}
 
 /* obj is a GObj * in the definition (clothAnimation.c): a word, pointer-wide
-   on the host (X4) */
+   on the host */
 extern void GetChainAnimation(void *sys, ICO_WORD obj, void *mtx);
 
 static void ropeGeo(GObj *rope)

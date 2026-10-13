@@ -4,7 +4,7 @@
 #include <libcdvd.h>
 #include "main.h"
 
-/* PC port (renderer wave 6, R6a): debug_exception.c on the host.
+/* PC port: debug_exception.c on the host.
 
    On the PS2 this is the debug monitor: debugExceptionInit installs
    debugEEExceptionMain as the EE kernel's handler for eleven exception

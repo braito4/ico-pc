@@ -102,7 +102,7 @@ typedef struct {                     /* field names derived */
 
 extern LtProp texLayout[];
 
-/* PC port (v0.6.0, W3-UI): whether a layout item whose display rect starts at
+/* PC port: whether a layout item whose display rect starts at
    x and is w wide, in the 1/16 grid units about the grid's centre that
    display_texture forms (box.x = (dispX - 320) * 16, box.w = dispW << 4),
    spans the 640 grid: x0 <= 0 and x1 >= 640 in grid units.  Such an item (the
@@ -114,7 +114,7 @@ static inline int lt_rect_spans_grid(int x, int w)
     return x <= -320 * 16 && x + w >= 320 * 16;
 }
 
-/* PC port (I17b): the menus' mouse pointer's view of the layouts (port/ui/
+/* PC port: the menus' mouse pointer's view of the layouts (port/ui/
    ui_mouse.c): whether row no is shown, whether the last tick's procs had
    the item select off, and the cursor of layout no moved onto item as a
    pad move does (sound and glow) */

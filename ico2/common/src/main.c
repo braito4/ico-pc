@@ -119,7 +119,7 @@ void ico_host_main_tick(void);
    this file's static thread functions */
 void ico_host_milestone(const char *what);
 void ico_host_name_func(void *func, const char *name);
-/* port/game/options.h: developer mode (renderer wave 6, R6a) */
+/* port/game/options.h: developer mode */
 int ico_opt_developer_mode(void);
 /* port/config/sysconf.c: [video] video_mode, else 60 Hz (0); [game]
    language, else the system's, as the game's 2..6 */
@@ -131,14 +131,13 @@ void debug_Menu(void);
 unsigned int ico_host_main_ticks(void);
 /* port/platform/diag_host.h: a milestone line in the log */
 void ico_diag_milestone(const char *fmt, ...);
-/* port/game/model_viewer.h: the model viewer's tick (package MV) */
+/* port/game/model_viewer.h: the model viewer's tick */
 void ico_mv_tick(void);
-/* port/ui/ui_mouse.h: the mouse pointer in the menus (I17b) */
+/* port/ui/ui_mouse.h: the mouse pointer in the menus */
 void ui_mouse_tick(void);
-/* port/game/photo_view.h: photo mode's camera in the game's matrices
-   (issue 14) */
+/* port/game/photo_view.h: photo mode's camera in the game's matrices */
 void ico_photo_view_tick(void);
-/* port/game/title_logo.h: the title logo's hidden state (package L1) */
+/* port/game/title_logo.h: the title logo's hidden state */
 void ico_title_logo_update(void);
 /* script/include/script.h, which this file does not include */
 int RequestStageChange(int no, GObj *g, GObj *girl, float speed, float wait);
@@ -162,7 +161,7 @@ static int ico_dev_number(const char *s)
     return n;
 }
 
-/* PC port (X5): [dev] switch_to = N and [dev] switch_at = T (developer
+/* PC port: [dev] switch_to = N and [dev] switch_at = T (developer
    keys; host_config.c hands them over as
    ICO_SWITCH_TO and ICO_SWITCH_AT) force one stage change, for the
    transition sweep.  At the
@@ -326,7 +325,7 @@ void Main(void)
         MakeCollisionDependGObjList();
         MakeCharGObjList();
         ExecKeyInput();
-        /* PC port (R6a): developer mode
+        /* PC port: developer mode
            restores the development build's debug menu call, here after the
            pad is read and before ExecIcoMisc's layout code can clear
            pad[0].flags.  SELECT opens the menu; until then debug_Menu only
@@ -337,16 +336,16 @@ void Main(void)
         /* [dev] switch_to (above): the exit taken here, after the pad is
            read, as a script or the boy's exit floor would in this tick */
         ico_dev_switch_stage();
-        /* PC port (I17b): the mouse pointer in the menus, after the pad
+        /* PC port: the mouse pointer in the menus, after the pad
            read and before the layouts: a hover moves the cursor, a click
            or the wheel adds its button to this tick's pad
            (port/ui/ui_mouse.h) */
         ui_mouse_tick();
-        /* PC port (package MV): the model viewer's tick, after the pad read
+        /* PC port: the model viewer's tick, after the pad read
            and before the layouts and the objects (port/game/model_viewer.h) */
         ico_mv_tick();
         ExecIcoMisc();
-        /* PC port (package L1): whether the title's logo is drawn this
+        /* PC port: whether the title's logo is drawn this
            tick, after the layouts ran and before the objects are drawn */
         ico_title_logo_update();
         if (graphics_ready == 0) {
@@ -357,7 +356,7 @@ void Main(void)
         if (graphics_ready == 0) {
             stage_CalcAnimationParent();
         }
-        /* PC port (photo mode, issue 14): the paused game drawn from photo
+        /* PC port (photo mode): the paused game drawn from photo
            mode's camera, set where the camera's update sets it in play
            (after the objects, before the draw); its own camera back on
            leaving (port/game/photo_view.h) */

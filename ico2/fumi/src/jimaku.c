@@ -90,7 +90,7 @@ extern void gif_EndPacket(void);
 
 #ifdef ICO_RD
 
-/* PC port (renderer R7d): GifHost.h's key of the decoder's primitives, so
+/* PC port: GifHost.h's key of the decoder's primitives, so
    the presenter matches a subtitle's two rows between ticks by its block */
 extern void gif_HostDrawKey(const void *obj, int part, int ordinal);
 
@@ -99,7 +99,7 @@ extern void gif_HostDrawKey(const void *obj, int part, int ordinal);
 #define JIM_HOST_KEY(obj, part) ((void)0)
 #endif
 
-/* port/game/photo_mode.c: 1 while photo mode is on (issue 14); the
+/* port/game/photo_mode.c: 1 while photo mode is on; the
    subtitles are left out of its pictures */
 extern int ico_photo_active(void);
 
@@ -109,7 +109,7 @@ static void display_texture(LtProperty *t)
     int dst[4];
     int src[4];
 
-    /* PC port (photo mode, issue 14): no subtitle over the picture */
+    /* PC port (photo mode): no subtitle over the picture */
     if (ico_photo_active()) {
         return;
     }

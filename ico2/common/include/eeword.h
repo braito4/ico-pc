@@ -2,8 +2,7 @@
  * ico2/common/include/eeword.h
  *
  * EE address words: a 32-bit word in a disc record, or in a record the game
- * keeps at the EE's layout, that holds a heap address.  Port header (package
- * 2C).
+ * keeps at the EE's layout, that holds a heap address.  Port header.
  *
  * The loaders relocate file offsets in place ("p->wcl = (int)p + p->wcl")
  * and the readers cast the word back to a pointer.  A 64-bit host cannot

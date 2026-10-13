@@ -37,7 +37,7 @@ static void copyToWork(int pri);
 
 #ifdef ICO_RD
 
-/* PC port (renderer wave 5, R5b).  The
+/* PC port (docs/port/GS.md, "Effects recorded on rd directly").  The
    work block copyToWork and flushWork allocate right after tex_ResetVramPri
    is TBP 0x2800, which the GS register decoder takes for the named AA0
    target (no depth buffer); on the GS the scene copy, the refracting
@@ -144,7 +144,7 @@ static int work1Vram = 0; /* derived name */
    span the frame over 0 .. 1, which the renderer reads over the block's
    own width (a render target is sampled whole: no power of two).  The
    block's VRAM address is the PS2's (ADDRESS). */
-/* VIS-RULES item 18 (v0.6.1): checked, not narrower than the frame's share
+/* PC port: checked, not narrower than the frame's share
    (rd_water_test "frame W" at 1376, 2048 and 2560) */
 static int poolBlockW(void) /* port name */
 {

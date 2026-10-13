@@ -49,7 +49,7 @@ typedef union { /* field names derived */
    own counter, and each node's 0.0f words are stored from one float set at
    the top of the loop body.  FLAG_NODE_WORD is the word at the EE offset
    off, on the host the field it holds (Sub15C's prefix is wider on a 64-bit
-   host: package 2I). */
+   host). */
 #define FLAG_NODE_WORD(o, off, field) ICO_RAW(char *, o, off, *(char **)&(o)->field)
 #define FLAG_ALLOC_NODES(o, num) /* derived name */                                                \
     {                                                                                              \

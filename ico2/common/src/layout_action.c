@@ -258,18 +258,18 @@ static int fileMask = 0; /* derived name */
 
 static int actionStarted = 0; /* derived name */
 
-/* PC port (Phase 6, 6C): the Settings menu (port/ui/settings.h).  Its entry rows are chained after the title's
+/* PC port: the Settings menu (port/ui/settings.h).  Its entry rows are chained after the title's
    rows; the title procs leave Cross/START on them to default_item_select,
    which opens the menu through the row's right link, and mask them with
    their own rows while the memory card check runs. */
 int ui_settings_entry_item(int item);
 void ui_settings_title_mask(int masked);
-/* S1: la_key_config's OK goes back to Settings > Controls (settings.h) */
+/* la_key_config's OK goes back to Settings > Controls (settings.h) */
 int ui_settings_key_config_back(void);
 
 #define LA_HOST_NOT_SETTINGS_ROW &&!ui_settings_entry_item(lt_current_property_item())
 
-/* PC port (Q2): the bits of the
+/* PC port: the bits of the
    procs' Triangle cancels.  With [game] circle_back on (the default) Circle
    is an alias of Triangle there (port/ui/layout_ext.h lt_ext_back_buttons);
    off, 0x10 alone, the PS2's checks.  Not used where Triangle is not a
@@ -279,8 +279,8 @@ int lt_ext_back_buttons(void);
 
 #define LA_BACK lt_ext_back_buttons()
 
-/* PC port (renderer wave 7, R7c): mirror mode, chosen on a port screen after
-   the vibration choice (port/ui/settings.h ui_NewGameScreen*) and kept per
+/* PC port: mirror mode, chosen on a port screen after
+   the vibration choice (port/ui/settings.h ui_new_game_screen_*) and kept per
    save slot in the port config (port/game/options.h ico_mirror_slot_*). */
 int ui_new_game_screen_enter(void);
 int ui_new_game_screen_layout(void);
@@ -733,7 +733,7 @@ int la_vibe_select(void)
             break;
         }
         if (ui_new_game_screen_layout() >= 0) {
-            return la_host_new_game_screen(); /* R7c: the New Game screen, then the start */
+            return la_host_new_game_screen(); /* the New Game screen, then the start */
         }
         if (titleAdpcm != 0) {
             titleAdpcm->stream->fadeStep = 0x80;
@@ -757,7 +757,7 @@ int la_vibe_select(void)
     return 0xC;
 }
 
-/* PC port (renderer wave 7, R7c): the start la_vibe_select's confirm made,
+/* PC port: the start la_vibe_select's confirm made,
    run by the New Game screen's confirm (port/ui/settings.c) once the player
    has picked: the title music fades, the game flags and the key config are
    reset and gflag 382 starts the new game, at the same moment as each
@@ -819,7 +819,7 @@ int la_title_continue_or_new(int first)
         isysGObjActiveLink(0, 1);
         systemStatus[5] = 0;
         gflagOff(382);
-        ico_opt_mirror_reset(); /* R7c: the title belongs to no run */
+        ico_opt_mirror_reset(); /* the title belongs to no run */
         if (gflagChk(385) == 0) {
             gflagOn(385);
         }
@@ -836,7 +836,7 @@ int la_title_continue_or_new(int first)
         lt_mask_property(0x32, 1);
     }
     ui_settings_title_mask(continueDecided == 0);
-    /* PC port (6C): not on the Settings row, whose Cross default_item_select
+    /* PC port: not on the Settings row, whose Cross default_item_select
        takes (it opens the menu) */
     if (continueDecided != 0 && (pad[0].flags & 0x840) &&
         lt_fade_status() == 2 LA_HOST_NOT_SETTINGS_ROW) {
@@ -886,7 +886,7 @@ int la_title_new_game_only(int first)
         isysGObjActiveLink(0, 1);
         systemStatus[5] = 0;
         gflagOff(382);
-        ico_opt_mirror_reset(); /* R7c: the title belongs to no run */
+        ico_opt_mirror_reset(); /* the title belongs to no run */
         if (gflagChk(385) == 0) {
             gflagOn(385);
         }
@@ -902,7 +902,7 @@ int la_title_new_game_only(int first)
         lt_mask_property(51, 1);
     }
     ui_settings_title_mask(newGameDecided == 0);
-    /* PC port (6C): not on the Settings row, whose Cross default_item_select
+    /* PC port: not on the Settings row, whose Cross default_item_select
        takes (it opens the menu) */
     if (newGameDecided != 0 && (pad[0].flags & 0x840) &&
         lt_fade_status() == 2 LA_HOST_NOT_SETTINGS_ROW) {
@@ -1552,7 +1552,7 @@ int la_load_processing(int first)
             *(struct McPreview *)&IosMcProductFile[mc.port].file[mc.fileNo];
         playTime((struct McPreview *)IosMcPreviewInfo, &hour, &min, &sec);
         loadSerial = mcSetFileNo(mc.port, mc.fileNo);
-        ico_mirror_slot_loaded(mc.fileNo, (unsigned int)mc.sum); /* R7c: the slot's flag */
+        ico_mirror_slot_loaded(mc.fileNo, (unsigned int)mc.sum); /* the slot's mirror flag */
         ico_ach_slot_loaded(mc.fileNo, (unsigned int)mc.sum);    /* the slot's achievement run */
         debug_StdPrintfDummy("stage no %d\n", gFlagSaveStage);
         seEnvForceClose = 1;
@@ -2401,7 +2401,7 @@ int la_save_processing(int first)
         saveStep++;
         break;
     case 10:
-        ico_mirror_slot_saved(mc.fileNo, (unsigned int)mc.sum); /* R7c: the run's flag */
+        ico_mirror_slot_saved(mc.fileNo, (unsigned int)mc.sum); /* the run's mirror flag */
         ico_ach_slot_saved(mc.fileNo, (unsigned int)mc.sum);    /* the achievement run */
         saveStep = 0;
         lt_set_item_select_func(0);
@@ -2904,7 +2904,7 @@ int la_key_config(int first)
             }
             lt_set_item_select_func(0);
             actionStarted = 0;
-            /* PC port (S1): back to Settings > Controls, which opens this
+            /* PC port: back to Settings > Controls, which opens this
                screen now that the Options screen (58) is not reached */
             return ui_settings_key_config_back();
         }
@@ -3076,7 +3076,7 @@ int la_adjust_screen(void)
     return -1;
 }
 
-/* PC port (6C): what every proc does before it returns the layout it
+/* PC port: what every proc does before it returns the layout it
    switches to, for the port's Settings procs (actionStarted is this file's) */
 void la_host_leave(void)
 {
@@ -3084,7 +3084,7 @@ void la_host_leave(void)
     actionStarted = 0;
 }
 
-/* PC port (S1): Settings > Gameplay > Film effect, what la_game_option does
+/* PC port: Settings > Gameplay > Film effect, what la_game_option does
    when row 300 changes the mode: the old mode's stage animation stopped, the
    new one's started */
 void la_host_film_effect(int mode)
@@ -3106,7 +3106,7 @@ void la_host_film_effect(int mode)
     optionScreenMode = mode;
 }
 
-/* PC port (package MV): the model viewer leaves the title as a new game
+/* PC port: the model viewer leaves the title as a new game
    does, the title music fading (la_host_new_game_go), and comes back to it
    the way la_end_confirm's Yes ends a game */
 void la_host_title_music_fade(void)

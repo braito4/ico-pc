@@ -55,12 +55,12 @@ extern void gif_SetAlpha(long long alpha, long long mode, long long fix);
 extern void gif_SetZTest(int on);
 extern void gif_SetZWrite(int on);
 
-/* PC port (v0.4.2): the menu text hook (port/ui/layout_ext.h) */
+/* PC port: the menu text hook (port/ui/layout_ext.h) */
 #include "layout_ext.h"
 
 #ifdef ICO_RD
 
-/* PC port (package TXT): GifHost.h's key of the decoder's primitives, so
+/* PC port: GifHost.h's key of the decoder's primitives, so
    the presenter matches a sign's sprites between ticks by its row (its
    texProperty entry) and the backdrop by its packet, and blends their
    fades.  The cursor sparkle stays unkeyed (its points are random each
@@ -69,13 +69,13 @@ extern void gif_HostDrawKey(const void *obj, int part, int ordinal);
 
 #define KANBAN_HOST_KEY(obj, part) gif_HostDrawKey((obj), (part), 0)
 
-/* PC port (v0.6.0): the sign's backdrop is the whole 640 x 224 grid
+/* PC port: the sign's backdrop is the whole 640 x 224 grid
    (kanbanSprite), the PS2's whole picture: the black every boot sign (the
    Sony presents sign, the card and language screens) stands on, in the
    layout's colour (the presents sign's: black at alpha 127).  On a wide
-   frame the UI helpers put it on the centred 4:3 box only, so stage 1's
-   scenery behind the presents sign showed beside it under the loading
-   layout's near-black (alpha 127 of 128).  It is a full-frame item by its
+   frame the UI helpers would put it on the centred 4:3 box only, and stage
+   1's scenery behind the presents sign would show beside it under the
+   loading layout's near-black (alpha 127 of 128).  It is a full-frame item by its
    data, as layout_texture.c's primary sprite is: drawn between
    gif_FullFrameBegin and gif_FullFrameEnd (GifPacket.h), so it covers the
    native frame at every aspect, and a 4:3 frame (512) gets the same
@@ -368,9 +368,9 @@ static void display_texture(LtProp *pr, LtProperty *e, KanbanCol *col)
         r[3] -= 8;
         uv[3] -= 8;
 
-        /* PC port (v0.4.2): a menu text row (the boot screens' prompts,
+        /* PC port: a menu text row (the boot screens' prompts,
            Yes / No, the language names) is drawn in the sheets' look where
-           the sprite would be, its texture transferred as before
+           the sprite would be, its texture still transferred
            (port/ui/menu_text.h) */
         KANBAN_HOST_KEY(e, 0);
         if (lt_ext_is_text_row(e)) {
@@ -459,12 +459,12 @@ static void display_layout(Kanban *k)
 
 #ifdef ICO_RD
 
-/* PC port (v0.6.2, TITLE-COVER): the frame black while a stage change to
+/* PC port: the frame black while a stage change to
    the title is in flight, from the stage manager setting systemStatus[6]
    (StageManager.c, after exit_stage) until the title's fade has reached
    full black.  The End Game and game over exits switch with a fade-out so
    slow it never shows (stgmgrForceSwitchWithFade(1, 0.025, 4)), so the
-   half-freed stage was drawn, with the loading layout's near-black over the
+   half-freed stage is drawn, with the loading layout's near-black over the
    4:3 box only; on a wide frame the pieces of it that fail the region test
    beside the box were GPU-clipped away on the PS2 and show here.  Two
    phases, so the PS2's own picture is kept wherever it shows: first only

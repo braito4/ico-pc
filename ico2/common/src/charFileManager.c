@@ -679,7 +679,7 @@ void ReadStageSettingFile(void *h, ICO_WORD name, int size)
     systemStatus[8]++;
     buf = iosMallocDebug(ios_partition_seki, size, __FILE__, 905);
     iosCdvdHandlerRead(h, buf, size);
-    /* port: the copy has no bound; every .ssb on the disc fits (R4 s.2) */
+    /* port: the copy has no bound; every .ssb on the disc fits */
     if (size > (int)sizeof(GlobalStageSetting)) {
         __builtin_trap();
     }

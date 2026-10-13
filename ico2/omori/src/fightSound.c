@@ -92,7 +92,7 @@ static void fightSoundProcessMain(void)
     }
 }
 
-/* PC port (package MUS3): while set, the
+/* PC port: while set, the
    fight music's step does nothing.  The step finds stream 1 (battle.int) by
    its number whoever opened it, and with no fight on fades it out and
    closes it at once; the music gallery sets this while it is open so that

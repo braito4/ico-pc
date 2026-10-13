@@ -48,8 +48,7 @@
  * It is never emitted out of line, so it has no symbol in
  * baserom/pal/MAIN.MAP and no disc name: `absf` is ours.  Unreferenced,
  * a static inline function emits nothing, so every other includer's
- * object is unchanged (each compared by whole object when it landed,
- * chain 1 pass 130).
+ * object is unchanged (each compared by whole object).
  *
  * One host uses it (twice); the listing, not a second host, is what
  * places it here.
@@ -400,7 +399,7 @@ struct MotRoot {       /* field names derived */
     float holdPoint[4]; /* 0x370, the point the hang hold is measured from */
     int ropeState;      /* 0x380, 0, or -1 and 1 by the hold height on the chain */
     ICO_WORD
-    fixObj; /* 0x384, the object SetMotionNodeFixModeParameter fixes the node to; held as a word: stored as GObj * (or char *, P4-xcut), SetMotionNodeFixModeParameter's code changes (measured) */
+    fixObj; /* 0x384, the object SetMotionNodeFixModeParameter fixes the node to; held as a word: stored as GObj * (or char *), SetMotionNodeFixModeParameter's code changes (measured) */
     int fixNode; /* 0x388, the focus node on that object */
     char _pad38C[4];
     float fixQuat[4];     /* 0x390, the fixed node's turn */
@@ -585,7 +584,7 @@ struct Sub15C { /* field names derived */
     ICO_WORD
     nodeMtx; /* 0xC, one 64-byte matrix a node; held as a word: typed float (*)[4][4] or char *, attackhit.o, act-game.o, commonact.o, fieldCollision.o and girl_act.o move, where the ROM adds a byte offset to it (measured) */
     ICO_WORD
-    nodeQuat; /* 0x10, one quaternion a node; held as a word: typed float (*)[4], GetMatrixOfMotion's int-typed read of it moves (measured, P4-xcut) */
+    nodeQuat; /* 0x10, one quaternion a node; held as a word: typed float (*)[4], GetMatrixOfMotion's int-typed read of it moves (measured) */
     char pad14[12];
     float matrix[4][4]; /* 0x20, the object's own matrix (initMatrixDObj) */
     float quat
@@ -728,9 +727,8 @@ typedef struct StageSetting { /* field names derived */
        field's; with the row aligned to 16 it adds base and index first, cse
        puts the index first, and the 0x130 stays the load's displacement,
        which is the ROM's `addu index, index, base` / `lw 0x130`.  The row
-       is the typed quadword; it replaced a bare aligned(16) on an r, g, b, a
-       struct (re-audit, completeness pass 57), with every user's object
-       byte-identical. */
+       is the typed quadword rather than a bare aligned(16) on an r, g, b, a
+       struct; every user's object is byte-identical either way. */
     sceVu0IVECTOR targetCol[4]; /* 0x130 */
 
     /* RECONSTRUCTION: the film grain's UV step, which

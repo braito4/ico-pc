@@ -721,7 +721,7 @@ ChainRecord *InitChainGeo(GObj *gobj, ChainGeoReq *req)
         sceVu0FVECTOR p0 = {0.0f, 0.0f, -25.0f, 1.0f};
         sceVu0FVECTOR p1 = {0.0f, 0.0f, 25.0f, 1.0f};
         ClipWork w;
-        /* PC port (X2): the original sets only the two
+        /* PC port: the original sets only the two
            points, so _Clip reads the radius and the skip filter from
            whatever the stack holds, and the wall it picks (climb.wall,
            wallOrient: the climb-off's wall plane) followed the host's

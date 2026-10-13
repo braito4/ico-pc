@@ -55,7 +55,7 @@ __UINTPTR_TYPE__ ico_arena_ee_addr(unsigned int ee);
    stage partition gets 4 MB and the others the same share of their size
    (4 MB / 15,826,944 bytes, rounded up to 64 KB).  The common partition
    also carries the packet banks' host pad, 2 x 0x80000 (DmaPacket.c
-   DPK_HOST_PAD; 0xC0000 more than v0.6.0's 2 x 0x20000, review B1). */
+   DPK_HOST_PAD). */
 #define ICO_HOST_STAGE_EXTRA 0x400000
 #define ICO_HOST_COMMON_EXTRA 0x1E0000  /* of 4,227,072 */
 #define ICO_HOST_SMOTION_EXTRA 0x50000  /* of 1,179,648 */

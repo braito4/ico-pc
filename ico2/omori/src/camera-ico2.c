@@ -20,7 +20,7 @@
 #include "gv.h"
 #include <assert.h>
 
-/* PC port (renderer R7d): a camera
+/* PC port: a camera
    group whose kind differs from the current one re-initialises the monitor
    camera, a hard cut for the presenter's interpolation
    (port/game/video_options.c; a counter no game state reads) */
@@ -78,15 +78,15 @@ static float targetASmooth[3]; /* derived name */
    the fourth word); on the EE and in the x86-64 gcc build that word is
    the .bss padding after it, so 0, while an arm64 clang build put
    pluralCameraSetNum there.  The host gives it its own fourth word, 0
-   (ASan global-buffer-overflow, issue 19). */
+   (ASan global-buffer-overflow). */
 static float targetBSmooth[4]; /* derived name */
 
 static float groupProbePos[36]; /* derived name */
 
 /* SetCameraTargetPosition stores both with a 16-byte vector store; on the
    EE each lies in its own 16-byte slot of .bss and the fourth word lands in
-   the slot's padding.  The host gives them that fourth word (package 2I,
-   ASan global-buffer-overflow). */
+   the slot's padding.  The host gives them that fourth word (ASan
+   global-buffer-overflow). */
 #define CAM_PREV_WORDS 4
 
 static float targetAPrev[CAM_PREV_WORDS]; /* derived name */
@@ -796,7 +796,7 @@ static void GetTargetOffset(GObj *gobj, float *v, unsigned char flag)
         /* PC port: _ApplyRyGV multiplies w by the zero translation row, so
            any value gives the same x, y and z but the sign of a zero; the
            stack word the EE left there is made 0 so no build depends on
-           its frame (issue 19) */
+           its frame */
         ofs[3] = 0.0f;
         need = ACTNotNeedCameraOffset(gobj) ? 1 : flag;
         if (need) {

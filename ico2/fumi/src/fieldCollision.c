@@ -435,7 +435,7 @@ static int clip_floor_1(ClipWork *ray, FcFloorEnt *e, int backFace)
     hit[2] = FC_MUL(FC_SUB(FC_MUL(ez, ds), FC_MUL(sz, de)), t);
     /* PC port: the 16-byte copy below takes w too, which the EE left as
        a stack word; 0, so the ray's end point does not depend on the
-       host's frame layout (issue 19) */
+       host's frame layout */
     hit[3] = 0.0f;
     if (FloorPointInside(e, hit) == 0) {
         return 0;

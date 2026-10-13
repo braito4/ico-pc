@@ -1652,7 +1652,7 @@ void actEndDemo13Chk(GObj *volatile self)
 
 void actStaff1Chk(GObj *volatile self)
 {
-    /* PC port (package CRED): the Extras credits start here, with the
+    /* PC port: the Extras credits start here, with the
        ending's song where the real ending has it when the roll starts (it
        began in actEndDemo06Chk, several scenes earlier) */
     if (ico_credits_active()) {
@@ -1693,7 +1693,7 @@ void actStaff3RollChk(GObj *volatile self)
         _ACTWait(1);
     }
 
-    /* PC port (package CRED): the Extras credits end at the title, with
+    /* PC port: the Extras credits end at the title, with
        every stream faded as this fades ed6, and no beach, logo or save */
     if (ico_credits_active()) {
         AdpcmFadeCloseAll(80);
@@ -1717,7 +1717,7 @@ void actEndDemo14Chk(GObj *volatile self)
 
 static void actEndingSave(GObj *volatile self)
 {
-    /* PC port (package CRED): the Extras credits never get here (they end
+    /* PC port: the Extras credits never get here (they end
        at actStaff3RollChk); if they did, no ending signal and no save */
     if (ico_credits_active()) {
         RequestStageChange(1, boyGObj, 0, 255.0f, 8.0f);

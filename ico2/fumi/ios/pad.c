@@ -353,7 +353,7 @@ static int iosPadDevReadFunc(void)
     return 0;
 }
 
-/* PC port (issue 46): port/input/pad_host.c */
+/* PC port: port/input/pad_host.c */
 unsigned int ico_pad_menu_word(const void *libpad_buf);
 
 int iosPadRead(IosPadCtx *ctx)
@@ -373,7 +373,7 @@ int iosPadRead(IosPadCtx *ctx)
     pbits = ((prev->hi << 8) | prev->lo) ^ 0xFFFF;
     cbits = ((cur->hi << 8) | cur->lo) ^ 0xFFFF;
 
-    /* PC port (issue 46): the default table is the menus' view of the pad:
+    /* PC port: the default table is the menus' view of the pad:
        bytes 20-21 of the read buffer, where the port keeps the gamepad's face
        buttons and d-pad by position whatever Remap controls says. Readers
        of pad[0] in play see this view, as with the game's own Button

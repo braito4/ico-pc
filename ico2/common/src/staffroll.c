@@ -5,7 +5,7 @@
 #include "main.h"
 #include "debug_exception.h"
 #include <assert.h>
-#include "ico_credits.h" /* PC port (package CRED): the roll's port credit */
+#include "ico_credits.h" /* PC port: the roll's port credit */
 
 /* staffroll.o's whole .data run: the roll's display area, centred on the
    origin, {x, y, width, height}.  Only the first word is read here, as the
@@ -61,7 +61,7 @@ void staffRollStart(float t, int alpha)
     staffRollCenterOffsetX = staffRollCenterOffsetXDest = rollOffset;
     staffRollArea[0] = 1280;
     memset(rollLines, 0, sizeof(rollLines));
-    ico_roll_started(staffRollNameDataNum); /* PC port (package CRED): a log line */
+    ico_roll_started(staffRollNameDataNum); /* PC port: a log line */
 }
 
 /* The scroll loop walks the 300-entry table by byte offset and spells the
@@ -123,7 +123,7 @@ static int staffRollNameOut(void)
     found:
 
         e = &rollLines[i];
-        /* PC port (package CRED): past the
+        /* PC port: past the
            disc's lines, the port credit's (port/game/credits.c) */
         if (rollNameIdx >= staffRollNameDataNum) {
             s = ico_roll_port_line(rollNameIdx++ - staffRollNameDataNum);
@@ -136,7 +136,7 @@ static int staffRollNameOut(void)
         e->y = (float)(font_GetHeight() + 449);
         e->align = font_CheckAlign(&e->col, *e->str);
     }
-    /* PC port (package CRED): the roll ends after the port credit's lines */
+    /* PC port: the roll ends after the port credit's lines */
     return rollNameIdx >= staffRollNameDataNum + ico_roll_port_count();
 }
 

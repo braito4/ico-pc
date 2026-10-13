@@ -49,7 +49,7 @@ static sceVu0FVECTOR nextStageRot; /* derived name */
 #include "backStage.h"
 #include "typedef.h"
 
-/* port/game/options.h: the model viewer is up (package MV) */
+/* port/game/options.h: the model viewer is up */
 extern int ico_mv_active;
 
 /* .data, owned by sceneManager.o: the default layout a scene object is
@@ -385,7 +385,7 @@ static void initSceneGObj(int stage, int no)
         }
 
         if (gen->proc != 0) {
-            /* PC port (package MV): the model viewer's host stage starts no
+            /* PC port: the model viewer's host stage starts no
                script; its objects stay as they were loaded */
             if (ico_mv_active == 0 || stage == 1) {
                 isysGObjProcAddS(gobj, gen->proc, 0, 0x13, pri);

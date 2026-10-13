@@ -35,7 +35,7 @@ static long long seChMask;
 static SqEntry soundDataTbl[16]; /* derived name */
 
 /* The byte walks over soundDataTbl: the EE's 0x30-byte stride and 768-byte
-   end; SqEntry is 0x48 bytes on a 64-bit host (package 2I). */
+   end; SqEntry is 0x48 bytes on a 64-bit host. */
 #define SQ_STRIDE ((int)sizeof(SqEntry))
 #define SQ_END ((int)sizeof(soundDataTbl))
 

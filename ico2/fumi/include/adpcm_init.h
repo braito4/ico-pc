@@ -75,7 +75,7 @@ void AdpcmLogFull(void);
 int AdpcmUseAreaGet(void);
 int AdpcmFreeAreaGet(void);
 void AdpcmInterStereoVolumeSetAll(void);
-/* PC port (package CRED): the next open of stream `no` starts `bytes` in
+/* PC port: the next open of stream `no` starts `bytes` in
    (adpcm_init.c) */
 void ico_adpcm_set_start(int no, int bytes);
 short AdpcmInterLeaveVolumeGet(struct SqEntry *self, int idx);

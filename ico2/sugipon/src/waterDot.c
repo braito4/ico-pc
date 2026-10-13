@@ -189,7 +189,7 @@ void DispWaterDot(WaterDotWork *w)
                top and bottom of the picture and the sides of a wide one.
                GsBase.c's window is the native frame's half-width
                (gsFrame.w / 2) and half-height plus 144 pixels, 400 across
-               at 4:3 as before, and while pictures are blended a dot an
+               at 4:3 as on the PS2, and while pictures are blended a dot an
                earlier camera saw is drawn too.  Inside the window x fits
                the 16 bits packed below (55552 at the widest). */
             if (gsb_HostDotVisible(ip, &p->pos.x)) {

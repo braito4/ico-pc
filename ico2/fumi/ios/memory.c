@@ -20,7 +20,7 @@ void ico_heap_stats_free(const void *part, unsigned int bytes);
  * AddressSanitizer, every block header, the slack after each block's
  * requested size and every free area are poisoned while the game runs, so
  * the first write past a block's end reports the writer. The allocator works
- * as before (same partitions, offsets and bookkeeping); its public functions
+ * as in the normal build (same partitions, offsets and bookkeeping); its public functions
  * are the wrappers at the end of this file, which unpoison the heap around
  * the original code and poison it again from the node lists afterwards. */
 #ifndef __SANITIZE_ADDRESS__

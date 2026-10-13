@@ -21,7 +21,7 @@
 
 #endif
 
-/* PC port (wave 5, R5c).  The
+/* PC port.  The
    strip packet below is a VIF DIRECT block (path 2) of GIF REGLIST packets:
    mc_HostDma reads it as the GIF would and the GS register decoder draws it,
    in order after the gif_* state packet.  The blend mode c comes from the

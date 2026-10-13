@@ -1013,7 +1013,7 @@ static void getMotionGeometry(void *self)
         Vec16 rv;
 
         /* PC port: neither root-position call writes w (see below); 0
-           rather than whatever the host's frame left there (issue 19) */
+           rather than whatever the host's frame left there */
         v.f[3] = 0.0f;
         rv.f[3] = 0.0f;
         if (motionKind[w->motion].blendKind == 320) {
@@ -1446,9 +1446,9 @@ void ExecMotionOrient(void *self)
     }
 }
 
-/* PC port (AN-19e): the rows are reordered in place below. A const
+/* PC port: the rows are reordered in place below. A const
    declaration of the table lets clang delete these stores as writes to
-   constant memory (motionOrientManager.h, issue 19). */
+   constant memory (motionOrientManager.h). */
 _Static_assert(__builtin_types_compatible_p(__typeof__(&motionLimitDef[0]), MotOriLimit *),
                "motionLimitDef must be declared writable");
 

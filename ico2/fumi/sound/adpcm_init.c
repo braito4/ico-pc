@@ -32,7 +32,7 @@ static AdpcmStream adpcmStream[2]; /* derived name */
 
 static int adpcmSpuSlot[4]; /* derived name */
 
-/* PC port (package CRED): one stream opened
+/* PC port: one stream opened
    part way in.  After ico_adpcm_set_start(no, bytes), the next open of
    stream `no` reads from `bytes` (rounded down to a 2 KB sector, which keeps
    the 0x400-byte channel interleave) instead of from its start: AdpcmOpen
@@ -43,7 +43,7 @@ static int adpcmStartNo = -1;
 
 static int adpcmStartBytes;
 
-/* PC port (issue 67): the sound-data entry and the stream number each of the
+/* PC port: the sound-data entry and the stream number each of the
    two stream records was opened for, so the request daemon can close a
    fading stream at once when it needs the slot (AdpcmFadingCloseNow) and the
    log can name streams. */
@@ -158,7 +158,7 @@ found:
     p = (AdpcmStream *)((char *)adpcmStream + i * 0x58);
     p->used = 1;
     obj->stream = p;
-    adpcmObj[i] = obj; /* PC port (issue 67) */
+    adpcmObj[i] = obj; /* PC port */
     adpcmNo[i] = no;
     ico_diag_log("adpcm: open %d slot %d", no, i);
     p->n = adpcmFile[no].channels;
@@ -259,7 +259,7 @@ void AdpcmOpen(AdpcmOpenReq *self, int no, int ch, int loopNum)
     if (soundDataAreaSearch(&req) != 0) {
         self->bg = 0;
         if (no == adpcmStartNo) {
-            adpcmStartNo = -1; /* PC port (CRED): already open, not kept */
+            adpcmStartNo = -1; /* PC port: already open, not kept */
         }
         return;
     }
@@ -270,12 +270,12 @@ void AdpcmOpen(AdpcmOpenReq *self, int no, int ch, int loopNum)
         self->bg = iosCdvdBackGroundMgrAdd((char *)&adpcmFile[no], adpcmOpenProc, self,
                                            adpcmOpenDiskNotReady, 0, self, 0, 0);
         if (no == adpcmStartNo) {
-            iosCdvdBackGroundMgrSeek(self->bg, adpcmStartBytes); /* PC port (CRED) */
+            iosCdvdBackGroundMgrSeek(self->bg, adpcmStartBytes); /* PC port */
         }
     } else {
         self->bg = 0;
         if (no == adpcmStartNo) {
-            adpcmStartNo = -1; /* PC port (CRED): not opened, not kept */
+            adpcmStartNo = -1; /* PC port: not opened, not kept */
         }
         debug_StdPrintfDummy("%s\n", (char *)&adpcmFile[no]);
     }
@@ -320,7 +320,7 @@ void AdpcmClose(SqEntry *obj)
         debug_assert(adpcmSrcFile, 605);
         __assert(adpcmSrcFile, 605, "0");
     found:
-        /* PC port (issue 67): a stream whose fade ran out is closed "fade",
+        /* PC port: a stream whose fade ran out is closed "fade",
            one closed by a call (or by AdpcmFadingCloseNow) "now" */
         ico_diag_log("adpcm: close %d (%s)", adpcmNo[j], self->fadeStep != 0 ? "fade" : "now");
         adpcmStream[j].used = 0;
@@ -328,7 +328,7 @@ void AdpcmClose(SqEntry *obj)
     }
 }
 
-/* PC port (issue 67): the request daemon (scpSubAdpcmPlay) found both stream
+/* PC port: the request daemon (scpSubAdpcmPlay) found both stream
    slots taken.  A stream that is already fading out is on its way to
    closing and will free its slot within a few ticks, so close it now and
    let the request take the slot.  Returns how many streams were closed;
@@ -354,7 +354,7 @@ int AdpcmFadingCloseNow(void)
     return closed;
 }
 
-/* PC port (issue 67): the PS2's path is about to fade every stream out */
+/* PC port: the PS2's path is about to fade every stream out */
 void AdpcmLogFull(void)
 {
     char list[32];
@@ -501,7 +501,7 @@ body:
     iosCdvdBackGroundMgrDelete(self->bg);
     r = adpcmDataSet(0, self->id, 0x11, self->ch, 0, self->iopBuf, self->loopNum);
     if (self->id == adpcmStartNo) {
-        /* PC port (CRED): the ring holds the stream from adpcmStartBytes */
+        /* PC port: the ring holds the stream from adpcmStartBytes */
         iosCdvdBackGroundMgrSeek(r->stream->bg, adpcmStartBytes + 0x5C000);
         r->stream->remain -= adpcmStartBytes;
         adpcmStartNo = -1;

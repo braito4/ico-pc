@@ -289,7 +289,7 @@ void ExecIcoMisc(void)
     }
     kanbanExec();
 #ifdef ICO_RD
-    kanbanTitleCover(); /* PC port (TITLE-COVER) */
+    kanbanTitleCover(); /* PC port: the cover over a stage change to the title */
 #endif
     if (graphics_ready != 0) {
         return;

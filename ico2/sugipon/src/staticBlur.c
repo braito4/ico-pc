@@ -134,12 +134,12 @@ extern void gif_SpriteSensitiveOrg(void *r, long long z, void *uv, void *col, in
 /* as in GifPacket.h, which this file does not include */
 extern void gif_StartPacketPri(int pri);
 /* port/game/video_options.c: the Glow, Depth of field and Motion blur
-   switches (issue 11), 1 = on */
+   switches, 1 = on */
 extern int ico_video_effect_glow(void);
 extern int ico_video_effect_depth_of_field(void);
 extern int ico_video_effect_motion_blur(void);
 /* port/game/photo_mode.c: 1 while photo mode shows the paused game from
-   its own camera (issue 14), when the aura's feedback follows the picture
+   its own camera, when the aura's feedback follows the picture
    as it does in play */
 extern int ico_photo_active(void);
 /* port/game/photo_mode.c: 1 on the tick that left photo mode, when the
@@ -149,7 +149,7 @@ extern int ico_photo_left(void);
 
 #ifdef ICO_RD
 
-/* PC port (wave 5, R5a): the
+/* PC port: the
  * window build records this file's packets on rd itself instead of through
  * GifPacket.c's register decoder, whose generic mapping of the work buffers
  * cannot be right here (the same TBP is a 256 x 128, a 256 x 256 and a
@@ -1359,7 +1359,7 @@ void MotionBlur(void)
     if (motionBlurAlpha == 0) {
         return;
     }
-    /* PC port (issue 11): Options > Effects > Motion blur off */
+    /* PC port: Options > Effects > Motion blur off */
     if (!ico_video_effect_motion_blur()) {
         return;
     }
@@ -1558,7 +1558,7 @@ static void dispFeedInfo(void)
     }
 }
 
-/* PC port (issue 11): the post mode with Options > Effects' Glow or Depth
+/* PC port: the post mode with Options > Effects' Glow or Depth
  * of field off.  The modes are 1, 4, 6 flare (or bloom) alone, 2 depth of
  * field alone, 3, 5, 7 flare (or bloom) and depth of field, 8 none.  Glow
  * off drops the flare half (1, 4, 6 -> 8; 3, 5, 7 -> 2), then Depth of field
@@ -1614,7 +1614,7 @@ void FullScreenEffectBefore(void)
     dispPostInfo();
     dispFeedInfo();
 #ifdef ICO_RD
-    /* PC port (R5a): which effects run, logged when that changes (the
+    /* PC port: which effects run, logged when that changes (the
        count is FullScreenEffectBefore's calls, one per frame; "drawn" says
        whether MotionBlur drew in the frame before, which GlobalTimer
        frames skip, and is not a change of its own) */

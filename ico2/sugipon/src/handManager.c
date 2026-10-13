@@ -92,9 +92,9 @@ static void connectToTarget(GObj *obj, HandRec *hw, int na, int nb, int nc)
         float l2 = l + l;
 
         sa = s;
-        /* PC port (AN-19): hands at one point (len 0) or a zero bone scale
+        /* PC port: hands at one point (len 0) or a zero bone scale
            divide by zero: +-Fmax on the EE, NaN under IEEE when the
-           dividend is 0 too (issue 19) */
+           dividend is 0 too */
         SetQuaternionByAxisRotateV(q, GetTableArcCos(ps2_div(ll + ss - tt, l2 * sa)), ax);
         GetMatrixFromQuaternion(m, q);
         _SubVector(v, (char *)GOBJ_SUB(tgt)->nodeMtx + (nb << 6) + 0x30,
@@ -170,12 +170,12 @@ static inline int PutHandOnLadder(HandRec *hw, int node) /* derived name */
     return 1;
 }
 
-/* PC port (AN-19): port/platform/diag_host.c */
+/* PC port: port/platform/diag_host.c */
 int ico_diag_float_fault(const char *site, const void *caller);
 void ico_diag_log(const char *fmt, ...);
 
-/* PC port (AN-19): the arm IK turns toward ikDir; a NaN there makes every
-   arm angle 90 degrees on arm64 (issue 19).  Checked when this frame set
+/* PC port: the arm IK turns toward ikDir; a NaN there makes every
+   arm angle 90 degrees on arm64.  Checked when this frame set
    a target (ikMode nonzero); the first NaN from each mode
    is logged with what it was made from: the hand's own node, the other
    object's node it reaches for (mode 5: its focus-19 node, mode 6: its

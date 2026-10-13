@@ -85,13 +85,13 @@ static float isInScreen2At(int *p, int hw) /* port name */
     return ry;
 }
 
-/* PC port (v0.6.1, VIS-RULES item 19): two widths for two kinds of caller.
+/* PC port: two widths for two kinds of caller.
    The camera's decisions take the 4:3 picture's half-width at every frame
    width, the PS2's ScreenWidth / 2 (_IsInScreen2, IsPointIsInScreen):
    camera-root.c Camctrl_Exec (a blend inserted when the camera's target
    leaves the screen) and act-game.c ACTGame_InsertCamera_GirlIsPinch (a
    camera inserted when the girl is off the screen).  With the native width
-   (v0.6.0) the camera of a wide picture behaved differently from the
+   the camera of a wide picture would behave differently from the
    original's, reaching angles the PS2 never framed; the camera is the
    original's, the wider picture only shows more of what it frames.  Ico's
    own looks take the native frame's half-width gsFrame.w / 2

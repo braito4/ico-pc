@@ -71,13 +71,13 @@ static unsigned int fadeLength; /* derived name */
 
 static unsigned int fadeCount; /* derived name */
 
-/* PC port (I17b): lt_item_select_disable as the last exec_layout_texture
+/* PC port: lt_item_select_disable as the last exec_layout_texture
    left it just before clearing it (lt_host_select_disabled) */
 static int ltHostSelectDisabled;
 
 #include "Texture.h"
 
-/* PC port (Phase 6, 6B): the rows past the game's tables.  texLayout[80] and
+/* PC port: the rows past the game's tables.  texLayout[80] and
    texProperty[436] are fixed-size runtime-loaded arrays with no free
    property row; the port's Settings rows live in an extension past their
    ends (port/ui/layout_ext.h), which this file's lookups fall through to.
@@ -86,13 +86,13 @@ static int ltHostSelectDisabled;
 
 #include "layout_ext.h"
 
-/* Phase 6, 6C: the Settings menu's port layouts and the game rows that lead
+/* PC port: the Settings menu's port layouts and the game rows that lead
    to them (port/ui/settings.h), built once the tables are loaded */
 void ui_settings_install(void);
 
 #define LT_LAYOUT(i) (*lt_ext_layout(i))
 #define LT_PROP(i) (*lt_ext_prop(i))
-/* PC port (Q2): Triangle follows the selected row's left link back; with
+/* PC port: Triangle follows the selected row's left link back; with
    [game] circle_back on, Circle does too (layout_ext.h lt_ext_back_buttons;
    0x10 alone when it is off) */
 #define LT_BACK_BUTTONS lt_ext_back_buttons()
@@ -113,7 +113,7 @@ static const SprRect primarySpriteRect = {-5120, -1808, 10240, 3616}; /* derived
 
 #ifdef ICO_RD
 
-/* PC port (v0.6.0, W3-UI): the 2D layer is a centred 4:3 box, but a layout's
+/* PC port: the 2D layer is a centred 4:3 box, but a layout's
    primary sprite is a full-frame backdrop and so is an item whose 640-grid
    rect spans the grid (the pause and End Game bars).  Both are drawn between
    gif_FullFrameBegin and gif_FullFrameEnd (GifPacket.h): the 640-grid helpers
@@ -127,7 +127,7 @@ static const SprRect primarySpriteRect = {-5120, -1808, 10240, 3616}; /* derived
    is drawing more of it; the primary sprite is untextured. */
 extern void gif_FullFrameBegin(void);
 extern void gif_FullFrameEnd(void);
-/* renderer R7d: GifHost.h's key of the decoder's primitives, so the
+/* PC port: GifHost.h's key of the decoder's primitives, so the
    presenter matches a row's sprites between ticks by the row (its
    texProperty entry) and blends their moves and fades */
 extern void gif_HostDrawKey(const void *obj, int part, int ordinal);
@@ -465,9 +465,9 @@ extern void gif_SpriteSensitiveOffset(SprRect *r, long long z, SprRect *uv, SprC
 extern void gif_PointOffset(int *v, long long z, SprCol *col, int prim);
 extern void gif_SetGsReg(long long reg, long long data);
 
-/* PC port (6B): the port row display_texture is drawing, whose glow is its
-   label stretched like the texture sprite (port/ui/layout_ext.h); since
-   v0.4.2 also a game row of the menu text table, whose words are drawn in
+/* PC port: the port row display_texture is drawing, whose glow is its
+   label stretched like the texture sprite (port/ui/layout_ext.h), or a
+   game row of the menu text table, whose words are drawn in
    the sheets' look where the sprite would be (port/ui/menu_text.h) */
 static LtProperty *ltHostTextRow;
 
@@ -512,7 +512,7 @@ static void display_texture(int no, LtProperty *e)
     int sel;
     int i;
     int full; /* the item spans the grid: a full-frame item */
-    /* PC port (6C): a port row in a layout chained after the current one
+    /* PC port: a port row in a layout chained after the current one
        with no cursor of its own (the Settings entry rows after the Options
        and title rows) is selected and dimmed by the current layout's
        cursor, which the item links move onto it */
@@ -566,10 +566,10 @@ static void display_texture(int no, LtProperty *e)
 
         flag = (e->upItem >= 0 || e->downItem >= 0 || e->leftItem >= 0 || e->rightItem >= 0 ||
                 e->right >= 0 || e->left >= 0 || e->down >= 0 || e->up >= 0);
-        /* PC port (6B): a port row has no texture; its label is drawn where
+        /* PC port: a port row has no texture; its label is drawn where
            the sprite would be, with the same colour.  A port glyph row is
            the exception: it draws a game texture as the game's rows do.
-           v0.4.2: a game row of the menu text table is drawn the same way
+           A game row of the menu text table is drawn the same way
            as text, its texture still transferred so the VRAM and packets
            are the texture path's */
         ltHostTextRow = lt_ext_is_text_row(e) ? e : 0;
@@ -772,13 +772,13 @@ void exec_layout_texture(void)
     for (k = 0; list[k] >= 0; k++) {
         lt_draw_layout(list[k]);
     }
-    /* PC port (I17b): what this tick's procs decided, for the mouse
+    /* PC port: what this tick's procs decided, for the mouse
        pointer's tick before the next one (lt_host_select_disabled) */
     ltHostSelectDisabled = lt_item_select_disable;
     lt_item_select_disable = 0;
 }
 
-/* PC port (I17b): the menus' mouse pointer (port/ui/ui_mouse.c), which runs
+/* PC port: the menus' mouse pointer (port/ui/ui_mouse.c), which runs
    once a Main tick before the layouts.  Whether property row no is shown
    (lt_property_visible); whether the last tick's procs had the item select
    off (the title's card check, a list's wrap, a layout that switched with

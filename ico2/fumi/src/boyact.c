@@ -46,8 +46,9 @@
 #include "motionManager2.h"
 #include "box.h"
 
-/* PC port (issue 53, [gameplay] door_fix): port/game/door_grace.c, the
-   doorway fix's arm and arrival grace */
+/* PC port ([gameplay] door_fix): port/game/door_grace.c, the
+   doorway fix's arm and arrival grace (docs/port/GAME_FEATURES.md, "Door
+   fix and the arrival grace") */
 extern void ico_door_grace_arm(int from_stage, int to_stage, int holding_hands);
 extern int ico_door_grace_begin(int stage, int frames);
 extern int ico_door_grace_active(void);
@@ -589,7 +590,7 @@ static void CheckCollisionAttr(void *self)
     int flag = 1;
     int esc = 0;
 
-    /* PC port (issue 53, [gameplay] door_fix): the arrival grace counts every
+    /* PC port ([gameplay] door_fix): the arrival grace counts every
        frame of the check, before the returns below */
     if (ico_door_grace_active()) {
         ico_door_grace_tick();
@@ -611,7 +612,7 @@ static void CheckCollisionAttr(void *self)
             int *w = (int *)boyInfo;
 
             flag = 0;
-            /* PC port (issue 53, [gameplay] door_fix): during the grace after
+            /* PC port ([gameplay] door_fix): during the grace after
                an arrival holding hands, an exit floor leading back to the
                stage just left is only remembered, as the game remembers the
                first floor touched after an arrival (below), so a push onto
@@ -638,7 +639,7 @@ static void CheckCollisionAttr(void *self)
                 }
                 if (esc) {
                     boyInfo[1] |= 0x800000000LL;
-                    /* PC port (issue 53, [gameplay] door_fix): an exit that
+                    /* PC port ([gameplay] door_fix): an exit that
                        fires arms the grace for the stage start it leads to;
                        stage_no is still the stage being left */
                     if (RequestStageChange(i, boyGObj, girlGObj, 1.0f, 8.0f)) {
@@ -647,7 +648,7 @@ static void CheckCollisionAttr(void *self)
                                            ACTGame_FLAG_TETSUNAGI());
                     }
                 } else {
-                    /* PC port (issue 53, [gameplay] door_fix): as above */
+                    /* PC port ([gameplay] door_fix): as above */
                     if (RequestStageChange(i, boyGObj, 0, 1.0f, 8.0f)) {
                         ico_door_grace_arm(stage_no,
                                            exitData[stageData[stage_no].ent[i - 1]].nextStage,
@@ -922,7 +923,7 @@ static __inline__ unsigned char boyPrivInsCamInScreen(void) /* derived name */
     if (PrivInsCamChk_Control() == 0) {
         return 0;
     }
-    /* PC port (VIS-RULES item 19): Ico's looks see the wide picture */
+    /* PC port: Ico's looks see the wide picture (poly-flat.c) */
     if (0.0f < IsPointIsInScreenWide(scr, test_CURRENTROOT(boyGObj))) {
         return 1;
     }
@@ -2114,7 +2115,7 @@ void subBoyCollision(GObj *volatile self)
                         girlLookInScreen =
                             (0.0f < IsPointIsInScreenWide(scr2, test_CURRENTROOT(girlGObj)))
                                 ? 1
-                                : 0; /* PC port: the wide picture (item 19) */
+                                : 0; /* PC port: the wide picture (poly-flat.c) */
                     }
                 }
                 if (girlGObj != 0) {
@@ -2232,7 +2233,7 @@ void subBoyCollision(GObj *volatile self)
                             weaponLookInScreen =
                                 (0.0f < IsPointIsInScreenWide(work, test_CURRENTROOT(w)))
                                     ? 1
-                                    : 0; /* PC port: the wide picture (item 19) */
+                                    : 0; /* PC port: the wide picture (poly-flat.c) */
                         }
                         weaponLookStarted = 1;
                         mode = (int)(sub->flags20.ll >> 24) & 3;
@@ -3291,7 +3292,7 @@ void actBoyStart(GObj *self)
     BOYINFO.escort = 0;
 
     ((int *)boyInfo)[4] = -1;
-    /* PC port (issue 53, [gameplay] door_fix): an exit taken holding hands
+    /* PC port ([gameplay] door_fix): an exit taken holding hands
        into this stage starts the arrival grace, 3 seconds of game frames
        (the frame rate expression the game uses below) */
     ico_door_grace_begin(stage_no, 3 * ((60 - systemStatus[0] * 10) / systemStatus[1]));

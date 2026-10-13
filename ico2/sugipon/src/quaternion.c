@@ -157,7 +157,7 @@ void RegularizeQuaternion(void *q)
 /* short (float), as tableSin.h and the definition: the int the decompiled
    declaration had read the whole return register, whose upper half the
    callee leaves unspecified (the x86-64 clang build returned 16383 as
-   0x13FFF, which this slerp then multiplied; issue 19) */
+   0x13FFF, which this slerp then multiplied) */
 extern short GetTableArcCos(float c);
 /* float (int) here, float (short) in tableSin.h */
 extern float GetTableSin(int x);

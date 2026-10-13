@@ -439,8 +439,8 @@ typedef struct {     /* field names derived */
     /* PC port: InitMotionGeoInfo copies this record over a MotRoot, so the
        host layout must be MotRoot's.  MotRoot has 20 unread bytes at 0x10C
        (not a WallCfg, which is 24 bytes on a 64-bit host) and a 16-byte
-       aligned plane; with the EE types every field from filter on landed 8
-       or 16 bytes off on x64 (armTwist read as 0: package 2I). */
+       aligned plane; with the EE types every field from filter on lands 8
+       or 16 bytes off on x64 (armTwist reads as 0). */
     struct {
         int o[2];
         int elem;

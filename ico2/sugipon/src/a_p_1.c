@@ -25,7 +25,7 @@
 
 /* short (float), as tableSin.h and the definition: an int declaration
    reads the upper half of the return register, which the callee leaves
-   unspecified (see quaternion.c; issue 19) */
+   unspecified (see quaternion.c) */
 extern short GetTableArcCos(float x);
 /* as in tableSin.h, which this file does not include */
 extern short GetTableArcTan2(float y, float x);
