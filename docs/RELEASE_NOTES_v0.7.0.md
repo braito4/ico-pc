@@ -16,3 +16,8 @@
 - The wall pieces above the courtyard doorways no longer vanish as the camera turns.
 - Changing the Frame rate setting no longer blacks out the screen or skips ahead.
 - Windows: the program now carries version information, and the download no longer includes developer tools.
+
+## Known issues
+
+- Some movement ghosting remains in a few places while the camera moves: the chandelier room and the main gate show it most, the courtyard with the sunbeams much less. Work continues on it.
+- On NVIDIA cards under Vulkan, a frame-rate limit equal to the screen's refresh rate can still show a picture a refresh late once or twice a second; Direct3D 12 or Uncapped are smoother if that bothers you.
