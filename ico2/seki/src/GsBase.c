@@ -1008,7 +1008,8 @@ static void gsb_SetGsDefault(void)
 extern int ico_photo_active(void);
 extern int ico_photo_film(void);
 extern int ico_photo_deja(void);
-/* port/game/photo_view.c: the deja vision's veil over the photo */
+/* port/game/photo_view.c: the deja vision's film reel and veil over the
+   photo */
 extern void ico_photo_view_veil(void);
 
 /* PC port: the Film effect in force, 0 for none: in photo mode the one
@@ -1118,10 +1119,10 @@ static int gsb_PostEffect(void)
     }
     fog_DrawFog();
 #ifdef ICO_RD
-    /* PC port: photo mode's Deja vu, the deja vision's two veil layers
-       drawn here into list 5 (after the fog, before the motion blur and the
-       aura and softening passes, as stage 40 draws them); nothing
-       otherwise */
+    /* PC port: photo mode's Deja vu, the deja vision's film reel specks
+       and its two veil layers drawn here into list 5 (after the fog, before
+       the motion blur and the aura and softening passes, as stage 40 draws
+       them); nothing otherwise */
     if (ico_photo_deja()) {
         ico_photo_view_veil();
     }

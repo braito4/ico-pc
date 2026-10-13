@@ -80,4 +80,12 @@ void stage_CalcAnimationParent(void);
 
 int stage_Init(void);
 
+#ifdef ICO_RD
+struct BgaHeader;
+/* PC port: the BGA header of stage animation row key when this stage set the
+   row up (stage_Init), else NULL (port/game/photo_view.c, photo mode's Deja
+   vu) */
+struct BgaHeader *stage_HostBgaHeader(int key);
+#endif
+
 #endif /* STAGEANIMATION_H */

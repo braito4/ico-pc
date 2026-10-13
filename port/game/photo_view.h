@@ -36,11 +36,12 @@ extern "C" {
 
 void ico_photo_view_tick(void);
 /* Photo mode's Deja vu (photo_mode.h ICO_PHOTO_FILM_DEJA): the deja
-   vision's two veil layers drawn through the game's object path into list
-   5, from GsBase.c's gsb_PostEffect after the fog (the window build; the
-   comment at its definition has the stage data and the mechanism).
-   Nothing in stage 40, which draws the veil itself, or before the first
-   photo tick */
+   vision's film reel (the noise specks and scratches, their animation
+   stepped by ico_photo_view_tick through the game's own evaluator) and its
+   two veil layers drawn through the game's object path into list 5, from
+   GsBase.c's gsb_PostEffect after the fog (the window build; the comments
+   at the definitions have the stage data and the mechanism).  Nothing in
+   stage 40, which draws them itself, or before the first photo tick */
 void ico_photo_view_veil(void);
 /* 1 while the game camera is saved (between enter and leave) */
 int ico_photo_view_saved(void);

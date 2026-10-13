@@ -48,6 +48,12 @@
  *            GS pixels across): with rd_content_extend.c's tiles every
  *            pixel of the frame is drawn, without them the sides are not,
  *            below ("the photo veil")
+ *   photo reel  photo mode's Deja vu film reel (port/game/photo_view.c):
+ *            the four noise specks of stage 40's frame v2227 drawn at the
+ *            dump's places on the 16:9 frame: none tiled, every pixel drawn
+ *            inside a speck's own place, all in the 4:3 picture's columns,
+ *            the speck left of the picture off the frame, below ("the photo
+ *            reel")
  *   natural chains  rd_content_chain.c's table and a let-down chain laid
  *            out as BgAnimation.c lays it out with the option on: the links
  *            at their size along the chain, the far end where the keyed
@@ -1832,6 +1838,159 @@ static void photoVeilPixels(void)
     rd__content_extend_set(NULL);
 }
 
+/* ----------------------------------------------------- the photo reel */
+/* Photo mode's Deja vu film reel (port/game/photo_view.c): the noiseA..E
+ * specks, each one quad of its model (noiseB, noiseD: x and y -+0.033;
+ * noiseE: x -+0.033, y -+0.453; UV 0..1), held in the camera's space.  The
+ * dump of stage 40 (v2227, rd_replay_tool --vu-ref 5:489, 5:502, 5:515,
+ * 5:526) puts the four drawn that frame at GS X 2255.3..2271.3 (noiseB),
+ * 2008.4..2031.4 (noiseD), 1800.4..1803.9 and 1652.9..1657.2 (noiseE), Y
+ * 1769.4..1794.7, 1847.9..1867.0 and 1730.9..2377.2.  Here the four quads,
+ * made from packets as the models hold them, are drawn untextured at those
+ * places on the 16:9 frame (688 GS pixels across, X 1704..2391):
+ *   none of them is tiled (rd_content_extend.c lists the veil's sheets
+ *     only): each speck is drawn once at its own size;
+ *   every pixel drawn lies in one of the four places (to a pixel), so in
+ *     the 4:3 picture's columns 88..599: the speck at 1653 lies left of
+ *     the 16:9 frame (as left of the 4:3 picture on the PS2) and draws
+ *     nothing, noiseB's rows below 1792 alone are on the frame */
+static const struct {
+    const char *name;
+    float x0, x1, y0, y1; /* the GS place */
+    float hy;             /* the model's half height */
+} kReelSpeck[4] = {
+    {"noiseB", 2255.250f, 2271.312f, 1769.375f, 1794.688f, 0.033f},
+    {"noiseD", 2008.375f, 2031.438f, 1847.875f, 1867.000f, 0.033f},
+    {"noiseE", 1800.438f, 1803.875f, 1730.938f, 2377.188f, 0.453f},
+    {"noiseE", 1652.938f, 1657.188f, 1730.938f, 2377.188f, 0.453f},
+};
+
+static const char kReelKey;
+
+static uint8_t s_reelImg[WT * 512 * 4];
+
+static void photoReelPixels(void)
+{
+    static const uint8_t grey[4] = {40, 40, 60, 0x80};
+    static float qw[1 + 4 * 3][4];
+    RdMesh m[4];
+    int tiled = 0;
+    CHECK(g_rd.gsW == WT, "photo reel: the frame is %u wide", g_rd.gsW);
+    CHECK(rd__content_extend_set(NULL), "photo reel: the table");
+    for (int q = 0; q < 4; q++) {
+        /* the model's quad: a strip of four, x -+0.033, y -+hy */
+        const float hy = kReelSpeck[q].hy;
+        const float quad[4][4] = {
+            {-0.033f, -hy, 0.0f, 0.0f},
+            {-0.033f, hy, 0.0f, 1.0f},
+            {0.033f, -hy, 1.0f, 0.0f},
+            {0.033f, hy, 1.0f, 1.0f},
+        };
+        memset(qw, 0, sizeof(qw));
+        const uint32_t tag = 0x8000u | 4u; /* NLOOP 4, EOP */
+        memcpy(&qw[0][0], &tag, 4);
+        for (int v = 0; v < 4; v++) {
+            float *p = qw[1 + v * 3], *st = qw[2 + v * 3], *c = qw[3 + v * 3];
+            p[0] = quad[v][0];
+            p[1] = quad[v][1];
+            p[3] = 1.0f;
+            st[0] = quad[v][2];
+            st[1] = quad[v][3];
+            st[2] = 1.0f;
+            st[3] = v == 0 ? 0.0f : 1.0f;
+            c[0] = c[1] = c[2] = 255.0f;
+            c[3] = 127.0f;
+        }
+        const RdVuBatchDesc bd = {0, 0, 0};
+        RdVuMeshDesc md;
+        memset(&md, 0, sizeof(md));
+        md.qw = (const float (*)[4])qw;
+        md.qwCount = 1 + 4 * 3;
+        md.qwPerVertex = RD_VU_QW_PRELIT;
+        md.batchCount = 1;
+        md.batches = &bd;
+        md.materialCount = 1;
+        md.debugName = kReelSpeck[q].name;
+        m[q] = rd_create_vu_mesh(&md);
+        const RdMeshRec *r = rd__mesh_rec(m[q].id);
+        tiled += r && r->tiledFrom != 0;
+    }
+    CHECK(tiled == 0, "photo reel: %d of the specks tiled", tiled);
+    dl_Clear();
+    dl_SetDLPriority(5);
+    rd_set_target(rd_target(RD_TARGET_SCENE), rd_target(RD_TARGET_SCENE), WT, 512, 1);
+    rd_clear_target(rd_target(RD_TARGET_SCENE), grey, 1, 0);
+    rd_test_gs(RD_TEST_Z_GEQUAL);
+    rd_z_write(1);
+    rd_blend(RD_BLEND_LERP_AS, 0x80, 0);
+    rd_abe(0);
+    rd_pabe(0);
+    rd_fba(0);
+    rd_gouraud(1);
+    rd_texture_off();
+    for (int q = 0; q < 4; q++) {
+        RdVuDraw d;
+        memset(&d, 0, sizeof(d));
+        d.prog = RD_PROG_PRELIT;
+        d.code = 32;
+        d.clip = RD_VU_CLIP_REGION;
+        d.vu.mem[16][0] = (kReelSpeck[q].x1 - kReelSpeck[q].x0) / 0.066f;
+        d.vu.mem[17][1] = (kReelSpeck[q].y1 - kReelSpeck[q].y0) / (2.0f * kReelSpeck[q].hy);
+        d.vu.mem[19][0] = 0.5f * (kReelSpeck[q].x0 + kReelSpeck[q].x1);
+        d.vu.mem[19][1] = 0.5f * (kReelSpeck[q].y0 + kReelSpeck[q].y1);
+        d.vu.mem[19][2] = 1000.0f;
+        d.vu.mem[19][3] = 1.0f;
+        rd_draw_vu_mesh(m[q], &d, RD_KEY(&kReelKey, 0, q));
+    }
+    dl_Swap();
+    for (int q = 0; q < 4; q++) {
+        rd_destroy_vu_mesh(m[q]);
+    }
+    uint32_t w = 0, h = 0;
+    if (!rd__read_target(rd_target(RD_TARGET_SCENE), s_reelImg, sizeof(s_reelImg), &w, &h) ||
+        w != WT || h != 512) {
+        CHECK(0, "photo reel: SCENE read back (%ux%u)", w, h);
+        return;
+    }
+    /* the frame's GS origin: X 2048 - 344, Y 2048 - 256 */
+    const float ox = 2048.0f - (float)WT / 2.0f, oy = 2048.0f - 256.0f;
+    int drawn[4] = {0, 0, 0, 0}, stray = 0, x0 = (int)w, x1 = -1;
+    for (int y = 0; y < 512; y++) {
+        for (int x = 0; x < (int)w; x++) {
+            const uint8_t *p = &s_reelImg[((size_t)y * w + (size_t)x) * 4];
+            if (p[0] == 40 && p[1] == 40 && p[2] == 60) {
+                continue;
+            }
+            const float gx = ox + (float)x + 0.5f, gy = oy + (float)y + 0.5f;
+            int in = -1;
+            for (int q = 0; q < 4 && in < 0; q++) {
+                if (gx >= kReelSpeck[q].x0 - 1.0f && gx <= kReelSpeck[q].x1 + 1.0f &&
+                    gy >= kReelSpeck[q].y0 - 1.0f && gy <= kReelSpeck[q].y1 + 1.0f) {
+                    in = q;
+                }
+            }
+            if (in < 0) {
+                stray++;
+            } else {
+                drawn[in]++;
+            }
+            x0 = x < x0 ? x : x0;
+            x1 = x > x1 ? x : x1;
+        }
+    }
+    CHECK(stray == 0, "photo reel: %d pixels drawn outside the specks' places", stray);
+    CHECK(drawn[0] > 0 && drawn[1] > 0 && drawn[2] > 0 && drawn[3] == 0,
+          "photo reel: noiseB %d, noiseD %d, noiseE %d and %d pixels (the last off the frame)",
+          drawn[0], drawn[1], drawn[2], drawn[3]);
+    /* noiseD: its 23 x 19 GS pixels whole, once */
+    CHECK(drawn[1] >= 21 * 18 && drawn[1] <= 25 * 21, "photo reel: noiseD once at its size (%d)",
+          drawn[1]);
+    CHECK(x0 >= 88 && x1 <= 599, "photo reel: drawn in columns %d..%d (the 4:3 picture 88..599)",
+          x0, x1);
+    printf("  photo reel at 16:9: noiseB %d, noiseD %d, noiseE %d and %d pixels, columns %d..%d\n",
+           drawn[0], drawn[1], drawn[2], drawn[3], x0, x1);
+}
+
 /* -------------------------------------------------------- strip order */
 /* Packet.c's table of the title logo's strips drawn in another order of
  * their own entries (pac_HostStrips, pac_HostStripOrder):
@@ -3327,6 +3486,7 @@ static const IcoShardCase k_cases[] = {
     {"recording", 1},        {"strip_disc", 1},  {"box_disc_0", 14},      {"box_disc_1", 14},
     {"box_disc_2", 15},      {"box_disc_3", 15}, {"gpu_prims", 1},        {"stretch_same", 1},
     {"closing_original", 1}, {"chain", 1},       {"stretch_enhanced", 1}, {"photo_veil", 1},
+    {"photo_reel", 1},
 };
 
 int main(int argc, char **argv)
@@ -3470,6 +3630,24 @@ int main(int argc, char **argv)
         setup();
         photoVeilPixels();
         CHECK(rhi_vk_validation_error_count() == 0, "60:9: %u validation errors",
+              rhi_vk_validation_error_count());
+        rd_shutdown();
+    }
+    /* photo mode's Deja vu film reel on the 16:9 frame (688 wide) */
+    st.preset = RD_PRESET_ENHANCED;
+    st.aspect = 16.0f / 9.0f;
+    st.sceneScale = 1.0f;
+    s_sceneW = WT;
+    if (!ico_shard_take("photo_reel")) {
+        /* another shard's */
+    } else if (!rd_init(WT, 512, &st, NULL)) {
+        CHECK(0, "rd_init at 16:9 (the reel)");
+    } else {
+        gif_HostForgetTextures();
+        gif_HostFrameReset();
+        setup();
+        photoReelPixels();
+        CHECK(rhi_vk_validation_error_count() == 0, "16:9 reel: %u validation errors",
               rhi_vk_validation_error_count());
         rd_shutdown();
     }

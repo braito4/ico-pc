@@ -1141,3 +1141,25 @@ static void stage_SetCameraForceOff(void)
 {
     bga_SetCameraForceOff();
 }
+
+#ifdef ICO_RD
+
+/* PC port: the BGA header of stage animation row key when this stage set the
+   row up (stage_Init: a row the stage's layout plays whose data is a BGA),
+   else NULL; the record lookup of stage_SetLoopFlag.  Photo mode's Deja vu
+   evaluates the Film effect's noise animation through it
+   (port/game/photo_view.c) */
+struct BgaHeader *stage_HostBgaHeader(int key)
+{
+    int i;
+    StageAnim *e = stageAnimTable;
+
+    for (i = 0; i < stageAnimCount; i++, e++) {
+        if (key == e->entry1->no && (e->flags.i >> 30) == 0) {
+            return e->entry2;
+        }
+    }
+    return 0;
+}
+
+#endif

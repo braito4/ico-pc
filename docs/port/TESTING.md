@@ -255,7 +255,13 @@ program under an environment switch ([Environment switches](#environment-switche
 - `rd_gsbase_test.c`: `GsBase.c`'s host path driving a synthetic scene (`rd_gsbase`); photo mode's
   Deja vu draws the stage's sandstorm object once a frame with the vision's two nodes, gives back
   what it borrowed, adds no film grain, and draws nothing in stage 40, with the effect off or with
-  photo mode closed (`checkDejaVeil`).
+  photo mode closed (`checkDejaVeil`); its film reel on a row of `film_noise_l4.bga`'s shape: the
+  first photo tick starts the row, each later tick runs it once on the filter's own frames, the
+  game's frames and node records are the same after every tick and draw, the noise objects are
+  drawn in model order before the veil with the evaluated nodes, their fade following the
+  envelope's own frame tick by tick and wrapping at its length, nothing with the effect off, in
+  stage 40 or with photo mode closed, the veil alone without the row (`checkDejaReel`; the
+  evaluator there stands in for the game's).
 - `rd_interp_test.c`: presentation between [ticks](ARCHITECTURE.md#terms) on two synthetic frames
   (`rd_interp`).
 - `rd_layout_test.c`: the layout frame from the game's layout calls (`rd_layout`).
@@ -263,7 +269,9 @@ program under an environment switch ([Environment switches](#environment-switche
   content table's four sandstorm sheets and the tiles appended to them (`sheetTableChecks`), one
   sheet on the device at 4:3 byte for byte the same with and without the tiles and at 16:9 the
   columns beside it drawn (`sheetPixels`), and the `photo_veil` shard: the veil's two layers at
-  60:9 drawing every pixel with the tiles (`photoVeilPixels`).
+  60:9 drawing every pixel with the tiles (`photoVeilPixels`), and the `photo_reel` shard: the film
+  reel's four specks of the deja dump at their places on the 16:9 frame, none tiled, every pixel
+  inside a speck's own place and in the 4:3 picture's columns (`photoReelPixels`).
 - `rd_mip_test.c`: the Enhanced mip chain's size and its builder staying inside it (`rd_mip`).
 - `rd_mirror_test.c`: mirror mode's flag and the flipped presenter output (`rd_mirror`).
 - `rd_passring_test.c`: the pass ring the device-loss report prints: order, wrap, the replay table, the

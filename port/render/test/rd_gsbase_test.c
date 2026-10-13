@@ -49,6 +49,22 @@
  *            (no call, the frame's commands the same as photo mode's
  *            without it) with the effect off or 1 .. 4, in stage 40,
  *            without the object, or with photo mode closed
+ *   reel     Deja vu's film reel (photo_view.c): a row of
+ *            film_noise_l4.bga's shape in the arena (noiseE, noiseB, noiseE
+ *            and sandstorm nodes under CAMERA_PARENT, then the CAMERA),
+ *            row 70 asked for; the first photo tick starts it
+ *            (bga_SetFrame), each later tick runs it once
+ *            (bga_CalcAnimation, mode 1, looping) on the reel's own frames,
+ *            and the game's frames, mode and node records are the same
+ *            after every tick and draw; the draws are noiseB then noiseE
+ *            (model order), each once with the evaluated nodes (fade,
+ *            camera-held, scale), under the tick's 500 unit pair, before
+ *            the veil, the priority put back; the drawn fade follows the
+ *            envelope's own frame tick by tick and wraps at its length
+ *            (the evaluator here stands in for the game's); nothing with
+ *            the effect off or 1 .. 4, in stage 40, with photo mode closed;
+ *            the veil alone without the row or with a node the reel cannot
+ *            put back; started again on reopening
  *   cull     the native width (gsb_SetVSMatrixSub's window half-width
  *            gsFrame.w / 2) and gsbHostCullMargin: with the Original
  *            framerate at 4:3 +0x240 and the 500 unit pair's +0x680 are as
@@ -97,6 +113,9 @@
 #include "GifHost.h"
 #include "GifPacket.h"
 #include "GsBase.h"
+#include "BgAnimation.h"
+#include "StageAnimation.h"
+#include "eeword.h"
 #include "video_options.h"
 #include "photo_mode.h"
 #include "photo_view.h"
@@ -475,8 +494,31 @@ static struct {
     int pri; /* the display list priority at the call */
 } s_disp;
 
+/* every reg_DispObj of a frame in order (the reel's checks): the object,
+   its nodes and matrices as the call sees them */
+#define DISP_LOG 16
+
+static struct {
+    Sub15C *o;
+    int nodeNum;
+    struct DObjNode nodes[4];
+    float mtx[4][16];
+    float screen500[32];
+} s_dispLog[DISP_LOG];
+
+static int s_dispLogN;
+
 void reg_DispObj(Sub15C *o)
 {
+    if (s_dispLogN < DISP_LOG) {
+        const int n = o->nodeNum < 4 ? o->nodeNum : 4;
+        s_dispLog[s_dispLogN].o = o;
+        s_dispLog[s_dispLogN].nodeNum = o->nodeNum;
+        memcpy(s_dispLog[s_dispLogN].nodes, o->nodes, (size_t)n * sizeof(struct DObjNode));
+        memcpy(s_dispLog[s_dispLogN].mtx, (const void *)o->nodeMtx, (size_t)n * 64);
+        memcpy(s_dispLog[s_dispLogN].screen500, matrixptr + 0x640, sizeof(s_dispLog[0].screen500));
+        s_dispLogN++;
+    }
     s_disp.calls++;
     s_disp.o = o;
     s_disp.nodeNum = o->nodeNum;
@@ -494,6 +536,145 @@ void UpdateHandCameraLimitP(void) {}
 void UpdateHandCameraLimitV(void) {}
 
 void UpdateZoomMaxVallInDemo(void) {}
+
+/* the EE word arena (eeword.h): the reel's stage animation lives in it */
+static unsigned char s_arena[1 << 16] __attribute__((aligned(16)));
+static size_t s_arenaTop = 16;
+unsigned char *ico_arena_cached_base = s_arena;
+
+unsigned char *ico_arena_base(void)
+{
+    return s_arena;
+}
+
+int ico_arena_contains(const void *p, __SIZE_TYPE__ n)
+{
+    const unsigned char *c = (const unsigned char *)p;
+    return c >= s_arena && c + n <= s_arena + sizeof(s_arena);
+}
+
+static void *arenaAlloc(size_t n)
+{
+    void *p = &s_arena[s_arenaTop];
+    s_arenaTop = (s_arenaTop + n + 15) & ~(size_t)15;
+    memset(p, 0, n);
+    return p;
+}
+
+/* photo_view.c's reel: StageAnimation.c's row lookup and BgAnimation.c's
+   evaluator, as the call sees them.  The evaluator here stands in for the
+   game's (bga_CalcObject and bga_calcEnvelope) with its shape: each node's
+   fade from its type 0 envelope's frame (reelFade), its place held in the
+   camera's space (flags 1 and 2, the position, a scale matrix), then every
+   envelope and the node's motion stepped by the header's step and wrapped to
+   0 past their lengths when looping; bga_SetFrame puts every frame at the
+   start and evaluates without the header's step */
+static BgaHeader *s_reelHead;
+static int s_reelKeyAsked = -1;
+static int s_setFrames, s_calcs, s_calcModeBad, s_quatDepth;
+
+BgaHeader *stage_HostBgaHeader(int key)
+{
+    s_reelKeyAsked = key;
+    return s_reelHead;
+}
+
+void PushQuaternion(void)
+{
+    s_quatDepth++;
+}
+
+void PopQuaternion(void)
+{
+    s_quatDepth--;
+}
+
+/* the fade an envelope frame gives: -0.6 + 0.01 f (between -1 and 1 for
+   the frames used: subtracted early, added late) */
+static float reelFade(float f)
+{
+    return -0.6f + 0.01f * f;
+}
+
+static void stubCalcObject(BgaDObjEnt *d, float dt, int loop)
+{
+    for (; d != 0; d = ICO_EEPTR(BgaDObjEnt *, d->sibling)) {
+        BgaPtMotion *m = (BgaPtMotion *)&d->motion;
+        BgaEnvEnt *e = ICO_EEPTR(BgaEnvEnt *, d->env);
+        if (d->u.obj != 0 && d->type == 10) {
+            Sub15C *o = ICO_EEPTR(Sub15C *, d->u.obj);
+            struct DObjNode *w = &o->nodes[d->num];
+            float *mt = (float *)(o->nodeMtx + (ICO_WORD)d->num * 64);
+            if (e != 0 && e->type == 0) {
+                w->fade = reelFade(ICO_EEPTR(BgaExtMotion *, e->data)->frame);
+                w->flags.ll |= 1;
+            }
+            w->flags.ll |= 2;
+            w->pos[0] = 0.1f * (float)d->num - 0.2f + 0.001f * m->frame;
+            w->pos[1] = 0.05f;
+            w->pos[2] = 1.05f;
+            w->pos[3] = 1.0f;
+            memset(mt, 0, 64);
+            mt[0] = mt[5] = mt[10] = 0.6f;
+            mt[15] = 1.0f;
+        }
+        for (; e != 0 && e->data != 0; e++) {
+            BgaExtMotion *x = ICO_EEPTR(BgaExtMotion *, e->data);
+            x->frame += dt;
+            if ((float)x->len < x->frame) {
+                x->frame = loop ? 0.0f : (float)x->len;
+            }
+        }
+        if (d->child != 0) {
+            stubCalcObject(ICO_EEPTR(BgaDObjEnt *, d->child), dt, loop);
+        }
+        m->frame += dt;
+        if ((float)m->len < m->frame) {
+            m->frame = loop ? 0.0f : (float)m->len;
+        }
+    }
+}
+
+void bga_CalcAnimation(BgaHeader *p, int loop, int reset)
+{
+    s_calcs++;
+    s_calcModeBad += p->mode != 1;
+    for (int i = 0; BGA_ROOT(p, i) != 0; i++) {
+        stubCalcObject(BGA_ROOT(p, i), p->step, loop);
+    }
+    if (!reset) {
+        p->frame += p->step;
+        if (p->end < p->frame) {
+            p->frame = 0.0f;
+        }
+    }
+}
+
+static void stubResetCounters(BgaDObjEnt *d, float f)
+{
+    for (; d != 0; d = ICO_EEPTR(BgaDObjEnt *, d->sibling)) {
+        BgaEnvEnt *e = ICO_EEPTR(BgaEnvEnt *, d->env);
+        ((BgaPtMotion *)&d->motion)->frame = f;
+        for (; e != 0 && e->data != 0; e++) {
+            ICO_EEPTR(BgaExtMotion *, e->data)->frame = f;
+        }
+        if (d->child != 0) {
+            stubResetCounters(ICO_EEPTR(BgaDObjEnt *, d->child), f);
+        }
+    }
+}
+
+void bga_SetFrame(BgaHeader *p, int frame, int mode, int loop)
+{
+    (void)frame;
+    s_setFrames++;
+    p->frame = p->start;
+    p->mode = (signed char)mode;
+    for (int i = 0; BGA_ROOT(p, i) != 0; i++) {
+        stubResetCounters(BGA_ROOT(p, i), p->frame);
+    }
+    bga_CalcAnimation(p, loop, 1);
+}
 
 /* ------------------------------------------------------------- helpers */
 
@@ -2531,6 +2712,339 @@ static void checkDejaVeil(void)
     ico_photo_reset();
 }
 
+/* The reel's stage animation: film_noise_l4.bga's shape (row 70) in the
+   arena: CAMERA_PARENT holding a noiseE node, a noiseB node, a second noiseE
+   node and a sandstorm node, then the CAMERA; their objects (noiseE with two
+   nodes, noiseB and sandstorm with one).  Every frame and node record starts
+   at values of its own, the game's, which the reel must leave as they are */
+typedef struct {
+    BgaHeader *head;
+    BgaDObjEnt *node[6]; /* CAMERA_PARENT, E0, B, E1, sandstorm, CAMERA */
+    BgaExtMotion *env[6];
+    Sub15C *obj[3]; /* noiseE, noiseB, sandstorm */
+} ReelData;
+
+static struct DObjNode s_reelNodes[3][2];
+static float s_reelMtx[3][2][16];
+static float s_reelQuat[3][2][4];
+static char s_reelModel[64], s_reelLight[64];
+
+static BgaDObjEnt *reelNodeAt(ReelData *r, int i, int type, int num, const char *name, int obj,
+                              unsigned len, int envType, unsigned envLen)
+{
+    BgaDObjEnt *d = arenaAlloc(sizeof(BgaDObjEnt));
+    d->type = (unsigned short)type;
+    d->num = (unsigned short)num;
+    snprintf(d->name, sizeof(d->name), "%s", name);
+    d->u.obj = obj >= 0 ? ico_eew(r->obj[obj]) : 0;
+    BgaPtMotion *m = (BgaPtMotion *)&d->motion;
+    m->n = 1;
+    m->len = len;
+    m->frame = 10.0f * (float)i + 2.0f;
+    if (envType >= 0) {
+        BgaEnvEnt *e = arenaAlloc(2 * sizeof(BgaEnvEnt));
+        BgaExtMotion *x = arenaAlloc(sizeof(BgaExtMotion));
+        x->n = 1;
+        x->len = envLen;
+        x->frame = 10.0f * (float)i + 1.0f;
+        e[0].type = (unsigned short)envType;
+        e[0].data = ico_eew(x);
+        d->env = ico_eew(e);
+        r->env[i] = x;
+    }
+    r->node[i] = d;
+    return d;
+}
+
+static void reelBuild(ReelData *r)
+{
+    static const int model[3] = {1613, 1610, 1614};
+    s_arenaTop = 16;
+    memset(r, 0, sizeof(*r));
+    for (int k = 0; k < 3; k++) {
+        Sub15C *o = arenaAlloc(sizeof(Sub15C));
+        o->modelId = model[k];
+        o->model = (struct PObjModel *)(void *)s_reelModel;
+        o->lightMtx = (struct LightMatrix *)(void *)s_reelLight;
+        o->dispType = 2;
+        o->nodeNum = k == 0 ? 2 : 1;
+        o->nodes = s_reelNodes[k];
+        o->nodeMtx = (ICO_WORD)s_reelMtx[k];
+        o->nodeQuat = (ICO_WORD)s_reelQuat[k];
+        r->obj[k] = o;
+        for (int n = 0; n < 2; n++) {
+            memset(&s_reelNodes[k][n], 0x40 + k * 2 + n, sizeof(s_reelNodes[k][n]));
+            for (int c = 0; c < 16; c++) {
+                s_reelMtx[k][n][c] = (float)(100 * k + 10 * n + c);
+            }
+            for (int c = 0; c < 4; c++) {
+                s_reelQuat[k][n][c] = (float)(-100 * k - 10 * n - c);
+            }
+        }
+    }
+    BgaDObjEnt *cp = reelNodeAt(r, 0, 10, 0, "CAMERA_PARENT", -1, 0, -1, 0);
+    BgaDObjEnt *e0 = reelNodeAt(r, 1, 10, 0, "noiseE", 0, 90, 0, 132);
+    BgaDObjEnt *b = reelNodeAt(r, 2, 10, 0, "noiseB", 1, 90, 0, 91);
+    BgaDObjEnt *e1 = reelNodeAt(r, 3, 10, 1, "noiseE", 0, 90, 0, 111);
+    BgaDObjEnt *ss = reelNodeAt(r, 4, 10, 0, "sandstorm", 2, 0, 0, 0);
+    BgaDObjEnt *cam = reelNodeAt(r, 5, 2, 0, "CAMERA", -1, 0, 1, 0);
+    cp->child = ico_eew(e0);
+    e0->sibling = ico_eew(b);
+    b->sibling = ico_eew(e1);
+    e1->sibling = ico_eew(ss);
+    cp->sibling = 0;
+    IcoEEWord *roots = arenaAlloc(3 * sizeof(IcoEEWord));
+    roots[0] = ico_eew(cp);
+    roots[1] = ico_eew(cam);
+    BgaHeader *h = arenaAlloc(sizeof(BgaHeader));
+    memcpy(h->magic, "BGA", 4);
+    h->group = 867;
+    h->mode = -1;
+    h->roots = ico_eew(roots);
+    h->start = 1.0f;
+    h->end = 90.0f;
+    h->step = 1.0f;
+    h->frame = 37.0f;
+    r->head = h;
+}
+
+/* the game's side of the row: the frames and the objects' node records */
+typedef struct {
+    float head;
+    signed char mode;
+    float motion[6], env[6];
+    struct DObjNode nodes[3][2];
+    float mtx[3][2][16], quat[3][2][4];
+} ReelGame;
+
+static void reelGame(const ReelData *r, ReelGame *g)
+{
+    memset(g, 0, sizeof(*g));
+    g->head = r->head->frame;
+    g->mode = r->head->mode;
+    for (int i = 0; i < 6; i++) {
+        g->motion[i] = ((BgaPtMotion *)&r->node[i]->motion)->frame;
+        g->env[i] = r->env[i] ? r->env[i]->frame : 0.0f;
+    }
+    memcpy(g->nodes, s_reelNodes, sizeof(g->nodes));
+    memcpy(g->mtx, s_reelMtx, sizeof(g->mtx));
+    memcpy(g->quat, s_reelQuat, sizeof(g->quat));
+}
+
+static int reelGameSame(const ReelData *r, const ReelGame *a)
+{
+    ReelGame b;
+    reelGame(r, &b);
+    int same = a->head == b.head && a->mode == b.mode &&
+               memcmp(a->nodes, b.nodes, sizeof(a->nodes)) == 0 &&
+               memcmp(a->mtx, b.mtx, sizeof(a->mtx)) == 0 &&
+               memcmp(a->quat, b.quat, sizeof(a->quat)) == 0;
+    for (int i = 0; i < 6; i++) {
+        same &= a->motion[i] == b.motion[i] && a->env[i] == b.env[i];
+    }
+    for (int k = 0; k < 3; k++) {
+        same &= r->obj[k]->nodes == s_reelNodes[k] &&
+                r->obj[k]->nodeMtx == (ICO_WORD)s_reelMtx[k] && r->obj[k]->nodeNum == (k ? 1 : 2);
+    }
+    return same;
+}
+
+/* one photo tick and its frame: the post effect with the reel's draws
+   logged */
+static void reelFrame(void)
+{
+    ico_photo_view_tick();
+    s_dispLogN = 0;
+    s_disp.calls = 0;
+    tick();
+}
+
+/* reg_setDissolve's FIX for a node's fade (alpha 1), and whether it adds */
+static int reelFix(float fade, int *adds)
+{
+    *adds = fade > 0.0f;
+    return (int)((fade < 0.0f ? fade + 1.0f : 1.0f - fade) * 96.0f);
+}
+
+static void checkDejaReel(void)
+{
+    static ReelData r;
+    static GObj g;
+    ReelGame game;
+    reelBuild(&r);
+    /* the veil's sandstorm object is the row's (kind 35) */
+    memset(&g, 0, sizeof(g));
+    g.dobj = r.obj[2];
+    s_kindHead = &g;
+    s_reelHead = r.head;
+
+    IcoVideoOptions o;
+    ico_video_defaults(&o);
+    ico_video_set(&o);
+    gFlagGameClear = 0;
+    optionScreenMode = 0;
+    tick();
+    systemStatus[5] = 1;
+    stage_no = 11;
+    ico_photo_reset();
+    ico_photo_set_tick_hz(25);
+    gameCamAt(PHOTO_D);
+    ico_photo_enter();
+    const IcoPhotoPad right = {0, ICO_PHOTO_RIGHT, {128, 128, 128, 128}};
+    const IcoPhotoPad still = {0, 0, {128, 128, 128, 128}};
+    /* off and 1 .. 4: the row never evaluated, no draw */
+    s_setFrames = s_calcs = 0;
+    for (int m = 0; m < ICO_PHOTO_FILM_DEJA; m++) {
+        ico_photo_update(m == 0 ? &still : &right);
+        reelFrame();
+        CHECK(!ico_photo_deja() && s_dispLogN == 0, "reel: film %d draws nothing (%d calls)", m,
+              s_dispLogN);
+    }
+    CHECK(s_setFrames == 0 && s_calcs == 0, "reel: no evaluation without Deja vu (%d, %d)",
+          s_setFrames, s_calcs);
+
+    /* Deja vu: the first tick starts the reel (bga_SetFrame from the
+       start, looping), the game's frames and node records put back */
+    ico_photo_update(&right);
+    reelGame(&r, &game);
+    s_reelKeyAsked = -1;
+    ico_photo_view_tick();
+    CHECK(ico_photo_deja() && s_reelKeyAsked == 70 && s_setFrames == 1 && s_calcs == 1 &&
+              s_calcModeBad == 0 && s_quatDepth == 0,
+          "reel: the first tick starts row 70 (key %d, %d starts, %d runs, %d without mode 1, "
+          "quaternion depth %d)",
+          s_reelKeyAsked, s_setFrames, s_calcs, s_calcModeBad, s_quatDepth);
+    CHECK(reelGameSame(&r, &game), "reel: the game's frames and node records put back (start)");
+    float pair[32], other[32];
+    memcpy(pair, matrixptr + 0x640, sizeof(pair));
+    for (int i = 0; i < 32; i++) {
+        other[i] = (float)(i + 1) * 0.25f;
+    }
+    memcpy(matrixptr + 0x640, other, sizeof(other));
+    s_dispLogN = 0;
+    s_disp.calls = 0;
+    s_fogPri = 3;
+    s_blurPri = -1;
+    gsb_SyncGSSystem();
+    s_fogPri = -1;
+    CHECK(memcmp(matrixptr + 0x640, other, sizeof(other)) == 0,
+          "reel: +0x640 and +0x680 put back after the draws");
+    gsb_UpdateGSSystem(0);
+    memcpy(matrixptr + 0x640, pair, sizeof(pair));
+    /* the noise objects in model order (noiseB 1610 before noiseE 1613,
+       the tree has noiseE first), each once with its own node count, then
+       the veil on the sandstorm object */
+    CHECK(s_dispLogN == 3 && s_dispLog[0].o == r.obj[1] && s_dispLog[1].o == r.obj[0] &&
+              s_dispLog[2].o == r.obj[2] && s_dispLog[0].nodeNum == 1 &&
+              s_dispLog[1].nodeNum == 2 && s_dispLog[2].nodeNum == 2,
+          "reel: noiseB, noiseE, then the veil (%d calls)", s_dispLogN);
+    int under = 1;
+    for (int i = 0; i < s_dispLogN; i++) {
+        under &= memcmp(s_dispLog[i].screen500, pair, sizeof(pair)) == 0;
+    }
+    CHECK(under, "reel: drawn under the tick's full screen 500 unit pair");
+    CHECK(s_blurPri == 3, "reel: the display list priority put back (%d)", s_blurPri);
+    /* the evaluated nodes at the start (envelope frame 1): faded, held in
+       the camera's space, subtracted at FIX (1 - 0.59) x 96 */
+    int adds = 0;
+    const struct DObjNode *nb = &s_dispLog[0].nodes[0];
+    CHECK(nb->fade == reelFade(1.0f) && (nb->flags.ll & 3) == 3 && reelFix(nb->fade, &adds) == 39 &&
+              !adds && s_dispLog[0].mtx[0][0] == 0.6f,
+          "reel: noiseB at the start (fade %g, flags %llx)", (double)nb->fade,
+          (unsigned long long)nb->flags.ll);
+    CHECK(reelGameSame(&r, &game), "reel: the objects' own nodes given back after the draw");
+    const float fade0 = nb->fade;
+
+    /* ticks: the reel steps once a tick through the game's evaluator (no
+       second start), the drawn fades follow the envelope frames, the game's
+       state is never changed */
+    int same = 1, follows = 1;
+    float last = fade0;
+    for (int t = 1; t <= 95; t++) {
+        reelFrame();
+        same &= reelGameSame(&r, &game);
+        const struct DObjNode *b = &s_dispLog[0].nodes[0];
+        /* noiseB's envelope (91 frames) from 1, past 91 back to 0 */
+        const float f = 1.0f + (float)t <= 91.0f ? 1.0f + (float)t : (float)t - 91.0f;
+        follows &= s_dispLogN == 3 && b->fade == reelFade(f);
+        if (t == 10) {
+            CHECK(b->fade != fade0 && b->fade > last,
+                  "reel: the fade moves between ticks (%g at the start, %g ten ticks in)",
+                  (double)fade0, (double)b->fade);
+        }
+        last = b->fade;
+    }
+    CHECK(s_setFrames == 1 && s_calcs == 96 && s_calcModeBad == 0 && s_quatDepth == 0,
+          "reel: one start, one step a tick (%d starts, %d runs)", s_setFrames, s_calcs);
+    CHECK(follows, "reel: the drawn fade follows the reel's own envelope frame, wrapping at 91");
+    CHECK(same, "reel: the game's frames and node records never changed");
+
+    /* photo mode in stage 40, which draws its own: nothing evaluated or
+       drawn */
+    ico_photo_exit();
+    ico_photo_view_tick();
+    stage_no = 40;
+    ico_photo_enter();
+    const int calcs = s_calcs;
+    reelFrame();
+    reelFrame();
+    CHECK(ico_photo_deja() && s_dispLogN == 0 && s_calcs == calcs && s_setFrames == 1,
+          "reel: nothing in stage 40 (%d calls, %d runs)", s_dispLogN, s_calcs - calcs);
+    ico_photo_exit();
+    ico_photo_view_tick();
+    stage_no = 11;
+    ico_photo_enter();
+    ico_photo_view_tick();
+    /* in another stage again: the reel starts from the start */
+    CHECK(s_setFrames == 2, "reel: started again in stage 11 (%d)", s_setFrames);
+
+    /* a row the reel cannot put back (a particle node): no reel, the veil
+       alone, the row untouched */
+    r.node[4]->type = 13;
+    reelGame(&r, &game);
+    reelFrame();
+    CHECK(s_dispLogN == 1 && s_dispLog[0].o == r.obj[2] && reelGameSame(&r, &game),
+          "reel: a node it cannot put back, the veil alone (%d calls)", s_dispLogN);
+    r.node[4]->type = 10;
+    /* no row 70 in the stage: the veil alone */
+    s_reelHead = NULL;
+    reelFrame();
+    CHECK(s_dispLogN == 1 && s_dispLog[0].o == r.obj[2],
+          "reel: without the row, the veil alone (%d calls)", s_dispLogN);
+    s_reelHead = r.head;
+    /* neither: nothing */
+    s_kindHead = NULL;
+    s_reelHead = NULL;
+    reelFrame();
+    CHECK(s_dispLogN == 0, "reel: without the row or the sheet, nothing (%d calls)", s_dispLogN);
+    s_kindHead = &g;
+    s_reelHead = r.head;
+    reelFrame();
+    CHECK(s_dispLogN == 3, "reel: back with the row (%d calls)", s_dispLogN);
+
+    /* photo mode closed: nothing; reopened: the reel starts again */
+    const int starts = s_setFrames;
+    ico_photo_exit();
+    reelFrame();
+    CHECK(s_dispLogN == 0 && s_setFrames == starts, "reel: photo mode closed, nothing (%d calls)",
+          s_dispLogN);
+    ico_photo_enter();
+    reelFrame();
+    CHECK(ico_photo_deja() && s_dispLogN == 3 && s_setFrames == starts + 1,
+          "reel: reopened with Deja vu, started again (%d calls, %d starts)", s_dispLogN,
+          s_setFrames - starts);
+    /* the saved choice back to off for the checks after this one */
+    ico_photo_update(&right);
+    CHECK(ico_photo_film() == 0, "reel: Right after Deja vu is off (%d)", ico_photo_film());
+    ico_photo_exit();
+    ico_photo_view_tick();
+    s_kindHead = NULL;
+    s_reelHead = NULL;
+    systemStatus[5] = 0;
+    stage_no = 0;
+    ico_photo_reset();
+}
+
 static void boot(void)
 {
     matrixptr = s_spr;
@@ -2556,6 +3070,7 @@ static void recordingChecks(void)
     checkZScale();
     checkPhotoView();
     checkDejaVeil();
+    checkDejaReel();
     checkCull();
     checkDecoder();
     checkStripWindow();

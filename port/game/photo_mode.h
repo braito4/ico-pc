@@ -198,9 +198,10 @@ int ico_photo_hide_ui(void);
    1 .. 4 the modes Options > Gameplay > Film effect has, whose grain
    GsBase.c draws while photo mode is active, whatever the game's setting
    and whether or not the game is cleared; ICO_PHOTO_FILM_DEJA the deja
-   vision's grain veil (stage 40's two layers of the "sandstorm" sheets),
-   which photo_view.c ico_photo_view_veil draws through the game's own
-   object path (no film grain with it). */
+   vision's grain veil (stage 40's two layers of the "sandstorm" sheets)
+   and its film reel (the animated noiseA..E specks and scratches), which
+   photo_view.c ico_photo_view_veil draws through the game's own object
+   path (no film grain with it). */
 #define ICO_PHOTO_FILM_DEJA 5
 #define ICO_PHOTO_FILM_MODES 6
 int ico_photo_film(void);

@@ -345,6 +345,40 @@ Deja vu has no film grain (`gsb_filmMode`), and the veil texture's palette cycle
 entries 0 to 15, no UV scroll) keeps running in photo mode as the grain's does
 (`ico2/seki/src/Texture.c` (`tex_ResetVram`)).
 
+The vision's film reel comes with it. `deja_lightning.bga` also holds nine "noise" entries of type
+10 under CAMERA_PARENT (nodes 5 to 9, 11, 12, 15 and 16) of the models 1609 to 1613
+(`noiseA.p2o` to `noiseE.p2o`, `objTableScene` rows 1253 to 1257: quads 0.066 across, noiseE's
+0.906 tall, each with a 32 x 32 four-bit speck texture whose TIM2 header has no ICO block, so no
+palette cycle and no UV scroll). Each entry has its own keyed motion (position about the
+picture's middle in the camera's space, depth 0.83 to 1.17, scale and roll; 90 to 135 frames) and
+its own type 0 envelope, the node's fade (91 to 132 frames, between -1 and 1): `reg_dispMObj`
+skips a node at -1 or 1 and otherwise draws it through the dissolve at FIX (1 - |fade|) x 96,
+added above 0 and subtracted below (`ico2/seki/src/RegistPacket.c` (`reg_dispMObj`,
+`reg_setDissolve`)). The stage steps each motion and envelope a frame a tick and wraps each at its
+own length (`ico2/seki/src/BgAnimation.c` (`bga_stepMotion`, `bga_stepEnvelope`); row 79 loops),
+so the flicker has no short period. The deja dump (frame v2227) holds four of these draws in list
+5 before the veil, noiseB subtracted at FIX 44, noiseD added at FIX 95, noiseE added at FIX 22 and
+44, at GS X 2263, 2020, 1802 and 1655; the tracks evaluated from the stage's start (at 60 Hz) give
+exactly those four draws and places 81 ticks in, every other node at -1 or 1. The Film effect's fourth
+animation, `film_noise_l4.bga` (`stageTable` row 70, in every stage pack, the same objects),
+holds the same nine entries key for key and envelope for envelope, so with Deja vu each photo tick
+runs that row through the game's own evaluator on the filter's own frames:
+`ico_photo_view_tick` sets aside the row's frames (the header's, every node's motion and
+envelopes) and the node records of the objects it drives, puts the filter's frames in, runs one
+step (`bga_CalcAnimation` in mode 1, looping, as `stage_CalcAnimationNoParent` runs a playing row;
+the first tick `bga_SetFrame` from the start, as `stage_SetAnimation` starts a looping row), keeps
+the five noise objects' evaluated nodes and the advanced frames, and puts everything of the game's
+back (`port/game/photo_view.c` (`reelTick`); `ico2/seki/src/StageAnimation.c`
+(`stage_HostBgaHeader`) finds the row). At the draw `ico_photo_view_veil` borrows each noise
+object with those nodes for one `reg_DispObj` before the veil, under the same 500 unit pair
+(`reelDraw`). The specks keep the vision's places and sizes: centred on the picture, each drawn
+once, never repeated across a wide frame (the content table lists the veil's sheets only). Over
+the tracks they reach GS X 1648 to 2387, the 4:3 picture (1792 to 2303) and up to 144 GS pixels
+left and 84 right of it; one vertical line (node 16, GS X 1648 to 1669) always lies left of it. A
+wide frame shows those parts as it does in the vision.
+Nothing is drawn or evaluated in stage 40, which plays its own, or with photo mode closed; a place
+without row 70 logs it once and draws the veil alone.
+
 ## The model viewer and Characters
 
 Settings > Extras > Models shows the game's character and object models on the game's own motion

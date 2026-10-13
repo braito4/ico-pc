@@ -194,11 +194,14 @@ hidden next time too. Press Square again to show it.
 
 The Film effect is a filter here: each press of Right goes to the next
 look, from Off through 1 to 4, then Deja vu, and back to Off, and a small
-note says which one you have. Deja vu is the grainy veil of Ico's vision:
-the two shimmering sheets of grain the game lays over the picture during
-that scene, here over any place you are, from edge to edge on a wide
-screen. During the vision itself the game already shows the veil, so Deja
-vu adds nothing there. The Film effect works whether or not you have
+note says which one you have. Deja vu is the grainy veil and the film
+scratches of Ico's vision: the two shimmering sheets of grain the game lays
+over the picture during that scene, from edge to edge on a wide screen,
+and the flickering specks and thin vertical lines of an old film reel that
+come and go over the middle of the picture, each at its own small size and
+in its own place as in the vision, never repeated across a wide screen,
+here over any place you are. During the vision itself the game already
+shows them, so Deja vu adds nothing there. The Film effect works whether or not you have
 finished the game, and it does not change the Film effect row in Options.
 The game remembers your choice for the next time you open photo mode, and
 your saved pictures include the effect.
