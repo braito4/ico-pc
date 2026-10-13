@@ -708,7 +708,15 @@ their stream, so a model pack's replacement never matches. When a listed mesh is
 across, then the outer row `rows` times outward down, each tile's UV continued from the tile it
 repeats so the texture runs on without a seam under REPEAT (`rd__sheet_tiles`). The mesh's own
 vertices and triangles come first and are unchanged; the tiles are drawn with the draw's state,
-matrices and UV offset, and take the region test as the sheet does. A morph
+matrices and UV offset, and take the region test as the sheet does. Out of the box (the Original
+preset at 4:3 and 1x, `vuExtended`) a draw of a listed sheet stops at the game's own triangles
+(`rd__vu_sheet_end`, `RdMeshRec.tiledIndexFrom`), so the appended tiles are never drawn there,
+wherever the sheet is placed, and the picture is the PS2's; in every other state they are drawn,
+clipped by the GPU at the frame. This is decided per draw, so an Options change needs no new mesh
+(`port/render/rd_replay.c` (`doVuDraw`); `port/render/rd_interp.c` (`scratchFor`) carries the
+counts to a blended copy). A dump stores a listed sheet as the game made it, its own vertices,
+triangles and batch (`port/render/rd_dump.c` (`rd__dump_frame`)), so the replay lays the tiles
+again under `ICO_RD_CONTENT_EXTEND` as it is set, and `off` removes them. A morph
 (`rd_update_vu_mesh`) writes the sheet's own vertices and lays the tiles again (`retileSheet`).
 The veil's sheets reach GS X 2048 -+ 702 and Y 2048 -+ 717; three tiles across (351 GS pixels
 each) and one down reach 2048 -+ 1755 and -+ 1075, past the widest frame (60:9, -+ 1280) and still

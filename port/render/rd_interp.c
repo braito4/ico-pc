@@ -3426,6 +3426,10 @@ static RdMeshRec *scratchFor(const RdMeshRec *c, const float (*stream)[4])
         }
     }
     rd__vu_mesh_copy_draw_index(m, c); /* the source's overlap marks */
+    /* a sheet's appended tiles (rd__vu_sheet_end draws them only outside
+       the out-of-the-box state) */
+    m->tiledFrom = c->tiledFrom;
+    m->tiledIndexFrom = c->tiledIndexFrom;
     m->materialCount = c->materialCount;
     m->srcQw = c->srcQw;
     s_scratchBytes +=

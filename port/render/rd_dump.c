@@ -323,11 +323,27 @@ bool rd__dump_frame(const RdFrame *f, const char *path)
         if (!m || !m->vu) {
             continue;
         }
-        ok = w32(fp, meshes.ids[i]) && w32(fp, m->vertexCount) && w32(fp, m->qwPerVertex) &&
-             w32(fp, m->indexCount) && w32(fp, m->batchCount) && wraw(fp, m->name, 24) &&
-             wraw(fp, m->stream, (size_t)m->vertexCount * m->qwPerVertex * 16) &&
-             wraw(fp, m->index, (size_t)m->indexCount * 4) &&
-             wraw(fp, m->batches, (size_t)m->batchCount * sizeof(RdVuBatchRec));
+        /* a sheet of the content table (rd_mesh.c extendSheet): the game's
+         * own vertices, triangles and batch, without the appended tiles, so
+         * the load makes it again under the table as the replay sets it
+         * (ICO_RD_CONTENT_EXTEND) and tools/content_table_check.py decide
+         * compares the sheet with and without them.  The layout is the
+         * same: only the counts written are the stream's own. */
+        const uint32_t nv = m->tiledFrom ? m->tiledFrom : m->vertexCount;
+        const uint32_t ni = m->tiledFrom ? m->tiledIndexFrom : m->indexCount;
+        ok = w32(fp, meshes.ids[i]) && w32(fp, nv) && w32(fp, m->qwPerVertex) && w32(fp, ni) &&
+             w32(fp, m->batchCount) && wraw(fp, m->name, 24) &&
+             wraw(fp, m->stream, (size_t)nv * m->qwPerVertex * 16) &&
+             wraw(fp, m->index, (size_t)ni * 4);
+        if (ok && m->tiledFrom && m->batchCount == 1) {
+            /* extendSheet's one batch, over the whole stream */
+            RdVuBatchRec b = m->batches[0];
+            b.vertexCount = nv;
+            b.indexCount = ni;
+            ok = wraw(fp, &b, sizeof(b));
+        } else if (ok) {
+            ok = wraw(fp, m->batches, (size_t)m->batchCount * sizeof(RdVuBatchRec));
+        }
     }
     ok = fclose(fp) == 0 && ok;
     if (!ok) {

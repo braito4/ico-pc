@@ -715,9 +715,10 @@ typedef struct RdMeshRec {
     uint64_t partJoinSig;
     /* a sheet of the content table (rd_content_extend.c): the vertex count
      * of the stream it was made from, the tiles appended after it
-     * (rd_mesh.c extendSheet; 0: none), and the entry's cols and rows, for
-     * rd_update_vu_mesh to lay them again */
-    uint32_t tiledFrom;
+     * (rd_mesh.c extendSheet; 0: none), its index count (the game's own
+     * triangles, all a draw out of the box draws: rd__vu_sheet_end), and
+     * the entry's cols and rows, for rd_update_vu_mesh to lay them again */
+    uint32_t tiledFrom, tiledIndexFrom;
     uint8_t tileCols, tileRows;
 } RdMeshRec;
 
@@ -838,6 +839,13 @@ RdExtendVerb rd__content_extend_verb(int i);
  * (in vertices) holds them. */
 uint32_t rd__sheet_tiles(const float (*stream)[4], uint32_t vertexCount, uint32_t qwPerVertex,
                          uint32_t cols, uint32_t rows, float (*out)[4], uint32_t cap);
+/* rd_mesh.c: where a draw of m's indices up to `end` (one past its last
+ * batch's) stops: out of the box (extended false: the Original preset at
+ * 4:3 and 1x, rd_replay.c vuExtended) a sheet of the content table draws
+ * only the game's own triangles (m->tiledIndexFrom), so the PS2's picture
+ * never holds an appended tile whatever the sheet's placement; in any
+ * other state, and for any other mesh, `end` */
+uint32_t rd__vu_sheet_end(const RdMeshRec *m, uint32_t end, bool extended);
 /* rd_mesh.c: the per-list VU images (rd_set_vu_common updates all 13). */
 void rd__vu_init(void);
 void rd__vu_shutdown(void);

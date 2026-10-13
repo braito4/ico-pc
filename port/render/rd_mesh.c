@@ -969,8 +969,16 @@ static void extendSheet(RdMeshRec *m)
     m->batches[0].vertexCount = m->vertexCount;
     m->batches[0].indexCount = m->indexCount;
     m->tiledFrom = nv;
+    m->tiledIndexFrom = m->indexCount - ni;
     m->tileCols = x->cols;
     m->tileRows = x->rows;
+}
+
+/* out of the box the game's own triangles only (rd_internal.h): the PS2's
+   picture holds no appended tile, by construction */
+uint32_t rd__vu_sheet_end(const RdMeshRec *m, uint32_t end, bool extended)
+{
+    return m && m->tiledFrom && !extended && end > m->tiledIndexFrom ? m->tiledIndexFrom : end;
 }
 
 /* rd_update_vu_mesh wrote the sheet's own vertices: its tiles laid again
