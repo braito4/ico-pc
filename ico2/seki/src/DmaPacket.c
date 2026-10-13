@@ -23,7 +23,7 @@ int used_dma_memory = 0;
    nothing else; it comes out of the common partition's host extra
    (ios.c ICO_HOST_COMMON_EXTRA).
 
-   v0.6.1 (VIS-RULES, review B1): a tick whose camera step is past half the
+   A tick whose camera step is past half the
    presenter's limits registers every box (GsBase.c gsbHostCullViews), the
    whole stage at most.  The largest stage pack (st02a: 87 models, 225
    parts, 862 packets; st20a 303 parts and 773 packets; counted on the PAL

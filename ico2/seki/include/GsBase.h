@@ -53,18 +53,18 @@ void gsb_SetMotionBlur(void);
 void gsb_SetVSMatrix(int w, int h, float d);
 void gsb_UpdateGSSystem(int keep);
 int gsb_StageSetting(void);
-/* PC port (photo mode, issue 14): the camera saved and put back, and the
+/* PC port (photo mode): the camera saved and put back, and the
    distance of the last full-screen gsb_SetVSMatrix (GsBase.c lists what the
    save holds) */
 void gsb_PushView(void);
 void gsb_PopView(void);
 float gsb_ViewFocus(void);
-/* PC port (issue 29): the cull against the cameras of the blended
+/* PC port: the cull against the cameras of the blended
    pictures.  RegistPacket.c says whether the part it culls next is locked
    to the camera (node flag 2: culled against this tick's camera only);
    gsb_HostCullViewsUsed is how many cameras the last gsb_ClipBox tested
    (1, 2 or 3; 0 when a step past half the presenter's limits kept every
-   box, v0.6.1; the tests and F12's cull line read it).  The windows sized by the native
+   box; the tests and F12's cull line read it).  The windows sized by the native
    frame's width (gsFrame.w): the water dots' (waterDot.c; ip the dot's GS position
    in 1/16 pixels, pos its world position), the lines' x clip
    (lineManager.c) and the shadow volumes' edge clip (Shadow.c). */

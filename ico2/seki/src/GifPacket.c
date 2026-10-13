@@ -34,15 +34,17 @@ int gif_HostFrameWidth(void)
     return gifHostFrameW;
 }
 
-/* PC port (VIS-WINDOW, v0.6.1): the picture is not the PS2's out of the
-   box, the Original preset on the 4:3 frame at 1x (the user's ruling,
-   2026-10-12: out of the box the PS2's behaviour stays; any other state
-   draws what a game made for that picture would draw).  GsBase.c's frame
-   latch sets it from the video options (ico_video_original: Enhanced or a
-   custom row); a frame wider than 4:3 is never out of the box.  The CPU
-   strips' rule (gifHostBeside) and the particles' window gate
-   (particleEffect.c) read it; the VU programs' form is rd_replay.c
-   vuExtended. */
+/* PC port: whether the picture is not the PS2's out of the box (the
+   Original preset on the 4:3 frame at 1x).  Out of the box the PS2's
+   behaviour stays; any other state draws what a game made for that picture
+   would draw.  GsBase.c's frame latch sets it from the video options
+   (ico_video_original: Enhanced or a custom row); a frame wider than 4:3 is
+   never out of the box.  The CPU strips' rule (gifHostBeside,
+   gifStripPasses, gifStripXyz) reads it; the particles' window gate
+   (particleEffect.c particleEffectOffScreen) does not: it is the PS2's
+   test on the GS window in every state.  The VU programs' form is
+   rd_replay.c vuExtended (docs/port/VU1_PROGRAMS.md, "The region
+   rule"). */
 static int gifHostExtendedSet;
 
 void gif_HostSetExtended(int on)
@@ -55,7 +57,7 @@ int gif_HostExtended(void)
     return gifHostExtendedSet || gifHostFrameW > ICO_FRAME_BASE_W;
 }
 
-/* PC port (v0.6.0, W3-UI): the GIF_SP_FULL scope.  The 2D layer is a centred
+/* PC port: the GIF_SP_FULL scope.  The 2D layer is a centred
    4:3 box (the 640 grid x ScreenWidth / 640 = 512 pixels about the frame's
    centre); an item that covers the whole frame (a backdrop, a bar spanning
    the grid) is drawn between gif_FullFrameBegin and gif_FullFrameEnd, where
@@ -94,7 +96,7 @@ enum {
     GIF_SP_FULL = 3
 }; /* port: GIF_ENTER's spaces */
 
-/* PC port, windowed build (renderer wave 2, R2a): the GS register decoder at
+/* PC port, windowed build: the GS register decoder at
    the end of this file turns every register write into rd state and
    primitives (GifHost.h).  setGsReg feeds it instead of the packet, so the
    gif_* helpers below keep their bodies; GIF_ENTER marks each entry point
@@ -573,9 +575,9 @@ static int stripIndex = 0; /* derived name */
    at every native width the frame (2048 -+ W / 2 pixels, at most 768 ..
    3328) lies inside it.  The triangles it drops that the port draws on a
    wide frame are gifHostBeside's. */
-/* VIS-RULES item 9 (v0.6.1), kept: an in-view CPU strip is dropped only
-   where the PS2 dropped it (a vertex past the GS's range, the triangle
-   reaching the picture); beside the picture gifHostBeside draws it */
+/* An in-view CPU strip is dropped only where the PS2 dropped it (a vertex
+   past the GS's range, the triangle reaching the picture); beside the
+   picture gifHostBeside draws it */
 static inline int isInScreen(volatile int *p) /* derived name */
 {
     if (p[2] < 0)
@@ -591,11 +593,11 @@ static inline int isInScreen(volatile int *p) /* derived name */
     return p[1] <= 65520;
 }
 
-/* PC port: the one camera on the native frame (user decision 2026-10-11:
-   "4:3 is not a separate viewport, it's a camera; don't render something
-   that would get clipped off inside the camera's picture"; the VU
-   programs' form of it is vu_common.hlsli vu_triangle_out's REGION
-   branch).  The game's intent: a CPU-projected strip (gif_DrawStripF,
+/* PC port: the one camera on the native frame: the 4:3 picture is the
+   camera's, not a separate viewport, and nothing is drawn that the
+   camera's picture would cut off (docs/port/GS.md, "CPU strips and the
+   one-camera rule"; the VU programs' form is vu_common.hlsli
+   vu_region_rule).  The game's intent: a CPU-projected strip (gif_DrawStripF,
    FST and G, gif_Draw2DStripG and gif_Draw2DUVStripG below) kicks a
    triangle only when its three vertices pass isInScreen (the XYZ2 / XYZ3
    choice), and gif_DrawPolyF4 draws its quad only when all four do: the
@@ -616,7 +618,7 @@ static inline int isInScreen(volatile int *p) /* derived name */
    applied at all (gifHostFrameW 512), so every packet is the PS2's, byte
    for byte.  The two-vertex lines (poly-flat.c do_DrawLine) drop a line
    with an end failing _IsInScreen in the caller, as the PS2.
-   VIS-WINDOW (v0.6.1): outside the out-of-the-box state (gif_HostExtended:
+   Outside the out-of-the-box state (gif_HostExtended:
    Enhanced, wider than 4:3, scaled up) a triangle with a failing vertex
    and its three Z values in range that reaches the picture is drawn too,
    clipped by the GPU (its vertices past 16 bits through XYZ2_HI), unless
@@ -639,7 +641,7 @@ static inline int gifHostZIn(volatile int *p)
    first two vertices' Z compares were za and zb, is drawn under the rule
    above although a vertex failed isInScreen: a wide frame, every Z in
    range, the x extent wholly beside the picture */
-/* PC port (VIS-WINDOW): the strip being drawn has a triangle whose three
+/* PC port: the strip being drawn has a triangle whose three
    vertices pass isInScreen (set by each strip function before its loop
    outside the out-of-the-box state, else 0; back to 0 after it) */
 static int gifStripPass;
@@ -652,7 +654,7 @@ static inline int gifHostBeside(int xa, int za, int xb, int zb, volatile int *c)
     if (!za || !zb || !gifHostZIn(c))
         return 0;
     if (gifStripPass && gif_HostExtended())
-        return 1; /* VIS-WINDOW: not a card, drawn clipped wherever it lies */
+        return 1; /* not a card: drawn clipped wherever it lies */
     if (gifHostFrameW <= ICO_FRAME_BASE_W)
         return 0;
     lo = xa < xb ? xa : xb;
@@ -716,7 +718,7 @@ static inline void rotTransPers(volatile int *dst, void *src) /* derived name */
     dst[2] = ps2_ftoi4(v[2] * q);
 }
 
-/* PC port (VIS-WINDOW): gifStripPass for a strip of n vertices, src every
+/* PC port: gifStripPass for a strip of n vertices, src every
    16 bytes (the 3D strips, projected as their loops project them) or
    projected already, every 4 ints (the 2D strips): whether a triangle has
    three vertices passing isInScreen, the strip's own kicks on the PS2.  0
@@ -785,7 +787,7 @@ beside:
        1 2 3: on a wide frame each of the two that lies wholly beside the
        camera's picture is drawn (gifHostBeside), the other kept out by an
        XYZ3; outside the out-of-the-box state (gif_HostExtended) both are
-       drawn when either passes (VIS-WINDOW: the quad is not a card).
+       drawn when either passes (the quad is not a card).
        Nothing out of the box, where the PS2 returned with nothing sent */
     {
         int k2;
@@ -797,7 +799,7 @@ beside:
         rotTransPers(q[1], p1);
         rotTransPers(q[2], p2);
         rotTransPers(q[3], p3);
-        /* VIS-WINDOW: the quad is a card when neither triangle passes */
+        /* the quad is a card when neither triangle passes */
         gifStripPass =
             isInScreen(q[1]) && isInScreen(q[2]) && (isInScreen(q[0]) || isInScreen(q[3]));
         k2 = gifHostBeside(q[0][0], gifHostZIn(q[0]), q[1][0], gifHostZIn(q[1]), q[2]);
@@ -824,7 +826,7 @@ void gif_DrawStripF(void *v, GifColor col, int n, int prim)
     stripZIn[0] = stripZIn[1] = 0; /* PC port */
     setGsReg(0x00, ((long long)prim << 6) | 0x104);
     stripIndex = 0;
-    gifStripPass = gifStripPasses(p, 0, n); /* PC port: VIS-WINDOW */
+    gifStripPass = gifStripPasses(p, 0, n); /* PC port: the card test */
     setGsReg(0x01, GIF_COLOR(&col) | (0xFE00LL << 46));
     for (i = 0; i < n; i++, p += 16) {
         volatile int q[4];
@@ -850,7 +852,7 @@ void gif_DrawStripFST(void *v, void *uv, GifColor col, int n, int prim)
     stripZIn[0] = stripZIn[1] = 0; /* PC port */
     setGsReg(0x00, ((long long)prim << 6) | 0x94);
     stripIndex = 0;
-    gifStripPass = gifStripPasses(p, 0, n); /* PC port: VIS-WINDOW */
+    gifStripPass = gifStripPasses(p, 0, n); /* PC port: the card test */
     setGsReg(0x01, GIF_COLOR(&col) | (0xFE00LL << 46));
     for (i = 0; i < n; i++, p += 16, s += 4) {
         volatile int q[4];
@@ -877,7 +879,7 @@ void gif_DrawStripG(void *v, void *col, int n, int prim)
     stripZIn[0] = stripZIn[1] = 0; /* PC port */
     setGsReg(0x00, ((long long)prim << 6) | 0x10C);
     stripIndex = 0;
-    gifStripPass = gifStripPasses(p, 0, n); /* PC port: VIS-WINDOW */
+    gifStripPass = gifStripPasses(p, 0, n); /* PC port: the card test */
     for (i = 0; i < n; i++, c += 4, p += 16) {
         volatile int q[4];
         int t;
@@ -901,7 +903,7 @@ void gif_Draw2DStripG(int *v, GifColor *col, int n, int prim)
     stripZIn[0] = stripZIn[1] = 0; /* PC port */
     setGsReg(0x00, ((long long)prim << 6) | 0x10C);
     stripIndex = 0;
-    gifStripPass = gifStripPasses(0, v, n); /* PC port: VIS-WINDOW */
+    gifStripPass = gifStripPasses(0, v, n); /* PC port: the card test */
     for (i = 0; i < n; i++, col++, v += 4) {
         int c;
 
@@ -923,7 +925,7 @@ void gif_Draw2DUVStripG(int *v, int *uv, unsigned char *col, int n, int prim)
     stripZIn[0] = stripZIn[1] = 0; /* PC port */
     setGsReg(0x00, ((long long)prim << 6) | 0x11C);
     stripIndex = 0;
-    gifStripPass = gifStripPasses(0, v, n); /* PC port: VIS-WINDOW */
+    gifStripPass = gifStripPasses(0, v, n); /* PC port: the card test */
     for (i = 0; i < n; i++, col += 4, v += 4, uv += 4) {
         int c;
 
@@ -1137,7 +1139,8 @@ int _IsInScreen(volatile int *v)
 #ifdef ICO_RD
 
 /* ===================================================================== *
- * PC port (renderer wave 2, R2a): the GS register decoder.
+ * PC port: the GS register decoder (docs/port/GS.md, "The register
+ * decoder").
  *
  * Every A+D write the 2D layer makes, through the gif_* helpers above, raw
  * gif_SetGsReg calls, or the setGsReg macros Texture.c, GsBase.c and others
@@ -1146,7 +1149,7 @@ int _IsInScreen(volatile int *v)
  * selected:
  *
  *   PRIM            ABE, TME (texture on/off), IIP; resets the vertex queue;
- *                   AA1 on a line or triangle type (rd_aa1, package AA1),
+ *                   AA1 on a line or triangle type (rd_aa1),
  *                   returned to 0 when the packet ends
  *   RGBAQ ST UV     the current vertex attributes
  *   XYZ2 XYZF2      a vertex with a drawing kick; XYZ3 XYZF3 without one
@@ -1166,7 +1169,7 @@ int _IsInScreen(volatile int *v)
  *                   16-31) of the next vertex, for a native-frame vertex
  *                   outside 0..0xFFFF; the vertex is then the signed 32-bit
  *                   (hi << 16) | lo.  Without it a vertex is the unsigned
- *                   16 bits, as before.  The game side never emits it at 4:3.
+ *                   16 bits.  The game side never emits it at 4:3.
  *
  * Field widths: on a frame wider than 4:3 (gifHostFrameW > 512, the width
  * GsBase.c's frame latch hands over with gif_HostSetFrameWidth; a test that
@@ -1182,8 +1185,9 @@ int _IsInScreen(volatile int *v)
  *
  * Anything else is counted per register and logged once
  * (gif_HostUndecodedCount): the image transfers (BITBLTBUF, TRXPOS,
- * TRXREG, TRXDIR) belong to the texture package, MIPTBP and TEX2 to the
- * texture cache, FOG/FOGCOL to the fog package.
+ * TRXREG, TRXDIR), MIPTBP, TEX2, FOG and FOGCOL.  The effects that need
+ * them record on rd directly (docs/port/GS.md, "Effects recorded on rd
+ * directly").
  *
  * Consecutive primitives of one kind, space and UV mode are batched into one
  * rd_screen_prims call; any state change ends the batch first, so rd sees the
@@ -1219,7 +1223,7 @@ typedef struct GsShim { /* port */
     int qn;
     /* what this packet has emitted to rd (emValid 0: nothing known) */
     int emValid, emTme, emAbe, emIip;
-    /* package AA1: rd's AA1 bit as this packet left it.  0 outside packets
+    /* rd's AA1 bit as this packet left it.  0 outside packets
        (gsAa1Off at every end), so a list recorded in any order replays with
        AA1 off wherever its own packet did not set it */
     int emAa1;
@@ -1228,7 +1232,7 @@ typedef struct GsShim { /* port */
     RdScreenVtx batch[GS_BATCH_MAX];
     unsigned int nb;
     int bType, bSpace, bFixed;
-    /* renderer R7d: the RdKey the batch's primitives carry
+    /* the RdKey the batch's primitives carry
        (gif_HostDrawKey) */
     RdKey key;
     /* PC port: whether the vertices decoded now were projected on the CPU
@@ -1255,7 +1259,7 @@ typedef struct GsShim { /* port */
 
     int phCount;
 
-    /* wave 3 (R3ab): render-to-texture targets.  A FRAME.FBP that names no
+    /* render-to-texture targets.  A FRAME.FBP that names no
        fixed buffer (puddle, pool and queen barrier blocks from
        tex_AllocVramAuto) draws into an rd_temp_target of the size XYOFFSET
        gives, with its own depth, for the rest of the frame; a TEX0 whose
@@ -1389,7 +1393,7 @@ static void gsFlushBatch(void)
 
 /* ------------------------------------------------------- targets, scissor */
 
-/* wave 3 (R3ab): the temporary target standing in for a VRAM block that is
+/* the temporary target standing in for a VRAM block that is
    no fixed buffer, one per FBP and size and frame. */
 static RdTarget gsAliasTarget(unsigned int fbp, unsigned int w, unsigned int h)
 {
@@ -1478,7 +1482,7 @@ static void gsSyncEnv(void)
             h = w;
         }
         if (!gsIsNamedFbp(fbp)) {
-            /* wave 3 (R3ab): a render-to-texture block */
+            /* a render-to-texture block */
             RdTarget t = gsAliasTarget(fbp, w, h);
 
             rd_set_target(t, t, w, h, 0);
@@ -1495,7 +1499,7 @@ static void gsSyncEnv(void)
     }
     if (gs.scissorDirty) {
         /* 16-bit fields on a wide frame: the GS's 11 cannot hold a native
-           width past 2048; the GS's own 11 at 4:3, byte for byte as before */
+           width past 2048; the GS's own 11 at 4:3, byte for byte */
         const unsigned long long m = gifHostFrameW > ICO_FRAME_BASE_W ? 0xFFFF : 0x7FF;
         int x0 = (int)(gs.scissorL[gsList()] & m), x1 = (int)((gs.scissorL[gsList()] >> 16) & m);
         int y0 = (int)((gs.scissorL[gsList()] >> 32) & m),
@@ -1550,7 +1554,7 @@ RdTex gif_HostPlaceholder(unsigned int tbp)
     return gs.ph[slot].tex;
 }
 
-/* TEX0 to an rd texture: the resolver (R2b), then the named targets the
+/* TEX0 to an rd texture: the resolver (Texture.c), then the named targets the
    post passes read, then the placeholder. */
 static RdTex gsResolveTex0(unsigned long long tex0)
 {
@@ -1592,7 +1596,7 @@ static RdTex gsResolveTex0(unsigned long long tex0)
     default: {
         int i;
 
-        /* wave 3 (R3ab): a render-to-texture block drawn this frame */
+        /* a render-to-texture block drawn this frame */
         for (i = 0; i < gs.aliasCount; i++) {
             if (gs.alias[i].fbp * 32 == tbp) {
                 return rd_target_texture(gs.alias[i].t, RD_VIEW_RGBA);
@@ -1619,7 +1623,7 @@ static void gsBindTexture(void)
 
 /* --------------------------------------------------------------- PRIM */
 
-/* package AA1: rd's AA1 bit back to 0 (the batch already flushed) */
+/* rd's AA1 bit back to 0 (the batch already flushed) */
 static void gsAa1Off(void)
 {
     if (gs.emAa1) {
@@ -1633,7 +1637,7 @@ static void gsApplyPrim(void)
     int tme = (int)((gs.primL[gsList()] >> 4) & 1);
     int abe = (int)((gs.primL[gsList()] >> 6) & 1);
     int iip = (int)((gs.primL[gsList()] >> 3) & 1);
-    /* package AA1: PRIM.AA1 (bit 7) acts on lines and triangles (types 1 to
+    /* PRIM.AA1 (bit 7) acts on lines and triangles (types 1 to
        5); points and sprites (the particles' 0xD6) draw as without it, so
        rd is told only where it matters */
     int type = (int)(gs.primL[gsList()] & 7);
@@ -1689,9 +1693,8 @@ static int gsSpace(void)
         return RD_SPACE_WORLD;
     default:
         /* raw writes and the raw-coordinate helpers: UI in list 12, WORLD
-           elsewhere.  PC port (renderer wave 7, R7c): list 11 was UI too
-           until R7c, but what draws raw there is world-projected
-           (waterDot.c's drops, the insect net, the debug lines and
+           elsewhere.  List 11 is WORLD: what draws raw there is
+           world-projected (waterDot.c's drops, the insect net, the debug lines and
            volumes); list 12's raw writers are 2D (debug.c's font and bars,
            icoMisc.c's memory bar).  The layout, subtitles, staff roll and
            font come through the UI helpers above and gif_HostScreenPrims.
@@ -1821,7 +1824,7 @@ static void gsVertex(unsigned long long data, int fog, int kick)
 
 static const unsigned char gsAlphaRegs[RD_BLEND_COUNT] = {
     0x68, 0x62, 0x64, 0x29, 0x44, 0x48, 0x42, 0x44, 0x58, 0x52, 0x54, 0x49,
-}; /* mode 3: 0x29 (alphaTable {1, 2, 2, 0}), R5c; R2a had 0x61 */
+}; /* mode 3: 0x29 (alphaTable {1, 2, 2, 0}) */
 
 static void gsAlpha(unsigned long long data)
 {
@@ -2105,7 +2108,7 @@ void gif_HostForgetTextures(void)
     memset(gs.ph, 0, sizeof(gs.ph));
 }
 
-/* wave 3 (R3ab): A+D writes that reach the GS through the VU (SET_GSREGISTER,
+/* A+D writes that reach the GS through the VU (SET_GSREGISTER,
    the PRIM of a mesh batch's GIF tag), decoded in order with what the open
    packet holds; whatever the decoder still batches goes to rd first. */
 void gif_HostWriteRegs(const unsigned long long *ad, unsigned int n)
@@ -2123,7 +2126,7 @@ void gif_HostWriteRegs(const unsigned long long *ad, unsigned int n)
 
 void gif_HostFrameReset(void)
 {
-    gs.aliasCount = 0; /* wave 3: the temporary targets die with the frame */
+    gs.aliasCount = 0; /* the temporary targets die with the frame */
     gs.nb = 0;
     gs.qn = 0;
     gs.emValid = 0;

@@ -19,11 +19,11 @@
 #ifdef ICO_RD
 
 #include "GifHost.h"
-#include "MicroCode.h" /* R3ab: mc_HostDma */
+#include "MicroCode.h" /* mc_HostDma */
 #include "rd_tex.h"
-#include "texpack.h" /* v0.4.0: PCSX2 texture packs */
+#include "texpack.h" /* PCSX2 texture packs */
 
-/* port/game/appearance.h (v0.4.2): the characters' colours, a recolour of
+/* port/game/appearance.h: the characters' colours, a recolour of
    a copy of the CLUT before the decode; the serial moves when a colour
    may have changed */
 extern int ico_appearance_recolour(const char *texName, const void *clut, unsigned int colors,
@@ -267,7 +267,7 @@ static int tex_loadImage(ICO_WORD addr, TexData *tex, int idx, short dbp, short 
         __assert("src/Texture.c", 650, "0");
     }
 #ifdef ICO_RD
-    /* PC port (R2b): no image transfer.  The texture cache decodes the
+    /* PC port: no image transfer.  The texture cache decodes the
        record's images once, here at the first upload (a hit afterwards),
        and tex_setTexReg's TEX0 binds the cached texture through the
        resolver; the size is returned as on the PS2. */
@@ -307,7 +307,7 @@ static inline int getTWTH(int size) /* derived name */
 
 #ifdef ICO_RD
 /* ===================================================================== *
- * PC port (renderer wave 2, R2b): the textures on rd.
+ * PC port: the textures on rd (docs/port/GS.md, "Textures").
  *
  * The VRAM bump allocator keeps running as bookkeeping (tex_AllocVramAuto,
  * the TBPs tex_setTexReg writes, tex_GetVramFreeAddress), but no texel
@@ -347,11 +347,11 @@ static struct { /* port */
     int unknownN;
     int failOnce;
     unsigned char clutSnap[1024];
-    int packOn; /* v0.4.0: the pack or the dump in force last frame (-1 before the first) */
-    unsigned int appearanceSerial; /* v0.4.2: ico_appearance_serial() last frame */
+    int packOn; /* the pack or the dump in force last frame (-1 before the first) */
+    unsigned int appearanceSerial; /* ico_appearance_serial() last frame */
 } texHost = {.packOn = -1};
 
-/* v0.4.0 (T3): texture packs.  The texture just decoded for (id, gen) as
+/* PC port: texture packs.  The texture just decoded for (id, gen) as
    texpack_name.h's source (every level of the TIM2, the CLUT in CSM1
    order), so the pack's replacement under the first of its candidate
    names is queued for the loader (texpack_pump installs it), and with
@@ -507,7 +507,7 @@ static RdTex texHostTexture(int id)
     smp.wrapS = RD_WRAP_REPEAT;
     smp.wrapT = RD_WRAP_REPEAT;
     smp.tex1Lod = tex1Lod;
-    /* v0.4.2: the characters' colours decode from a recoloured copy of the
+    /* the characters' colours decode from a recoloured copy of the
        CLUT (appearance.h); rdtex_store decodes before it returns
        (rd_tex.c rdtex_store -> rdtex_decode), so the copy on the stack
        is enough.  t->clut.addr is never written (texHostClutCheck and the
@@ -690,7 +690,7 @@ static void tex_setTexReg(Tim2Picture *pic, TexData *t, int levels, int lv, int 
     }
     gif_StartPacketPri(dl_GetPri());
 #ifdef ICO_RD
-    /* R2b: the record's TEX1 and TEST, which the PS2 chains just before
+    /* the record's TEX1 and TEST, which the PS2 chains just before
        this packet by reference (tex_transRegister) */
     setGsReg(t->pkt.tex1.addr, t->pkt.tex1.data);
     setGsReg(t->pkt.test.addr, t->pkt.test.data);
@@ -815,7 +815,7 @@ static int tex_transVramDirectTex(Tim2Picture *pic, TexData *t, int levels, int 
 static void tex_transRegister(TexData *t)
 {
 #ifdef ICO_RD
-    /* R2b: written into tex_setTexReg's packet, which follows */
+    /* written into tex_setTexReg's packet, which follows */
     (void)t;
 #else
     dl_OpenDma(2, &t->pkt, 5);
@@ -1423,7 +1423,7 @@ static int tex_initTextureSub(char *name, void *pkt)
     texTable[texCount].rec.ext.partition = malloc_GetPartition();
     texCount++;
 #ifdef ICO_RD
-    /* R2b: a new content generation for the slot, decoded now */
+    /* a new content generation for the slot, decoded now */
     texHost.serial[no] = ++texHost.nextSerial;
     texHostTexture(no);
 #endif
@@ -1492,7 +1492,7 @@ int tex_TransTexture(int id, int ret)
     dl_OpenDma(2, &t->uv, 3);
     dl_CloseDma();
 #ifdef ICO_RD
-    /* R3ab: SET_UVOFFSET reaches the list's VU state (rd_mesh.h) */
+    /* SET_UVOFFSET reaches the list's VU state (rd_mesh.h) */
     mc_HostDma(2, &t->uv, 3);
 #endif
     return ret;
@@ -1687,7 +1687,7 @@ static void tex_textureAnimation(void)
 
             e->frame++;
 #ifdef ICO_RD
-            /* package S: the sine axes marked in the SET_UVOFFSET quadword's z
+            /* PC port: the sine axes marked in the SET_UVOFFSET quadword's z
              * (U) and w (V), which the microprograms do not move (rd_mesh.h
              * RD_VU_SCROLL_SINE_U): the interpolation must not unwrap them */
             uv->zw = (e->file.ampU != 0.0f ? 1LL : 0LL) | (e->file.ampV != 0.0f ? 1LL << 32 : 0LL);
@@ -1744,7 +1744,7 @@ int tex_FreeTexture(int id)
     }
     texTable[id].rec.ext.used = 0;
 #ifdef ICO_RD
-    /* R2b: the cache entry goes (its rd texture after the frames that may
+    /* the cache entry goes (its rd texture after the frames that may
        still draw it) */
     rdtex_drop((unsigned int)id);
     texHost.serial[id] = 0;
@@ -1820,7 +1820,7 @@ void tex_ResetVram(void)
     }
 #ifdef ICO_RD
     else if (ico_photo_active()) {
-        /* PC port: photo mode keeps the film grain moving (issue 75) */
+        /* PC port: photo mode keeps the film grain moving */
         texAnimOnly = tex_GetTextureNo("sandstorm_spr");
         if (texAnimOnly >= 0) {
             tex_textureAnimation();
@@ -1829,10 +1829,10 @@ void tex_ResetVram(void)
     }
 #endif
 #ifdef ICO_RD
-    /* R2b: once per frame; destroys the rd textures retired two frames
+    /* once per frame; destroys the rd textures retired two frames
        ago */
     rdtex_frame_tick();
-    /* v0.4.0: the texture pack's finished loads go in; the pack (or the
+    /* the texture pack's finished loads go in; the pack (or the
        dump) switched on gives every loaded texture a new generation, so
        each is decoded again and looked up (switched off, rd_set_settings
        has put the originals back) */
@@ -1850,7 +1850,7 @@ void tex_ResetVram(void)
         }
         texHost.packOn = on;
     }
-    /* v0.4.2: a character colour changed (appearance.h): each loaded
+    /* a character colour changed (appearance.h): each loaded
        texture it covers gets a new generation and is decoded again now,
        as a load does; the same shape re-expands in place.  Runs while
        paused too, so the menu's scene follows within a frame */
@@ -2493,7 +2493,7 @@ void tex_Init(void)
     int i;
 
 #ifdef ICO_RD
-    /* R2b: GifPacket.c's decoder binds TEX0 through the cache */
+    /* GifPacket.c's decoder binds TEX0 through the cache */
     gif_HostSetTex0Resolver(texHostResolve);
 #endif
     tex_ResetVram();

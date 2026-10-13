@@ -717,8 +717,8 @@ inline void stage_SetLoopFlag(int key, int loop)
         /* one int pointer reads the record and then the count; with a record
            pointer and a direct count read the key test becomes a
            branch-likely (measured) */
-        /* the row's no and loop by name (StageAnimDef's layout is the ELF
-           table's only once package 5 freezes it) */
+        /* the row's no and loop by name (StageAnimDef is a host record the
+           table loader fills from the ELF table, port/data/tables.c) */
         if (key == e->entry1->no) {
             e->entry1->loop = loop;
             count = *(volatile int *)&stageAnimCount;

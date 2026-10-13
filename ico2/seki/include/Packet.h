@@ -109,7 +109,7 @@ int pac_HostStripOrder(const char *model, const short *index, int stride, int nu
 
 #ifdef ICO_RD
 
-/* PC port (renderer wave 3, R3ab): the id of the rd mesh (RdMesh.id,
+/* PC port: the id of the rd mesh (RdMesh.id,
    rd_mesh.h) of a packet pac_makePacket built (its vertex batches), made at
    load and again whenever rd evicted it; 0 for a packet without batches.
    The id is kept in the header's pad word.  pac_HostRefresh re-reads the
@@ -117,7 +117,7 @@ int pac_HostStripOrder(const char *model, const short *index, int stride, int nu
 unsigned int pac_HostMesh(PacHeader *pk);
 void pac_HostRefresh(PacHeader *pk);
 
-/* v0.4.1 (M4): model packs (port/render/modelpack.h).  The part a packet
+/* PC port: model packs (port/render/modelpack.h).  The part a packet
    belongs to, as the draw (RegistPacket.c regHostMesh) or the morph path
    (reg_setShape) knows it: the model's name (PObjModel.name), the part's
    index, the packet's place in the part's chain (-1: unknown), the

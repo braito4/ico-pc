@@ -28,7 +28,7 @@
 #include "modelpack.h"
 
 /* ===================================================================== *
- * PC port (renderer wave 3, R3ab).
+ * PC port (docs/port/GS.md, "The VU1 side of the chains").
  *
  * Every DMA this file chains for VU1 (matrix, light, material, texture,
  * dissolve, specular and reflection packets, the point and line packets)
@@ -49,15 +49,15 @@ static inline void regHostDma(int id, void *addr, int qwc)
 
 #define dl_OpenDma(id, addr, qwc) regHostDma((id), (void *)(addr), (qwc))
 
-/* R7d: a mesh draw's RdKey is
+/* PC port: a mesh draw's RdKey is
  * the object, the part and the packet's place in the part's chain with the
  * pass (0 the material, 1 the specular, 2 the reflection pass), so the same
  * draw has the same key in every frame.  The packet pointer alone is not:
  * a morphing part draws grp->packets and grp->morph in alternate frames
  * (buffer_ID), and objects that share a model share its packets.  The
  * functions that walk a part's chain name it (regKeyPart) before the walk;
- * a packet in neither of that group's chains keeps R7b's key (packet, list,
- * MSCAL code). */
+ * a packet in neither of that group's chains keeps the default key (packet,
+ * list, MSCAL code). */
 static Sub15C *regKeyObj;
 
 static PObjGroup *regKeyGrp;
@@ -109,7 +109,7 @@ static int regKeyOrdinal(PacHeader *pk)
     return -1;
 }
 
-/* v0.4.1 (M4): the part a packet drawn now belongs to (Packet.h
+/* PC port: the part a packet drawn now belongs to (Packet.h
    PacHostIdent), from the walk's names; a packet outside the named part's
    chains (n < 0) has no name, bone count or object */
 static void regHostIdent(PacHostIdent *id, int n)
@@ -174,7 +174,7 @@ static void regHostMesh(PacHeader *pk, int pass)
     if (m.id == 0) {
         return;
     }
-    /* v0.4.1 (M4): the model pack's dump, at every draw (meshes are made
+    /* the model pack's dump, at every draw (meshes are made
        lazily, and the one-shot dump wants each part of its object drawn) */
     if (!id.morph && modelpack_dump_wanted(rd_vu_mesh_hash(m), id.obj)) {
         id.skel = regHostSkeleton();
@@ -199,10 +199,10 @@ static void regHostMesh(PacHeader *pk, int pass)
     }
 }
 
-/* PC port (v0.6.1, VIS-RULES): a box cull's drop, named for F12's log
-   line (rd.h rd_note_cull_drop): rule 2 the object's box (part -1), rule 3
-   a part's box, with the cameras the cull tested (item 5 when more than
-   one) and, with one, why */
+/* PC port: a box cull's drop, named for F12's log line (rd.h
+   rd_note_cull_drop): rule 2 the object's box (part -1), rule 3 a part's
+   box, with the cameras the cull tested (the line's "rule N/5" when more
+   than one: the cull against the blended cameras) and, with one, why */
 static void regHostCullDrop(Sub15C *o, int part, int rule)
 {
     rd_note_cull_drop(o->model != 0 ? o->model->name : 0, part, rule, gsb_HostCullViewsUsed(),
@@ -362,8 +362,8 @@ static void reg_setShape(Sub15C *o, int idx, int flag, PacHeader *pkt, PObjMater
         }
     }
 #ifdef ICO_RD
-    /* R3ab: the vertices were rewritten in the packets: the meshes follow
-       (v0.4.1, M4: named, for a model pack's replacement that cannot) */
+    /* the vertices were rewritten in the packets: the meshes follow
+       (named, for a model pack's replacement that cannot) */
     for (n = 0, pk = pkt; pk != 0; pk = pk->next, n++) {
         PacHostIdent id;
 
@@ -419,7 +419,7 @@ static void reg_dispBoxLine(PacHeader *pk)
     gif_EndPacket();
 }
 
-/* PC port (v0.6.1, VIS-RULES item 4): a packet of a part that passed its
+/* PC port: a packet of a part that passed its
    cull is never dropped on its own box.  The PS2 dropped a packet whose
    box (Packet.c pac_makeBoundingBox, its strips' vertices) gsb_ClipBox
    culled; the box decides nothing the part's did not already, except
@@ -598,9 +598,9 @@ static char *reg_setNMatrixPacket(Sub15C *o, int idx)
     gsb_HostCullCameraLocked(0);
     box = o->model->box[0];
     _SetCurrentMatrix(matrixptr + 0x300);
-    /* VIS-RULES item 2 (v0.6.1): the object's box, the vertex extent of
+    /* PC port: the object's box, the vertex extent of
        every part (PObj.c MakeBoundingBox), a drop only past the margin
-       (GsBase.c gsbHostDropFlags); item 7: a dropped caster's light matrix
+       (GsBase.c gsbHostDropFlags); a dropped caster's light matrix
        is still made and reg_dispNObj still registers its shadow volume
        alone (the PS2's own rule; Shadow.c clips the volume) */
     if (gsb_ClipBox(box) == 0) {
@@ -786,10 +786,10 @@ static char *reg_setMMatrixPacket(Sub15C *o, int idx)
     gsb_HostCullCameraLocked((w->flags.ll & 2) != 0);
     box = o->model->box[0];
     _SetCurrentMatrix(matrixptr + 0x300);
-    /* VIS-RULES items 2 and 6 (v0.6.1): the object's box at the node's
+    /* PC port: the object's box at the node's
        matrix (it holds every part's vertices, so the node's own), a drop
        only past the margin; a node locked to the camera is tested with the
-       tick's camera alone (it moves with it); item 7: a dropped caster's
+       tick's camera alone (it moves with it); a dropped caster's
        light matrix is still made and its shadow still registered by the
        caller (reg_dispMObj) */
     if (gsb_ClipBox(box) == 0) {
@@ -1154,14 +1154,14 @@ static void reg_dispNObj(Sub15C *o)
         for (j = 0; j < mdl->partCount; j++, grp++) {
             box = (float *)(j * 128 + (ICO_WORD)o->model->boxes);
             _SetCurrentMatrix(matrixptr + 0x300);
-            /* VIS-RULES item 3 (v0.6.1): the part's box, its vertex extent
+            /* PC port: the part's box, its vertex extent
                (PObj.c MakeBoundingBox), a drop only past the margin */
             if (gsb_ClipBox(box) == 0) {
                 REG_CULL_DROP(o, j, 3);
             } else {
                 pkt = grp->packets;
 #ifdef ICO_RD
-                regKeyPart(o, grp, j); /* R7d: the draws' keys */
+                regKeyPart(o, grp, j); /* the draws' keys */
 #endif
                 while (pkt != 0) {
                     r = reg_clipPacketBoundingBox(pkt);
@@ -1273,7 +1273,7 @@ static void reg_dispMObj(Sub15C *o)
                 pkt = grp->packets;
             }
 #ifdef ICO_RD
-            regKeyPartM(o, grp, i); /* R7d: the draws' keys */
+            regKeyPartM(o, grp, i); /* the draws' keys */
 #endif
             while (pkt != 0) {
                 r = reg_clipPacketBoundingBox(pkt);
@@ -1364,7 +1364,7 @@ static void reg_dispSObj(Sub15C *o, int idx)
             }
         }
 #ifdef ICO_RD
-        regKeyPartM(o, grp, idx); /* R7d: the draws' keys */
+        regKeyPartM(o, grp, idx); /* the draws' keys */
 #endif
         while (pkt != 0) {
             r = reg_clipPacketBoundingBox(pkt);
@@ -1443,7 +1443,7 @@ static void reg_dispCObj(Sub15C *o)
             pkt = grp->packets;
         }
 #ifdef ICO_RD
-        regKeyPart(o, grp, i); /* R7d: the draws' keys */
+        regKeyPart(o, grp, i); /* the draws' keys */
 #endif
         while (pkt != 0) {
             pri = regMaterialDLPri(grp, pkt->mat, tex_GetTexExtData(pkt->tex), 0.0f);
@@ -1895,10 +1895,10 @@ static char *reg_setNMatrixPacketNoLightCalc(Sub15C *o, Sub15C *src, int idx)
     gsb_HostCullCameraLocked(0);
     box = o->model->box[0];
     _SetCurrentMatrix(matrixptr + 0x300);
-    /* VIS-RULES item 2 (v0.6.1): as reg_setNMatrixPacket's */
+    /* PC port: the object's box, as reg_setNMatrixPacket's */
     if (gsb_ClipBox(box) == 0) {
         REG_CULL_DROP(o, -1, 2);
-        /* PC port (VIS-RULES item 7): the accessory's shadow is still
+        /* PC port: the accessory's shadow is still
            drawn (reg_DispAccessoryWithShadow), from the light its owner
            lends it, as the drawn path below copies it */
         if (mode != 0 && mode != 3) {
@@ -1954,7 +1954,7 @@ void reg_DispAccessoryWithShadow(Sub15C *o, Sub15C *src)
     int pri;
     int mode;
 
-    /* PC port (v0.6.1, review B1): no room left in the packet bank, the
+    /* PC port: no room left in the packet bank, the
        object is not registered (DmaPacket.c dpk_HostRoom logs it) */
     if (!dpk_HostRoom()) {
         return;
@@ -1977,14 +1977,14 @@ void reg_DispAccessoryWithShadow(Sub15C *o, Sub15C *src)
         for (j = 0; j < mdl->partCount; j++, grp++) {
             box = (float *)(j * 128 + (ICO_WORD)o->model->boxes);
             _SetCurrentMatrix(matrixptr + 0x300);
-            /* VIS-RULES item 3 (v0.6.1): the part's box, its vertex extent
+            /* PC port: the part's box, its vertex extent
                (PObj.c MakeBoundingBox), a drop only past the margin */
             if (gsb_ClipBox(box) == 0) {
                 REG_CULL_DROP(o, j, 3);
             } else {
                 pkt = grp->packets;
 #ifdef ICO_RD
-                regKeyPart(o, grp, j); /* R7d: the draws' keys */
+                regKeyPart(o, grp, j); /* the draws' keys */
 #endif
                 while (pkt != 0) {
                     r = reg_clipPacketBoundingBox(pkt);
@@ -2034,13 +2034,13 @@ void reg_DispAccessoryWithShadow(Sub15C *o, Sub15C *src)
             shadow_RenderVolume(o);
         }
     } else if (o->shadow != 0) {
-        /* PC port (v0.6.1, VIS-RULES item 7): the PS2 drew an accessory's
+        /* PC port: the PS2 drew an accessory's
            shadow only with the accessory, so the shadow it casts into the
            picture vanished while the accessory itself was outside it (the
            caster just past the picture's edge, its shadow on the floor in
            view).  Every other caster's volume is registered whether or not
            its object is culled (reg_dispNObj, reg_dispMObj, reg_dispSObj,
-           reg_dispCObj); the accessory's now is too, with the light
+           reg_dispCObj); the accessory's is too, here, with the light
            reg_setNMatrixPacketNoLightCalc copied from its owner.
            clipVolumeEdge (Shadow.c) drops the edges wholly off the screen,
            so a shadow out of view draws nothing. */
@@ -2057,7 +2057,7 @@ void reg_RenderReflection(Sub15C *o, int pri)
     int i;
     int r;
 
-    /* PC port (v0.6.1, review B1): no room left in the packet bank, the
+    /* PC port: no room left in the packet bank, the
        object is not registered (DmaPacket.c dpk_HostRoom logs it) */
     if (!dpk_HostRoom()) {
         return;
@@ -2077,7 +2077,7 @@ void reg_RenderReflection(Sub15C *o, int pri)
     for (i = 0; i < mdl->partCount; i++) {
         pkt = grp->packets;
 #ifdef ICO_RD
-        regKeyPart(o, grp, i); /* R7d: the draws' keys */
+        regKeyPart(o, grp, i); /* the draws' keys */
 #endif
         while (pkt != 0) {
             r = reg_clipPacketBoundingBox(pkt);
@@ -2178,7 +2178,7 @@ void reg_DispEnemy(void *sub)
     int i;
     int pri;
 
-    /* PC port (v0.6.1, review B1): no room left in the packet bank, the
+    /* PC port: no room left in the packet bank, the
        object is not registered (DmaPacket.c dpk_HostRoom logs it) */
     if (!dpk_HostRoom()) {
         return;
@@ -2209,7 +2209,7 @@ void reg_DispEnemy(void *sub)
                 pkt = grp->packets;
             }
 #ifdef ICO_RD
-            regKeyPart(o, grp, i); /* R7d: the draws' keys */
+            regKeyPart(o, grp, i); /* the draws' keys */
 #endif
             while (pkt != 0) {
                 pri = regMaterialDLPri(grp, pkt->mat, tex_GetTexExtData(pkt->tex), 0.0f);
@@ -2249,7 +2249,7 @@ void reg_DispMultiPri(Sub15C *o, int pri)
     int mode;
     int prilist;
 
-    /* PC port (v0.6.1, review B1): no room left in the packet bank, the
+    /* PC port: no room left in the packet bank, the
        object is not registered (DmaPacket.c dpk_HostRoom logs it) */
     if (!dpk_HostRoom()) {
         return;
@@ -2266,15 +2266,14 @@ void reg_DispMultiPri(Sub15C *o, int pri)
         }
         pk = reg_setMMatrixPacket(o, i);
         if (pk == 0) {
-            /* PC port (v0.6.1, VIS-RULES item 20): the next node.  The PS2
+            /* PC port: the next node.  The PS2
                returned here, so every node after a culled one went
                undrawn, in view or not (enemyParts.c's priority 10 pass);
                each node has its own cull (reg_setMMatrixPacket), as
                reg_dispMObj walks them.  This changes the 4:3 picture
                (Original included) only by drawing the enemy nodes the PS2
                skipped after a culled one, each through its own cull: a
-               hole filled, nothing the original hid (Gate A: name it in
-               the re-baseline) */
+               hole filled, nothing the original hid */
             continue;
         }
         prilist = 1 << pri;
@@ -2295,7 +2294,7 @@ void reg_DispMultiPri(Sub15C *o, int pri)
             pkt = grp->packets;
         }
 #ifdef ICO_RD
-        regKeyPartM(o, grp, i); /* R7d: the draws' keys */
+        regKeyPartM(o, grp, i); /* the draws' keys */
 #endif
         while (pkt != 0) {
             r = reg_clipPacketBoundingBox(pkt);
@@ -2356,10 +2355,10 @@ void reg_DispMultiPri(Sub15C *o, int pri)
     }
 }
 
-/* PC port (package L1): the title's logo is not drawn while a Settings or
+/* PC port: the title's logo is not drawn while a Settings or
    Extras page opened from the title covers it (port/game/title_logo.c) */
 extern int ico_title_logo_skip(const char *model);
-/* PC port (v0.6.0, W3-UI): the title's darkening plane is a model built to
+/* PC port: the title's darkening plane is a model built to
    cover the 4:3 screen, so it is a full-frame item the game widens itself:
    its local x axis is stretched by the native frame's width over 512 for the
    draw, so it covers the frame at every aspect, and a 4:3 frame (512) leaves
@@ -2378,7 +2377,7 @@ extern int ico_title_logo_skip(const char *model);
    stretch only draws more of it. */
 extern int ico_title_fullframe_model(const char *model);
 
-/* VIS-RULES item 1 (v0.6.1), kept: an object reaches here only while it is
+/* An object reaches here only while it is
    active and its scripts show it (scpDispOff*, model->disp): authored, the
    original's picture at every aspect */
 void reg_DispObj(Sub15C *o)
@@ -2391,7 +2390,7 @@ void reg_DispObj(Sub15C *o)
     int k;
 #endif
 
-    /* PC port (v0.6.1, review B1): no room left in the packet bank, the
+    /* PC port: no room left in the packet bank, the
        object is not registered (DmaPacket.c dpk_HostRoom logs it) */
     if (!dpk_HostRoom()) {
         return;
@@ -2450,7 +2449,7 @@ void reg_DispObj(Sub15C *o)
 
 void reg_DispObj2(Sub15C *o, int idx)
 {
-    /* PC port (v0.6.1, review B1): no room left in the packet bank, the
+    /* PC port: no room left in the packet bank, the
        object is not registered (DmaPacket.c dpk_HostRoom logs it) */
     if (!dpk_HostRoom()) {
         return;

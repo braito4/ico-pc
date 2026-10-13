@@ -2,8 +2,8 @@
  * ico2/seki/include/Tim2.h
  *
  * The TIM2 file headers Texture.c reads off the disc image in memory
- * (moved here from Texture.c for the PC port's layout asserts; renderer
- * wave 2, package R2b).  Both are disc records: frozen on every host
+ * (here, not in Texture.c, for the PC port's layout asserts).  Both are
+ * disc records: frozen on every host
  * (config/struct_classes.txt, class overlay).  The 64-bit register fields
  * sit on 8-byte boundaries in the file; the host spells the 8-byte
  * alignment out, since a 4-byte-aligned ABI would give a long long member only 4.

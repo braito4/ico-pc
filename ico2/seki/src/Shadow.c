@@ -18,7 +18,8 @@
 #include "rd.h"
 
 /* ===================================================================== *
- * PC port (renderer wave 4, R4b).
+ * PC port (docs/port/GS.md, "Effects recorded on rd directly";
+ * docs/port/RENDER.md, "Shadows").
  *
  * The packets below are still built (the DMA bookkeeping and the heap use
  * stay as they are), but nothing on the host reads them: shadow_Reset's is
@@ -48,7 +49,7 @@
  * PSMCT24 under TEXA 0x80 AEM: the resolve writes that expansion as alpha
  * (rd.h, rd_shadow_resolve).  The GS register decoder (GifPacket.c) never
  * sees these writes: like rd_post's passes, they leave its per-list FRAME,
- * PRIM and TEX0 shadow behind (section 12). */
+ * PRIM and TEX0 shadow behind. */
 
 /* the triangles of one object's strips, recorded at the end of the object
    or when full */
@@ -867,8 +868,7 @@ static inline float clipVolumeEdge(VECTOR *pa, VECTOR *pb, float sgn) /* derived
     /* PC port: the edge clip at +-gsFrame.w about the centre across (FRAME:
        the PS2's +-ScreenWidth, 512, at 4:3), so a shadow at a wide frame's
        sides is not cut (GsBase.c; at most GSB_SHADOW_CLIP_MAX, 2046 pixels,
-       so a clipped end passes volumeVertsOutOfRange below: VIS-RULES item
-       17, v0.6.1) */
+       so a clipped end passes volumeVertsOutOfRange below) */
     fw = gsb_HostShadowClipX();
     rate[0] = rate[1] = 1.0f;
     /* a wholly visible edge returns at once */

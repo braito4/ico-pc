@@ -123,7 +123,7 @@ int font_CheckAlign(SprCol *col, unsigned char *str)
 }
 
 #ifdef ICO_RD
-/* PC port (R2a; the names here are the port's): the glyph sprites of one font_Print, collected and drawn
+/* PC port (the names here are the port's): the glyph sprites of one font_Print, collected and drawn
    with one gif_HostScreenPrims (rd_screen_prims) call.  The corners are the
    XYZ2 words drawOne packs, unpacked the way the GS reads them. */
 #define FONT_MAX_SPRITES 256 /* port */
@@ -235,10 +235,10 @@ void font_Print(unsigned int color, unsigned char *str, float x, float y, int al
     b = ((color >> 8) & 0xFF) * col.f[2] / 255;
     a = ((color & 0xFF) * col.f[3]) >> 7;
 #ifdef ICO_RD
-    /* R2a: the same state on rd: Z write on, TEST 0x30000, ALPHA 0x44,
+    /* the same state on rd: Z write on, TEST 0x30000, ALPHA 0x44,
        TEX1 0x60; the PRIM write (0x156: sprite, TME, ABE, FST) goes through
        the decoder once so it binds the "font" TEX0 tex_TransTexture wrote
-       (the texture seam: a placeholder until Texture.c is on rd) */
+       (the texture seam: Texture.c's resolver) */
     gif_HostFlush();
     rd_z_write(1);
     rd_test_gs(0x30000);
@@ -317,7 +317,7 @@ void font_Print(unsigned int color, unsigned char *str, float x, float y, int al
 
 #ifdef ICO_RD
     if (fontVertCount != 0) {
-        /* R7d: keyed by the string, so a line that moves or fades blends
+        /* keyed by the string, so a line that moves or fades blends
            between two ticks glyph for glyph (a changed string is another
            key and snaps) */
         gif_HostDrawKeyText((const char *)str, 0xDF);

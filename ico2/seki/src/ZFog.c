@@ -8,7 +8,7 @@
 #include "DmaPacket.h"
 #include "DisplayList.h"
 
-/* port/game/video_options.c: the Fog switch (issue 11), 1 = on */
+/* port/game/video_options.c: the Fog switch, 1 = on */
 extern int ico_video_effect_fog(void);
 
 #ifdef ICO_RD
@@ -199,7 +199,7 @@ void fog_MakeFogClut(void)
 #ifdef ICO_RD
 
 /* ===================================================================== *
- * PC port (renderer wave 4, R4c).
+ * PC port (docs/port/GS.md, "Effects recorded on rd directly").
  *
  * fog_DrawFog's two packets (the CLUT upload, then the Z copy, its PSMT4
  * byte copy and the fog sprite) are DIRECT GIF packets the host does not
@@ -212,7 +212,8 @@ void fog_MakeFogClut(void)
  *   BITBLTBUF/TRXPOS/TRXREG/TRXDIR, the CLUT image and the PSMT4 copies
  *                  not recorded: the Z copy and its byte copy are what
  *                  rd_post(RD_POST_FOG) folds into its index (bits 16..23
- *                  of the GS Z, the derivation in section 15), the CLUT is
+ *                  of the GS Z: docs/port/RENDER.md, "The fog path and its
+ *                  self-test"), the CLUT is
  *                  passed to it in index order
  *   TEXFLUSH       nothing to do
  *   FRAME/SCISSOR/XYOFFSET 0x40  rd_set_target(SCENE, SCENE), as GifPacket.c
@@ -227,7 +228,7 @@ void fog_MakeFogClut(void)
  *                  screenOffsetX/Y
  * The GS register decoder (GifPacket.c) never sees these writes; like
  * rd_post's other passes and Shadow.c they leave its per-list PRIM/TEX0/
- * FRAME shadow behind (section 12). */
+ * FRAME shadow behind. */
 
 /* The CLUT in index order: fog_MakeFogClut stores it for CSM1, entries 8..15
    and 16..23 of every 32 traded, and the GS's CSM1 lookup of index n reads
@@ -351,7 +352,7 @@ void fog_DrawFog(void)
 
     if (debug_fullscreen_effect == 0) return;
     if (GlobalStageSetting.fogOn == 0) return;
-    if (!ico_video_effect_fog()) return; /* PC port (issue 11): Options > Effects > Fog off */
+    if (!ico_video_effect_fog()) return; /* PC port: Options > Effects > Fog off */
 
     if (debug_font_flag & 1) debug_Printf(510, ScreenHeight / 2 - 8, 0xCCCCCC00, "Z");
 

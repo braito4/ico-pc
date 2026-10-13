@@ -112,7 +112,7 @@ static float zoomSpeed = 1000.0f; /* derived name */
 
 int currentFocusDistance = 1;
 
-/* PC port (photo mode, issue 14): the projection distance of the last
+/* PC port (photo mode): the projection distance of the last
    full-screen gsb_SetVSMatrix, as a float (currentFocusDistance keeps only
    its integer part, and the reflections' calls in puddle.c and pool.c pass
    their own sizes); gsb_ViewFocus reads it.  Recorded only: nothing of the
@@ -121,7 +121,7 @@ static float gsbViewD = 0.0f;
 
 #ifdef ICO_RD
 
-/* PC port (R2c): the frame lifecycle, camera and VU block on rd; defined
+/* PC port: the frame lifecycle, camera and VU block on rd; defined
    after gsb_PostEffect */
 static void gsbHostResetHalf(void);
 static void gsbHostCommon(void);
@@ -150,9 +150,9 @@ extern int ico_video_interpolate(void);
 /* port/game/video_options.c: the count of the game's hard camera cuts and
    stage changes (ico_video_camera_cut) */
 extern unsigned ico_video_cut_serial(void);
-/* port/game/video_options.c: the Screen softening switch (issue 11), 1 = on */
+/* port/game/video_options.c: the Screen softening switch, 1 = on */
 extern int ico_video_effect_softening(void);
-/* port/game/video_options.c: the Cinematic bars switch (issue 27), 1 = on */
+/* port/game/video_options.c: the Cinematic bars switch, 1 = on */
 extern int ico_video_effect_cinematic_bars(void);
 
 /* Point the double buffer's two display and two draw environments at the
@@ -211,7 +211,7 @@ void gsb_Init(void *db)
     while (sceGsSyncPath(1, 0) != 0) {
         debug_StdPrintfDummy("wait gs init\n");
     }
-    /* PC port (R2a, R2c): the 50/60 Hz switch changes the frame size: the
+    /* PC port: the 50/60 Hz switch changes the frame size: the
        native frame is latched for it (rd's scene-sized targets follow) */
     gsbHostFrameLatch();
     gsb_SetVSMatrix(ScreenWidth, ScreenHeight, 512.0f); /* SCALE: the full screen */
@@ -454,7 +454,7 @@ static void gsb_KeepFrameBuffer(void)
     GsbRect r1 = {8, 8, gsFrame.w * 16, ScreenHeight / 2 * 16};
 
 #ifdef ICO_RD
-    /* PC port (R2c): the same register writes and sprite as
+    /* PC port: the same register writes and sprite as
        rd_post(RD_POST_KEEP), in list 11, in the environment in force */
     (void)r0;
     (void)r1;
@@ -535,7 +535,7 @@ static void gsb_fade(void)
         fadeColor[3] = fadeLevel;
     }
 #ifdef ICO_RD
-    /* PC port (R2c): rd_post(RD_POST_FADE) records the same writes and
+    /* PC port: rd_post(RD_POST_FADE) records the same writes and
        sprite (the scene environment, TEST, ZBUF, PABE, ALPHA 0x44, PRIM
        0x446) in list 11 */
     (void)r;
@@ -627,11 +627,11 @@ static void gsb_scissorOnDemo(void)
             debug_Printf(0x21C, ScreenHeight / 2 - 8, 0xCCCCCC00, "D");
         }
         dl_SetDLPriority(11);
-        /* PC port (issue 27): Options > Effects > Cinematic bars off skips the bars
+        /* PC port: Options > Effects > Cinematic bars off skips the bars
            (and the subtitle dimming that rides on them); the ramp above still runs */
         if (ico_video_effect_cinematic_bars()) {
 #ifdef ICO_RD
-            /* PC port (R2c): rd_post(RD_POST_LETTERBOX): the scene
+            /* PC port: rd_post(RD_POST_LETTERBOX): the scene
            environment, TEST 0x30000, Z write on, PABE 0, ALPHA 0x64 with
            FIX = the level, the two 58-line bars */
             (void)r;
@@ -689,7 +689,7 @@ static void gsb_controlBrightness(void)
             debug_Printf(0x212, ScreenHeight / 2 - 8, 0xCCCCCC00, "B");
         }
 #ifdef ICO_RD
-        /* PC port (R2c): rd_post(RD_POST_BRIGHTNESS): TEST 0x30000, Z
+        /* PC port: rd_post(RD_POST_BRIGHTNESS): TEST 0x30000, Z
            write off, gif_SetAlpha(1, 7, 0), the white sprite with the
            corners the GS receives from gif_MakeSpriteNoTexture */
         dl_SetDLPriority(0xB);
@@ -760,7 +760,7 @@ static void gsb_antiAlias(void)
     const int w1 = ico_frame_x(&gsFrame, 128); /* the second's */
     int lv[2];
 
-    /* PC port (issue 11): Options > Effects > Screen softening off */
+    /* PC port: Options > Effects > Screen softening off */
     if (!ico_video_effect_softening()) {
         return;
     }
@@ -775,7 +775,7 @@ static void gsb_antiAlias(void)
         return;
     }
 #ifdef ICO_RD
-    /* PC port (R2c): rd_post(RD_POST_AA_DOWNSAMPLE) then
+    /* PC port: rd_post(RD_POST_AA_DOWNSAMPLE) then
        rd_post(RD_POST_AA_COMPOSITE) record this function's writes and
        sprites in list 10, in the same order */
     (void)col;
@@ -1035,7 +1035,7 @@ static void gsb_filmNoise(void)
     scale = GlobalStageSetting.grainScale;
     tex_TransTexture(n, 0xA);
 #ifdef ICO_RD
-    /* PC port (R2c): one PRIM write lets the decoder bind the TEX0
+    /* PC port: one PRIM write lets the decoder bind the TEX0
        tex_TransTexture wrote (sandstorm_spr, through the texture resolver),
        as DisplayFont.c does; rd_post(RD_POST_FILM_NOISE) records the rest
        (CLAMP 0, ZBUF, TEST, PABE, ALPHA 0x44, the grain sprite) */
@@ -1140,7 +1140,7 @@ static int gsb_PostEffect(void)
 
 #ifdef ICO_RD
 
-/* PC port (R2c): the flip on rd.  On the PS2 gsb_UpdateGSSystem runs, in
+/* PC port: the flip on rd.  On the PS2 gsb_UpdateGSSystem runs, in
    this order: gsb_Reduction (SCENE, as the frame kicked one flip earlier
    left it, into DISPLAY, with the tint the previous call computed);
    sceGsSwapDBuff (the display environment, then over GIF path 3 the draw
@@ -1216,7 +1216,7 @@ static void gsbHostSetHalfOffset(void)
     gsbHostHalf[buffer_ID & 1] = gsbHostField() == 0;
 }
 
-/* PC port (R2a, R2c): gsb_Reduction's packet (SCENE into the half-height
+/* PC port: gsb_Reduction's packet (SCENE into the half-height
    DISPLAY, tinted, border-cropped) as rd's reduction pass at the end of
    list 12 of the frame dl_Swap is about to close; the tint is the one
    gsb_Reduction computed this call, which on the PS2 is the tint of the
@@ -1436,8 +1436,9 @@ static void gsbHostFrameLatch(void)
         extern int ico_video_original(void);
 
         gif_HostSetFrameWidth(gsFrame.w);
-        /* VIS-WINDOW: the CPU strips' and particles' window rule outside
-           the out-of-the-box state (the Original preset) */
+        /* the CPU strips' window rule outside the out-of-the-box state
+           (GifPacket.c gifHostBeside; the particles' gate is the PS2's in
+           every state, particleEffect.c particleEffectOffScreen) */
         gif_HostSetExtended(!ico_video_original());
     }
 #ifdef ICO_RD
@@ -1649,8 +1650,7 @@ void gsb_SetVSMatrix(int w, int h, float d)
    The gameplay matrices +0x80 and +0xC0 (IsPointIsInScreen and the screen
    tests) never change.  puddle.c and pool.c call gsb_SetVSMatrix for their
    reflection views too, so the reflections' cull is as wide and carries
-   the same margin: it only ever adds objects to a reflection (VIS-RULES
-   item 8, v0.6.1: kept).  A part the
+   the same margin: it only ever adds objects to a reflection.  A part the
    frustum holds whole but that crosses the 4:3 screen's edge is drawn by
    the VU program for parts inside (code 34) instead of the one with the
    per-triangle region test (code 32); its vertices are well inside the
@@ -1669,7 +1669,7 @@ static void gsbHostCullMargin(float *projHalf)
     }
 }
 
-/* PC port (photo mode, issue 14): one saved copy of every piece of the
+/* PC port (photo mode): one saved copy of every piece of the
    frame's camera that the camera update writes and later code reads, so
    photo mode (port/game/photo_view.c) can draw the paused game from its
    own camera and give the game its camera back unchanged.  The matrices
@@ -1756,7 +1756,7 @@ float gsb_ViewFocus(void)
 
 #ifdef ICO_RD
 
-/* PC port (R2c): gsb_MakeCommonMatrix's VU1 parameter block (the 16
+/* PC port: gsb_MakeCommonMatrix's VU1 parameter block (the 16
    quadwords its packet unpacks to VU1 memory 0..15) and the frame's camera,
    from the scratchpad matrices as the packet copied them. */
 static void gsbHostCommon(void)
@@ -1796,7 +1796,8 @@ static void gsbHostCommon(void)
    RD_INTERP_CAMERA_MOVE units apart, rd_camera_blend.h).  A part culled against
    this tick's camera alone is missing from those pictures wherever the
    earlier cameras would show it: at the screen's edges while the camera
-   turns or moves, worse the wider the picture (issue 29).  So while
+   turns or moves, worse the wider the picture (docs/port/GS.md, "The cull
+   against the blended cameras").  So while
    pictures are blended a box is culled only when it is outside three
    cameras: this tick's, the tick before's and the half-way one, built with
    the presenter's own blend (port/render/rd_camera_blend.h, the same
@@ -1957,7 +1958,7 @@ static void gsbHostLoad16(const float *f, double *d)
     }
 }
 
-/* PC port (v0.6.1, VIS-RULES item 5): the span the three cameras are
+/* PC port: the span the three cameras are
    trusted over.  The three cameras and the eye's sweep hold the in-between
    pictures of a step up to the presenter's limits only as far as the
    tests sample them (gsb_cull_test "moving": t 0.25, 0.5, 0.75); past half
@@ -1972,7 +1973,7 @@ static void gsbHostLoad16(const float *f, double *d)
    one tick's registration of the stage's parts, the ones beside the
    picture included; such steps are single ticks of a fast swing (a turn of
    15 degrees in a 30 Hz tick is 450 degrees a second).  The cost is bounded
-   by the packet bank (review B1): once the bank is past half of the EE's
+   by the packet bank: once the bank is past half of the EE's
    size (DmaPacket.c dpk_HostFill), the rest of the tick is culled against
    the three cameras again (gsbHostKeepAll; logged once a stage), so the
    step's registration can never run the bank past what a three-camera tick
@@ -2118,7 +2119,7 @@ static int gsbHostClipFlags(const float *r, float cw)
     return f;
 }
 
-/* PC port (v0.6.1, VIS-RULES items 2 and 3): the flags a corner must have
+/* PC port: the flags a corner must have
    for the box to be dropped.  In exact arithmetic the eight-corner test is
    conservative (a plane all eight corners are outside of holds the whole
    convex box outside), but a corner on a plane is a coin toss of the
@@ -2243,7 +2244,7 @@ static int gsbHostPointIn(const double *c, const float *pos)
     return r[3] > 0.0 && fabs(r[0]) <= r[3] && fabs(r[1]) <= r[3];
 }
 
-/* VIS-RULES item 8 (v0.6.1), kept: the window is the frame's plus a
+/* PC port: the window is the frame's plus a
    margin and every earlier camera of the blended pictures */
 int gsb_HostDotVisible(const int *ip, const float *pos)
 {
@@ -2287,7 +2288,7 @@ int gsb_HostDotVisible(const int *ip, const float *pos)
    keeps the rest off the picture).  With the Original framerate it is
    gsFrame.w / 2 exactly (256.0f at 4:3).  The widest frame reaches 2048
    +- 1433.6 with the margin, inside the GS's 0..4095. */
-/* VIS-RULES item 8 (v0.6.1), kept: the frame's half-width with the cull's
+/* PC port: the frame's half-width with the cull's
    margin while pictures blend */
 float gsb_HostLineHalfWidth(void)
 {
@@ -2302,14 +2303,15 @@ float gsb_HostLineHalfWidth(void)
 /* PC port: Shadow.c's edge clip: +-ScreenWidth (512) about the centre on
    the PS2, +-gsFrame.w on the native frame (FRAME; 512 at 4:3), so the
    clip lies a half-width past the picture's side at every width.  At most
-   GSB_SHADOW_CLIP_MAX pixels (v0.6.1, VIS-RULES item 17): a clipped end
+   GSB_SHADOW_CLIP_MAX pixels: a clipped end
    must pass emitVolumeStrip's range test (volumeVertsOutOfRange: x in
    0x11 .. 0xFFEF sixteenths, GS 1.0625 .. 4094.9375), or the strip it
    belongs to is dropped whole, the part of its shadow inside the picture
-   with it.  The old cap, 2047, put a clipped end on GS x 1 or 4095 (16 or
-   65520 sixteenths, both outside that range), so from 48:9 (2048) up every
-   strip with an end clipped at the side vanished: shadows of casters near
-   the side of the picture disappeared before leaving it.  2046 puts a
+   with it.  A cap of 2047 would put a clipped end on GS x 1 or 4095 (16
+   or 65520 sixteenths, both outside that range), so from 48:9 (2048) up
+   every strip with an end clipped at the side would vanish: shadows of
+   casters near the side of the picture would disappear before leaving
+   it.  2046 puts a
    clipped end on GS x 2 or 4094 (32, 65504), inside the range with a pixel
    for the clip's rounding, and still 766 .. 1022 pixels past the picture's
    side (1024 .. 1280 out).  GSB_SHADOW_CLIP_MAX is in GsBase.h. */

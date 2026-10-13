@@ -560,7 +560,7 @@ static void bga_noteLastKey(const char *fn, float f, int linear, const int *next
    SIGNF), and a float converted straight to short and widened to int is
    one conversion to int for clang, so an angle past 180 degrees kept its
    unwrapped value and the sine its wrong sign on arm64 (the opening's
-   trunk shot was seen mirrored, issue 19).  The int is in range; its
+   trunk shot was seen mirrored).  The int is in range; its
    conversion to short wraps as the EE's and gcc's code did. */
 static void bga_GetMotion(float *pos, int *rot, float *col, BgaPtMotion *m)
 {

@@ -118,7 +118,7 @@ inline void mc_TransMicroCode(int id, int mask)
                 dl_OpenDma(5, 0, 0);
                 dl_CloseDma();
 #ifdef ICO_RD
-                /* R3ab: the program resident in this list from here on */
+                /* the program resident in this list from here on */
                 rd_vu_program(id);
 #endif
                 mcResident[i] = id;
@@ -266,7 +266,7 @@ void mc_SetMicroCode(int mode, int light, int pass, int clip, int pri)
     dl_OpenDma(5, PacketBufferStruct.dma.c, 0);
     dl_CloseDma();
 #ifdef ICO_RD
-    /* R3ab: the MSCALF code reaches the list's VU state */
+    /* the MSCALF code reaches the list's VU state */
     mc_HostDma(5, PacketBufferStruct.dma.c, 0);
 #endif
 }
@@ -300,8 +300,8 @@ inline void mc_Reset(void)
 #ifdef ICO_RD
 
 /* ===================================================================== *
- * PC port (renderer wave 3, R3ab): the VU1 side of the DMA chains the seki
- * layer builds for path 1.
+ * PC port: the VU1 side of the DMA chains the seki layer builds for path 1
+ * (docs/port/GS.md, "The VU1 side of the chains").
  *
  * On the PS2 the VIF unpacks these chains into VU1 memory and starts the
  * resident microprogram at an MSCAL/MSCALF code.  The host reads the VIF
@@ -319,10 +319,10 @@ inline void mc_Reset(void)
  *                          (rd_draw_vu_particles); the mesh packets do not come
  *                          here (static meshes: RegistPacket.c; grids:
  *                          Primitive.c)
- *   DIRECT / DIRECTHL      (wave 5, R5c) path 2: the GIF packets of the block
+ *   DIRECT / DIRECTHL      path 2: the GIF packets of the block
  *                          to the decoder (mcHostGif below; lightning.c)
  *
- * Since wave 5 (R5c) SET_GSREGISTER reads any GIF tag (mcHostGif), and the
+ * SET_GSREGISTER reads any GIF tag (mcHostGif), and the
  * raw packet builders outside seki chain theirs here too: darkVolume.c and
  * particleEffect.c (SET_GSREGISTER register packets), lightning.c (DIRECT).
  *
@@ -340,7 +340,7 @@ static float mcHostTop[1024][4];
 
 static unsigned int mcHostOnce;
 
-/* package I1: mc_HostParticleKey's emitter, 0 = none */
+/* mc_HostParticleKey's emitter, 0 = none */
 static const void *mcHostEmitter;
 
 /* the life of that emitter's slot: the key's ordinal byte, so an emitter
@@ -362,7 +362,7 @@ static void mcHostOnceLog(int bit, const char *msg, unsigned int v)
 }
 
 /* ---------------------------------------------------------------------- *
- * Renderer wave 5 (R5c): GIF packets.  The register writes of a GIF packet
+ * GIF packets.  The register writes of a GIF packet
  * (a SET_GSREGISTER kick, a VIF DIRECT/DIRECTHL block on path 2) as the GIF
  * unpacks them, gathered as A+D pairs (data, register) and handed to the GS
  * register decoder (gif_HostWriteRegs) in packet order:
@@ -552,8 +552,8 @@ out:
     return at < qwc ? at : qwc;
 }
 
-/* SET_GSREGISTER (vu1_common.h:20-48): XGKICK of the GIF packet at TOP (R3ab
-   read PACKED A+D tags only; since R5c any GIF tag, mcHostGif). */
+/* SET_GSREGISTER (ico2/vusrc/vu1_common.h, the SET_GSREGISTER routine):
+   XGKICK of the GIF packet at TOP, any GIF tag (mcHostGif). */
 static void mcHostSetGsRegister(void)
 {
     mcHostGif((const unsigned int *)(const void *)mcHostTop, 1024, 1);
@@ -585,7 +585,7 @@ static void mcHostBatch(void)
         pd.qw = (const float (*)[4])mcHostTop;
         pd.count = (uint32_t)(n > 80 ? 80 : n);
         pd.vu = d.vu;
-        /* package I1: keyed by the emitter (prim_DispParticle), so a batch
+        /* keyed by the emitter (prim_DispParticle), so a batch
            another emitter inserts ahead of it does not shift its match */
         rd_draw_vu_particles(&pd, mcHostEmitter ? RD_KEY(mcHostEmitter, 18, mcHostEmitterGen) : 0);
         return;
@@ -649,7 +649,7 @@ static void mcHostVif(const unsigned int *w, unsigned int n)
         case 0x50: /* DIRECT */
         case 0x51: /* DIRECTHL */
         {
-            /* R5c: path 2, the GIF packets of the next imm quadwords
+            /* path 2, the GIF packets of the next imm quadwords
                (lightning.c's strips) */
             unsigned int qn = imm ? imm : 65536;
 

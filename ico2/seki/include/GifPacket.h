@@ -37,13 +37,13 @@ int _IsInScreen(volatile int *v);
    GsBase.c's frame latch sets it at each flip, in every build */
 void gif_HostSetFrameWidth(int w);
 int gif_HostFrameWidth(void);
-/* PC port (VIS-WINDOW, v0.6.1): whether the picture is not the PS2's out
+/* PC port: whether the picture is not the PS2's out
    of the box (the Original preset on the 4:3 frame at 1x): set by GsBase.c's
    frame latch from the video options, true on any frame wider than 4:3;
    the CPU strips' window rule (GifPacket.c gifHostBeside) reads it */
 void gif_HostSetExtended(int on);
 int gif_HostExtended(void);
-/* PC port (v0.6.0): the GIF_SP_FULL scope.  The 640-grid helpers (gif_Sprite,
+/* PC port: the GIF_SP_FULL scope.  The 640-grid helpers (gif_Sprite,
    gif_SpriteSensitive and their Offset forms, gif_Point, gif_PointOffset,
    gif_Line, gif_LineOffset) map x to the centred 4:3 box: grid x * ScreenWidth
    / 640 (UI).  Between gif_FullFrameBegin and gif_FullFrameEnd they map it to
