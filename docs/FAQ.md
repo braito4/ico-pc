@@ -28,6 +28,22 @@ To go through, open **Options > Gameplay** and turn on **East Reflector door fix
 few seconds after you come through a door holding her hand, that door does
 not take you back. It is off unless you turn it on.
 
+## The game closed and opened again right after starting
+
+**The window disappeared a moment after I started the game, then came back.
+Is something wrong?**
+
+Some graphics drivers crash while the game prepares its shaders. When that
+happens, the game notices and starts itself again, trying a gentler way each
+time: on Windows it switches to Direct3D 12, or it prepares the shaders as
+you play instead of all at once. You need do nothing, and your settings are
+left as they are. If the game still cannot start, a message says the
+graphics driver crashed; updating the driver from the maker's site (NVIDIA,
+AMD or Intel) usually fixes it. On Windows you can also add the line
+`backend=d3d12` to `ico-pc.ini` to always use Direct3D 12. If you report
+it, attach the log: it shows every attempt. See
+[The game closes by itself](TROUBLESHOOTING.md#the-game-closes-by-itself).
+
 ## The screen stays black but I hear the game
 
 **The window or screen stays black, but the music and sounds play. What is

@@ -134,6 +134,16 @@ If the game closes with an error, the log ends with a block whose first
 line has `CRASH:` in it. Send the log. The developers can find where it
 happened from the numbers in that block.
 
+**The game closes or restarts itself right after it starts.** Some graphics
+drivers crash while the game prepares its shaders. When that happens the
+game notices and starts itself again, once or twice, each time trying a
+gentler way: on Windows it may switch to Direct3D 12, or prepare the shaders
+as you play instead of all at once. You need do nothing, and your settings
+are left as they are. If it still cannot start, a message says the graphics
+driver crashed. Updating the graphics driver usually fixes this. On Windows
+you can also add the line `backend=d3d12` to `ico-pc.ini` to always use
+Direct3D 12. If you report it, attach the log: it shows every attempt.
+
 If the game stops responding, it closes itself after a while: 30 seconds
 while it is starting, 60 seconds once it is running. The log then has a
 block whose first line has `WATCHDOG:` in it, and it says what the game
