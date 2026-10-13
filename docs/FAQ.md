@@ -14,10 +14,6 @@ anywhere in between and Ico never reaches running speed.
 The game keeps that behaviour unless you change it. To run in any
 direction, open **Options > Gameplay** and turn on **Analogue stick fix**.
 
-(People reported this in
-[issue 5, "Controller Stick Issue"](https://github.com/nathanialf/ico-pc/issues/5)
-and [issue 6, "Ico can't run"](https://github.com/nathanialf/ico-pc/issues/6).)
-
 ## Ico and Yorda come straight back out of a doorway
 
 **When I take Yorda's hand through the door at the top of the ladder in the
@@ -30,11 +26,7 @@ out as soon as you arrive.
 
 To go through, open **Options > Gameplay** and turn on **East Reflector door fix**. For a
 few seconds after you come through a door holding her hand, that door does
-not take you back. It is off unless you turn it on, because the original
-game does not do this.
-
-(People reported this in
-[issue 53](https://github.com/nathanialf/ico-pc/issues/53).)
+not take you back. It is off unless you turn it on.
 
 ## The screen stays black but I hear the game
 
@@ -53,7 +45,9 @@ A texture pack is a set of sharper pictures that fans made to replace the
 game's own. The game comes with a `textures` folder for one.
 
 1. Copy the pack's `SCES-50760` folder into the `textures` folder beside
-   the program. On Windows that is inside the `x64` folder.
+   the program. On Windows that is inside the `x64` folder. On a Mac or an
+   iPhone the download has no such folder: [the full guide](TEXTURE_PACKS.md)
+   shows where to make one.
 2. Start the game.
 3. Open **Options > Display** and check that **Texture pack** says **On**.
 
@@ -66,8 +60,6 @@ Yes. Open **Options > Effects**. There are six switches: Glow, Depth of
 field, Screen softening, Motion blur, Fog and Cinematic bars (the black
 bars of cutscenes). All of them On is the picture
 the PS2 gives. [What each one does](OPTIONS.md#effects).
-
-(Asked for in [issue 11](https://github.com/nathanialf/ico-pc/issues/11).)
 
 ## Why is there a thin black border around the picture?
 
@@ -89,15 +81,14 @@ would get its own dark lines, and the whole screen would look like a fine
 mesh, a bit like looking through a screen door. So the filter keeps the
 original resolution on purpose. Texture packs still show through it.
 
-## Why did the movies show comb lines on moving edges?
+## How are the movies shown without comb lines?
 
 The movies on the disc are stored the way a TV shows them: each frame is
 two half-pictures, one made of the even lines and one of the odd lines,
 taken a moment apart. Shown together, anything that moves between the two
-gets jagged comb lines along its edges. The game now shows the two halves
-one after the other and fills in the missing lines of each, so moving
-edges stay smooth and still parts keep their full detail.
-(Reported in [issue 41](https://github.com/nathanialf/ico-pc/issues/41).)
+gets jagged comb lines along its edges. The game shows the two halves one
+after the other and fills in the missing lines of each, so moving edges
+stay smooth and still parts keep their full detail.
 
 ## How do I start the game from Steam?
 
@@ -140,9 +131,14 @@ save backup tools make. [How to bring it over](PORTABLE_MODE.md#bring-a-ps2-save
 
 ## Which devices does it run on?
 
-Windows and Linux PCs, the Steam Deck, 64-bit ARM Linux handhelds, Android
-phones and tablets, and, contributed and untested by the
-maintainer, iPhones through LiveContainer and Apple-silicon Macs. The
+- Windows and Linux PCs, and the Steam Deck.
+- 64-bit ARM Linux handhelds and boards.
+- Android phones and tablets.
+- Apple-silicon Macs ([how to install](../README.md#mac)).
+- iPhones, through LiveContainer ([how to install](../README.md#iphone)).
+
+The maintainer has no Apple device, so the Mac and iPhone versions are
+not tested here; problem reports are welcome. The
 [supported platforms table](../README.md#supported-platforms) says what to
 download for each and how well it is tested.
 
@@ -150,6 +146,9 @@ download for each and how well it is tested.
 
 On most 64-bit Android phones and tablets from 2022 or newer, with
 Android 10 or later. [The Android guide](ANDROID.md) has the details.
+
+On an iPhone with iOS 15 or newer, it runs inside LiveContainer.
+[How to install it](../README.md#iphone).
 
 ## Can I use ReShade?
 
@@ -177,10 +176,10 @@ there, with all its effects. Press Cross to save a picture.
 
 ## How do I close the game?
 
-Choose **Quit to desktop** on the title screen (**Quit game** on Android).
-While you play, open the pause menu (Start, or Escape on a PC), choose
-**End Game** to reach the title screen, and quit from there. On a PC you
-can also close the window.
+Choose **Quit to desktop** on the title screen (**Quit game** on a phone
+or tablet). While you play, open the pause menu (Start, or Escape on a
+computer), choose **End Game** to reach the title screen, and quit from
+there. On a computer you can also close the window.
 
 ## Something went wrong. What now?
 

@@ -5,14 +5,22 @@
 ## The log file
 
 Every time the game runs, it writes what it is doing into a text file
-named `ico-pc.log`, in a `logs` folder beside the program. On Windows that
-is `x64\logs\ico-pc.log`. On Android it is in the game's folder
-([where that is](ANDROID.md#where-your-files-are)). Each run starts the
-file again and keeps the one from the run before as `ico-pc-previous.log`
-in the same folder, so the log of a run that went wrong is still there
-after you start the game once more.
+named `ico-pc.log`, in a `logs` folder. Where that folder is:
 
-The log records your display settings, every change you make to them, and
+- Windows: beside the program, so the file is `x64\logs\ico-pc.log`.
+- Linux and Steam Deck: beside `ico_pc`.
+- Mac: in the game's folder, usually
+  `~/Library/Application Support/ico-pc/ico-pc/logs`.
+- iPhone: in ICO's Documents folder.
+- Android: in the game's folder
+  ([where that is](ANDROID.md#where-your-files-are)).
+
+Each run starts the file again and keeps the one from the run before as
+`ico-pc-previous.log` in the same folder, so the log of a run that went
+wrong is still there after you start the game once more.
+
+The first lines of the log say which version of the game you have. The
+log also records your display settings, every change you make to them, and
 every 10 seconds how fast the game is running (every second for 30 seconds
 after you press F11). When something goes wrong, it says what.
 
@@ -28,8 +36,11 @@ updating the graphics driver usually fixes it.
 1. Open a report on the
    [issues page](https://github.com/nathanialf/ico-pc/issues).
 2. Say what happened and what you were doing.
-3. Attach `ico-pc.log`.
-4. If you are asked for it, also attach `config.toml` from the folder with
+3. Say which version of the game you have. A downloaded release shows it
+   in the top-right corner of the Options menu, and the log says it at the
+   top.
+4. Attach `ico-pc.log`.
+5. If you are asked for it, also attach `config.toml` from the folder with
    your saves ([where that is](PORTABLE_MODE.md#where-your-saves-are)).
 
 If you are asked for a timing file, close the game, open `config.toml` in a
@@ -41,25 +52,26 @@ perf_log = true
 ```
 
 If the file already has a `[dev]` line, add only the `perf_log = true` line
-under it. The game then also writes `ico-pc-perf.csv` in the same `logs`
-folder as `ico-pc.log`, one line for each picture it draws (about 1 MB a
-minute). Play until the problem shows, close the game, and attach that file
-with the log. Then delete what you added, so the game stops writing the
-file.
+under it. On Windows, Linux and Android the game then also writes
+`ico-pc-perf.csv` in the same `logs` folder as `ico-pc.log`, one line for
+each picture it draws (about 1 MB a minute). Play until the problem
+shows, close the game, and attach that file with the log. Then delete what
+you added, so the game stops writing the file.
 
 ## Save a picture of a problem
 
 If something looks wrong on screen, press **F12** while it is showing. The
-game saves two files in a `dumps` folder in the folder with your saves
-([where that is](PORTABLE_MODE.md#where-your-saves-are)), both named
+game saves three files in a `dumps` folder in the folder with your saves
+([where that is](PORTABLE_MODE.md#where-your-saves-are)), all named
 `frame-` and the date and time:
 
 - a `.zip` file with a file that lets the developers see exactly how that
   moment was drawn, and a copy of the log (`ico-pc.log`);
-- a `.png` picture of that moment.
+- a `.png` picture of the whole frame the game drew at that moment;
+- a picture ending in `-present.png`: that moment as your window showed it.
 
-Attach the `.zip` to your report on the issues page. The picture is optional,
-and can be very large when the Resolution is high.
+Attach the `.zip` to your report on the issues page. The pictures are
+optional, and can be very large when the Resolution is high.
 
 The files contain pictures from your disc, so use them only for a bug
 report, and do not share them anywhere else.
@@ -87,7 +99,12 @@ choose the `.bin` of the data track.
 (about 1 GB is needed), or the disc image is incomplete. Free some space
 and try again.
 
-**"Could not open the game window."** (on a PC) or **"Could not start the
+**"The game's data just written to ... cannot be read back."** The copy of
+the game's files that the first start made is damaged. Delete the file the
+message names and start the game again: it copies the files out of the
+disc image once more.
+
+**"Could not open the game window."** (on a computer) or **"Could not start the
 game's graphics."** (on a phone) Your graphics driver or graphics chip does
 not support Vulkan 1.2, the way the game talks to the graphics. Updating
 the graphics driver usually fixes it. On a phone, install the latest
@@ -113,15 +130,15 @@ image.
 
 ## The game closes by itself
 
-If the game closes with an error, the log ends with a block that starts
-with `CRASH:`. Send the log. The developers can find where it happened
-from the numbers in that block.
+If the game closes with an error, the log ends with a block whose first
+line has `CRASH:` in it. Send the log. The developers can find where it
+happened from the numbers in that block.
 
 If the game stops responding, it closes itself after a while: 30 seconds
 while it is starting, 60 seconds once it is running. The log then has a
-block that starts with `WATCHDOG:` and says what the game was doing. With
-[ReShade](RESHADE.md) the game waits longer, because ReShade can take a
-long time to get ready.
+block whose first line has `WATCHDOG:` in it, and it says what the game
+was doing. With [ReShade](RESHADE.md) loaded, the game gives itself 60
+seconds to start as well, as ReShade takes a while to get ready.
 
 ## Texture packs and model packs
 
@@ -142,9 +159,11 @@ The Linux version needs a fairly new system: SteamOS 3.5, Debian 13,
 Ubuntu 24.04 or newer. Keep `ico_pc` and `libSDL3.so.0` in the same
 folder.
 
-The window that asks for your disc image needs a small program named
-`zenity`, which most desktops have. Without it, put the image beside
-`ico_pc` named `Ico_PAL.iso` (or `Ico_PAL.chd`, `Ico_PAL.bin` or `Ico_PAL.cue`) instead.
+The window that asks for your disc image comes from your desktop: its own
+file chooser, or one of the small programs `zenity` and `kdialog`. Most
+desktops have one of them. If no window shows up, put the image beside
+`ico_pc` named `Ico_PAL.iso` (or `Ico_PAL.chd`, `Ico_PAL.bin` or
+`Ico_PAL.cue`) instead.
 
 ## Steam Deck
 
@@ -161,8 +180,8 @@ The window that asks for your disc image needs a small program named
 4. Play it in Game Mode with the normal controller layout. The Deck's
    buttons work with no setup.
 
-In Game Mode, the game always fills the screen, whatever the Window mode
-row in Options says.
+In Game Mode, the Deck shows the game on the whole screen, whatever the
+Window mode row in Options says.
 
 With Vertical sync off, the picture only tears if the Deck's "Allow
 Tearing" setting is on.
@@ -170,6 +189,5 @@ Tearing" setting is on.
 ## Android
 
 If the fog looks wrong on your phone, for example if it covers the whole
-picture, the log has lines that begin `rd: fog:`. They say which way the
-game took to draw the fog and what it found, so attach the log to your
-report.
+picture, attach the log to your report: the log says which way the game
+drew the fog and what it found.

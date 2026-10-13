@@ -13,6 +13,10 @@ Up and Down move between rows. Left and Right change a value. Cross opens
 a page or confirms. Triangle goes back, and so does Circle (see **Circle
 goes back** under [Controls](#controls)).
 
+In a released download, the version of the game is shown in small grey
+letters in the top-right corner of the Options menu's first page. Say
+which version you have when you report a problem.
+
 Every change happens at once, and the game remembers it the next time you
 play. A few rows only show up in one of the two places. This page says
 which.
@@ -35,17 +39,20 @@ How the picture looks.
   the PS2 picture. **Enhanced** makes the picture as sharp as your
   window, fits it to the window's shape, smooths the textures and shows
   the full-height picture. Once you change one of those four rows yourself,
-  it says **Custom**. Two of those four rows, Full-height picture and Texture filtering, are on the Effects page. The shortcut also sets Full pixel (Effects page): Enhanced turns it on, Original turns it off.
+  it says **Custom**. Two of those four rows, Full-height picture and
+  Texture filtering, are on the Effects page. The shortcut also sets Full
+  pixel (Effects page): Enhanced turns it on, Original turns it off.
 - **Resolution** is how sharp the picture is: 1x is the PS2's, up to 16x,
   or the size of your window. Very high values need a lot of graphics
   memory; when your graphics card cannot hold the picture, the game lowers
   it on its own and the row shows both, for example **16x (8x)**. **Auto**
   starts at the size of your window and steps down (3x, then 2x, then 1x)
   when your computer or phone cannot draw the pictures in time. It never
-  steps back up while the game runs; the row then reads, for example, **Auto (2x)**. On Android,
-  the Enhanced preset uses Auto. It stays at 1x while the CRT filter is on:
-  the filter draws the PS2's own picture dots with dark lines between them,
-  and over a sharper picture it would look like a fine mesh.
+  steps back up while the game runs; the row then reads, for example,
+  **Auto (2x)**. On phones and tablets, the Enhanced preset uses Auto. It
+  stays at 1x while the CRT filter is on: the filter draws the PS2's own
+  picture dots with dark lines between them, and over a sharper picture it
+  would look like a fine mesh.
   [Why](FAQ.md#why-does-the-crt-filter-switch-the-picture-back-to-the-original-resolution).
   The menus' lettering follows it too: from 2x up to 4x it is drawn that
   much finer, so it stays crisp, in the same style.
@@ -63,18 +70,28 @@ How the picture looks.
   picture at a larger size and shrinks it back, which smooths everything
   (including the insides of textures) but needs more from your graphics
   card. MSAA works the same with Full pixel on or off, at any window size.
-  This row only works with the Enhanced preset (it is **Off** under
-  Original). The row shows your saved choice. When the game is not using it,
+  While the Preset is **Original**, this row stays at **Off** and cannot be
+  changed. Pick **Enhanced**, or change one of the Preset's rows, to use
+  it. The row shows your saved choice. When the game is not using it,
   because your graphics card cannot do it, or cannot do it with the fog
-  effect, it says **(off: not available)** after the name and the picture is
-  drawn without it.
+  effect, it says **(off: not available)** after the name and the picture
+  is drawn without it.
 - **Window mode** is **Windowed** (a normal window), **Borderless** (a
   window without a frame that fills the whole screen, so switching to
-  another program is quick) or **Fullscreen**. In Steam Deck Game Mode the
-  game always fills the screen, whatever this says. This row is not on
-  phones.
+  another program is quick) or **Fullscreen**. In Game Mode, the Steam Deck
+  shows every game on the whole screen, whatever this row says. This row is
+  not on phones and tablets.
 - **Vertical sync** stops the picture from tearing. With it off, the
-  picture can tear if your screen allows it.
+  picture can tear if your screen allows it. With it on and **Frame rate**
+  set to your screen's refresh rate (60 on a 60 Hz screen, 120 on a
+  120 Hz screen), the game takes its steps in time with the screen, so
+  every picture is shown for the same length of time. On Windows the game
+  measures how fast the screen really refreshes and follows that, rather
+  than the number Windows reports. With
+  Direct3D 12 (see [Choosing the renderer on Windows](#choosing-the-renderer-on-windows))
+  and Vertical sync on, the game waits until the screen is ready for a new
+  picture before it draws one, so the picture you see is as fresh as it
+  can be.
 - **Texture pack** turns an installed texture pack On or Off. It says
   **None installed** when there is none. [About texture packs](TEXTURE_PACKS.md).
 - **Model pack** turns an installed model pack On or Off. It says **None
@@ -82,13 +99,15 @@ How the picture looks.
   Options. [About model packs](MODEL_PACKS.md).
 - **Frame rate** is Original (as on the PS2), Uncapped, or a fixed limit of
   60, 120, 144 or 240 frames a second. On a computer it starts at
-  Uncapped. With Vertical sync on, Uncapped follows your
-  screen: one new picture each time the screen shows one (and never
-  fewer than sixty a second where the screen can take them). With it off,
-  Uncapped draws as fast as your computer can. A limit equal to your
-  screen's refresh rate (60 on a 60 Hz screen, 120 on a 120 Hz screen)
+  Uncapped. With Vertical sync on, Uncapped follows your screen: one new
+  picture each time the screen shows one. If your screen says it refreshes
+  fewer than sixty times a second, Vulkan still draws sixty a second when
+  your graphics driver can hand pictures to the screen without waiting for
+  it; Direct3D 12 always draws one picture for each refresh. With Vertical
+  sync off, Uncapped draws as fast as your computer can. A limit equal to
+  your screen's refresh rate (60 on a 60 Hz screen, 120 on a 120 Hz screen)
   follows the screen, so motion stays smooth, and the 144 and 240 limits
-  reach their rate. On Android it starts at 60.
+  reach their rate. On phones and tablets it starts at 60.
   If motion ever looks uneven, check that this limit matches your
   screen's refresh rate (see your system's display settings). If a faint
   trailing image stays while you move, try another limit, or on Windows
@@ -138,9 +157,8 @@ The last row is not one of the game's effects:
   wide as the window shows it, at every size and shape of window. It needs
   the Enhanced Preset with Resolution set to the size of your window. With
   Original, a fixed Resolution (1x to 16x), the CRT filter or supersampling,
-  this row only opens up the thin black border. It is on by default with the
-  Enhanced Preset. If you played an earlier version, your settings keep it
-  Off: turn it on here, or pick the Enhanced Preset again. Off keeps the
+  this row only opens up the thin black border. Picking the Enhanced Preset
+  turns it on, and you can turn it on or off here at any time. Off keeps the
   original game's frame shape, with its thin black border. With Video mode
   at 50 Hz the strip at the top and bottom is a little taller.
 
@@ -200,7 +218,8 @@ A change takes effect the next time you start the game.
   in photo mode.
 - **Invert mouse up/down** swaps up and down for the mouse.
 - **Mouse camera speed** is how quickly the camera reaches where you point
-  it. 1.0x is the normal speed; Instant moves it almost at once.
+  it. 1.0x is the speed the camera has with a gamepad; Instant moves it
+  almost at once.
 - **Mouse camera range:** Normal keeps each area's own limit on how far the
   camera turns. Full lets you look all the way around.
 - **Camera swings back:** On means that when you keep the mouse still, the
@@ -264,7 +283,7 @@ page, and it is the same setting in both places.
 ## Extras
 
 On the title screen's Options this page has Music, Models, Credits,
-Character Customization, on Windows and Linux Add to Steam, and Achievement
+Character Customization, Add to Steam (on a computer) and Achievement
 pop-ups. In the pause menu's Options it has only Character Customization
 and Achievement pop-ups.
 
@@ -276,8 +295,8 @@ and Achievement pop-ups.
 - **Character Customization:** change the colours of Ico and Yorda. [Details below](#character-customization).
 - **Achievement pop-ups** is the switch that is also the first row of the
   [Achievements](#achievements) list. Turn it on or off in either place.
-- **Add to Steam** (Windows and Linux, including the Steam Deck; on the
-  title screen's Extras page only): adds the
+- **Add to Steam** (on the title screen's Extras page only; it finds Steam
+  on Windows and Linux, including the Steam Deck): adds the
   game to your Steam library as a non-Steam game, so you can start it from
   Steam. Close Steam first: the game will not change Steam's list while
   Steam is open, and says so if Steam is running. On a Steam Deck, use
@@ -287,7 +306,7 @@ and Achievement pop-ups.
   the game is already in your library, the row says so and changes
   nothing; a copy of the old list is kept as `shortcuts.vdf.bak` in the
   same folder. If you move the game to another folder, add it again from
-  there. The row is not in the Android version.
+  there. The row is not on phones and tablets.
 
 ### Character Customization
 
@@ -359,8 +378,8 @@ helpers you turned on (Shadows never take Yorda, the stick fix, Developer
 mode) are listed too. Where the game has a name for the area you are in,
 the panel shows it.
 
-A save made before version 0.4.0 never counted its saves and enemies, so
-those two lines stay hidden until you start a New Game.
+A save that has no count of saves and enemies keeps those two lines
+hidden until you start a New Game.
 
 ## Starting a New Game
 
@@ -395,8 +414,9 @@ Each line has a short note above it saying what it does. Lines that start
 with `#` are notes, or settings switched off. To switch one on, delete
 the `#` at the start of its line.
 
-A `config.toml` from an older version may not have a line yet. You can add
-it yourself, under the heading shown below in square brackets.
+If your `config.toml` has no such line, add it under the heading shown
+below in square brackets. If the file has no such heading either, add the
+heading on its own line first.
 
 Under `[photo]`, for photo mode:
 
@@ -412,7 +432,7 @@ Under `[video]`:
 
 | Line | What it does |
 | --- | --- |
-| `window_mode = "windowed"` | The Window mode row: `"windowed"`, `"borderless"` or `"fullscreen"`. A `config.toml` from an older version has a `fullscreen` line instead, and it is still read. |
+| `window_mode = "windowed"` | The Window mode row: `"windowed"`, `"borderless"` or `"fullscreen"`. If the file has no `window_mode` line, the game reads its `fullscreen =` line instead: `true` is Fullscreen, `false` is Windowed. |
 | `effect_glow = true` and the five other `effect_` lines | The six switches of the Effects page. |
 | `crt = false`, `crt_mode = "consumer"`, `crt_strength = 1.0` | The CRT filter and CRT strength rows. `crt_mode` is `"scanlines"`, `"consumer"`, `"trinitron"`, `"pvm"` or `"shadow"`. `crt_strength` goes from `0.0` to `1.0`. |
 | `crt_scanlines`, `crt_mask`, `crt_halation`, `crt_bloom` | Fine tuning of the CRT filter, each from `0.0` to `1.0`: how strong the dark lines are, how strong the fine pattern of dots or stripes is, how much glow surrounds bright spots and how much bright areas spread softly. A line that is missing, or a negative number, keeps the chosen style's own value. |

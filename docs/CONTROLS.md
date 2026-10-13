@@ -31,7 +31,7 @@ usual job, and the original button for its own.
 | Left stick (move) | left stick | W A S D (hold Left Shift to walk) | |
 | Right stick (look) | right stick | I J K L | move the mouse |
 
-A few more keys on a PC:
+A few more keys on a computer:
 
 - **Escape** opens the pause menu while you play, and goes back in the
   menus, like Triangle. It does not close the game: to quit, choose
@@ -45,11 +45,14 @@ A few more keys on a PC:
 - **F12** saves a picture of the current moment, and a zip file to attach
   to a bug report. See
   [When something goes wrong](TROUBLESHOOTING.md#save-a-picture-of-a-problem).
+- **Shift+F12**, in photo mode, saves the paused moment at five picture
+  shapes, from 4:3 to the widest, into one zip file beside the F12 files,
+  for problem reports about wide screens.
 - **F11** makes the game write its speed numbers into the log every second
   for 30 seconds, instead of every 10 seconds. Press it again to stop
   early. It is for problem reports about slow play.
 
-Escape, Alt+Enter, F11 and F12 cannot be changed. Everything else can be, in
+Escape, Alt+Enter, F11, F12 and Shift+F12 cannot be changed. Everything else can be, in
 **Options > Controls > Remap controls**. When you give a button or key to
 another action, the two actions swap. If the action you changed had no
 button on that device, the other action is left without one.
@@ -74,8 +77,9 @@ You can change how it feels in **Options > Controls**:
   the mouse.
 - **Invert mouse up/down** swaps up and down.
 - **Mouse camera speed** is how quickly the camera reaches the place you
-  point it at. 1.0x is how the camera always moved; a higher number is
-  quicker, a lower one is slower, and Instant moves it almost at once.
+  point it at. 1.0x is the speed the camera has with a gamepad; a higher
+  number is quicker, a lower one is slower, and Instant moves it almost
+  at once.
 - **Mouse camera range** Normal keeps each area's own limit on how far the
   camera can turn. Full lets you look all the way around. In scenes where
   the game steers the camera itself, Full can show what the camera was
@@ -84,8 +88,8 @@ You can change how it feels in **Options > Controls**:
   move the mouse again, instead of swinging back behind Ico.
 
 These rows are not shown on phones and tablets. The speed and the range
-only apply while the mouse is turning the camera; a controller or the
-keys move it the way they always did.
+only apply while the mouse is turning the camera; a gamepad or the keys
+move it at the normal speed, within each area's own limit.
 
 ## Use the mouse in menus
 
