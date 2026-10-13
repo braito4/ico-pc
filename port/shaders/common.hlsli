@@ -16,6 +16,150 @@
 
 #include "gs_math.hlsli"
 
+// ------------------------------------------------------------- Above 1x
+// The resampling kernels of a scaled target (docs/port/RENDER.md "Above
+// 1x"). This block is valid HLSL and valid C: shaders_pixel_test and the
+// CPU reference (port/render/test/above1x_ref.c) include it through
+// hlsl_shim.h (ICO_GS_MATH_C) and check it; everything after it is HLSL
+// only. Integers throughout, so a CPU model gives the GPU's bytes.
+//
+// One axis at a time, by the step: source texels per destination texel,
+// in 1/32 (step32). The kernel is centred on the GS's own sample point,
+// c16: the GS's U (or V) in the source's 12.4 texels, texel i spanning
+// [16 i, 16 i + 16) (the GS's bilinear blends the texels around c16 - 8,
+// its nearest takes the one c16 falls in):
+//   GS_RS_BOX      step > 2 texels (step32 > GS_RS_BOX_MIN32): an area box
+//                  of width step32 / 32 texels on [lo32, lo32 + step32),
+//                  lo32 = 2 c16 - step32 / 2, each texel weighted by its
+//                  overlap in 1/32 texel (gs_box_w); the weights sum to
+//                  step32. Nearest and bilinear alike.
+//   GS_RS_BSPLINE  step < 0.5 texel (step32 < GS_RS_BSPLINE_MAX32) with the
+//                  bilinear filter: the cubic B-spline (B = 1, C = 0: no
+//                  overshoot, so an alpha mask stays within its values),
+//                  four taps from texel ((c16 - 8) >> 4) - 1, weights from
+//                  the GS's 4-bit fraction (c16 - 8) & 15 (gs_bspline_w),
+//                  summing to GS_RS_BSPLINE_DIV.
+//   GS_RS_GS       otherwise: the GS's own taps on this axis (bilinear: two
+//                  taps weighted 16 - f and f; nearest: one tap).
+// A draw takes this path only under a flag its C side sets when a scaled
+// target is involved and an axis is BOX or BSPLINE; at scale 1 nothing
+// here runs, and the PS2's own decimations (the 4:1 and 3.5:1 chain steps)
+// stay the GS's there.
+//
+// Two entry points:
+//   Load-based (fx_sprite_ps): gs_resample_axis gives an axis's taps
+//     (GsAxis: first texel, count, and gs_resample_weight /
+//     gs_resample_div); the caller fetches each tap with its own
+//     addressing (fx_texel: CLAMP or REPEAT on the TEX0 size, the backing
+//     texture's clamp, TEXA before filtering) and combines them
+//     separably: per row R = sum(wx t), R' = (16 R + Dx / 2) / Dx, then
+//     t = (sum(wy R') + 8 Dy) / (16 Dy) (the row's four extra bits keep
+//     the sums within 32 bits: R' <= 4080, sum(wy R') <= 24576 * 4080).
+//   Sampler-based (gs_bspline_bilinear4): the B-spline in both axes as four
+//     hardware bilinear taps (each axis's four weights folded into two
+//     taps placed between texels: g0 = w0 + w1 at texel i0 - 1 + w1 / g0,
+//     g1 = w2 + w3 at texel i0 + 1 + w3 / g1), for a sampler that
+//     reproduces the addressing; the filter's own 8-bit weights make it
+//     inexact (within 2 LSB of the Load form).
+// gs_bayer8 is the 8x8 ordered-dither threshold 0..63 of a texel.
+#define GS_RS_GS 0
+#define GS_RS_BOX 1
+#define GS_RS_BSPLINE 2
+#define GS_RS_BOX_MIN32 64      // above 2 texels a destination texel: the box
+#define GS_RS_BSPLINE_MAX32 16  // below half a texel: the B-spline
+#define GS_RS_BOX_MAX32 1024    // the box's widest: 32 texels
+#define GS_RS_BSPLINE_DIV 24576 // 6 * 16^3: the B-spline's weights' sum
+
+// The 8x8 Bayer matrix at (x, y) (only the low three bits of each count):
+// the bits of x ^ y and y interleaved and reversed, 0..63, each value once
+// in every 8x8 block; row 0 is 0 32 8 40 2 34 10 42.
+GS_FN uint gs_bayer8(uint x, uint y)
+{
+    const uint a = (x ^ y) & 7u;
+    const uint b = y & 7u;
+    return ((a & 1u) << 5) | ((b & 1u) << 4) | ((a & 2u) << 2) | ((b & 2u) << 1) |
+           ((a & 4u) >> 1) | ((b & 4u) >> 2);
+}
+
+// The cubic B-spline's weight of tap k (0..3: texels i0 - 1 .. i0 + 2) at
+// the GS's 4-bit fraction f, in 1/24576 (6 * 16^3; t = f / 16):
+//   (1 - t)^3 / 6, (3 t^3 - 6 t^2 + 4) / 6, (-3 t^3 + 3 t^2 + 3 t + 1) / 6,
+//   t^3 / 6, exact in these units.
+GS_FN int gs_bspline_w(uint f, uint k)
+{
+    const int t = (int)(f & 15u);
+    const int t2 = t * t;
+    const int t3 = t2 * t;
+    const int u = 16 - t;
+    return k == 0u ? u * u * u
+           : k == 1u ? 3 * t3 - 96 * t2 + 16384
+           : k == 2u ? -3 * t3 + 48 * t2 + 768 * t + 4096
+           : t3;
+}
+
+// The overlap of texel i ([32 i, 32 i + 32) in 1/32 texel) with the box
+// [lo32, hi32), in 1/32 texel (0 outside it).
+GS_FN int gs_box_w(int lo32, int hi32, int i)
+{
+    return max(0, min(hi32, 32 * i + 32) - max(lo32, 32 * i));
+}
+
+// The kernel of an axis (GS_RS_*) for step32 and the filter.
+GS_FN int gs_rs_kind(int step32, uint bilinear)
+{
+    return step32 > GS_RS_BOX_MIN32 ? GS_RS_BOX
+           : (step32 > 0 && step32 < GS_RS_BSPLINE_MAX32 && bilinear != 0u) ? GS_RS_BSPLINE
+           : GS_RS_GS;
+}
+
+// The box's left edge in 1/32 texel: centred on c16, step32 at most
+// GS_RS_BOX_MAX32.
+GS_FN int gs_rs_box_lo(int c16, int step32)
+{
+    return 2 * c16 - (min(step32, GS_RS_BOX_MAX32) >> 1);
+}
+
+// The first tap of an axis (a texel index, before addressing).
+GS_FN int gs_rs_first(int kind, int c16, int step32, uint bilinear)
+{
+    return kind == GS_RS_BOX ? gs_rs_box_lo(c16, step32) >> 5
+           : kind == GS_RS_BSPLINE ? ((c16 - 8) >> 4) - 1
+           : bilinear != 0u ? (c16 - 8) >> 4
+           : c16 >> 4;
+}
+
+// The number of taps of an axis.
+GS_FN int gs_rs_count(int kind, int c16, int step32, uint bilinear)
+{
+    const int lo = gs_rs_box_lo(c16, step32);
+    return kind == GS_RS_BOX ? ((lo + min(step32, GS_RS_BOX_MAX32) - 1) >> 5) - (lo >> 5) + 1
+           : kind == GS_RS_BSPLINE ? 4
+           : bilinear != 0u ? 2
+           : 1;
+}
+
+// The weight of tap k (texel gs_rs_first + k) of an axis.
+GS_FN int gs_rs_weight(int kind, int c16, int step32, uint bilinear, int k)
+{
+    const int lo = gs_rs_box_lo(c16, step32);
+    const uint f = (uint)(c16 - 8) & 15u;
+    return kind == GS_RS_BOX ? gs_box_w(lo, lo + min(step32, GS_RS_BOX_MAX32), (lo >> 5) + k)
+           : kind == GS_RS_BSPLINE ? gs_bspline_w(f, (uint)k)
+           : bilinear != 0u ? (k == 0 ? 16 - (int)f : (int)f)
+           : 1;
+}
+
+// The sum of an axis's weights.
+GS_FN int gs_rs_div(int kind, int step32, uint bilinear)
+{
+    return kind == GS_RS_BOX ? min(step32, GS_RS_BOX_MAX32)
+           : kind == GS_RS_BSPLINE ? GS_RS_BSPLINE_DIV
+           : bilinear != 0u ? 16
+           : 1;
+}
+
+#ifndef ICO_GS_MATH_C // the rest is HLSL only
+
 // Vulkan-only attributes: DXC rejects them (as warnings, which are errors
 // here) when compiling DXIL.
 #ifdef __spirv__
@@ -93,7 +237,8 @@ cbuffer FrameCB : register(b0, space0)
 //            the target's scale for a scaled one; z, with t1 a Full pixel
 //            crop of the frame (rd_replay.c, RdTargetRec.ox), its left-out
 //            texels over its width (ox / tw: the normalised U subtracted,
-//            gs_uv_norm), else 0; w reserved (0)
+//            gs_uv_norm), else 0; w fx_sprite_ps's resampling steps above
+//            1x (fx_sprite.hlsl), else 0
 cbuffer DrawCB : register(b1, space1)
 {
     uint4 g_col;
@@ -208,6 +353,66 @@ uint4 gs_bilerp(uint4 a, uint4 b, uint4 c, uint4 d, uint fu, uint fv)
     const int4 top = ia + (((ib - ia) * int(fu)) >> 4);
     const int4 bot = ic + (((id - ic) * int(fu)) >> 4);
     return uint4(top + (((bot - top) * int(fv)) >> 4));
+}
+
+// Above 1x (the kernels at the top of this file): one axis's taps for the
+// Load-based form. The caller fetches texels first .. first + count - 1
+// with its own addressing and combines them as the header says.
+struct GsAxis {
+    int first;
+    int count;
+    int kind; // GS_RS_*
+    int c16;
+    int step32;
+    uint bilinear;
+};
+
+GsAxis gs_resample_axis(int c16, int step32, bool bilinear)
+{
+    GsAxis a;
+    a.bilinear = bilinear ? 1u : 0u;
+    a.kind = gs_rs_kind(step32, a.bilinear);
+    a.c16 = c16;
+    a.step32 = step32;
+    a.first = gs_rs_first(a.kind, c16, step32, a.bilinear);
+    a.count = gs_rs_count(a.kind, c16, step32, a.bilinear);
+    return a;
+}
+
+uint gs_resample_weight(GsAxis a, int k)
+{
+    return uint(gs_rs_weight(a.kind, a.c16, a.step32, a.bilinear, k));
+}
+
+uint gs_resample_div(GsAxis a)
+{
+    return uint(gs_rs_div(a.kind, a.step32, a.bilinear));
+}
+
+// The sampler-based form: the B-spline in both axes from four bilinear
+// taps of smp (which must address as the draw does). tc is the GS's sample
+// point in texels of tex (the 12.4 coordinate / 16, the texel centre at
+// i + 0.5); the fraction is the GS's 4-bit one, as gs_bspline_w takes it.
+float4 gs_bspline_bilinear4(Texture2D<float4> tex, SamplerState smp, float2 tc, float2 size)
+{
+    const int2 c16 = int2(floor(tc * 16.0 + 0.5));
+    const int2 i0 = (c16 - 8) >> 4;
+    const uint2 f = uint2((c16 - 8) & 15);
+    float2 g0, g1, h0, h1;
+    [unroll] for (uint k = 0u; k < 2u; k++) {
+        const float w0 = float(gs_bspline_w(f[k], 0u)), w1 = float(gs_bspline_w(f[k], 1u));
+        const float w2 = float(gs_bspline_w(f[k], 2u)), w3 = float(gs_bspline_w(f[k], 3u));
+        g0[k] = (w0 + w1) / float(GS_RS_BSPLINE_DIV);
+        g1[k] = (w2 + w3) / float(GS_RS_BSPLINE_DIV);
+        // the taps' centres in texels (texel j's centre at j + 0.5)
+        h0[k] = float(i0[k]) - 1.0 + w1 / (w0 + w1) + 0.5;
+        h1[k] = float(i0[k]) + 1.0 + w3 / max(w2 + w3, 1.0) + 0.5;
+    }
+    const float2 inv = 1.0 / size;
+    return g0.y * (g0.x * tex.SampleLevel(smp, float2(h0.x, h0.y) * inv, 0.0) +
+                   g1.x * tex.SampleLevel(smp, float2(h1.x, h0.y) * inv, 0.0)) +
+           g1.y * (g0.x * tex.SampleLevel(smp, float2(h0.x, h1.y) * inv, 0.0) +
+                   g1.x * tex.SampleLevel(smp, float2(h1.x, h1.y) * inv, 0.0));
 }
 
 // TEXA before filtering (sprite_texa_ps, vu_texa_ps): the texel of a
@@ -764,4 +969,5 @@ void fullscreen_triangle(uint id, out float4 pos, out float2 t)
     t = c;
 }
 
+#endif // ICO_GS_MATH_C
 #endif

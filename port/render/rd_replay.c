@@ -5158,6 +5158,35 @@ void rd__set_blur_fix128_skip(bool on)
     s_blurFix128Skip = on;
 }
 
+/* Above 1x (fx_sprite.hlsl FXF_ABOVE1X): a sprite sampling target src into
+ * tc when a scaled target is involved (either target's scale not 1, the
+ * predicate rd__blur_screen_fallback takes): the steps, src texels per tc
+ * texel in 1/32 (rounded), packed step32x * 4096 + step32y for
+ * DrawCB.scale[3].  0, and the flag left off, when every scale is 1 (the
+ * GS's own arithmetic, whatever the step: the PS2's 4:1 and 3.5:1 chain
+ * steps stay its point samples) or when neither axis leaves the GS's
+ * filter (RD_FX_BOX_MIN32, RD_FX_BSPLINE_MAX32). */
+static uint32_t blurAbove1xSteps(const RdTargetRec *tc, const RdTargetRec *src, const float uv[4],
+                                 const float rect[4], int linear)
+{
+    if (!src || (tc->sx == 1.0f && tc->sy == 1.0f && src->sx == 1.0f && src->sy == 1.0f)) {
+        return 0;
+    }
+    const double dx = fabs((double)rect[2] - (double)rect[0]);
+    const double dy = fabs((double)rect[3] - (double)rect[1]);
+    if (!(dx > 0.0) || !(dy > 0.0) || !(tc->sx > 0.0f) || !(tc->sy > 0.0f)) {
+        return 0;
+    }
+    const double kx = fabs((double)uv[2] - (double)uv[0]) / dx * src->sx / tc->sx * 32.0;
+    const double ky = fabs((double)uv[3] - (double)uv[1]) / dy * src->sy / tc->sy * 32.0;
+    const uint32_t sx = kx >= RD_FX_STEP_MAX ? RD_FX_STEP_MAX : (uint32_t)floor(kx + 0.5);
+    const uint32_t sy = ky >= RD_FX_STEP_MAX ? RD_FX_STEP_MAX : (uint32_t)floor(ky + 0.5);
+    const int leaves =
+        sx > RD_FX_BOX_MIN32 || sy > RD_FX_BOX_MIN32 ||
+        (linear && ((sx > 0 && sx < RD_FX_BSPLINE_MAX32) || (sy > 0 && sy < RD_FX_BSPLINE_MAX32)));
+    return leaves ? sx * 4096u + sy : 0;
+}
+
 static void doBlurSpriteDraw(Replay *r, const RdFrame *f, const RdCmd *c)
 {
     RdPostRec p;
@@ -5296,7 +5325,14 @@ static void doBlurSpriteDraw(Replay *r, const RdFrame *f, const RdCmd *c)
 
     IcoDrawCB cb;
     memset(&cb, 0, sizeof(cb));
-    const uint32_t fl = blurFlags(d, p.lines, textured, dstRead);
+    uint32_t fl = blurFlags(d, p.lines, textured, dstRead);
+    /* above 1x: a target source and a scaled target (blurAbove1xSteps) */
+    const uint32_t steps =
+        textured ? blurAbove1xSteps(tc, src, p.uv, p.rect, d->magFilter == RD_FILTER_LINEAR) : 0;
+    if (steps) {
+        fl |= RD_FXF_ABOVE1X;
+        g_rd.above1xDraws++;
+    }
     memcpy(cb.col, (const uint32_t[4]){p.rgba[0], p.rgba[1], p.rgba[2], p.rgba[3]}, sizeof(cb.col));
     cb.mode[0] = fl;
     cb.mode[1] = d->texa | (tfmt << 8);
@@ -5317,6 +5353,7 @@ static void doBlurSpriteDraw(Replay *r, const RdFrame *f, const RdCmd *c)
     if (src && src->ox > 0.0f) {
         cb.scale[2] = src->ox / (float)src->tw; /* Full pixel (fx_sprite.hlsl fx_src_crop16) */
     }
+    cb.scale[3] = (float)steps; /* below 2^24: exact */
     memcpy(cb.param, p.rect, sizeof(cb.param));
     rhi_cmd_set_pipeline(s_cl, pipe);
     rd__bind_uniform(s_cl, 0, r->frameBG);

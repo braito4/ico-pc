@@ -21,7 +21,10 @@
 //   g_param  x0 y0 x1 y1, 12.4 window coordinates (integers held as floats)
 //   g_scale  xy t1 texels per GS texel (a scaled target's scale; 1
 //            for images and in Original), z t1's Full pixel crop: its
-//            left-out texels over its width (common.hlsli), else 0
+//            left-out texels over its width (common.hlsli), else 0,
+//            w with FXF_ABOVE1X the steps (t1 texels per bound texel, in
+//            1/32) step32x * 4096 + step32y (rd_replay.c doBlurSpriteDraw),
+//            else 0
 // FrameCB: g_origin.xy the XYOFFSET of the bound target (GS pixels, + 0.5 y
 // with the half-line offset), g_z.x the GS Z scale of its depth, g_z.yz the
 // bound target's texels per GS pixel (1 in Original). The target is as wide
@@ -34,6 +37,14 @@
 // in 12.4, and the texture coordinates address t1 at its own scale (UV
 // times g_scale), so every sum below is the GS's at scale 1 (bit-exact) and
 // the same picture at finer sampling elsewhere.
+//
+// Above 1x (FXF_ABOVE1X: a target source with a scaled target involved, an
+// axis stepping over more than 2 t1 texels a texel or, bilinear, under
+// half of one): the texel is resampled about the same GS sample point
+// (U, V in t1's 12.4) by common.hlsli's kernels, an area box for a
+// decimation, the cubic B-spline for a magnification, each tap fetched as
+// fx_texel fetches (wrap, clamp, TEXA), then TFX, the tests and the blend
+// as below, all in integers.  The flag is never set at scale 1.
 #include "common.hlsli"
 
 #define FXF_TEXTURED 1u
@@ -48,6 +59,7 @@
 #define FXF_DATE 1024u
 #define FXF_DATM 2048u
 #define FXF_DST 4096u
+#define FXF_ABOVE1X 8192u
 
 #define AFAIL_KEEP 0u
 #define AFAIL_FB_ONLY 1u
@@ -142,7 +154,23 @@ float4 fx_sprite_ps(float4 pos : SV_Position) : SV_Target0
         const float2 ss = fx_src_scale();
         const int su = int(round(float(u) * ss.x)) - fx_src_crop16();
         const int sv = int(round(float(v) * ss.y));
-        if ((flags & FXF_LINEAR) != 0u) {
+        if ((flags & FXF_ABOVE1X) != 0u) {
+            const uint steps = uint(g_scale.w);
+            const bool lin = (flags & FXF_LINEAR) != 0u;
+            const GsAxis ax = gs_resample_axis(su, int(steps >> 12), lin);
+            const GsAxis ay = gs_resample_axis(sv, int(steps & 4095u), lin);
+            const uint dx = gs_resample_div(ax), dy = gs_resample_div(ay);
+            uint4 sum = uint4(0u, 0u, 0u, 0u);
+            [loop] for (int j = 0; j < ay.count; j++) {
+                uint4 row = uint4(0u, 0u, 0u, 0u);
+                [loop] for (int i = 0; i < ax.count; i++) {
+                    row += fx_texel(int2(ax.first + i, ay.first + j), flags) *
+                           gs_resample_weight(ax, i);
+                }
+                sum += ((row * 16u + dx / 2u) / dx) * gs_resample_weight(ay, j);
+            }
+            t = (sum + 8u * dy) / (16u * dy);
+        } else if ((flags & FXF_LINEAR) != 0u) {
             const int uu = su - 8, vv = sv - 8;
             const int2 i0 = int2(uu >> 4, vv >> 4);
             const uint fu = uint(uu & 15), fv = uint(vv & 15);

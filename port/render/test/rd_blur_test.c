@@ -57,7 +57,8 @@
  *      behind a nearer band, twelve frames of feedback against the model;
  *      then Enhanced 4x and 4x with the full-height scene, SCENE at the GS
  *      pixel centres against the 1x model: exact where the mask is 0 within
- *      16 GS pixels, within 4 where it is one value within 16.
+ *      16 GS pixels, within 4 where it is one value within 16, with the
+ *      above-1x kernels drawing the chain's decimations and magnifications.
  *   p  the mirage frame of q with the shine a keyed world
  *      draw, presented as the presenter does (a tick's first present at
  *      alpha 0.5 and a later one at 1, the shine moving between ticks): the
@@ -79,6 +80,13 @@
  *      loop at W = 512, 688, 1376 and 2560 on the device, SCENE's and
  *      DISPLAY's 4:3 columns the 512 run's byte for byte (frames + 2
  *      pixels in from their edges).
+ *   x  above 1x: the aura's modes 1, 2 and 3 at Enhanced 4x (NTSC: SCENE
+ *      4x, the work buffers 2x), every target against the CPU model at its
+ *      own scale exactly, the decimations (SCENE and AURA_WORK into FEED128
+ *      and WORK0) the area box and the magnifications (FEED128 and
+ *      AURA_TAP over the frame) the B-spline of above1x_ref.c; the replay
+ *      flags as many sprites as the model resamples.  Every comparison of
+ *      a run at scale 1 (all the others) finds no sprite flagged.
  * Tolerance 0 everywhere (but q's scaled runs).  Every pipeline created is enumerated; no
  * validation errors; no stubbed command replayed. */
 #include <math.h>
@@ -103,6 +111,11 @@
 #include "debug.h"
 #include "main.h"
 #include "../../test/ico_shard.h"
+#include "above1x_ref.h"
+
+_Static_assert(RD_FX_BOX_MIN32 == A1X_BOX_MIN32 && RD_FX_BSPLINE_MAX32 == A1X_BSPLINE_MAX32 &&
+                   RD_FX_STEP_MAX == A1X_STEP_MAX,
+               "the replay's above-1x thresholds are the reference's");
 
 static int failures;
 
@@ -1002,8 +1015,8 @@ static size_t cpuMaxBytes(void)
     size_t m = (size_t)W * H * 4;
     for (int i = 0; i < RD_TARGET_COUNT; i++) {
         const RdTargetRec *t = rd__target_rec((uint32_t)i + 1);
-        if (t && (size_t)t->w * t->h * 4 > m) {
-            m = (size_t)t->w * t->h * 4;
+        if (t && (size_t)t->tw * t->th * 4 > m) {
+            m = (size_t)t->tw * t->th * 4;
         }
     }
     return m;
@@ -1016,11 +1029,11 @@ static void cpuInit(void)
         if (!t || t->format != RHI_FMT_RGBA8_UNORM) {
             continue;
         }
-        s_cpu[i].w = (int)t->w;
-        s_cpu[i].h = (int)t->h;
-        s_cpu[i].c = calloc((size_t)t->w * t->h, 4);
+        s_cpu[i].w = (int)t->tw;
+        s_cpu[i].h = (int)t->th;
+        s_cpu[i].c = calloc((size_t)t->tw * t->th, 4);
         if (t->withDepth) {
-            s_cpu[i].z = calloc((size_t)t->w * t->h, 4);
+            s_cpu[i].z = calloc((size_t)t->tw * t->th, 4);
         }
     }
     s_old = malloc(cpuMaxBytes());
@@ -1056,10 +1069,11 @@ typedef struct Tex {
 
 static void texel(const Tex *t, int x, int y, uint32_t o[4])
 {
-    x = t->clampS ? (x < 0 ? 0 : (x >= t->lw ? t->lw - 1 : x)) : (x & (t->lw - 1));
-    y = t->clampT ? (y < 0 ? 0 : (y >= t->lh ? t->lh - 1 : y)) : (y & (t->lh - 1));
-    x = x < t->w ? x : t->w - 1;
-    y = y < t->h ? y : t->h - 1;
+    /* REPEAT as fx_texel: a modulo (c & (n - 1) on a power of two) */
+    x = t->clampS ? (x < 0 ? 0 : (x >= t->lw ? t->lw - 1 : x)) : ((x % t->lw) + t->lw) % t->lw;
+    y = t->clampT ? (y < 0 ? 0 : (y >= t->lh ? t->lh - 1 : y)) : ((y % t->lh) + t->lh) % t->lh;
+    x = x < 0 ? 0 : (x < t->w ? x : t->w - 1);
+    y = y < 0 ? 0 : (y < t->h ? y : t->h - 1);
     const uint8_t *p = &t->px[((size_t)y * t->w + x) * 4];
     o[0] = p[0];
     o[1] = p[1];
@@ -1104,13 +1118,63 @@ static int alphaPass(uint32_t atst, uint32_t aref, uint32_t a)
     }
 }
 
+/* (above1x) the sprites the model drew with the above-1x kernels, and
+ * their axes' kernels (A1X_GS, A1X_BOX, A1X_BSPLINE) */
+static int s_a1xSprites, s_a1xKinds[3];
+
+/* (above1x) the distinct resampled passes: source, destination, the axes'
+ * kernels and steps */
+#define A1X_PASSES 16
+
+static struct {
+    int src, dst, kx, ky;
+    uint32_t sx, sy;
+} s_a1xPass[A1X_PASSES];
+
+static int s_a1xNPass;
+
+static void a1xNote(int src, int dst, int kx, int ky, uint32_t sx, uint32_t sy)
+{
+    for (int i = 0; i < s_a1xNPass; i++) {
+        if (s_a1xPass[i].src == src && s_a1xPass[i].dst == dst && s_a1xPass[i].sx == sx &&
+            s_a1xPass[i].sy == sy) {
+            return;
+        }
+    }
+    if (s_a1xNPass < A1X_PASSES) {
+        s_a1xPass[s_a1xNPass].src = src;
+        s_a1xPass[s_a1xNPass].dst = dst;
+        s_a1xPass[s_a1xNPass].kx = kx;
+        s_a1xPass[s_a1xNPass].ky = ky;
+        s_a1xPass[s_a1xNPass].sx = sx;
+        s_a1xPass[s_a1xNPass].sy = sy;
+        s_a1xNPass++;
+    }
+}
+
+/* the model's texel fetch for the above-1x kernels (fx_texel) */
+static void cpuFetch(void *user, int x, int y, uint32_t out[4])
+{
+    texel((const Tex *)user, x, y, out);
+}
+
+/* fx_sprite_ps on the CPU (the 1x model of the cases above, and x's at
+ * scale).  On a scaled target (sx, sy texels a GS pixel)
+ * each texel stands for the GS position of its centre, (p + 0.5) / s - 0.5
+ * in 12.4 (rounded), and is covered when its GS pixel (floor(p / s)) is;
+ * a target texture is read at its own scale (U times its scale, 12.4), and
+ * with a scaled target involved and an axis past the GS's filter
+ * (a1x_kind) the texel is above1x_ref's resampling.  At scale 1 every one
+ * of these is the GS's own formula. */
 static void cpuSprite(const RdStateBlock *s, const RdPostRec *r)
 {
     CpuT *tc = cpuT(s->color);
-    if (!tc) {
+    const RdTargetRec *tcr = rd__target_rec(s->color);
+    if (!tc || !tcr || tcr->ox != 0.0f) {
         s_unexpected++;
         return;
     }
+    const float tsx = tcr->sx, tsy = tcr->sy;
     const RdDrawState *d = &s->ds;
     CpuT *td = cpuT(s->depth);
     if (td && (!td->z || td->w != tc->w || td->h != tc->h)) {
@@ -1123,11 +1187,33 @@ static void cpuSprite(const RdStateBlock *s, const RdPostRec *r)
     Tex t;
     memset(&t, 0, sizeof(t));
     int textured = 0;
+    float ssx = 1.0f, ssy = 1.0f; /* the texture's texels a GS texel */
+    int a1x = 0;
+    uint32_t stepX = 0, stepY = 0;
     if (d->texEnabled) {
         const RdTexRec *tr = rd__tex_rec(s->tex);
         if (tr && tr->kind == RD_TEXKIND_TARGET && tr->view != RD_VIEW_DEPTH) {
             CpuT *src = cpuT(tr->target);
-            if (src) {
+            const RdTargetRec *sr = rd__target_rec(tr->target);
+            if (src && sr) {
+                if (sr->ox != 0.0f) {
+                    s_unexpected++;
+                }
+                ssx = sr->sx;
+                ssy = sr->sy;
+                if (tsx != 1.0f || tsy != 1.0f || ssx != 1.0f || ssy != 1.0f) {
+                    stepX = a1x_step32(r->uv[2] - r->uv[0], r->rect[2] - r->rect[0], ssx, tsx);
+                    stepY = a1x_step32(r->uv[3] - r->uv[1], r->rect[3] - r->rect[1], ssy, tsy);
+                    const int lin = d->magFilter == RD_FILTER_LINEAR;
+                    const int kx = a1x_kind(stepX, lin), ky = a1x_kind(stepY, lin);
+                    a1x = kx != A1X_GS || ky != A1X_GS;
+                    if (a1x) {
+                        s_a1xSprites++;
+                        s_a1xKinds[kx]++;
+                        s_a1xKinds[ky]++;
+                        a1xNote(named(tr->target), named(s->color), kx, ky, stepX, stepY);
+                    }
+                }
                 t.px = src == tc ? s_old : src->c;
                 t.w = src->w;
                 t.h = src->h;
@@ -1142,8 +1228,10 @@ static void cpuSprite(const RdStateBlock *s, const RdPostRec *r)
             textured = 1;
         }
     }
-    t.lw = (int)r->scalar[0];
-    t.lh = (int)r->scalar[1];
+    t.lw = (int)rintf(r->scalar[0] * ssx);
+    t.lh = (int)rintf(r->scalar[1] * ssy);
+    t.lw = t.lw < 1 ? 1 : t.lw;
+    t.lh = t.lh < 1 ? 1 : t.lh;
     t.clampS = d->wrap.s == RD_WRAP_CLAMP;
     t.clampT = d->wrap.t == RD_WRAP_CLAMP;
     t.texa = d->texa;
@@ -1161,19 +1249,33 @@ static void cpuSprite(const RdStateBlock *s, const RdPostRec *r)
     const int u0 = (int)r->uv[0], v0 = (int)r->uv[1], u1 = (int)r->uv[2], v1 = (int)r->uv[3];
     const int ox = (2048 - (int)(s->gsW >> 1)) * 16;
     const int oy = (2048 - (int)(s->gsH >> 1)) * 16 + ((s->useOffset & RD_TARGET_HALF_Y) ? 8 : 0);
+    /* the scissor in GS pixels, then in texels (rd_replay.c gsRectToTexels) */
     int sx0 = s->scissor[0] < 0 ? 0 : s->scissor[0], sy0 = s->scissor[1] < 0 ? 0 : s->scissor[1];
-    int sx1 = s->scissor[2] >= tc->w ? tc->w - 1 : s->scissor[2];
-    int sy1 = s->scissor[3] >= tc->h ? tc->h - 1 : s->scissor[3];
+    int sx1 = s->scissor[2] >= (int)tcr->w ? (int)tcr->w - 1 : s->scissor[2];
+    int sy1 = s->scissor[3] >= (int)tcr->h ? (int)tcr->h - 1 : s->scissor[3];
+    if (tsx != 1.0f || tsy != 1.0f) {
+        const int a = (int)((float)sx0 * tsx), b = (int)((float)sy0 * tsy);
+        const int c = (int)((float)(sx1 + 1) * tsx + 0.999f) - 1;
+        const int e = (int)((float)(sy1 + 1) * tsy + 0.999f) - 1;
+        sx0 = a;
+        sy0 = b;
+        sx1 = c >= tc->w ? tc->w - 1 : c;
+        sy1 = e >= tc->h ? tc->h - 1 : e;
+    }
     for (int py = sy0; py <= sy1; py++) {
-        const int Y = oy + py * 16;
-        if (Y < y0 || Y >= y1) {
+        const float fy = (float)py + 0.5f;
+        if (oy + (int)floorf((fy - 0.5f) / tsy) * 16 < y0 ||
+            oy + (int)floorf((fy - 0.5f) / tsy) * 16 >= y1) {
             continue;
         }
+        const int Y = oy + (int)floorf((fy / tsy - 0.5f) * 16.0f + 0.5f);
         for (int px = sx0; px <= sx1; px++) {
-            const int X = ox + px * 16;
-            if (X < x0 || X >= x1) {
+            const float fx = (float)px + 0.5f;
+            const int gbx = ox + (int)floorf((fx - 0.5f) / tsx) * 16;
+            if (gbx < x0 || gbx >= x1) {
                 continue;
             }
+            const int X = ox + (int)floorf((fx / tsx - 0.5f) * 16.0f + 0.5f);
             const size_t i = (size_t)py * tc->w + px;
             if (useDepth) {
                 const uint32_t zb = td->z[i];
@@ -1189,9 +1291,13 @@ static void cpuSprite(const RdStateBlock *s, const RdPostRec *r)
             if (textured) {
                 const int u = u0 + ((X - x0) * (u1 - u0)) / (x1 - x0);
                 const int v = v0 + ((Y - y0) * (v1 - v0)) / (y1 - y0);
+                /* in the texture's own 12.4 texels */
+                const int su = (int)rintf((float)u * ssx), sv = (int)rintf((float)v * ssy);
                 uint32_t tx[4];
-                if (linear) {
-                    const int uu = u - 8, vv = v - 8;
+                if (a1x) {
+                    a1x_resample(cpuFetch, &t, su, sv, stepX, stepY, linear, tx);
+                } else if (linear) {
+                    const int uu = su - 8, vv = sv - 8;
                     const int ix = uu >> 4, iy = vv >> 4;
                     const uint32_t fu = (uint32_t)(uu & 15), fv = (uint32_t)(vv & 15);
                     uint32_t a[4], b[4], c[4], e[4];
@@ -1203,7 +1309,7 @@ static void cpuSprite(const RdStateBlock *s, const RdPostRec *r)
                         tx[ch] = gsBilerp(a[ch], b[ch], c[ch], e[ch], fu, fv);
                     }
                 } else {
-                    texel(&t, u >> 4, v >> 4, tx);
+                    texel(&t, su >> 4, sv >> 4, tx);
                 }
                 uint32_t o[4];
                 if (tfx == 1) {
@@ -1364,9 +1470,16 @@ static const int kCompared[] = {RD_TARGET_SCENE,     RD_TARGET_DISPLAY,   RD_TAR
                                 RD_TARGET_FEED128,   RD_TARGET_AURA_WORK, RD_TARGET_AURA_TAP,
                                 RD_TARGET_WORK2_PAD, RD_TARGET_FEED_HELD, RD_TARGET_DISPLAY_HELD};
 
+/* set while a case compares a scaled run (above1x): every other comparison
+ * is of a run whose targets are all at scale 1, where the replay never
+ * takes the above-1x kernels */
+static int s_scaledRun;
+
 static int compareAll(const char *what, int verbose)
 {
     int worst = 0;
+    CHECK(s_scaledRun || g_rd.above1xDraws == 0, "%s: %u sprites took the above-1x kernels at 1x",
+          what, g_rd.above1xDraws);
     for (size_t k = 0; k < sizeof(kCompared) / sizeof(kCompared[0]); k++) {
         const CpuT *c = &s_cpu[kCompared[k]];
         uint32_t w = 0, h = 0;
@@ -2370,6 +2483,91 @@ static void qInit(const char *what, int preset, float scale, int fullHeight)
     s_qShineTex = rd_create_texture(512, 512, shine, RD_TEXA_80_80, "rd_blur_test shine");
 }
 
+/* ============================================= (x) above 1x
+ *
+ * Enhanced 4x (NTSC, SCENE 4x, the work buffers 2x): the aura's three
+ * feedback modes over a picture with a nearer band, every target against
+ * the CPU model at its own scale (cpuSprite), 0 LSB: the GS's sprites
+ * where no target is scaled or no axis leaves the GS's filter, and
+ * above1x_ref's kernels where the replay sets FXF_ABOVE1X (SCENE into
+ * FEED128 and AURA_WORK into WORK0, decimations: the box; WORK0 and
+ * FEED128 back over the frame, magnifications: the B-spline).  The replay
+ * flagged as many sprites as the model resampled, both kernels ran. */
+#define X_FRAMES 3
+
+static void checkAbove1x(void)
+{
+    const int screenHeight = ScreenHeight, status0 = systemStatus[0];
+    ScreenHeight = QH;
+    systemStatus[0] = 0;
+    rd_shutdown();
+    for (int i = 0; i < RD_TARGET_COUNT; i++) {
+        free(s_cpu[i].c);
+        free(s_cpu[i].z);
+    }
+    memset(s_cpu, 0, sizeof(s_cpu));
+    free(s_old);
+    s_old = NULL;
+    qInit("Enhanced 4x", RD_PRESET_ENHANCED, 4.0f, 0);
+    const RdTargetRec *sc = rd__target_rec(rd_target(RD_TARGET_SCENE).id);
+    const RdTargetRec *fb = rd__target_rec(rd_target(RD_TARGET_FEED128).id);
+    CHECK(sc && fb && sc->sx == 4.0f && fb->sx == 2.0f, "(x) SCENE at 4x, FEED128 at 2x");
+    cpuInit();
+    s_scaledRun = 1;
+    clearAll();
+    s_a1xSprites = 0;
+    s_a1xNPass = 0;
+    memset(s_a1xKinds, 0, sizeof(s_a1xKinds));
+    int worst = 0;
+    for (int n = 0; n < 3 * X_FRAMES; n++) {
+        const int mode = 1 + n / X_FRAMES;
+        setStage(0, mode, (n & 1) ? 0x40 : 0x20);
+        GlobalTimer = 0;
+        makeImage((uint32_t)(n + 3), 0);
+        rd_update_texture(s_imgTex, s_img);
+        dl_SetDLPriority(0);
+        putImage(rd_target(RD_TARGET_SCENE), rd_target(RD_TARGET_SCENE), W, QH, 0, QH, 0, 1);
+        putImage(rd_target(RD_TARGET_SCENE), rd_target(RD_TARGET_SCENE), W, QH, 180, 260, Q_Z_FACE,
+                 1);
+        FullScreenEffectBefore();
+        dl_SetDLPriority(8);
+        putImage(rd_target(RD_TARGET_AURA_WORK), rd_target(RD_TARGET_SCENE), W, QH, 100 + n * 20,
+                 200 + n * 20, 0, 0);
+        FullScreenEffectAfter();
+        char what[48];
+        snprintf(what, sizeof(what), "(x) 4x frame %d mode %d", n, mode);
+        const int d = runFrame(what, failures < 10);
+        worst = d > worst ? d : worst;
+        if (failures > 20) {
+            break;
+        }
+    }
+    rhi_wait_idle();
+    printf("  (x) %d aura frames at Enhanced 4x: max difference %d LSB; %d sprites resampled "
+           "(the replay flagged %u), axes: %d GS, %d box, %d B-spline\n",
+           3 * X_FRAMES, worst, s_a1xSprites, g_rd.above1xDraws, s_a1xKinds[A1X_GS],
+           s_a1xKinds[A1X_BOX], s_a1xKinds[A1X_BSPLINE]);
+    static const char *const kKind[3] = {"GS", "box", "B-spline"};
+    for (int i = 0; i < s_a1xNPass; i++) {
+        printf("      %s -> %s: across %s at %.3f texels, down %s at %.3f\n",
+               kTargetNames[s_a1xPass[i].src], kTargetNames[s_a1xPass[i].dst],
+               kKind[s_a1xPass[i].kx], s_a1xPass[i].sx / 32.0, kKind[s_a1xPass[i].ky],
+               s_a1xPass[i].sy / 32.0);
+    }
+    CHECK(s_a1xSprites > 0 && (uint32_t)s_a1xSprites == g_rd.above1xDraws,
+          "(x) the replay flagged %u sprites, the model resampled %d", g_rd.above1xDraws,
+          s_a1xSprites);
+    CHECK(s_a1xKinds[A1X_BOX] > 0 && s_a1xKinds[A1X_BSPLINE] > 0,
+          "(x) both kernels ran: box %d, B-spline %d", s_a1xKinds[A1X_BOX],
+          s_a1xKinds[A1X_BSPLINE]);
+    CHECK(rhi_vk_validation_error_count() == 0, "(x) %u validation errors",
+          rhi_vk_validation_error_count());
+    s_scaledRun = 0;
+    rd_shutdown();
+    ScreenHeight = screenHeight;
+    systemStatus[0] = status0;
+}
+
 static void checkQueenMirage(void)
 {
     const int screenHeight = ScreenHeight, status0 = systemStatus[0];
@@ -2487,8 +2685,10 @@ static void checkQueenMirage(void)
             }
         }
         printf("  (q) %s: SCENE against the 1x model: away from the mask %d of %d pixels differ "
-               "(max %d), inside it %d of %d by more than 4 (max %d)\n",
-               kModes[m].what, farBad, nFar, farMax, inBad, nIn, inMax);
+               "(max %d), inside it %d of %d by more than 4 (max %d); %u sprites took the "
+               "above-1x kernels\n",
+               kModes[m].what, farBad, nFar, farMax, inBad, nIn, inMax, g_rd.above1xDraws);
+        CHECK(g_rd.above1xDraws > 0, "(q) %s: no sprite took the above-1x kernels", kModes[m].what);
         CHECK(farBad == 0, "(q) %s: %d pixels away from the mirage's mask differ from 1x",
               kModes[m].what, farBad);
         CHECK(inBad == 0, "(q) %s: %d pixels inside the mask differ from 1x by more than 4",
@@ -3121,6 +3321,7 @@ static const IcoShardCase k_cases[] = {
     {"feedback_wide", 25},
     {"shrinks_wide_device", 3},
     {"motion_blur_wide", 4},
+    {"above1x", 38},
 };
 
 int main(int argc, char **argv)
@@ -3254,6 +3455,9 @@ int main(int argc, char **argv)
     }
     if (ico_shard_take("motion_blur_wide")) {
         checkMotionBlurWide(); /* the motion blur's 4:3 columns: re-initialises rd */
+    }
+    if (ico_shard_take("above1x")) {
+        checkAbove1x(); /* re-initialises rd (NTSC, Enhanced 4x) */
     }
     if (ico_shard_finish() != 0) {
         return 1;

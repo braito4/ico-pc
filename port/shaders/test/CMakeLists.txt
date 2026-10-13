@@ -2,7 +2,9 @@
 #   shaders_table  every embedded entry compiled for SPIR-V and signed DXIL
 #   gs_math        gs_math.hlsli as C against port/test/gs_blend_test.c's formulas
 #   shaders_pixel  sprite, blit and blend_int drawn through the Vulkan RHI
-#                  (skips, exit 77, without a Vulkan device)
+#                  (skips, exit 77, without a Vulkan device), after
+#                  common.hlsli's above-1x kernels as C against
+#                  port/render/test/above1x_ref.c (CPU)
 #   vu1            the VU1 program shaders against port/render/vu1_ref: hand
 #                  traces (CPU), probe and rendered strips (Vulkan; exit 77
 #                  without a device once the CPU part passes)
@@ -15,8 +17,10 @@ target_include_directories(gs_math_test PRIVATE "${ICO_SHADER_DIR}")
 target_compile_options(gs_math_test PRIVATE ${ICO_SEMANTIC_OPTIONS} ${ICO_PORT_WARNINGS})
 
 if(TARGET ico_rhi_vk)
-    add_executable(shaders_pixel_test shaders_pixel_test.c)
-    target_include_directories(shaders_pixel_test PRIVATE "${ICO_SHADER_DIR}")
+    add_executable(shaders_pixel_test shaders_pixel_test.c
+                   "${CMAKE_SOURCE_DIR}/port/render/test/above1x_ref.c")
+    target_include_directories(shaders_pixel_test PRIVATE "${ICO_SHADER_DIR}"
+                               "${CMAKE_SOURCE_DIR}/port/render/test")
     target_compile_options(shaders_pixel_test PRIVATE ${ICO_SEMANTIC_OPTIONS} ${ICO_PORT_WARNINGS})
     target_link_libraries(shaders_pixel_test PRIVATE ico_shaders ico_rhi_vk)
     ico_copy_sdl3_dll(shaders_pixel_test)
