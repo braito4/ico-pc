@@ -283,8 +283,10 @@ of SDL's; the surface is NULL while the app is in the background and the caller 
 
 **Render area.** A render pass larger than one of its attachments would draw past the image's end:
 `rhi_cmd_begin_render_pass` logs the first such pass with the sizes, asserts in a Debug build,
-counts it and clamps the area, viewport and scissor to the smallest attachment; a pass that fits is
-untouched (`port/rhi/vk/vk_cmd.c` (`vkr_pass_area_fits`)). The D3D12 backend clamps its default
+counts it and clamps the area, viewport and scissor to the smallest attachment, and every scissor set
+while the pass is open is cut to that area, so the renderer's own full-target scissor cannot reach
+past it; a pass that fits is untouched (`port/rhi/vk/vk_cmd.c` (`vkr_pass_area_fits`,
+`rhi_cmd_set_scissor`)). The D3D12 backend clamps its default
 viewport and scissor the same way (`port/rhi/d3d12/d3d12_cmd.c` (`dx_pass_area_check`)).
 
 **Test hooks** (`port/rhi/vk/rhi_vk.h`): the validation error count, a forced present result
@@ -382,7 +384,8 @@ renderer's [pass ring](RENDER.md#the-pass-ring) after it, before the message box
 - **The last submissions.** Each backend keeps its last 8 submissions with the timeline (fence) value
   each signals, the replay and frame numbers `rhi_set_submit_tag` set before it, and on Vulkan its
   command lists and whether it signalled a present; the report marks each finished or not against
-  the value the GPU reached. A Vulkan wait that fails first logs how long it waited, the value it
+  the value the GPU reached, or "state unknown" when that value cannot be read (a failed Vulkan
+  counter read; a removed D3D12 device's fence, which reads `UINT64_MAX`). A Vulkan wait that fails first logs how long it waited, the value it
   waited for, the last one submitted and the one the GPU reached; once the device is lost no wait is
   made again (`port/rhi/vk/vk_cmd.c` (`vkr_wait_value`, `vkr_note_submit`); `port/rhi/vk/vk_device.c`
   (`vkr_lost_report`, `vkr_report_submits`); `port/rhi/d3d12/d3d12_device.c` (`dx_lost_report`)).
@@ -392,7 +395,10 @@ renderer's [pass ring](RENDER.md#the-pass-ring) after it, before the message box
   Each address is matched to a resource through the allocation table: every `VkDeviceMemory` alive
   with the buffer or image bound to it, its size and debug name, kept by `vkr_allocate` and
   `vkr_free_memory`, and with `gpu_checkpoints` the object's GPU address range from
-  `VK_EXT_device_address_binding_report` (a debug-utils messenger of its own, no validation layer);
+  `VK_EXT_device_address_binding_report` (a debug-utils messenger of its own, no validation layer;
+  a report naming the buffer or image, or the memory itself for a driver that reports at
+  allocation, which comes before the table has the entry and is kept until `vkr_alloc_note` adds
+  it);
   the report names the resource holding the address, or the nearest below it
   (`port/rhi/vk/vk_resource.c` (`vkr_alloc_note`, `vkr_alloc_bound`, `vkr_alloc_nearest`);
   `port/rhi/vk/vk_device.c` (`vkr_report_fault`, `vkr_bind_callback`)).

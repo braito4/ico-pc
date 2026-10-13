@@ -1430,7 +1430,8 @@ static int device_lost_quit(void)
         /* the box is modal and the run ends when the player closes it: the
            time it stays open is not a hang (the watchdog's later limit
            would report one, the game standing since the loss), and the
-           log says how long it was open */
+           log says how long it was open; the watchdog runs again once it
+           is closed, so a hang in the shutdown that follows is reported */
         ico_diag_watchdog_pause(1);
         const Uint64 t0 = SDL_GetTicksNS();
 
@@ -1442,6 +1443,7 @@ static int device_lost_quit(void)
                                  s_window);
         fprintf(stderr, "window: the message was closed after %.1f s\n",
                 (double)(SDL_GetTicksNS() - t0) / 1e9);
+        ico_diag_watchdog_pause(0);
     }
     return 1;
 }

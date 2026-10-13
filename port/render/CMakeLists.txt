@@ -580,7 +580,8 @@ target_compile_options(rd_debug_test PRIVATE ${ICO_SEMANTIC_OPTIONS} ${ICO_GAME_
 target_link_libraries(rd_debug_test PRIVATE ico_render ico_math ico_host_fs)
 
 # rd_passring_test: the pass ring the device-loss report prints
-# (rd_passring.c): order, wrap, the replay table, the line format; pure.
+# (rd_passring.c): order, wrap, the replay table, the replays printed, the line
+# format; pure.
 add_executable(rd_passring_test test/rd_passring_test.c rd_passring.c)
 target_include_directories(rd_passring_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_options(rd_passring_test PRIVATE ${ICO_SEMANTIC_OPTIONS} ${ICO_PORT_WARNINGS})

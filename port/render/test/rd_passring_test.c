@@ -5,6 +5,9 @@
  *   wrap      past RD_PASSRING_SIZE entries the ring holds the newest
  *             ones; the replay table still names the replay and frame of a
  *             sequence number the ring moved past, until it too moves on
+ *   print     the report prints the last RD_PASSRING_PRINT_REPLAYS replays'
+ *             entries (whole at 430 entries a replay), never more than
+ *             the ring holds
  *   markers   the marker push returns is the entry's sequence number
  *   pipeline  only a render pass or exact blend takes the pipeline asked
  *             for; an upload batch takes its bytes
@@ -69,29 +72,70 @@ static void testOrder(void)
 static void testWrap(void)
 {
     rd__passring_reset();
-    /* 12 replays of 10 passes each, every third a keep frame */
-    for (uint32_t rep = 1; rep <= 12; rep++) {
+
+    /* 12 replays of 200 passes each (2400 entries, past the ring), every
+     * third a keep frame */
+    enum { PER = 200, REPS = 12, TOTAL = PER * REPS };
+
+    for (uint32_t rep = 1; rep <= REPS; rep++) {
         rd__passring_frame(rep, 100 + rep, rep % 3 == 0);
-        for (int p = 0; p < 10; p++) {
-            rd__passring_list(p);
+        for (int p = 0; p < PER; p++) {
+            rd__passring_list(p % 13);
             rd__passring_push(RD_PASSK_PASS, (uint32_t)p + 1, 64, 64, 0, 0, 0, 0, -1);
         }
     }
     CHECK(rd_passring_count() == RD_PASSRING_SIZE);
     const RdPassRec *first = rd_passring_get(0);
     const RdPassRec *last = rd_passring_get(RD_PASSRING_SIZE - 1);
-    CHECK(first && last && last->seq == 120 && first->seq == 120 - RD_PASSRING_SIZE + 1);
-    CHECK(last && last->replay == 12 && last->frame == 112 && last->keep == 1 && last->list == 9);
+    CHECK(first && last && last->seq == TOTAL && first->seq == TOTAL - RD_PASSRING_SIZE + 1);
+    CHECK(last && last->replay == 12 && last->frame == 112 && last->keep == 1 &&
+          last->list == (PER - 1) % 13);
     for (uint32_t i = 1; i < rd_passring_count(); i++) {
         CHECK(rd_passring_get(i)->seq == rd_passring_get(i - 1)->seq + 1);
     }
     CHECK(rd_passring_get(RD_PASSRING_SIZE) == NULL);
-    /* the replay table: the last RD_PASSRING_REPLAYS replays */
+    /* the replay table: the last RD_PASSRING_REPLAYS replays (5..12) */
     CHECK(rd_passring_replay_count() == RD_PASSRING_REPLAYS);
-    const RdPassReplay *r = rd_passring_replay_of(50); /* replay 5's passes 41..50 */
-    CHECK(r && r->replay == 5 && r->frame == 105 && r->first == 41 && r->last == 50);
-    CHECK(rd_passring_replay_of(40) == NULL); /* replay 4: past the table */
-    CHECK(rd_passring_replay_of(121) == NULL);
+    const RdPassReplay *r = rd_passring_replay_of(5 * PER); /* replay 5's passes 801..1000 */
+    CHECK(r && r->replay == 5 && r->frame == 105 && r->first == 4 * PER + 1 && r->last == 5 * PER);
+    CHECK(rd_passring_replay_of(4 * PER) == NULL); /* replay 4: past the table */
+    CHECK(rd_passring_replay_of(TOTAL + 1) == NULL);
+}
+
+/* the report prints the last RD_PASSRING_PRINT_REPLAYS replays' entries,
+ * each one whole while the ring holds it (a replay of about 430 entries:
+ * the in-flight replays fit), and only those */
+static void testPrintStart(void)
+{
+    rd__passring_reset();
+    CHECK(rd_passring_print_start() == 0);
+
+    enum { PER = 430 };
+
+    for (uint32_t rep = 1; rep <= 6; rep++) {
+        rd__passring_frame(rep, rep, 0);
+        for (int p = 0; p < PER; p++) {
+            rd__passring_push(RD_PASSK_PASS, 1, 64, 64, 0, 0, 0, 0, -1);
+        }
+    }
+    CHECK(RD_PASSRING_SIZE >= RD_PASSRING_PRINT_REPLAYS * PER);
+    const uint32_t s = rd_passring_print_start();
+    const RdPassRec *e = rd_passring_get(s);
+    CHECK(e && e->replay == 6 - RD_PASSRING_PRINT_REPLAYS + 1 &&
+          e->seq == (uint64_t)(6 - RD_PASSRING_PRINT_REPLAYS) * PER + 1);
+    CHECK(rd_passring_count() - s == RD_PASSRING_PRINT_REPLAYS * PER);
+    /* a replay too big for the ring: the printing starts at the oldest
+     * entry held and stays within the ring */
+    rd__passring_frame(7, 7, 0);
+    for (int p = 0; p < RD_PASSRING_SIZE + 10; p++) {
+        rd__passring_push(RD_PASSK_PASS, 1, 64, 64, 0, 0, 0, 0, -1);
+    }
+    CHECK(rd_passring_print_start() == 0);
+    /* fewer replays than RD_PASSRING_PRINT_REPLAYS: all of them */
+    rd__passring_reset();
+    rd__passring_frame(1, 1, 0);
+    rd__passring_push(RD_PASSK_UPLOAD, 0, 0, 0, 0, 0, 0, 0, -1);
+    CHECK(rd_passring_print_start() == 0);
 }
 
 static void testFormat(void)
@@ -126,6 +170,7 @@ int main(void)
 {
     testOrder();
     testWrap();
+    testPrintStart();
     testFormat();
     printf("rd_passring_test: %s\n", failures ? "FAILED" : "ok");
     return failures ? 1 : 0;

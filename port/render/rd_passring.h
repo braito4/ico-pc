@@ -6,7 +6,13 @@
  * list, targets and their sizes, storage flag, picture effect and the last
  * pipeline asked for while it was open; and per replay the sequence numbers
  * of its first and last entries (the last RD_PASSRING_REPLAYS replays).  A
- * few stores per pass, always on.
+ * few stores per pass, always on.  A replay records about 430 entries, so
+ * the ring holds the last RD_PASSRING_PRINT_REPLAYS replays whole while
+ * they stay under about 680 each: the replay that met the loss and the
+ * RHI_FRAMES_IN_FLIGHT before it, the oldest of them the submission whose
+ * wait failed.  The replay stops recording once the device is lost
+ * (rd_replay.c replayFrame), so the ring ends at the last replay given to
+ * the GPU.
  *
  * On a device loss the window prints it before the box
  * (port/platform/window_host.c device_lost_quit), after the backend's own
@@ -24,8 +30,9 @@
 #include <stdint.h>
 #include <stdio.h>
 
-#define RD_PASSRING_SIZE 32
+#define RD_PASSRING_SIZE 2048 /* 64 bytes an entry: 128 KiB */
 #define RD_PASSRING_REPLAYS 8
+#define RD_PASSRING_PRINT_REPLAYS 3 /* the replays whose entries the report prints */
 
 typedef enum RdPassKind {
     RD_PASSK_PASS,    /* a render pass (beginPass) */
@@ -86,7 +93,12 @@ const RdPassReplay *rd_passring_replay_of(uint64_t seq);
 /* one entry as a line (no newline), postName naming an effect (NULL:
  * numbers); the length written, as snprintf */
 int rd_passring_format(const RdPassRec *e, const char *(*postName)(int), char *out, size_t n);
-/* the replays and the entries, oldest first, "rd: " lines */
+/* the first entry the report prints (an index for rd_passring_get): the
+ * first of the last RD_PASSRING_PRINT_REPLAYS replays, or the oldest entry
+ * held when the ring has moved past it; rd_passring_count() when empty */
+uint32_t rd_passring_print_start(void);
+/* the replay table, then the entries from rd_passring_print_start, oldest
+ * first, "rd: " lines (at most RD_PASSRING_SIZE of them) */
 void rd_passring_print(FILE *f, const char *(*postName)(int));
 
 #endif /* PORT_RENDER_RD_PASSRING_H */

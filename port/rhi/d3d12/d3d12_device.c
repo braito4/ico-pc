@@ -181,15 +181,20 @@ void dx_lost_report(void)
         return;
     }
     s_done = true;
-    const uint64_t reached = g_dx.fence ? ID3D12Fence_GetCompletedValue(g_dx.fence) : 0;
+    /* a removed device's fence reads UINT64_MAX (ID3D12Fence::GetCompletedValue):
+     * then no submission's state is known */
+    const uint64_t reached = g_dx.fence ? ID3D12Fence_GetCompletedValue(g_dx.fence) : UINT64_MAX;
+    const bool known = reached != UINT64_MAX;
     const uint32_t n = g_dx.submitCount < DX_SUBMIT_HISTORY ? g_dx.submitCount : DX_SUBMIT_HISTORY;
-    DX_LOG("loss report: the last %u submissions (fence reached %llu):", n,
-           (unsigned long long)reached);
+    DX_LOG("loss report: the last %u submissions (fence reached %s%llu):", n,
+           known ? "" : "unknown, ", (unsigned long long)(known ? reached : 0ull));
     for (uint32_t k = 0; k < n; k++) {
         const uint32_t i = (g_dx.submitCount - n + k) % DX_SUBMIT_HISTORY;
         DX_LOG("  fence %llu: replay %u, frame %u, %s", (unsigned long long)g_dx.submits[i].value,
                g_dx.submits[i].replay, g_dx.submits[i].frame,
-               g_dx.submits[i].value <= reached ? "finished" : "not finished");
+               !known                             ? "state unknown"
+               : g_dx.submits[i].value <= reached ? "finished"
+                                                  : "not finished");
     }
     if (!g_dx.dred) {
         DX_LOG("loss report: no breadcrumbs (gpu_checkpoints = true in ico-pc.ini turns DRED on)");

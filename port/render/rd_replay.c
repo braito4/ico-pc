@@ -969,6 +969,10 @@ typedef struct Replay {
        in force or the last post sprite belongs to, and a change waiting for
        the open run's draw (the run's draws belong to the effect before) */
     int perfPost, perfPending, perfPendingPost;
+    /* the reduction's fallback sprite being drawn keeps the GS's filter on
+     * both axes (doBlurSpriteDraw: blurAbove1xSteps 0), so spriteAbove1x
+     * leaves its flag off */
+    int a1xGs;
 } Replay;
 
 static void flushScreenRun(Replay *r);
@@ -2843,14 +2847,17 @@ static void sheetParam(const RdTexRec *t, float param[4])
  * linear, no GS levels, the texture's scale not the bound target's: the
  * shadow levels (scale 1) composited into SCENE, the softening's SCENE into
  * AA0 and AA0 or AA1 back (when the scene's scale is above the work
- * targets'), a work target drawn into SCENE.  The shadow chain's first
- * level reads the count already box-averaged to its GS size (shadowReduce),
- * at scale 1 as the levels are.  The scales are equal for every target at
- * scale 1, so never there. */
+ * targets'), a work target drawn into SCENE, the reduction's fallback
+ * sprite when an axis leaves the GS's filter (a1xGs).  The shadow chain's
+ * first level reads the count already box-averaged to its GS size
+ * (shadowReduce), at scale 1 as the levels are.  The scales are equal for
+ * every target at scale 1 but DISPLAY's rows at full height (sy 2), which
+ * only the reduction reads into, one SCENE row a DISPLAY row (a1xGs), so
+ * never at scale 1. */
 static int spriteAbove1x(const Replay *r, const RdDrawPass *dp, const DrawSetup *ds)
 {
     const RdDrawState *d = &r->st.ds;
-    if (!ds->textured || !d->texEnabled || ds->gsLevels || ds->replacement || !ds->tc ||
+    if (r->a1xGs || !ds->textured || !d->texEnabled || ds->gsLevels || ds->replacement || !ds->tc ||
         d->magFilter != RD_FILTER_LINEAR || d->minFilter != RD_FILTER_LINEAR ||
         (dp->key.fs != RD_FS_SPRITE && dp->key.fs != RD_FS_SPRITE_AA1 &&
          dp->key.fs != RD_FS_SPRITE_STQ)) {
@@ -5108,10 +5115,25 @@ static bool blurUvAxis(int32_t x0, int32_t x1, int32_t u0, int32_t u1, float ss,
  * inside the scissor bindDraw sets:
  * that box padded by two GS pixels (the half-line offset, rounding), in
  * texels.  Sampling itself (selfSample), the texture is read at the UVs:
- * blurUvAxis on each axis, the whole target under REPEAT.  Both: the box
- * holding the two. */
+ * blurUvAxis on each axis, the whole target under REPEAT; above 1x (steps,
+ * blurAbove1xSteps) each axis widened by its kernel's reach past the GS's
+ * taps (blurKernelReach).  Both: the box holding the two. */
+static int32_t blurKernelReach(uint32_t step32)
+{
+    if (step32 > RD_FX_BOX_MIN32) {
+        /* the box: half its width (at most 32 texels) each side of the
+         * centre, a texel more for the edges' partial texels */
+        const uint32_t w = step32 < 1024u ? step32 : 1024u;
+        return (int32_t)((w + 63u) / 64u) + 1;
+    }
+    /* the B-spline: a texel each side past the bilinear's two (one more
+     * kept); the GS's own filter: none */
+    return step32 > 0 && step32 < RD_FX_BSPLINE_MAX32 ? 2 : 0;
+}
+
 static void blurSnapArea(const Replay *r, const RdTargetRec *tc, const RdPostRec *p,
-                         const float uv[4], int dstRead, int selfSample, RhiRect *need)
+                         const float uv[4], int dstRead, int selfSample, uint32_t steps,
+                         RhiRect *need)
 {
     const RhiRect whole = {0, 0, tc->tw, tc->th};
     const int32_t x0 = (int32_t)p->rect[0], y0 = (int32_t)p->rect[1];
@@ -5134,11 +5156,17 @@ static void blurSnapArea(const Replay *r, const RdTargetRec *tc, const RdPostRec
         if (blurUvAxis(x0, x1, (int32_t)uv[0], (int32_t)uv[2], tc->sx, p->scalar[0],
                        d->wrap.s == RD_WRAP_CLAMP, tc->tw, (int32_t)floorf(tc->ox * 16.0f + 0.5f),
                        &a, &b)) {
+            const int32_t k = steps ? blurKernelReach(steps >> 12) : 0;
+            a = a - k < 0 ? 0 : a - k;
+            b = b + k > (int32_t)tc->tw - 1 ? (int32_t)tc->tw - 1 : b + k;
             tex.x = a;
             tex.w = (uint32_t)(b - a + 1);
         }
         if (blurUvAxis(y0, y1, (int32_t)uv[1], (int32_t)uv[3], tc->sy, p->scalar[1],
                        d->wrap.t == RD_WRAP_CLAMP, tc->th, 0, &e, &g)) {
+            const int32_t k = steps ? blurKernelReach(steps & 4095u) : 0;
+            e = e - k < 0 ? 0 : e - k;
+            g = g + k > (int32_t)tc->th - 1 ? (int32_t)tc->th - 1 : g + k;
             tex.y = e;
             tex.h = (uint32_t)(g - e + 1);
         }
@@ -5241,6 +5269,14 @@ void rd__set_blur_fix128_skip(bool on)
     s_blurFix128Skip = on;
 }
 
+/* rd__set_a1x_gs_keep (rd_internal.h) */
+static bool s_a1xGsKeep = true;
+
+void rd__set_a1x_gs_keep(bool on)
+{
+    s_a1xGsKeep = on;
+}
+
 /* Above 1x (fx_sprite.hlsl FXF_ABOVE1X): a sprite sampling target src into
  * tc when a scaled target is involved (either target's scale not 1, the
  * predicate rd__blur_screen_fallback takes): the steps, src texels per tc
@@ -5290,8 +5326,22 @@ static void doBlurSpriteDraw(Replay *r, const RdFrame *f, const RdCmd *c)
         rd__blur_snap_verts(&r->st, snap);
         RdFrame sf = *f;
         sf.payload = (uint8_t *)snap;
+        /* the GS's filter on both axes at the sprite's steps (one SCENE
+         * row a DISPLAY row at full height, scale 1): the flag left off,
+         * as sprite_above1x would take the GS's path at every pixel */
+        const RdTexRec *tr = r->st.ds.texEnabled ? rd__tex_rec(r->st.tex) : NULL;
+        const RdTargetRec *dst = rd__target_rec(r->st.color);
+        const RdTargetRec *src =
+            tr && tr->kind == RD_TEXKIND_TARGET ? rd__target_rec(tr->target) : NULL;
+        const int gs =
+            s_a1xGsKeep && dst && src && blurAbove1xSteps(dst, src, p.uv, p.rect, 1) == 0;
+        if (gs) {
+            flushScreenRun(r); /* the run before keeps its own flags */
+        }
+        r->a1xGs = gs;
         doScreen(r, &sf, &sc);
         flushScreenRun(r); /* the fallback sprite is a run of its own */
+        r->a1xGs = 0;
         return;
     }
     RdTargetRec *tc = rd__target_rec(r->st.color);
@@ -5365,11 +5415,15 @@ static void doBlurSpriteDraw(Replay *r, const RdFrame *f, const RdCmd *c)
     }
     float uv[4];
     rd__blur_uv_rect(c->b[0], &p, uv); /* the reduction's UVs under the mirror */
+    /* above 1x: a target source and a scaled target (blurAbove1xSteps) */
+    const uint32_t steps =
+        textured ? blurAbove1xSteps(tc, src, p.uv, p.rect, d->magFilter == RD_FILTER_LINEAR) : 0;
     RhiRect need = {0, 0, tc->tw, tc->th};
     if (dstRead || selfSample) {
         /* the texels the sprite reads from the snapshot: the destination
-         * at its own fragments, the texture at its UVs (blurSnapArea) */
-        blurSnapArea(r, tc, &p, uv, dstRead, selfSample, &need);
+         * at its own fragments, the texture at its UVs and its kernel's
+         * reach (blurSnapArea) */
+        blurSnapArea(r, tc, &p, uv, dstRead, selfSample, steps, &need);
         if (!takeSnap(r, tc, need)) {
             return;
         }
@@ -5409,9 +5463,6 @@ static void doBlurSpriteDraw(Replay *r, const RdFrame *f, const RdCmd *c)
     IcoDrawCB cb;
     memset(&cb, 0, sizeof(cb));
     uint32_t fl = blurFlags(d, p.lines, textured, dstRead);
-    /* above 1x: a target source and a scaled target (blurAbove1xSteps) */
-    const uint32_t steps =
-        textured ? blurAbove1xSteps(tc, src, p.uv, p.rect, d->magFilter == RD_FILTER_LINEAR) : 0;
     if (steps) {
         fl |= RD_FXF_ABOVE1X;
         g_rd.above1xDraws++;
@@ -5557,6 +5608,11 @@ static bool replayFrame(const RdFrame *f, int keep, bool present)
     }
     double t = rd__now_ms(), t1;
     rd__wait_frame();
+    if (rhi_device_lost()) {
+        /* nothing more reaches the GPU: no recording, so the pass ring
+         * ends at the last replay submitted (rd_passring.h) */
+        return false;
+    }
     rd__perf_collect_gpu(); /* the timestamps of the slot just recycled */
     g_rdPerf.waitMs = (t1 = rd__now_ms()) - t;
     t = t1;

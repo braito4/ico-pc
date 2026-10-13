@@ -362,7 +362,7 @@ way of reading the multisampled depth passed the fog's self-test, rd draws witho
 
 ### The pass ring
 
-The replay notes what it gives the GPU in a ring of the last 32 entries, always on (a few stores
+The replay notes what it gives the GPU in a ring of the last 2048 entries, always on (a few stores
 each): every render pass (`beginPass`), target copy (`doCopy`), snapshot copy (`takeSnap`), exact
 blend (`doExact`), the upload batch before the lists and the present. An entry holds its sequence
 number, the replay number (the performance record's, `g_rdPerf.replay`) and frame number, the keep
@@ -374,9 +374,15 @@ first and last sequence numbers, so a number the ring has moved past still names
 frame. Each entry's sequence number is also the marker the replay gives `rhi_cmd_checkpoint` right
 after the pass begins (or before the copy), and every replay sets `rhi_set_submit_tag` to its replay
 and frame numbers, so the backend's [loss report](RHI.md#device-loss) and the ring name the same
-passes. The window prints the ring after a device loss, before the box
-([PLATFORM.md](PLATFORM.md#diagnostics)) (`port/render/rd_passring.h`, header comment;
-`port/render/rd_passring.c` (`rd_passring_print`); `port/render/rd_replay.c` (`replayFrame`,
+passes. Once the device is lost the replay returns before recording anything (`replayFrame`), so
+the ring ends at the last replay given to the GPU. A replay records about 430 entries, so the ring
+holds the last three replays whole while each stays under about 680: the last one recorded and the
+two before it, the oldest of them the submission whose wait failed (`RHI_FRAMES_IN_FLIGHT` back).
+The window prints the replay table and then the entries of those three replays (from the oldest
+entry held when the ring has moved past the start of the first; at most the ring's 2048 lines)
+after a device loss, before the box ([PLATFORM.md](PLATFORM.md#diagnostics))
+(`port/render/rd_passring.h`, header comment; `port/render/rd_passring.c`
+(`rd_passring_print_start`, `rd_passring_print`); `port/render/rd_replay.c` (`replayFrame`,
 `beginPass`, `doCopy`, `takeSnap`, `doExact`); `port/render/rd_pipeline.c` (`rd__get_pipeline`)).
 
 ## Pipelines
@@ -532,7 +538,10 @@ filtering), and TFX, the tests and the blend follow in integers as before
 (`port/shaders/fx_sprite.hlsl` (`fx_sprite_ps`)). The pipelines are the same; only the per-draw
 constants differ. The gate is the scale, never the step: at scale 1 the chains' own 4:1 and 3.5:1
 steps stay the GS's point samples, so the out-of-the-box picture is the GS's arithmetic as before.
-Images are never resampled. `g_rd.above1xDraws` counts the flagged sprites since `rd_init`
+Images are never resampled. A sprite that samples the target it draws into reads its snapshot,
+which holds the texels at its UVs widened by the kernel's reach on each axis that leaves the GS's
+filter (`port/render/rd_replay.c` (`blurSnapArea`, `blurKernelReach`)). `g_rd.above1xDraws` counts
+the flagged sprites since `rd_init`
 (`port/render/rd_internal.h` (`RdContext`)).
 
 At Enhanced 4x (NTSC: SCENE 4x, the work buffers 2x) the aura's chain takes the box for SCENE and
@@ -548,7 +557,12 @@ both filters linear, no GS levels, and the texture's scale is not the bound targ
 draw's wrap in `DF_TEXA_CLAMP_S/T` (`port/render/rd_replay.c` (`spriteAbove1x`, `fillDrawCB`)).
 These are the shadow composites (the levels at scale 1 into SCENE, 1/2s to 1/8s texel a pixel), the
 softening's SCENE into AA0 and AA0 or AA1 back over SCENE when the scene's scale is above the work
-targets' (above 2x), and a work target drawn into SCENE. The shader takes the step of each axis
+targets' (above 2x), a work target drawn into SCENE, and the reduction's fallback sprite (SCENE
+into DISPLAY on a scaled target, `rd__blur_screen_fallback`) when an axis leaves the GS's filter at
+its steps as `blurAbove1xSteps` computes them; at full height and scale 1 DISPLAY has twice the GS's
+rows (sy 2) and the reduction steps one SCENE row a DISPLAY row, the GS's filter on both axes, so
+the flag stays off there (`Replay.a1xGs`; `port/render/rd_replay.c` (`doBlurSpriteDraw`)). The
+shader takes the step of each axis
 from the pixel's footprint (`ddx`/`ddy` of the texel coordinate, constant over a sprite, so a draw
 of several sprites gets each one's own step), in 1/32 texel (`port/shaders/sprite.hlsl`
 (`sprite_above1x`)):
@@ -568,8 +582,11 @@ against the CPU B-spline and that a row across the shadow falls and rises once
 (`port/render/test/rd_shadow_test.c` (`checkComposite4x`)). The GS
 levels' integer filter of the Original preset (`rd__gs_filter_int`) is for images only, so it never
 meets the flag (`port/render/rd_pipeline.c` (`rd__gs_filter_int`)). The flag is never set when the
-two scales are equal, so never with every target at scale 1. `g_rd.above1xDraws` counts these
-passes too.
+two scales are equal, nor on the reduction at the GS's filter, so never at scale 1;
+`rd_present_test`'s full height 1x case checks no draw is flagged there and that the frame is byte
+for byte the one with the reduction flagged (`rd__set_a1x_gs_keep` off), whose shader takes the GS's
+path at every pixel (`port/render/test/rd_present_test.c` (`checkFullHeight1x`)).
+`g_rd.above1xDraws` counts these passes too.
 
 **The fog.** `doFog` sets `DrawCB.param[3]` to 1 when SCENE or the depth target is scaled, with
 the bound target's centre texel (its texture size halved, rounded down: the native frame's centre,

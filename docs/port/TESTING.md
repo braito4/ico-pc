@@ -266,8 +266,8 @@ program under an environment switch ([Environment switches](#environment-switche
   60:9 drawing every pixel with the tiles (`photoVeilPixels`).
 - `rd_mip_test.c`: the Enhanced mip chain's size and its builder staying inside it (`rd_mip`).
 - `rd_mirror_test.c`: mirror mode's flag and the flipped presenter output (`rd_mirror`).
-- `rd_passring_test.c`: the pass ring the device-loss report prints: order, wrap, the replay table,
-  the line format; pure (`rd_passring`).
+- `rd_passring_test.c`: the pass ring the device-loss report prints: order, wrap, the replay table, the
+  replays printed (the last three, whole at 430 passes a replay), the line format; pure (`rd_passring`).
 - `rd_msaa_test.c`: the anti-aliasing's MSAA against the frame without it (`rd_msaa`).
 - `rd_native_test.c`: the native frame's centre rule on a synthetic frame at five widths
   (`rd_native`).

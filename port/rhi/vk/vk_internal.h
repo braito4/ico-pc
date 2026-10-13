@@ -148,6 +148,9 @@ typedef struct VkrCmdList {
     uint32_t offsets[RHI_MAX_BIND_SLOTS][RHI_MAX_DYNAMIC_OFFSETS];
     uint32_t groupDirty; /* bit per group */
     bool inPass;
+    /* the open pass's render area (vk_cmd.c vkr_pass_area_fits): every
+     * scissor set inside it is cut to it */
+    uint32_t areaW, areaH;
     /* a draw, and a RHI_DST_READ_STORAGE draw, recorded in the open
      * render pass (vk_cmd.c vkr_dst_order) */
     bool drawnInPass, storageDrawn;

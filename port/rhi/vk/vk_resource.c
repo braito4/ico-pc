@@ -23,6 +23,13 @@ typedef struct VkrAllocRec {
 static VkrAllocRec *s_allocs;
 static uint32_t s_allocCount, s_allocCap;
 
+/* a binding reported for a VkDeviceMemory before vkr_alloc_note had it
+ * (drivers that report at vkAllocateMemory, inside vkr_allocate): taken by
+ * the note that follows */
+static struct {
+    uint64_t handle, base, size;
+} s_allocEarly;
+
 void vkr_alloc_note(VkDeviceMemory memory, uint64_t object, VkDeviceSize size, const char *name)
 {
     if (s_allocCount == s_allocCap) {
@@ -40,6 +47,11 @@ void vkr_alloc_note(VkDeviceMemory memory, uint64_t object, VkDeviceSize size, c
     e->object = object;
     e->size = size;
     snprintf(e->name, sizeof(e->name), "%s", name ? name : "?");
+    if (s_allocEarly.handle && s_allocEarly.handle == e->memory) {
+        e->base = s_allocEarly.base;
+        e->span = s_allocEarly.size;
+        memset(&s_allocEarly, 0, sizeof(s_allocEarly));
+    }
 }
 
 void vkr_alloc_forget(VkDeviceMemory memory)
@@ -54,12 +66,19 @@ void vkr_alloc_forget(VkDeviceMemory memory)
 
 void vkr_alloc_bound(uint64_t object, uint64_t base, uint64_t size, bool bound)
 {
+    /* the report names the buffer or image (at its bind), or the memory
+     * (drivers that report at allocation) */
     for (uint32_t i = 0; i < s_allocCount; i++) {
-        if (s_allocs[i].object == object) {
+        if (s_allocs[i].object == object || s_allocs[i].memory == object) {
             s_allocs[i].base = bound ? base : 0;
             s_allocs[i].span = bound ? size : 0;
             return;
         }
+    }
+    if (bound) {
+        s_allocEarly.handle = object;
+        s_allocEarly.base = base;
+        s_allocEarly.size = size;
     }
 }
 
@@ -101,6 +120,7 @@ void vkr_alloc_table_free(void)
     free(s_allocs);
     s_allocs = NULL;
     s_allocCount = s_allocCap = 0;
+    memset(&s_allocEarly, 0, sizeof(s_allocEarly));
 }
 
 /* every vkFreeMemory, so the live counts stay right */

@@ -41,7 +41,7 @@
  *      B-spline of its level within 2 LSB (3 on the fixed-function
  *      blender), a row across the shadow falling
  *      and rising once; the softening's AA0 (at the work scale 2) the area
- *      box of SCENE within 1 LSB and its composite back the B-spline within
+ *      box of SCENE byte for byte and its composite back the B-spline within
  *      2; the passes counted (g_rd.above1xDraws), none in the 1x run.
  * Every pipeline created is enumerated; no validation errors. */
 #include <math.h>
@@ -1247,7 +1247,7 @@ static void checkSoftening4x(void)
     printf("  (s) 4x softening: AA0 (at 2) max %d LSB from the box (at %d,%d), SCENE max %d from "
            "the B-spline composite (at %d,%d)\n",
            worstA, ax, ay, worstS, sx, sy);
-    CHECK(worstA <= 1, "(s) AA0 at 4x: max difference %d from the box at (%d,%d)", worstA, ax, ay);
+    CHECK(worstA == 0, "(s) AA0 at 4x: max difference %d from the box at (%d,%d)", worstA, ax, ay);
     CHECK(worstS <= 2, "(s) SCENE at 4x: max difference %d from the composite at (%d,%d)", worstS,
           sx, sy);
 }

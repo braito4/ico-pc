@@ -789,9 +789,10 @@ void rhi_cmd_end_label(RhiCommandList cl);
  * opaque value the caller can name later (the renderer passes its pass
  * ring's sequence numbers, port/render/rd_passring.h).  Vulkan with
  * VK_NV_device_diagnostic_checkpoints and the switch on
- * (ICO_GPU_CHECKPOINTS=1, ico-pc.ini gpu_checkpoints); a no-op otherwise
- * and on D3D12 (whose DRED breadcrumbs, under the same switch, need no
- * markers).  Inside or outside a render pass.
+ * (ICO_GPU_CHECKPOINTS=1, ico-pc.ini gpu_checkpoints); on D3D12 under the
+ * same switch, a DRED marker "pass #N" kept as the breadcrumb context of
+ * the next operation (d3d12_cmd.c rhi_cmd_checkpoint); a no-op otherwise.
+ * Inside or outside a render pass.
  *
  * rhi_set_submit_tag: the replay and frame numbers the next submissions
  * belong to, kept with each submission's timeline or fence value so the

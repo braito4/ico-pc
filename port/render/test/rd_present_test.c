@@ -94,6 +94,13 @@
  *             shown picture has the overlay inside it; the
  *             capture takes a filter pass without it); rd_capture_result
  *             reports it once
+ *   aa off    without anti-aliasing, 4x into 640 x 480 (3.2 texels a pixel)
+ *             is DISPLAY box-reduced byte for byte (cpuReduce), one pass
+ *             more than at 1.28 a pixel; 1x into 320 x 240 keeps the plain
+ *             box blit (the passes of 1x into 960 x 720)
+ *   full height 1x  the reduction (DISPLAY sy 2, one SCENE row a DISPLAY
+ *             row) takes no above-1x kernel, byte for byte the frame with
+ *             it flagged (rd__set_a1x_gs_keep off), which is counted
  *   passes    the Enhanced preset at 960 x 720 with a deferred text item:
  *             the box blit, the deferred text and both overlay layers draw
  *             in one pass on the output, so the present records two passes
@@ -1701,11 +1708,16 @@ static void cpuReduce(const uint8_t *src, uint32_t sw, uint32_t sh, uint8_t *dst
     }
 }
 
-static uint8_t s_ssaaDisp[2048 * 2048 * 4], s_ssaaRef[1280 * 960 * 4], s_ssaaOut[1280 * 960 * 4];
+static uint8_t s_ssaaDisp[2048 * 2048 * 4], s_ssaaRef[1280 * 960 * 4], s_ssaaOut[1600 * 1200 * 4];
+
+/* the render passes the last ssaaRun's frame recorded, and its draws
+ * above 1x (g_rd.above1xDraws) */
+static uint32_t s_ssaaPasses, s_ssaaA1x;
 
 /* the rich frame at Enhanced, full height, 4:3 into outW x outH with the
  * anti-aliasing aa and scene scale scale: DISPLAY (into s_ssaaDisp when
- * disp), the present (into s_ssaaOut) and its box */
+ * disp), the present (into s_ssaaOut) and its box; its passes in
+ * s_ssaaPasses */
 static bool ssaaRun(int aa, float scale, uint32_t outW, uint32_t outH, int disp, uint32_t *dw,
                     uint32_t *dh, RhiRect *box)
 {
@@ -1720,7 +1732,13 @@ static bool ssaaRun(int aa, float scale, uint32_t outW, uint32_t outH, int disp,
         return false;
     }
     RdTex t = rd_create_texture(512, 512, s_scene, RD_TEXA_80_80, "scene");
+    RhiStats st0, st1;
+    const uint32_t a1x0 = g_rd.above1xDraws;
+    rhi_get_stats(&st0);
     recordRichFrame(t, 1);
+    rhi_get_stats(&st1);
+    s_ssaaPasses = (uint32_t)(st1.renderPasses - st0.renderPasses);
+    s_ssaaA1x = g_rd.above1xDraws - a1x0;
     bool ok = true;
     uint32_t w = 0, h = 0;
     uint8_t *p = readTarget(RD_TARGET_DISPLAY, &w, &h);
@@ -1807,6 +1825,104 @@ static void checkSsaa(void)
     }
     CHECK(rhi_vk_validation_error_count() == 0, "ssaa: %u validation errors",
           rhi_vk_validation_error_count());
+}
+
+/* Without anti-aliasing: a scaled scene with more than two texels a pixel
+ * (4x, 2048 texels into a 640 x 480 box: 3.2 a pixel) is box-reduced as
+ * the supersampling is, the present inside the box byte for byte DISPLAY
+ * reduced on the CPU, one pass more than the same scale at 1.28 a pixel
+ * (1600 x 1200: the box blit's one bilinear tap); at scale 1 into a small
+ * window (512 into 320: 1.6 a pixel) the plain box blit stays, the same
+ * passes as into a window larger than the frame (960 x 720). */
+static void checkAaOffReduce(void)
+{
+    makeNoiseScene();
+    uint32_t w = 0, h = 0;
+    RhiRect box;
+    if (!ssaaRun(RD_AA_OFF, 4.0f, 1600, 1200, 0, &w, &h, &box)) {
+        CHECK(0, "aa off: the 4x run into 1600 x 1200");
+        return;
+    }
+    const uint32_t passesLow = s_ssaaPasses;
+    if (!ssaaRun(RD_AA_OFF, 4.0f, 640, 480, 1, &w, &h, &box)) {
+        CHECK(0, "aa off: the 4x run into 640 x 480");
+        return;
+    }
+    const uint32_t passesHigh = s_ssaaPasses;
+    CHECK(passesHigh == passesLow + 1u,
+          "aa off: 3.2 texels a pixel adds the reduce's pass (%u, %u)", passesHigh, passesLow);
+    CHECK(w == 2048 && box.w > 0 && box.h > 0 && box.w * 4u * box.h <= sizeof(s_ssaaRef),
+          "aa off: DISPLAY %ux%u, box %ux%u", w, h, box.w, box.h);
+    if (w == 2048 && box.w > 0 && box.h > 0 && box.w * 4u * box.h <= sizeof(s_ssaaRef)) {
+        cpuReduce(s_ssaaDisp, w, h, s_ssaaRef, box.w, box.h);
+        int bad = 0, worst = 0;
+        for (uint32_t y = 0; y < box.h; y++) {
+            for (uint32_t x = 0; x < box.w; x++) {
+                const uint8_t *g =
+                    &s_ssaaOut[(((size_t)(box.y + (int32_t)y)) * 640u + (size_t)box.x + x) * 4];
+                const uint8_t *c = &s_ssaaRef[((size_t)y * box.w + x) * 4];
+                for (int k = 0; k < 3; k++) {
+                    const int e = abs((int)g[k] - (int)c[k]);
+                    worst = e > worst ? e : worst;
+                    bad += e != 0;
+                }
+            }
+        }
+        printf("  aa off 4x: %ux%u -> box %ux%u, %d bytes differ, worst %d\n", w, h, box.w, box.h,
+               bad, worst);
+        CHECK(bad == 0, "aa off 4x: the present is DISPLAY box-reduced, byte for byte");
+    }
+    if (!ssaaRun(RD_AA_OFF, 1.0f, 960, 720, 0, &w, &h, &box)) {
+        CHECK(0, "aa off: the 1x run into 960 x 720");
+        return;
+    }
+    const uint32_t passesBig = s_ssaaPasses;
+    if (!ssaaRun(RD_AA_OFF, 1.0f, 320, 240, 0, &w, &h, &box)) {
+        CHECK(0, "aa off: the 1x run into 320 x 240");
+        return;
+    }
+    CHECK(s_ssaaPasses == passesBig, "aa off 1x: a small window keeps the plain blit (%u, %u)",
+          s_ssaaPasses, passesBig);
+    CHECK(rhi_vk_validation_error_count() == 0, "aa off: %u validation errors",
+          rhi_vk_validation_error_count());
+}
+
+/* Full height at Resolution 1x: DISPLAY has twice the GS's rows (sy 2),
+ * so the reduction is drawn as its fallback sprite, one SCENE row a
+ * DISPLAY row.  The GS's filter on both axes there: no draw takes the
+ * above-1x kernels, and DISPLAY and the present are byte for byte the
+ * frame with the reduction flagged above 1x (rd__set_a1x_gs_keep off),
+ * whose shader takes the GS's path at every pixel. */
+static uint8_t s_fh1Disp[512 * 1024 * 4], s_fh1Out[960 * 720 * 4];
+
+static void checkFullHeight1x(void)
+{
+    makeNoiseScene();
+    uint32_t w = 0, h = 0, w2 = 0, h2 = 0;
+    RhiRect box;
+    rd__set_a1x_gs_keep(false);
+    const bool okFlag = ssaaRun(RD_AA_OFF, 1.0f, 960, 720, 1, &w, &h, &box);
+    rd__set_a1x_gs_keep(true);
+    const uint32_t a1xFlag = s_ssaaA1x;
+    CHECK(okFlag && (size_t)w * h * 4 <= sizeof(s_fh1Disp), "full height 1x: the flagged run");
+    if (!okFlag || (size_t)w * h * 4 > sizeof(s_fh1Disp)) {
+        return;
+    }
+    memcpy(s_fh1Disp, s_ssaaDisp, (size_t)w * h * 4);
+    memcpy(s_fh1Out, s_ssaaOut, sizeof(s_fh1Out));
+    if (!ssaaRun(RD_AA_OFF, 1.0f, 960, 720, 1, &w2, &h2, &box)) {
+        CHECK(0, "full height 1x: the run");
+        return;
+    }
+    printf("  full height 1x: DISPLAY %ux%u, %u draws above 1x flagged, %u kept at the GS's "
+           "filter\n",
+           w, h, a1xFlag, s_ssaaA1x);
+    CHECK(a1xFlag > 0, "full height 1x: the reduction's fallback sprite flagged when asked");
+    CHECK(s_ssaaA1x == 0, "full height 1x: %u draws above 1x at scale 1", s_ssaaA1x);
+    CHECK(w == w2 && h == h2 && memcmp(s_fh1Disp, s_ssaaDisp, (size_t)w * h * 4) == 0,
+          "full height 1x: DISPLAY byte for byte the flagged frame's");
+    CHECK(memcmp(s_fh1Out, s_ssaaOut, sizeof(s_fh1Out)) == 0,
+          "full height 1x: the present byte for byte the flagged frame's");
 }
 
 /* The scene cap follows the device's texture limit (4096 under
@@ -4251,6 +4367,8 @@ int main(int argc, char **argv)
     checkOriginal();
     checkScale2();
     checkSsaa();
+    checkAaOffReduce();
+    checkFullHeight1x();
     checkSceneLimit();
     checkWide169();
     checkPresent1to1();

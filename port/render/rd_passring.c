@@ -133,6 +133,30 @@ const RdPassReplay *rd_passring_replay_of(uint64_t seq)
     return NULL;
 }
 
+uint32_t rd_passring_print_start(void)
+{
+    const uint32_t n = rd_passring_count(), nr = rd_passring_replay_count();
+    if (!n) {
+        return 0;
+    }
+    /* the oldest of the last RD_PASSRING_PRINT_REPLAYS replays that has an
+     * entry */
+    uint64_t from = 0;
+    for (uint32_t i = nr > RD_PASSRING_PRINT_REPLAYS ? nr - RD_PASSRING_PRINT_REPLAYS : 0; i < nr;
+         i++) {
+        const RdPassReplay *r = rd_passring_replay_get(i);
+        if (r->first) {
+            from = r->first;
+            break;
+        }
+    }
+    const uint64_t oldest = rd_passring_get(0)->seq;
+    if (!from || from < oldest) {
+        return 0;
+    }
+    return (uint32_t)(from - oldest);
+}
+
 static const char *kindName(uint8_t k)
 {
     static const char *const names[RD_PASSK_COUNT] = {"pass",        "copy",    "snapshot",
@@ -202,9 +226,15 @@ void rd_passring_print(FILE *f, const char *(*postName)(int))
                 (unsigned)r->frame, r->keep ? " (keep)" : "", (unsigned long long)r->first,
                 (unsigned long long)r->last);
     }
-    const uint32_t n = rd_passring_count();
-    fprintf(f, "rd: the last %u passes recorded, oldest first:\n", n);
-    for (uint32_t i = 0; i < n; i++) {
+    const uint32_t n = rd_passring_count(), start = rd_passring_print_start();
+    const RdPassRec *s0 = rd_passring_get(start);
+    fprintf(f, "rd: the last %u passes recorded, oldest first (the last %u replays%s):\n",
+            n - start, (unsigned)RD_PASSRING_PRINT_REPLAYS,
+            s0 && start == 0 && rd_passring_replay_of(s0->seq) &&
+                    rd_passring_replay_of(s0->seq)->first < s0->seq
+                ? ", the oldest one's first passes past the ring"
+                : "");
+    for (uint32_t i = start; i < n; i++) {
         char line[320];
         rd_passring_format(rd_passring_get(i), postName, line, sizeof(line));
         fprintf(f, "rd:   %s\n", line);

@@ -811,8 +811,11 @@ static void vkr_hz_copy(VkrCmdList *c, VkrTexture *srcTex, VkrBuffer *srcBuf, Vk
  * VUID-VkRenderingInfo-pNext-06079/06080): one that does not is drawn over
  * memory past the image's end.  Such a pass is logged once (with the
  * sizes; an assert in the debug build), counted (vkr_test_pass_area_count)
- * and clamped to the smallest attachment, so it draws what lies inside.
- * A pass whose area fits is untouched. */
+ * and clamped to the smallest attachment, its default viewport and
+ * scissor with it; every scissor set while the pass is open is cut to the
+ * area too (rhi_cmd_set_scissor), so a later full-target scissor cannot
+ * reach past it and the pass draws what lies inside.  A pass whose area
+ * fits is untouched. */
 static bool s_passAreaNoAssert; /* vkr_test_pass_area_no_assert */
 
 uint32_t vkr_test_pass_area_count(void)
@@ -1000,6 +1003,8 @@ void rhi_cmd_begin_render_pass(RhiCommandList cl, const RhiRenderPassDesc *pass)
     }
     g_vkr.cmdBeginRendering(c->cb, &ri);
     c->inPass = true;
+    c->areaW = areaW;
+    c->areaH = areaH;
     c->storageDrawn = c->drawnInPass = false;
     g_vkr.stats.renderPasses++;
 
@@ -1042,6 +1047,12 @@ void rhi_cmd_set_scissor(RhiCommandList cl, const RhiRect *r)
     }
     vkr_flush_barriers(c);
     VkRect2D sc = {{r->x, r->y}, {r->w, r->h}};
+    if (c->inPass) {
+        /* within the render area (vkr_pass_area_fits) */
+        const uint32_t x = r->x > 0 ? (uint32_t)r->x : 0u, y = r->y > 0 ? (uint32_t)r->y : 0u;
+        sc.extent.width = x >= c->areaW ? 0u : r->w < c->areaW - x ? r->w : c->areaW - x;
+        sc.extent.height = y >= c->areaH ? 0u : r->h < c->areaH - y ? r->h : c->areaH - y;
+    }
     vkCmdSetScissor(c->cb, 0, 1, &sc);
 }
 
