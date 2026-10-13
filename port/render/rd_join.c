@@ -82,6 +82,9 @@ void rd__join_parts(const RdFrame *f, int keep)
             n++;
         }
     }
+    if (n == 0) {
+        return; /* no draws (a frame without meshes): qsort takes no null */
+    }
     qsort(draws, n, sizeof(JoinDraw), joinDrawCmp);
     for (uint32_t a = 0; a < n;) {
         uint32_t b = a + 1;
