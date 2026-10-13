@@ -594,12 +594,14 @@ typedef struct RdTexRec {
     uint8_t mipUse, mipRef;
     uint8_t mipBuiltBoost, mipBuiltRef;
     /* A SHEET texture's style (rd.h RdSheetStyle):
-     * the rim's weight (0 off, 1..64 the 64ths of a full rim: rimOn with
+     * the halo's weight (0 off, 1..64 the 64ths of a full halo: rimOn with
      * rimWeight), rimLevel, fillLevel, dither (kept as 0 or 1) */
     uint8_t sheet[4];
     /* Its RdSheetStyle.scale, 1..ICO_SHEET_SCALE_MAX
      * (0 in a texture that is no sheet) */
     uint8_t sheetScale;
+    /* Its RdSheetStyle.rimGain, 1..255 64ths (0 is kept as 64) */
+    uint8_t sheetGain;
     /* The GS mipmap levels of a game texture whose TEX1 asks for mipmapping
      * and whose levels are authored (rdtex_store_levels): gsLevels counts
      * them with the base (0 or 1: none), gsChain holds levels 1.. as RGBA8
@@ -2111,12 +2113,15 @@ bool rd__read_texture(RdTex t, void *dst, size_t dstSize, uint32_t *w, uint32_t 
  * style in the view word; 8 RD_TARGET_DISPLAY_HELD, an 18th fixed target
  * (the motion blur); 9 RdStateBlock.tex1Lod, RDC_FILTER's u[0] and an image's GS
  * levels (RdTexRec.gsLevels) after its texels; 10 the native frame after
- * gsH: f32 aspect, f32 wExact, u32 cullW (RdFrame.aspect, .wExact, .cullW).
+ * gsH: f32 aspect, f32 wExact, u32 cullW (RdFrame.aspect, .wExact, .cullW);
+ * 11 a sheet image always w x h with its halo in the bottom half and its
+ * rimGain in the bakedTexa word's bits 16..23 (an older sheet loads with
+ * its halo made again from its coverage and a gain of 64).
  * rd__dump_frame writes this version; rd__load_frame reads 3 to it, and a
  * dump before 10 loads as the 4:3 frame (aspect 4/3, wExact 512, cullW 512).
  * A dump holds the picture as drawn at its width: a replay can crop it to a
  * narrower aspect, never widen it (rd_replay_tool). */
-#define RD_DUMP_VERSION 10u
+#define RD_DUMP_VERSION 11u
 bool rd__dump_frame(const RdFrame *f, const char *path);
 bool rd__load_frame(const char *path, RdFrame *out);
 

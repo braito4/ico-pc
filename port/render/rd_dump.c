@@ -35,7 +35,12 @@
  *            10..15 the rim's weight in 64ths (0 full: the first version 7
  *            dumps have none), bits 16..23 rimLevel, 24..31 fillLevel
  *            (sheetView); a sheet's bakedTexa word holds its scale less
- *            one in bits 8..15 (0, a 1x sheet, in older dumps: sheetTexa)
+ *            one in bits 8..15 (0, a 1x sheet, in older dumps: sheetTexa).
+ *            Version 11: a sheet image is w x h with its coverage in the
+ *            top half and its halo in the bottom half at every scale, its
+ *            rimGain in the bakedTexa word's bits 16..23; an older one
+ *            loads with its halo made again from its coverage
+ *            (sheetRebuild) and a gain of 64
  *   u32      temp target count; per target: u32 id, w, h, withDepth, keep
  *   (version 5: RDC_OVERLAY_TEXT commands, their RdTextItem and
  *   RdTextOp payloads, and RDC_SCREEN's b[3]; no new section.  A version 4
@@ -130,11 +135,33 @@ static uint32_t sheetView(const RdTexRec *t)
            (uint32_t)t->sheet[1] << 16 | (uint32_t)t->sheet[2] << 24;
 }
 
-/* an image's bakedTexa word: a sheet's scale less one above the byte */
+/* an image's bakedTexa word: a sheet's scale less one above the byte and
+   its rimGain above that (version 11) */
 static uint32_t sheetTexa(const RdTexRec *t)
 {
-    const uint32_t up = t->format == RD_TEXEL_SHEET && t->sheetScale > 1 ? t->sheetScale - 1u : 0u;
-    return (uint32_t)t->bakedTexa | up << 8;
+    if (t->format != RD_TEXEL_SHEET) {
+        return t->bakedTexa;
+    }
+    const uint32_t up = t->sheetScale > 1 ? t->sheetScale - 1u : 0u;
+    return (uint32_t)t->bakedTexa | up << 8 | (uint32_t)(t->sheetGain ? t->sheetGain : 64u) << 16;
+}
+
+/* A sheet image of a dump before version 11: its coverage (the whole image
+   at 1x, the top half above it) over a halo made now (rd_sheet_rim), as
+   the version 11 texture is; NULL without the memory.  *hOut the new
+   height. */
+static uint8_t *sheetRebuild(const uint8_t *px, uint32_t w, uint32_t h, uint32_t scale,
+                             uint32_t *hOut)
+{
+    const uint32_t ch = scale > 1 ? h / 2u : h;
+    uint8_t *out = ch ? calloc((size_t)w * ch * 2u, 1) : NULL;
+    if (!out) {
+        return NULL;
+    }
+    memcpy(out, px, (size_t)w * ch);
+    rd_sheet_rim(out, w, ch, scale, 0, 0, (int32_t)w, (int32_t)ch, out + (size_t)w * ch);
+    *hOut = 2u * ch;
+    return out;
 }
 
 static void targetRef(IdSet *temps, uint32_t id)
@@ -609,7 +636,17 @@ bool rd__load_frame(const char *path, RdFrame *out)
                 }
             }
             if (ok) {
-                RdTex t = rd__create_texture_fmt(h.w, h.h, px, fmt, (RdTexSrc)h.src, "dump");
+                uint32_t th = h.h;
+                uint8_t *rebuilt = NULL;
+                if (sheet && ver < 11u) {
+                    const uint32_t up = (h.bakedTexa >> 8) & 0xFFu;
+                    rebuilt = sheetRebuild(px, h.w, h.h, up + 1u, &th);
+                    ok = rebuilt != NULL;
+                }
+                RdTex t = ok ? rd__create_texture_fmt(h.w, th, rebuilt ? rebuilt : px, fmt,
+                                                      (RdTexSrc)h.src, "dump")
+                             : (RdTex){0};
+                free(rebuilt);
                 if (nl > 1) {
                     rd__tex_set_levels(t, chain, nl);
                 }
@@ -626,6 +663,8 @@ bool rd__load_frame(const char *path, RdFrame *out)
                         tr->sheetScale =
                             (uint8_t)(up + 1u > ICO_SHEET_SCALE_MAX ? ICO_SHEET_SCALE_MAX
                                                                     : up + 1u);
+                        const uint32_t gain = ver >= 11u ? (h.bakedTexa >> 16) & 0xFFu : 0u;
+                        tr->sheetGain = (uint8_t)(gain ? gain : 64u);
                     }
                 }
                 texMap.from[texMap.n] = h.id;

@@ -750,7 +750,7 @@ static int spit(const char *path, const uint8_t *buf, long size)
  * refused. */
 static void testDumpV10(const char *dir)
 {
-    CHECK(RD_DUMP_VERSION == 10u, "the dump version is 10 (%u)", RD_DUMP_VERSION);
+    CHECK(RD_DUMP_VERSION >= 10u, "the dump version is 10 or later (%u)", RD_DUMP_VERSION);
     RdFrameHead h;
     memset(&h, 0, sizeof(h));
     h.gsW = 1376; /* 32:9: 16 * ceil(32 * k), k = 32/9 * 3/4 */
@@ -770,7 +770,7 @@ static void testDumpV10(const char *dir)
     snprintf(path, sizeof(path), "%s/rd_state_test_v10.rddump", dir);
     CHECK(rd__dump_frame(f, path), "v10 dump written");
     RdDumpInfo info;
-    CHECK(rd__dump_peek(path, &info) && info.version == 10u && info.gsW == 512u &&
+    CHECK(rd__dump_peek(path, &info) && info.version == RD_DUMP_VERSION && info.gsW == 512u &&
               info.gsH == 512u && info.aspect == h.aspect && info.wExact == h.wExact &&
               info.cullW == 1376u,
           "v10 header peeked");
