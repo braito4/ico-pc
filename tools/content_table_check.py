@@ -349,7 +349,9 @@ def cmd_decide(args, dumps):
             fails += 1
         else:
             say("entry %d (%s): HIDE (never in the 4:3 picture)" % (i, mesh))
-    return 1 if (fails or decide_sheets(args, dumps)) else 0
+    # both tables decided, the sheets also when a hide entry fails
+    sheet_fails = decide_sheets(args, dumps)
+    return 1 if (fails or sheet_fails) else 0
 
 
 def band_rows(img, x0, x1):

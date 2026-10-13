@@ -201,7 +201,19 @@ void ico_photo_view_veil(void)
     int pri;
     int i;
 
-    if (!v.pair || stage_no == VEIL_STAGE || (o = veilObject()) == 0) {
+    static int s_noVeilStage = -1; /* the stage last logged without one */
+
+    if (!v.pair || stage_no == VEIL_STAGE) {
+        return;
+    }
+    if ((o = veilObject()) == 0) {
+        if (stage_no != s_noVeilStage) {
+            s_noVeilStage = stage_no;
+            fprintf(stderr,
+                    "photo: Deja vu: this place has no grain sheet; nothing drawn "
+                    "(stage %d)\n",
+                    stage_no);
+        }
         return;
     }
     memset(nodes, 0, sizeof(nodes));

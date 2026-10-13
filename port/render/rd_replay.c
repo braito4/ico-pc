@@ -4388,13 +4388,22 @@ static void doVuDraw(Replay *r, const RdFrame *f, const RdCmd *c)
     if (last > m->batchCount || p.batchCount == 0) {
         last = m->batchCount;
     }
-    /* the strip test's bounds: the draw's vertices (its batches') */
+    /* the strip test's bounds: the draw's vertices (its batches'); a sheet
+     * of the content table out of the box: its own triangles only, never
+     * the appended tiles (rd__vu_sheet_end) */
+    const bool extended = vuExtended();
     vcb.strip[0] = m->batches[p.firstBatch].firstVertex;
     vcb.strip[1] = m->batches[last - 1].firstVertex + m->batches[last - 1].vertexCount;
+    if (m->tiledFrom && !extended && vcb.strip[1] > m->tiledFrom) {
+        vcb.strip[1] = m->tiledFrom;
+    }
     if (p.clip != RD_VU_CLIP_SCISSOR) {
         const RdVuBatchRec *b0 = &m->batches[p.firstBatch], *b1 = &m->batches[last - 1];
-        vuDraw(r, &r->st, &ds, g2, p.prog, vs, streamBuf, streamBufSize, streamOff, streamSize,
-               &vcb, bonesOff, 1, b0->firstIndex, b1->firstIndex + b1->indexCount - b0->firstIndex);
+        const uint32_t end = rd__vu_sheet_end(m, b1->firstIndex + b1->indexCount, extended);
+        if (end > b0->firstIndex) {
+            vuDraw(r, &r->st, &ds, g2, p.prog, vs, streamBuf, streamBufSize, streamOff, streamSize,
+                   &vcb, bonesOff, 1, b0->firstIndex, end - b0->firstIndex);
+        }
         return;
     }
     IcoVuCB cut = vcb, kick = vcb;
@@ -4404,10 +4413,14 @@ static void doVuDraw(Replay *r, const RdFrame *f, const RdCmd *c)
     fan.ds.abe = 1; /* the fans' PRIM is the common block's 0x5D: ABE on */
     for (uint32_t b = p.firstBatch; b < last; b++) {
         const RdVuBatchRec *br = &m->batches[b];
+        const uint32_t end = rd__vu_sheet_end(m, br->firstIndex + br->indexCount, extended);
+        if (end <= br->firstIndex) {
+            continue;
+        }
         vuDraw(r, &fan, &ds, g2, p.prog, vs, streamBuf, streamBufSize, streamOff, streamSize, &cut,
-               bonesOff, 1, br->firstIndex, br->indexCount);
+               bonesOff, 1, br->firstIndex, end - br->firstIndex);
         vuDraw(r, &r->st, &ds, g2, p.prog, vs, streamBuf, streamBufSize, streamOff, streamSize,
-               &kick, bonesOff, 1, br->firstIndex, br->indexCount);
+               &kick, bonesOff, 1, br->firstIndex, end - br->firstIndex);
     }
 }
 

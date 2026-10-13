@@ -20,10 +20,12 @@
  * any triangle of the draw (vu_common.hlsli vu_region_rule).
  *
  * The verb:
- *   RD_EXTEND_TILES  the tiles appended.  Listed only when the appended
- *              tiles lie wholly beside the 4:3 picture, so that the frame
- *              at 4:3 (Original 1x and Enhanced 2x) is the same, byte for
- *              byte, with the entry off and on
+ *   RD_EXTEND_TILES  the tiles appended.  Out of the box (Original, 4:3,
+ *              1x) a draw never draws them (rd_mesh.c rd__vu_sheet_end),
+ *              wherever the sheet is placed.  Listed only when the
+ *              appended tiles lie wholly beside the 4:3 picture, so that
+ *              the frame at 4:3 in the other states (Enhanced 2x) is the
+ *              same, byte for byte, with the entry off and on
  *              (tools/content_table_check.py decide), and a wide frame's
  *              sides then show the sheet as its middle does.
  * A new entry comes from a report: find the mesh (rd_replay_tool --list and
@@ -51,7 +53,13 @@ const RdContentExtend rd__content_extend[] = {
      * sheets already cover the 448 lines 3.2 times; one row (2048 -+ 1075)
      * the same.  At 4:3 (2048 -+ 256) every appended tile lies off the
      * frame (content_table_check.py decide on v2227 at 4:3: the same
-     * picture, Original 1x and Enhanced 2x): TILES */
+     * picture, Original 1x and Enhanced 2x).  The Film effect's stage
+     * animations (film_noise_l1..l4.bga, stageTable rows 67 to 70; GsBase.c
+     * gsb_ResetFilmNoise) hold the same model in every stage at one key,
+     * camera space (-1.523, 0.852, 0.77807), scale 0.0001: its centre at
+     * GS X 2048 - 979 and Y 2048 -+ 639 (500 / 583.3 GS pixels a unit at
+     * depth 1, the v2227 draws' scale), the sheets 33 x 34 GS pixels, with
+     * the tiles 82 x 50, off every frame the port draws: TILES */
     {"sandstorm: the deja veil, the upper right quadrant (x 0..256, y -224..0)", RD_EXTEND_TILES,
      16, 3, 0x876eda2730a28055ull, 3, 1},
     {"sandstorm: the deja veil, the lower right quadrant (x 0..256, y 0..224)", RD_EXTEND_TILES, 16,

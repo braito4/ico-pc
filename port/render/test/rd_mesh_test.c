@@ -1333,6 +1333,70 @@ static void sheetTableChecks(void)
     rd__content_extend_set(NULL);
 }
 
+static void sheetDraw(RdMesh m, float kx, float ky);
+
+/* the mesh of the first static mesh draw of frame f, NULL without one */
+static const RdMeshRec *sheetFrameMesh(const RdFrame *f)
+{
+    for (int l = 0; l < RD_LIST_COUNT; l++) {
+        for (uint32_t i = 0; i < f->lists[l].count; i++) {
+            if (f->lists[l].cmds[i].type == RDC_MESH) {
+                return rd__mesh_rec(f->lists[l].cmds[i].u[0]);
+            }
+        }
+    }
+    return NULL;
+}
+
+/* A dump of a frame drawing the tiled quadrant (rd_dump.c rd__dump_frame)
+ * holds the game's own sheet: loaded with the table off, the mesh is the
+ * packet's 16 vertices, 24 indices and one batch of them, no tile; loaded
+ * with the table, it gets its 44 vertices of tiles again (60 in all), the
+ * stream the one the frame drew */
+static void sheetDumpChecks(void)
+{
+    CHECK(rd__content_extend_set(NULL), "sheet dump: the table");
+    static float qw[1 + 16 * 3][4];
+    veilPacket(qw, 255.0f);
+    const RdMesh veil = veilMesh(255.0f);
+    const RdMeshRec *m = rd__mesh_rec(veil.id);
+    CHECK(m && m->vertexCount == 60 && m->tiledFrom == 16 && m->tiledIndexFrom == 24,
+          "sheet dump: the quadrant tiled before the dump");
+    sheetDraw(veil, 1.171875f, 1.25f);
+    const char *path = "rd_mesh_sheet.rddump";
+    CHECK(rd__dump_frame(rd__last_frame(), path), "sheet dump: written");
+    for (int pass = 0; pass < 2; pass++) {
+        const char *spec = pass == 0 ? "off" : NULL;
+        CHECK(rd__content_extend_set(spec), "sheet dump: the table %s", spec ? spec : "as listed");
+        RdFrame g;
+        if (!rd__load_frame(path, &g)) {
+            CHECK(0, "sheet dump: loaded");
+            break;
+        }
+        const RdMeshRec *r = sheetFrameMesh(&g);
+        if (pass == 0) {
+            int own = r != NULL && r->vertexCount == 16;
+            for (uint32_t v = 0; own && v < 16; v++) {
+                own &= memcmp(r->stream[v * 3], qw[1 + v * 3], 48) == 0;
+            }
+            CHECK(own && r->tiledFrom == 0 && r->indexCount == 24 && r->batchCount == 1 &&
+                      r->batches[0].vertexCount == 16 && r->batches[0].indexCount == 24,
+                  "sheet dump: off, the game's 16 vertices and 24 indices, no tile (%u vertices)",
+                  r ? r->vertexCount : 0u);
+        } else {
+            CHECK(r && m && r->vertexCount == 60 && r->tiledFrom == 16 && r->indexCount == 90 &&
+                      r->batches[0].vertexCount == 60 &&
+                      memcmp(r->stream, m->stream, (size_t)60 * 48) == 0,
+                  "sheet dump: the table, the 44 vertices of tiles laid again (%u in all)",
+                  r ? r->vertexCount : 0u);
+        }
+        rd__frame_free(&g);
+    }
+    rd__content_extend_set(NULL);
+    rd_destroy_vu_mesh(veil);
+    (void)remove(path);
+}
+
 /* one frame: SCENE cleared grey, mesh m by code 32 at x = 0.08 x + tx,
    y = 0.08 z + 2103 GS window coordinates (GS Z 16000) */
 static void closingDraw(RdMesh m, float tx)
@@ -1437,19 +1501,30 @@ static void closingPixels(int wide)
 }
 
 /* The deja veil's quadrant (sheetTableChecks) on the device, untextured, at
- * 1.171875 GS pixels a unit across and 1.25 down from GS (2048, 2048): its
- * tiles 150 x 140 pixels, the sheet over GS X 1748..2048 and Y 1768..2048,
- * past the 4:3 frame's left edge (1792) by 44 pixels and short of the 16:9
- * one's (1704) by as much, and past the frame's top (1792), as the veil
- * reaches past the PS2's picture on every side.
+ * kx GS pixels a unit across and ky down from GS (2048, 2048).
+ * The stage's placement, 1.171875 and 1.25: its tiles 150 x 140 pixels,
+ * the sheet over GS X 1748..2048 and Y 1768..2048, past the 4:3 frame's
+ * left edge (1792) by 44 pixels and short of the 16:9 one's (1704) by as
+ * much, and past the frame's top (1792), as the veil reaches past the PS2's
+ * picture on every side.
  *   4:3 (Original 1x): the picture with the tiles is the one without them,
- *     byte for byte (they lie wholly off the frame);
+ *     byte for byte;
  *   16:9 (688 wide, Enhanced): without the tiles the 44 columns left of the
  *     sheet are the clear's grey; with them they are drawn in every row the
- *     sheet's own columns are, and the sheet's own columns are the same */
+ *     sheet's own columns are, and the sheet's own columns are the same.
+ * A shrunk placement, 0.25 and 0.25: the tiles 32 x 28 pixels, the sheet
+ * over GS X 1984..2048 and Y 1992..2048, its appended tiles over X
+ * 1888..1984 and up to Y 1964, inside the 4:3 picture:
+ *   4:3 (Original 1x): out of the box a sheet draws its own triangles only
+ *     (rd__vu_sheet_end), so the picture with the tiles is still the one
+ *     without them, byte for byte, whatever the placement;
+ *   4:3 Enhanced and 16:9 Enhanced: the 96 columns left of the sheet,
+ *     inside the 4:3 picture, are the clear's grey without the tiles and
+ *     drawn with them in the sheet's rows; the sheet's own texels are the
+ *     same, and its columns gain the row of tiles above it (64 x 28) */
 static const char kSheetKey;
 
-static void sheetDraw(RdMesh m)
+static void sheetDraw(RdMesh m, float kx, float ky)
 {
     static const uint8_t grey[4] = {40, 40, 60, 0x80};
     dl_Clear();
@@ -1469,8 +1544,8 @@ static void sheetDraw(RdMesh m)
     d.prog = RD_PROG_PRELIT;
     d.code = 32;
     d.clip = RD_VU_CLIP_REGION;
-    d.vu.mem[16][0] = 1.171875f;
-    d.vu.mem[17][1] = 1.25f;
+    d.vu.mem[16][0] = kx;
+    d.vu.mem[17][1] = ky;
     d.vu.mem[19][0] = 2048.0f;
     d.vu.mem[19][1] = 2048.0f;
     d.vu.mem[19][2] = 1000.0f;
@@ -1481,9 +1556,10 @@ static void sheetDraw(RdMesh m)
 
 static uint8_t s_sheetB[WT * 512 * 4];
 
-static void sheetPixels(int wide)
+/* the plain sheet and the tiled one drawn at kx, ky into s_closingA and
+   s_sheetB; the target's width, 0 on no read */
+static uint32_t sheetPair(const char *at, float kx, float ky)
 {
-    const char *at = wide ? "16:9" : "4:3";
     CHECK(rd__content_extend_set("off"), "sheets %s: off", at);
     const RdMesh plain = veilMesh(255.0f);
     CHECK(rd__content_extend_set(NULL), "sheets %s: the table", at);
@@ -1492,13 +1568,34 @@ static void sheetPixels(int wide)
     CHECK(pr && tr && pr->vertexCount == 16 && tr->vertexCount == 60,
           "sheets %s: the plain sheet and the tiled one", at);
     uint32_t w = 0, w2 = 0;
-    sheetDraw(plain);
+    sheetDraw(plain, kx, ky);
     const int okA = closingRead(s_closingA, &w);
-    sheetDraw(tiled);
+    sheetDraw(tiled, kx, ky);
     const int okB = closingRead(s_sheetB, &w2);
-    CHECK(okA && okB && w == w2 && w == (wide ? WT : 512u), "sheets %s: SCENE read (%u, %u)", at, w,
-          w2);
-    if (okA && okB && w == w2) {
+    rd_destroy_vu_mesh(plain);
+    rd_destroy_vu_mesh(tiled);
+    CHECK(okA && okB && w == w2, "sheets %s: SCENE read (%u, %u)", at, w, w2);
+    return okA && okB && w == w2 ? w : 0u;
+}
+
+/* whether columns x0.. of the two pictures are the same in every row */
+static int sheetSameFrom(uint32_t w, int x0)
+{
+    int same = 1;
+    for (int y = 0; y < 512; y++) {
+        same &= memcmp(&s_closingA[((size_t)y * w + (size_t)x0) * 4],
+                       &s_sheetB[((size_t)y * w + (size_t)x0) * 4],
+                       (size_t)(w - (uint32_t)x0) * 4) == 0;
+    }
+    return same;
+}
+
+static void sheetPixels(int wide)
+{
+    const char *at = wide ? "16:9" : "4:3";
+    const uint32_t w = sheetPair(at, 1.171875f, 1.25f);
+    CHECK(w == (wide ? WT : 512u), "sheets %s: the frame's width (%u)", at, w);
+    if (w) {
         const int edge = (int)w / 2 - 300; /* the sheet's left edge, GS X 1748 */
         const int ownA = closingCount(s_closingA, w, edge, (int)w / 2);
         const int ownB = closingCount(s_sheetB, w, edge, (int)w / 2);
@@ -1520,17 +1617,50 @@ static void sheetPixels(int wide)
                   "sheets 16:9: the %d columns beside the sheet are drawn with the tiles in its %d "
                   "rows (%d texels, none without)",
                   edge, rowsDrawn, sideB);
-            int same = 1;
-            for (int y = 0; y < 512; y++) {
-                same &= memcmp(&s_closingA[((size_t)y * w + (size_t)edge) * 4],
-                               &s_sheetB[((size_t)y * w + (size_t)edge) * 4],
-                               (size_t)(w - (uint32_t)edge) * 4) == 0;
-            }
-            CHECK(same && ownA == ownB, "sheets 16:9: the sheet's own columns are the same");
+            CHECK(sheetSameFrom(w, edge) && ownA == ownB,
+                  "sheets 16:9: the sheet's own columns are the same");
         }
     }
-    rd_destroy_vu_mesh(plain);
-    rd_destroy_vu_mesh(tiled);
+    /* the shrunk placement: the tiles inside the 4:3 picture */
+    const char *shrunk = wide ? "16:9 shrunk" : "4:3 shrunk";
+    const int original = !wide && g_rd.settings.preset == RD_PRESET_ORIGINAL;
+    const uint32_t ws = sheetPair(shrunk, 0.25f, 0.25f);
+    if (ws) {
+        const int edge = (int)ws / 2 - 64; /* the sheet's left edge, GS X 1984 */
+        const int pic = (int)ws / 2 - 256; /* the 4:3 picture's left edge, GS X 1792 */
+        const int ownA = closingCount(s_closingA, ws, edge, (int)ws / 2);
+        const int ownB = closingCount(s_sheetB, ws, edge, (int)ws / 2);
+        const int sideA = closingCount(s_closingA, ws, pic, edge);
+        const int sideB = closingCount(s_sheetB, ws, pic, edge);
+        printf("  sheets %s (%s): own columns %d / %d texels, the 4:3 picture's columns beside "
+               "them %d / %d (plain / tiled)\n",
+               shrunk, original ? "Original" : "Enhanced", ownA, ownB, sideA, sideB);
+        if (original) {
+            CHECK(memcmp(s_closingA, s_sheetB, (size_t)ws * 512 * 4) == 0,
+                  "sheets 4:3 shrunk: out of the box the picture with the tiles is the one "
+                  "without them, byte for byte, though the tiles lie inside it");
+        } else {
+            /* the sheet's 56 rows: the 3 tiles beside each of its two rows of
+               tiles, 96 x 56 texels, in the 4:3 picture */
+            CHECK(sideA == 0 && sideB >= 96 * 50 && ownA > 0,
+                  "sheets %s Enhanced: the tiles are drawn inside the 4:3 picture (%d texels "
+                  "beside the sheet, %d without)",
+                  shrunk, sideB, sideA);
+            /* the sheet's own texels the same; above it, in its columns,
+               the row of tiles over its 64 x 28 texels */
+            int kept = 1;
+            for (size_t t = 0; t < (size_t)ws * 512; t++) {
+                const uint8_t *a = &s_closingA[t * 4];
+                if (a[0] != 40 || a[1] != 40 || a[2] != 60) {
+                    kept &= memcmp(a, &s_sheetB[t * 4], 4) == 0;
+                }
+            }
+            CHECK(kept && ownB - ownA == 64 * 28,
+                  "sheets %s Enhanced: the sheet's own texels are the same, the tiles above it "
+                  "%d texels",
+                  shrunk, ownB - ownA);
+        }
+    }
 }
 
 /* ---------------------------------------------------- the photo veil */
@@ -3181,6 +3311,7 @@ static void recordingChecks(void)
     checkStretchRecording();
     closingPlaneChecks();
     sheetTableChecks();
+    sheetDumpChecks();
     chainTableChecks();
     chainDrawChecks();
     stripTableChecks();
@@ -3299,6 +3430,7 @@ int main(int argc, char **argv)
         setup();
         buildScene();
         stretch43Enhanced();
+        sheetPixels(0); /* Enhanced at 4:3: the tiles drawn */
         rd_shutdown();
     }
 
