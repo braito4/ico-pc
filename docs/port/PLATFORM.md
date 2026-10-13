@@ -31,7 +31,7 @@ run explain itself. [ARCHITECTURE.md](ARCHITECTURE.md) places this layer among t
 | `port/platform/pace_policy.c`, `pace_policy.h` | the pacing decisions, free of SDL |
 | `port/platform/hotkeys.c`, `hotkeys.h` | F11 and F12 |
 | `port/platform/dump_zip.c`, `dump_zip.h` | F12's zip and the aspect sweep's zip |
-| `port/platform/steam_shortcut.c`, `steam_shortcut.h` | Settings > Extras > Add to Steam (desktop) |
+| `port/platform/steam_shortcut.c`, `steam_shortcut.h` | Settings > Extras > Add to Steam (Windows and Linux; not offered on macOS) |
 | `port/platform/gpu_driver.c`, `gpu_driver.h` | Android graphics driver packages (pure C, tested everywhere) |
 | `port/platform/android/` | `main_android.c`, `host_android.c`, `android_paths.c`, `iso_import.c`, `gpu_driver_android.c` |
 | `port/platform/ios/main_ios.c`, `ios/Info.plist.in` | the iOS entry point and bundle |

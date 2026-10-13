@@ -1385,7 +1385,7 @@ static int device_lost_quit(void)
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "ICO PC",
                                  "The graphics card stopped responding (its driver was reset or "
                                  "updated, or the card was removed).\n\nThe game has to close. "
-                                 "Your last save is kept; logs/ico-pc.log says why.",
+                                 "Your last save is kept; the log says why.",
                                  s_window);
     }
     return 1;
