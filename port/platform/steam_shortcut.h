@@ -3,8 +3,10 @@
  *
  * Settings > Extras > Add to Steam: a non-Steam shortcut for this program in
  * the most recent Steam user's library (userdata/<id>/config/shortcuts.vdf,
- * a binary VDF file). Desktop only (Windows, Linux and Steam Deck); the
- * Android build does not compile it.
+ * a binary VDF file). Windows, Linux and Steam Deck only: the Android and
+ * iOS builds do not compile it, and the macOS build does not offer the row
+ * (no /proc for the program's own path and no way here to tell that Steam
+ * runs; window_host.c).
  *
  * The file is edited by inserting one entry before the end of its
  * "shortcuts" map, so every existing entry keeps its bytes; the file as it

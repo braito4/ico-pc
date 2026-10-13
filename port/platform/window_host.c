@@ -404,8 +404,12 @@ static int window_fullscreen(void)
     return s_window != NULL && (SDL_GetWindowFlags(s_window) & SDL_WINDOW_FULLSCREEN) != 0;
 }
 
-#if !defined(__ANDROID__) && !defined(ICO_IOS)
-/* Extras > Add to Steam: steam_shortcut.c's answers are the menu's */
+/* Extras > Add to Steam: Windows and Linux. Not on macOS: steam_shortcut.c
+   finds its own path through /proc and tells that Steam runs from Linux's
+   pid files or Windows' registry and process list, none of which a Mac has,
+   so the row is not shown there. */
+#if !defined(__ANDROID__) && !defined(__APPLE__)
+/* steam_shortcut.c's answers are the menu's */
 _Static_assert(ICO_STEAM_ADDED == UI_STEAM_ADDED && ICO_STEAM_EXISTS == UI_STEAM_EXISTS &&
                    ICO_STEAM_RUNNING == UI_STEAM_RUNNING &&
                    ICO_STEAM_NOT_FOUND == UI_STEAM_NOT_FOUND &&
@@ -1191,8 +1195,8 @@ int ico_window_open(unsigned int gsW, unsigned int gsH)
     ui_settings_set_window_mode_query(window_mode_now);
     /* Display > Texture pack says "None installed" without one */
     ui_settings_set_texture_pack_count(texpack_count);
-#if !defined(__ANDROID__) && !defined(ICO_IOS)
-    /* Extras > Add to Steam (desktop only; the Android build never sets it) */
+#if !defined(__ANDROID__) && !defined(__APPLE__)
+    /* Extras > Add to Steam (Windows and Linux; see steam_add_handler) */
     ui_settings_set_steam_handler(steam_add_handler);
 #endif
 #ifdef __ANDROID__
@@ -2096,11 +2100,12 @@ static void pipeline_progress(void *ctx, uint32_t done, uint32_t total)
 }
 #endif
 
-/* logs/ico-pc-perf.csv, opened on the first record when [dev] perf_log
-   is true */
+/* ico-pc-perf.csv in the logs folder, beside ico-pc.log
+   (ico_host_logs_dir), opened on the first record when [dev] perf_log is
+   true */
 static void perf_csv_open(void)
 {
-    char dir[ICO_PATH_MAX], logs[ICO_PATH_MAX], path[ICO_PATH_MAX];
+    char logs[ICO_PATH_MAX], path[ICO_PATH_MAX];
 
     s_perf.csvTried = 1;
 #ifdef ICO_IOS
@@ -2109,8 +2114,7 @@ static void perf_csv_open(void)
     if (!ico_config_get_bool("dev.perf_log", 0)) {
         return;
     }
-    ico_host_exe_dir(dir, sizeof(dir));
-    if (ico_path_join(logs, sizeof(logs), dir, "logs") != 0 ||
+    if (ico_host_logs_dir(logs, sizeof(logs)) != 0 ||
         ico_path_join(path, sizeof(path), logs, "ico-pc-perf.csv") != 0) {
         fprintf(stderr, "window: perf_log: the path is too long\n");
         return;

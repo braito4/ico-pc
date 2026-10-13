@@ -13,7 +13,9 @@
  * runs) has no window and simulates vsyncs as fast as it can.
  *
  * Run with no arguments (a double-click), everything comes from the
- * executable's folder (host_config.h describes ico-pc.ini):
+ * executable's folder (host_config.h describes ico-pc.ini; a macOS app
+ * bundle keeps ico-pc.ini and logs/ in its per-user folder instead,
+ * ico_host_ini_path and ico_host_logs_dir):
  *
  *   logs/ico-pc.log          stdout and stderr, rewritten each run (the
  *                            run before's kept as logs/ico-pc-previous.log)
@@ -725,7 +727,8 @@ static int find_iso(const Args *a, const IcoIni *ini, const char *exe_dir, char 
 #ifdef ICO_IOS
     ico_host_fatal(log_file(), "Game data is missing. Copy ico.o2r into ICO's Documents folder "
                                "using LiveContainer's data-folder access, then reopen ICO. "
-                               "A PAL Ico_PAL.iso or Ico_PAL.chd can also be placed there.");
+                               "A PAL Ico_PAL.iso or Ico_PAL.chd (or .bin or .cue) can also "
+                               "be placed there.");
     return 1;
 #else
 #if !defined(ICO_HEADLESS) && !defined(_WIN32)
@@ -1558,20 +1561,9 @@ static int host_main(int argc, char **argv)
 
     /* the log first, so everything after it is recorded */
     ico_host_exe_dir(exe_dir, sizeof(exe_dir));
-#if defined(__APPLE__) && !defined(ICO_IOS)
-    {
-        char user_dir[ICO_PATH_MAX];
-
-        if (ico_host_pref_dir(user_dir, sizeof(user_dir)) != 0 ||
-            ico_path_join(logs_dir, sizeof(logs_dir), user_dir, "logs") != 0) {
-            logs_dir[0] = '\0';
-        }
-    }
-#else
-    if (ico_path_join(logs_dir, sizeof(logs_dir), exe_dir, "logs") != 0) {
+    if (ico_host_logs_dir(logs_dir, sizeof(logs_dir)) != 0) {
         logs_dir[0] = '\0';
     }
-#endif
     if (logs_dir[0] == '\0' ||
         ico_path_join(log_path, sizeof(log_path), logs_dir, "ico-pc.log") != 0) {
         log_path[0] = '\0';
@@ -1579,9 +1571,10 @@ static int host_main(int argc, char **argv)
     /* Traces and pad recordings still use the logs folder with --console. */
     logs_ready = logs_dir[0] != '\0' && ico_make_dir(logs_dir) == 0;
     if (a.console && !have_console) {
-        ico_host_message_box("--console: there is no console to log to (start ico_pc from a "
-                             "command prompt); the log goes to logs\\ico-pc.log instead",
-                             0);
+        ico_host_message_box(
+            "--console: there is no console to log to (start ico_pc from a "
+            "command prompt); the log goes to ico-pc.log in the logs folder instead",
+            0);
         a.console = 0;
     }
     /* a run the crash handler started again after a graphics driver crash

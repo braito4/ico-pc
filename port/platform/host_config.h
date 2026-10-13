@@ -109,6 +109,11 @@ int ico_host_pref_is_portable(void);
    per-user folder for a macOS app bundle. -1 only when the path does not
    fit in size (a folder lookup that fails gives "./ico-pc.ini"). */
 int ico_host_ini_path(char *out, size_t size);
+/* The logs folder (ico-pc.log and the files written beside it): <per-user
+   folder>/logs for a macOS app bundle, else <executable's folder>/logs (the
+   Documents folder on iOS, the app's files folder on Android). Not created.
+   0, or -1 when no folder is known or the path does not fit (out ""). */
+int ico_host_logs_dir(char *out, size_t size);
 /* ico_ini_load without the layering below: the file's own keys only. */
 int ico_ini_load_file(IcoIni *ini, const char *path);
 /* The ini key a config.toml path maps onto (the keys the ini has always had:
@@ -124,11 +129,13 @@ const char *ico_config_ini_key(const char *toml_path);
    to an explicit path (trace= other than 0/none; the default trace of a
    user run does not count), else false. */
 int ico_host_fixed_clock(const IcoIni *ini);
-/* The memory card folder: saves= in ico-pc.ini (a relative path is taken
-   from the executable's folder), else <pref dir>/memcard. Not created; a pure
+/* The memory card folder: saves= in the ini at ico_host_ini_path(), or
+   [paths] saves in config.toml (a relative path is taken from the
+   executable's folder), else <pref dir>/memcard. Not created; a pure
    read (ico_ini_load_layered). 0, or -1 (then out is "memcard"). */
 int ico_host_saves_dir(char *out, size_t size);
-/* The port-1 card folder: saves2= (relative to the executable's folder).
+/* The port-1 card folder: saves2= or [paths] saves2, read as saves=
+   (relative to the executable's folder).
    1 with out set, 0 when not configured (no card in port 1; out ""), -1 when
    the path does not fit (out ""). A pure read, like ico_host_saves_dir. */
 int ico_host_saves2_dir(char *out, size_t size);

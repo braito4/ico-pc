@@ -138,6 +138,14 @@ static void test_paths(void)
     CHECK(strcmp(out, "/abs/x.iso") == 0);
     CHECK(!ico_path_is_absolute("rel/x"));
     CHECK(ico_host_exe_dir(dir, sizeof(dir)) == 0 && dir[0] != '\0');
+    /* the logs folder: <exe dir>/logs here (no app bundle) */
+    {
+        char logs[ICO_PATH_MAX], want[ICO_PATH_MAX];
+
+        ico_path_join(want, sizeof(want), dir, "logs");
+        CHECK(ico_host_logs_dir(logs, sizeof(logs)) == 0 && strcmp(logs, want) == 0);
+        CHECK(ico_host_logs_dir(logs, 4) == -1 && logs[0] == '\0');
+    }
     CHECK(ico_make_dir("host_config_test_dir") == 0 && ico_make_dir("host_config_test_dir") == 0);
     remove("host_config_test_dir"); /* rmdir on POSIX; left behind on Windows */
 }
@@ -224,6 +232,49 @@ static void test_saves_dir_pure(void)
     remove(ini_path);
     remove(dumps);
     remove(logs);
+}
+
+/* The card folders come from the ini the game reads (ico_host_ini_path)
+   over config.toml in the user folder: [paths] saves/saves2 with no ini,
+   then the ini's saves= over the toml; relative to the executable's folder */
+static void test_saves_dir_layered(void)
+{
+    char ini_path[ICO_PATH_MAX], exe[ICO_PATH_MAX], pref[ICO_PATH_MAX], toml[ICO_PATH_MAX];
+    char out[ICO_PATH_MAX], want[ICO_PATH_MAX];
+    FILE *f;
+
+    ico_host_ini_path(ini_path, sizeof(ini_path));
+    CHECK(ico_host_exe_dir(exe, sizeof(exe)) == 0);
+    CHECK(ico_host_pref_dir(pref, sizeof(pref)) == 0);
+    ico_path_join(toml, sizeof(toml), pref, "config.toml");
+    if (ico_file_exists(ini_path) || ico_file_exists(toml)) {
+        fprintf(stderr, "host_config_test: %s or %s exists; layered card folders not tested\n",
+                ini_path, toml);
+        return;
+    }
+    f = fopen(toml, "wb");
+    CHECK(f != NULL);
+    if (f == NULL) {
+        return;
+    }
+    fputs("[paths]\nsaves = \"toml-cards\"\nsaves2 = \"toml-cards-2\"\n", f);
+    fclose(f);
+    ico_path_join(want, sizeof(want), exe, "toml-cards");
+    CHECK(ico_host_saves_dir(out, sizeof(out)) == 0 && strcmp(out, want) == 0);
+    ico_path_join(want, sizeof(want), exe, "toml-cards-2");
+    CHECK(ico_host_saves2_dir(out, sizeof(out)) == 1 && strcmp(out, want) == 0);
+    f = fopen(ini_path, "wb");
+    CHECK(f != NULL);
+    if (f != NULL) {
+        fputs("saves=ini-cards\n", f);
+        fclose(f);
+        ico_path_join(want, sizeof(want), exe, "ini-cards");
+        CHECK(ico_host_saves_dir(out, sizeof(out)) == 0 && strcmp(out, want) == 0);
+        ico_path_join(want, sizeof(want), exe, "toml-cards-2");
+        CHECK(ico_host_saves2_dir(out, sizeof(out)) == 1 && strcmp(out, want) == 0);
+        remove(ini_path);
+    }
+    remove(toml);
 }
 
 /* portable mode: portable=1 in the ini, or a userdata folder beside the
@@ -371,6 +422,7 @@ int main(void)
     test_ini();
     test_join_overflow();
     test_saves_dir_pure();
+    test_saves_dir_layered();
     test_paths();
     test_portable_value();
 #ifdef ICO_HOST_FORCE_PORTABLE

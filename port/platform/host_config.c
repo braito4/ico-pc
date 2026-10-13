@@ -1899,8 +1899,27 @@ int ico_host_ini_path(char *out, size_t size)
     return ico_path_join(out, size, dir, "ico-pc.ini") != 0 ? -1 : 0;
 }
 
-/* ico_host_saves2_dir and ico_host_saves_dir (below) are a read of
-   ico-pc.ini over config.toml and nothing else: no environment variable is
+int ico_host_logs_dir(char *out, size_t size)
+{
+    char dir[ICO_PATH_MAX];
+
+#if defined(__APPLE__) && !defined(ICO_IOS)
+    if (ico_host_pref_dir(dir, sizeof(dir)) != 0) {
+        if (size > 0) {
+            out[0] = '\0';
+        }
+        return -1;
+    }
+#else
+    /* a folder lookup that fails gives "./logs", as ico_host_ini_path */
+    ico_host_exe_dir(dir, sizeof(dir));
+#endif
+    return ico_path_join(out, size, dir, "logs") != 0 ? -1 : 0;
+}
+
+/* ico_host_saves2_dir and ico_host_saves_dir (below) are a read of the
+   game's own ico-pc.ini (ico_host_ini_path: the per-user folder in a macOS
+   app bundle) over config.toml and nothing else: no environment variable is
    set and no folder made, so they can be called from the game fiber
    (sceMcInit). */
 
@@ -1928,7 +1947,7 @@ int ico_host_saves2_dir(char *out, size_t size)
         out[0] = '\0';
     }
     if (ini == NULL || ico_host_exe_dir(dir, sizeof(dir)) != 0 ||
-        ico_path_join(ini_path, sizeof(ini_path), dir, "ico-pc.ini") != 0) {
+        ico_host_ini_path(ini_path, sizeof(ini_path)) != 0) {
         free(ini);
         return -1;
     }
@@ -1950,7 +1969,7 @@ int ico_host_saves_dir(char *out, size_t size)
     int r = 0;
 
     if (ini == NULL || ico_host_exe_dir(dir, sizeof(dir)) != 0 ||
-        ico_path_join(ini_path, sizeof(ini_path), dir, "ico-pc.ini") != 0) {
+        ico_host_ini_path(ini_path, sizeof(ini_path)) != 0) {
         free(ini);
         copy(out, size, "memcard");
         return -1;
