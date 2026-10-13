@@ -4,8 +4,8 @@ What the port's tests are and how they are wired: the test framework and its lab
 program by area, the render gates over saved frames, the tests that need the player's disc, the
 environment switches that force GPU paths, the frame dumps and the
 [replay tool](ARCHITECTURE.md#terms), [pad scripts](ARCHITECTURE.md#terms) and
-[traces](ARCHITECTURE.md#terms), the developer build helper, and CI. How to run `ctest` is
-[../BUILDING.md](../BUILDING.md#tests)'s.
+[traces](ARCHITECTURE.md#terms), the developer build helper, the documentation gate, CI, and which
+tests a change needs. How to run `ctest` is [../BUILDING.md](../BUILDING.md#tests)'s.
 
 ## Files
 
@@ -20,9 +20,10 @@ environment switches that force GPU paths, the frame dumps and the
 | `tools/native_frame_check.py`, `tools/native_frame_dumps.txt`, `docs/native_frame_baseline.json` | the native-frame gates, their dump list and their baseline |
 | `tools/coverage_check.py`, `tools/coverage_corpus.txt` | the regression renders and their corpus |
 | `port/render/tools/rd_replay_tool.c` | the replay tool |
-| `port/platform/hotkeys.h`, `dump_zip.h`, `port/render/rd_dump.c` | F12, the aspect sweep, the dump format |
-| `port/input/pad_script.h`, `input_record.h`, `port/platform/trace_host.h` | pad scripts, recordings, the trace |
+| `port/platform/hotkeys.h`, `port/platform/dump_zip.h`, `port/render/rd_dump.c` | F12, the aspect sweep, the dump format |
+| `port/input/pad_script.h`, `port/input/input_record.h`, `port/platform/trace_host.h` | pad scripts, recordings, the trace |
 | `tools/dev_build.sh` | build a few targets of one checkout and run a few tests |
+| `tools/check_docs.py`, `tools/check_docs_allow.txt` | the documentation gate and its allow-list |
 | `.github/workflows/ci.yml`, `ios.yml` | CI |
 
 ## The framework
@@ -45,8 +46,8 @@ build can run them: a native build, a cross build with an emulator, or a cross b
 own system (`CMakeLists.txt`, `ICO_RUN_TESTS`).
 
 A test that needs something the machine may lack exits 77 and is registered with
-`SKIP_RETURN_CODE 77`, which ctest reports as skipped; a script test prints `SKIP:` and is
-registered with `SKIP_REGULAR_EXPRESSION` (`port/render/test/rd_replay_tool_list.cmake`). A C test
+`SKIP_RETURN_CODE 77`, which ctest reports as skipped; a script test prints `SKIP:` (`port/render/test/rd_replay_tool_list.cmake`) and is registered
+with `SKIP_REGULAR_EXPRESSION "SKIP:"` (`port/render/CMakeLists.txt`, `rd_replay_tool_list`). A C test
 uses `port/test/ico_check.h`: `CHECK(cond)` or `CHECK(cond, fmt, ...)` prints
 `FAIL file:line: ...` and counts, `CHECK_STR` compares two strings, and `ico_check_summary(name)`
 prints `name: ok` or the failure count and returns the exit code. The Settings tests share
@@ -60,8 +61,9 @@ N; a run with no `--shard` owns every case. `ico_shard_take` stops the program w
 match the table's next entry, and `ico_shard_finish` fails when a case was never reached, so the
 table cannot drift from `main` (`port/test/ico_shard.h`, header comment).
 `ico_add_sharded_test(<name> <N> PROGRAM <target> ...)` registers `<name>.1ofN` to `<name>.NofN`
-and `<name>.cases`, which runs `--list-cases` for every N and checks through
-`cmake/IcoShardCheck.cmake` that every case is in exactly one shard and no shard is empty
+and `<name>.cases`, which runs `--list-cases` as each shard k of N and checks through
+`cmake/IcoShardCheck.cmake` that every run names the same owners, every case is in exactly one
+shard and no shard is empty
 (`cmake/IcoTests.cmake`, `ico_add_sharded_test`). `rd_blur`, `rd_mesh`, `rd_mesh_mali` and
 `rd_mesh_minlimits` are sharded four ways (`port/render/CMakeLists.txt`).
 
@@ -191,8 +193,9 @@ program under an environment switch ([Environment switches](#environment-switche
   deep stacks, the FP state inside a fiber (`fiber`, `fiber_guard`).
 - `gpu_driver_test.c`: the Android driver packages: `meta.json`, refusals, installs from zips made
   here, the trial marker (`gpu_driver`).
-- `host_config_test.c`: `ico-pc.ini` parsing and rewriting, SHA-1 vectors, path joining; built
-  again as `host_config_portable_test` (`host_config`, `host_config_portable`).
+- `host_config_test.c`: `ico-pc.ini` parsing and rewriting, SHA-1 vectors, path joining, the
+  card folders read from the ini the game reads (`ico_host_ini_path`), portable mode; built again
+  as `host_config_portable_test` (`host_config`, `host_config_portable`).
 - `host_fs_test.c`: the file helpers on a UTF-8 path outside ASCII (`host_fs`).
 - `hotkeys_test.c`: F12, Shift+F12 and F11, repeats ignored, no other key taken (`hotkeys`).
 - `ios_chain_test.c`: the game's thread, message and memory layer on the fiber scheduler under
@@ -203,13 +206,17 @@ program under an environment switch ([Environment switches](#environment-switche
 - `movie_pad_test.c`: the pad as a movie's skip check sees it from inside the player's loop
   (`movie_pad`).
 - `pace_loop_test.c`: the [vsync lock](ARCHITECTURE.md#terms)'s loop on a grid of the wall clock
-  under a fake clock and a fake swapchain (`pace_loop`).
-- `pace_policy_test.c`: the slow-present decision, Resolution "auto"'s steps and the gap between
-  presents (`pace_policy`).
+  under a fake clock and a fake swapchain, with and without the display clock, at 60, 59.94 and
+  120 Hz and on a display that drifts from its report (`pace_loop`).
+- `pace_policy_test.c`: the slow-present decision, Resolution "auto"'s steps, the gap between
+  presents, the vsync lock's n and alphas and its period's sanity, and the vblank clock's laws on a
+  synthetic display (`pace_policy`).
 - `perf_block_test.c`: a block of replays by phase: sums, maxes, the replays over a threshold, the
   longest phase (`perf_block`).
 - `sched_test.c`: the fiber scheduler against the EE kernel's rules through the SDK calls
   (`sched`).
+- `startup_retry_test.c`: the steps after a graphics driver crash while building a pipeline, the
+  crash chain to the box, the variable and the relaunch environment (`startup_retry`).
 - `steam_shortcut_test.c`: Add to Steam's CRC and id, a sample `shortcuts.vdf` appended byte-true,
   the duplicate check, `loginusers.vdf` (`steam_shortcut`).
 - `window_video_test.c`: fullscreen and mode requests on SDL's offscreen driver (`window_video`).
@@ -281,6 +288,8 @@ program under an environment switch ([Environment switches](#environment-switche
   a message box (`rhi_d3d12`).
 - `rhi_d3d12_plan_test.c`: the D3D12 backend's state and barrier bookkeeping on the CPU
   (`rhi_d3d12_plan`).
+- `rhi_driver_version_test.c`: the driver version text of the adapter line
+  (`port/rhi/rhi_driver_version.c`) for each vendor's packing (`rhi_driver_version`).
 - `rhi_vk_enum_test.c`: every `rhi.h` enumeration has a Vulkan mapping (`rhi_vk_enum`).
 - `rhi_vk_present_mode_test.c`: the present-mode choice over the sets drivers offer
   (`rhi_vk_present_mode`).
@@ -300,7 +309,13 @@ program under an environment switch ([Environment switches](#environment-switche
   (`shaders_pixel`, `_nodual`, `_mali`).
 - `vu1_test.c`: the [VU1](ARCHITECTURE.md#terms) program shaders against their CPU references and
   hand traces (`vu1`, `vu1_mali`).
-- `port/test/gs_blend_test.c` is a standalone CPU program on the GS blender's drift, not a ctest.
+
+### port/test
+
+- `layout_asserts.c`: the generated struct layout asserts, which hold at compile time
+  (`layout_asserts`).
+- `gs_blend_test.c` is a standalone CPU program on the GS blender's drift, not a ctest.
+- `ico_check.h` and `ico_shard.h` are the framework above.
 
 ### port/ui/test
 
@@ -327,7 +342,8 @@ program under an environment switch ([Environment switches](#environment-switche
 
 The frame gates replay saved [.rddump](ARCHITECTURE.md#terms) files with the replay tool. Dumps
 hold game assets and are never committed, so the dump lists name paths on one machine; a missing
-file is reported and skipped, and every gate exits 77 when it has nothing to run.
+file is reported and skipped, and every gate exits 77 when it has nothing to run
+(`tools/native_frame_check.py`, `tools/coverage_check.py`, docstrings).
 
 `tools/native_frame_check.py` has four commands (`tools/native_frame_check.py`, docstring):
 
@@ -341,7 +357,7 @@ file is reported and skipped, and every gate exits 77 when it has nothing to run
 - `gate-b` takes one game state captured at 4:3, 16:9, 32:9, 48:9 and 60:9 (an aspect sweep: a
   zip, a folder or PNGs with the aspect in the name, or `ICO_SWEEPS`) and checks the centre
   columns of every aspect equal the 4:3 picture byte for byte, with `--effects R` allowing a band
-  at each old edge (ctest `native_frame_gate_b`).
+  of R pixels at each edge of the 4:3 picture (ctest `native_frame_gate_b`).
 - `selftest` checks the gate-b logic on synthetic pictures (ctest `native_frame_check_selftest`).
 
 The list is `tools/native_frame_dumps.txt`, or the list or folder `ICO_DUMPS` names; the ctests
@@ -368,16 +384,21 @@ behind, `rd_depth_copy_dump.cmake` on a player dump with the depth fog (`ICO_FOG
 
 ## Tests that need the disc
 
-Three cache variables point the tests at the player's files ([../BUILDING.md](../BUILDING.md#tests)
-has their defaults):
+Five cache variables point the tests at the player's files ([../BUILDING.md](../BUILDING.md#tests)
+has their defaults; the registrations are in `port/*/CMakeLists.txt`):
 
-- `ICO_DISC_IMAGE`, the PAL image: `vfs_disc`, `archive_disc`, `sndn2`, `fmv`, `fmv_fields`,
-  `appearance_disc`, `shadow_spawn`, `gsb_cull_stage`, `texpack_disc`, `menu_look`, `menu_text`,
-  `gallery`, `tables_loader`, and the headless game runs below. Each exits 77 without it.
+- `ICO_DISC_IMAGE`, the PAL image. Without it `vfs_disc`, `archive_disc`, `appearance_disc`,
+  `fmv_fields`, `gsb_cull_stage`, `texpack_disc`, `menu_look`, `menu_text`, `gallery`,
+  `content_table_chains` and the headless game runs below skip; `sndn2`, `fmv`, `shadow_spawn` and
+  `rd_mesh` run only their synthetic part, and `tables_loader` reads the base ELF instead.
 - `ICO_BASE_ELF`, the PAL base ELF: with pyelftools, `tables_loader` and `tables_manifest` are
   built from it (`port/data/CMakeLists.txt`); `gallery` reads its tables.
 - `ICO_TEXPACK_DIR`, a PCSX2 pack's replacements folder: `texpack_disc`, `texpack_e2e`,
   `texpack_pack_files`.
+- `ICO_FOG_DUMP`, a player dump with the depth fog: `rd_fog_depth_copy_dump` and `_d24s8` (skipped
+  without it).
+- `ICO_BOOT_DUMP_DIR`, a start-up's frame dumps: `rd_boot_present`; `ICO_BOOT_DUMP_OLD` sets
+  `ICO_BOOT_OLD=1` for dumps whose frames 118 to 120 draw stage 1 (`port/render/CMakeLists.txt`).
 
 Three tests start the headless game itself, each in a fresh folder with its own `ico-pc.ini` and a
 pad script, `RUN_SERIAL` and with a long timeout:
@@ -413,10 +434,10 @@ switches the tests and their registrations use:
 | `ICO_UI_POPUP_TEST` | `ui_host.c` | the test popup at [Main tick](ARCHITECTURE.md#terms) 100 and every 150 ticks after (`[dev] popup_test`) |
 | `ICO_START_STAGE` | `ico2/common/src/debug.c` (`debug_TryToGetStartStage`), `gamestate.c` | `[dev] start_stage` handed over: a stage 2 to 105 to start in, which suspends achievements |
 | `ICO_TTY` | `kernel_host.c` | the game's `scePrintf` to stdout |
-| `ICO_FMV_DECODE` | `movie.c` | 0 skips decoding in the [headless build](ARCHITECTURE.md#terms) |
+| `ICO_FMV_DECODE` | `movie.c` | 0 skips decoding in any build; the timing is unchanged |
 | `ICO_RD_DUMP_EVERY`, `_DIR`, `_INTERP`, `_FROM` | `rd_core.c` | the frame dumps `ico-pc.ini` hands to rd |
 | `ICO_VU_REF_AT` | `rd_replay_tool.c` | the kicked triangles containing a GS point |
-| `ICO_BOOT_DUMPS`, `ICO_BOOT_OLD` | `rd_boot_present_test.c` | the start-up dumps and their kind |
+| `ICO_BOOT_DUMPS`, `ICO_BOOT_OLD` | `rd_boot_present_test.c` | the start-up dumps (the folder when no argument is given), and `ICO_BOOT_OLD=1` for dumps whose frames 118 to 120 draw stage 1 |
 | `ICO_DUMPS`, `ICO_SWEEPS`, `ICO_COVERAGE_DIR`, `ICO_REPLAY_LOCK` | the gate tools | the dump list, the aspect sweeps, the coverage state, the lock |
 
 `grep -rn 'getenv("' port/` and `grep -a -rn 'getenv("' ico2/` list the rest (the game sources
@@ -430,7 +451,7 @@ of the whole DISPLAY frame and a PNG of the picture as [presented](ARCHITECTURE.
 `frame-<time>-v<vsync>.zip` and deletes the loose dump; the zip exists because issue trackers refuse
 `.rddump` attachments (`port/platform/hotkeys.h`, `ico_frame_dump_paths`, `ico_frame_present_path`;
 `port/platform/dump_zip.h`, `ico_frame_dump_zip`). F11 makes the stats lines come every second for
-30 s.
+30 s (`port/platform/hotkeys.h`, header comment).
 
 Shift+F12 in photo mode is the aspect sweep: the paused frame re-rendered at 4:3, 16:9, 32:9, 48:9
 and 60:9 into `sweep-<time>.zip`, holding `<aspect>.rddump` and `<aspect>.png` for each with the
@@ -447,9 +468,9 @@ GPU), `--present WxH`, `--aspect`, `--enhanced`, `--aa` and `--interp T PREV`
 
 ## Pad scripts, recordings and the trace
 
-A pad script drives the pad instead of a person, in the [headless build](ARCHITECTURE.md#terms)
-through `pad_script=` in `ico-pc.ini`, `--pad-script FILE` or a `pad-script.txt` beside the program
-(`port/platform/main_host.c`, header comment). Each line is `<tick> <buttons-hex> [lx ly rx ry]`:
+A pad script drives the pad instead of a person, in either build, through `--pad-script FILE` or
+`[dev] pad_script` in `ico-pc.ini`; the [headless build](ARCHITECTURE.md#terms) also takes a
+`pad-script.txt` beside the program (`port/platform/main_host.c`, `setup_pad`). Each line is `<tick> <buttons-hex> [lx ly rx ry]`:
 from that [Main tick](ARCHITECTURE.md#terms) on, the pad returns the line's values until the next
 line; ticks increase strictly; the buttons are the game's logical word, active high (`0x0040` Cross,
 `0x0010` Triangle, `0x0800` Start, `0x1000` up, `0x4000` down, `0x8000` left, `0x2000` right); the
@@ -457,13 +478,12 @@ sticks are 0 to 255 with 128 centred (`port/input/pad_script.h`, header comment)
 tick t sees the line for tick t, and `--ticks N` stops after ticks 0 to N-1, so scripts, traces and
 the tick limit share one numbering.
 
-A pad recording writes what the game read from the pad as a pad script, so the headless build
-replays a player's session: the sample is taken in `scePadRead`, keyed by the tick that read it,
-one line per tick whose value changed, closed by `# end at tick T: N lines, C ticks read twice
-with different values` (`port/input/input_record.h`, header comment). It is on by default in the
-window build, in `logs/input-<time>.txt`, and off headless (`input_record=`); its header records
-the values of `gameplay.stick_fix`, `yorda_safe`, `developer_mode`, `door_fix`, `dev.start_stage`
-and `video.anti_aliasing`, and the native frame's width and aspect (`port/platform/main_host.c`,
+A pad recording ([INPUT.md](INPUT.md#recordings)) is a pad script of what the game read, so the
+headless build replays a player's session with `pad_script=<the file>`; it is on by default in the
+window build, in `logs/input-<time>.txt`, and off headless (`input_record=`). Its header records
+the values of `video.video_mode`, `game.language`, `gameplay.mirror`, `gameplay.stick_fix`,
+`gameplay.yorda_safe`, `gameplay.developer_mode`, `dev.start_stage`, `gameplay.door_fix` and
+`video.anti_aliasing`, and the native frame's width and aspect (`port/platform/main_host.c`,
 `record_keys`, `record_header`; `ico_input_record_frame_lines`).
 
 The trace (`trace=` or `--trace FILE`) writes a header naming its columns and then one line per Main
@@ -486,11 +506,51 @@ failing when they select no test, and prints a one-line summary (`tools/dev_buil
 ## The audits as tests
 
 The audits over the game sources are tools, some run as ctests on native builds (`offset_audit`,
-`template_audit`, `const_write_audit`, `softdouble_gate`) and the rest in the pre-commit hook and
-CI; what each refuses is in [GAME_CODE.md](GAME_CODE.md#audits). Other script tests under
-`port/test/CMakeLists.txt` and the top level check generated files and tables (`layout_asserts`,
-`layout_asserts_fresh`, `data_desc_fresh`, `font_audit`, `content_table_chains`) and the package
-staging (`package_textures`, [PACKS.md](PACKS.md#tests)).
+`template_audit`: `port/test/CMakeLists.txt`; `softdouble_gate`: `port/math/CMakeLists.txt`),
+`const_write_audit` on native clang builds only, and the rest in the pre-commit hook and CI; what
+each refuses is in [GAME_CODE.md](GAME_CODE.md#audits). Other tests check generated files and
+tables: `layout_asserts` (a program compiled from the generated asserts), `layout_asserts_fresh`,
+`font_audit` and `content_table_chains` (`port/test/CMakeLists.txt`), `data_desc_fresh` and
+`tables_manifest` (`port/data/CMakeLists.txt`), and the package staging (`package_textures`,
+[PACKS.md](PACKS.md#tests)).
+
+`docs_check` runs `tools/check_docs.py` over README.md, `docs/*.md` and `docs/port/*.md`: relative
+links and their anchors, history and package-code wording, issue numbers and internal words in the
+player guides, TODOs, and the package's list of player guides; `tools/check_docs_allow.txt` holds
+the allowed exceptions (top-level `CMakeLists.txt`, `docs_check`; `tools/check_docs.py`,
+docstring). `python3 -I tools/check_docs.py` runs it without a build.
+
+## Which tests a change needs
+
+- A new Options row: `ctest -L ui`. `settings` builds every page and compares its rows with fixed
+  lists (`port/ui/test/settings_test.c`, `testBuild`), so a new row updates those lists; new
+  settings cases go in `port/ui/test/settings_extra_test.c` (its header). `settings_render` draws
+  every screen, `menu_text` the rows in the sheets' look, and `font_audit` (every code point inside the
+  font subset, `tools/font_audit.py`) and `font_coverage` (a glyph for each) check the row's text
+  in the five languages. A gameplay option also needs `options`
+  (`port/game/test/options_test.c`).
+- A new config key: `config` (the reader, writer and precedence, `port/config/test/config_test.c`),
+  `host_config` when `ico-pc.ini` maps it (`port/platform/host_config.c`, `ini_map`), `settings`
+  when a row writes it, and the module's own test (`options`, `photo`, `appearance`, `input`).
+- A new texture-pack format: `texpack_load` (each loader on files built in memory,
+  `port/render/test/texpack_load_test.c`), `texpack`, `texpack_e2e`, and with `ICO_TEXPACK_DIR`
+  `texpack_pack_files`; `package_textures` when the shipped README changes
+  ([PACKS.md](PACKS.md#tests)).
+- A pacing change: `pace_policy`, `pace_loop` and `perf_block`
+  (`ctest -L platform -R '^(pace_|perf_block)'`), and `rhi_vk_present_mode` for the present-mode choice. The Windows
+  vblank clock (`port/platform/display_clock_win.c`) and the D3D12 waitable swap chain have no
+  ctest and are checked in a Windows build, on the `lock held` and `window: display:` lines
+  ([DISPLAY.md](DISPLAY.md)).
+- A new shader: `shaders_table`, whose `expected[]` lists every embedded entry
+  (`port/shaders/test/shaders_table_test.c`), then `ctest -L rhi` and `-L render`
+  (`shaders_pixel` and its variants, `vu1` for a VU shader, `gs_math`, `rhi_d3d12_plan`); on
+  Windows `rhi_d3d12` and `compare_backends.cmd` for the DXIL side.
+- A new achievement: `achievements`, which fails unless one of its runs unlocks every achievement
+  and each has a title and a description in every language; its count check
+  (`ico_ach_count() >= 20 && ico_ach_count() <= 30`) bounds the table, which holds 30
+  (`port/game/test/achievements_test.c`; `port/game/achievements.c`, `s_defs`). `font_coverage`
+  checks the new strings' glyphs.
+- A change to these documents: `docs_check`.
 
 ## CI
 
@@ -502,5 +562,8 @@ staging (`package_textures`, [PACKS.md](PACKS.md#tests)).
 | `ci.yml` | `android` | `ubuntu-24.04` | the debug APK (`assembleDebug`), `tools/check_android_flags.sh`, the APK structure checks |
 | `ios.yml` | `build`, `publish` | `macos-15`, `ubuntu-24.04` | the unsigned iPhone IPA for a published release, attached to it |
 | `ios.yml` | `build-macos`, `publish-macos` | `macos-15`, `ubuntu-24.04` | the macOS app for a published release, attached to it |
+
+(`.github/workflows/ci.yml`, jobs `linux`, `extra`, `linux-arm64`, `android`;
+`.github/workflows/ios.yml`.)
 
 The triggers, steps and caches are [../BUILDING.md](../BUILDING.md#continuous-integration)'s.
