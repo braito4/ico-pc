@@ -37,3 +37,5 @@ docs/THIRD_PARTY.md: v?0\.[0-9]+\.[0-9]+
 docs/port/*.md: \bAA[01]\b
 docs/port/*.md: \bR8\b
 docs/port/*.md: \bB[01] \(
+# the pad's shoulder buttons in the developer docs
+docs/port/*.md: \bR[1-3]\b
