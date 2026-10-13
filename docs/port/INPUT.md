@@ -78,7 +78,7 @@ gamepad layout (`south`, `leftshoulder`, `dpup`, `lefttrigger`, the half-axes `l
 
 - Gamepad: a source is down at half its range or more; the analog sticks take the radial dead zone
   (`ico_input_deadzone`: shorter than the zone is zero, the rest rescaled from the zone's edge);
-  digital stick targets make a vector no longer than 1, merged with the analog stick by magnitude.
+  digital stick targets make a vector of length at most 1, merged with the analog stick by magnitude.
 - Keyboard and mouse: buttons by their rows; the stick directions as digital vectors; while a
   walk key is down the left stick is scaled by `walk_scale`; the mouse camera's stick (below)
   merges into the right stick.
