@@ -859,6 +859,9 @@ RdTex rd_create_texture_sheet(uint32_t w, uint32_t h, const uint8_t *coverage,
     RdTexRec *r = rd__tex_rec(t.id);
     if (r) {
         sheetStyleSet(r, style);
+    } else if (g_rd.inited && w && h) {
+        rdtex_text_upload_failed(name ? name : "sheet", w, h, RD_TEXEL_SHEET,
+                                 "no texture slot or memory");
     }
     return t;
 }
@@ -952,4 +955,19 @@ void rd_set_texture_sheet_style(RdTex t, const RdSheetStyle *style)
     if (r && r->kind == RD_TEXKIND_IMAGE && r->format == RD_TEXEL_SHEET) {
         sheetStyleSet(r, style);
     }
+}
+
+static int s_textUploadLogged; /* rdtex_text_upload_failed: the line is written */
+
+int rdtex_text_upload_failed(const char *name, uint32_t w, uint32_t h, uint8_t format,
+                             const char *reason)
+{
+    if (!rd__texel_is_coverage(format) || s_textUploadLogged) {
+        return 0;
+    }
+    s_textUploadLogged = 1;
+    rd__log("text: a menu texture could not be uploaded (%s: \"%s\", %ux%u); text drawn from it "
+            "is missing (reported once)",
+            reason ? reason : "unknown", name ? name : "texture", w, h);
+    return 1;
 }

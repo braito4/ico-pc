@@ -1427,12 +1427,21 @@ static int device_lost_quit(void)
         fprintf(stderr, "window: the graphics device was lost; quitting\n");
         rd_passring_print(stderr, rd_perf_post_name);
         ico_host_log_flush();
+        /* the box is modal and the run ends when the player closes it: the
+           time it stays open is not a hang (the watchdog's later limit
+           would report one, the game standing since the loss), and the
+           log says how long it was open */
+        ico_diag_watchdog_pause(1);
+        const Uint64 t0 = SDL_GetTicksNS();
+
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "ICO PC",
                                  "The graphics card stopped responding (its driver was reset or "
                                  "updated, or the card was removed).\n\nThe game has to close. "
                                  "Your last save is kept; the log says why.\n\nIf the graphics "
                                  "card is overclocked, try its stock clocks first.",
                                  s_window);
+        fprintf(stderr, "window: the message was closed after %.1f s\n",
+                (double)(SDL_GetTicksNS() - t0) / 1e9);
     }
     return 1;
 }
