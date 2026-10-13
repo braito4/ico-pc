@@ -663,7 +663,7 @@ static bool vkr_pick_device(void)
     vkr_driver_text(g_vkr.phys, &g_vkr.props);
     vkr_fake_limits();
     vkGetPhysicalDeviceMemoryProperties(g_vkr.phys, &g_vkr.memProps);
-    /* issue 58: the heaps, and the one uploads (the renderer's ring, texture
+    /* the heaps, and the one uploads (the renderer's ring, texture
        pack uploads) come from: a device-local, host-visible type first
        (vkr_allocate), which without resizable BAR is a window of about
        256 MB that every upload buffer shares */
@@ -905,11 +905,11 @@ static bool vkr_create_device(void)
     /* the display's timing of presents (rhi_present_timing): VK_KHR_present_id
      * and VK_KHR_present_wait on a window, with SDL for the thread that
      * waits on each present (vk_swapchain.c).  Only when asked for
-     * (ICO_VK_PRESENT_WAIT=1, vkr_present_wait_wanted): the v0.7.0 rc4 build
-     * used them whenever the driver offered them, and on an RTX 3090 under
-     * Windows the screen then showed nothing usable with presents in mailbox
-     * mode at 120/144/240 and under the vsync lock.  Nothing is queried or
-     * enabled otherwise. */
+     * (ICO_VK_PRESENT_WAIT=1, vkr_present_wait_wanted): used whenever the
+     * driver offers them, they left the screen with nothing usable on an
+     * RTX 3090 under Windows with presents in mailbox mode at 120/144/240
+     * and under the vsync lock.  Nothing is queried or enabled otherwise
+     * (docs/port/RHI.md, "Vulkan"). */
     VkPhysicalDevicePresentIdFeaturesKHR qPid = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_ID_FEATURES_KHR};
     VkPhysicalDevicePresentWaitFeaturesKHR qPw = {

@@ -32,7 +32,7 @@
  *                            window. use_iso=1 ([dev] use_iso) mounts the
  *                            image directly instead: the default of the
  *                            headless build, so trace runs and tests read
- *                            the ISO as before
+ *                            the disc image itself
  *   disc image               Ico_PAL.iso, .chd, .bin or .cue beside the
  *                            executable, else ini iso=, else $ICO_ISO, else
  *                            baserom/Ico_PAL.iso (or .chd, .bin, .cue) under the working
@@ -417,8 +417,9 @@ static void record_header(char *out, size_t size, const char *stamp)
         PUT("# config %s = %s\n", record_keys[i], ico_config_get_string(record_keys[i], "(unset)"));
     }
     PUT("# effective fixed_clock = %s\n", fixed_clock_now());
-    /* gameplay.stick_fix's default differs by platform (on under Android):
-       the value the run used, for a phone's recording played on a computer */
+    /* the stick_fix value the run used (config.toml's, else the default:
+       off on every platform); a replay sets the same value by hand, nothing
+       reads this line back */
     PUT("# effective stick_fix = %d\n", ico_opt_stick_fix());
     {
         /* the frame the run starts with: the simulation's cull and the bird's
@@ -785,9 +786,9 @@ static void verify_iso(const char *iso)
 /* --- the game data: the archive, or the image in dev mode ----------------- */
 
 #ifndef ICO_HEADLESS
-/* ico_dir_walk's callback: deletes the game-lettering files an earlier
-   version left in the per-user folder (gamefont-*.bin, and a .tmp of one
-   an interrupted write left); *user counts them */
+/* ico_dir_walk's callback: deletes the game-lettering files in the per-user
+   folder that nothing reads (gamefont-*.bin, and a .tmp of one an
+   interrupted write left); *user counts them */
 static int remove_gamefont(const char *path, const char *name, void *user)
 {
     const size_t n = strlen(name);
@@ -803,7 +804,7 @@ static int remove_gamefont(const char *path, const char *name, void *user)
 #endif
 
 /* use_iso= / [dev] use_iso: 1 reads the image directly. Default: the
-   headless build reads the image (trace runs and tests stay as they were),
+   headless build reads the image (trace runs and tests read the disc itself),
    the window build the archive. */
 static int use_iso_mode(const IcoIni *ini)
 {
@@ -863,7 +864,7 @@ static void progress_ui_open(void)
     progressRen = SDL_CreateRenderer(progressWin, NULL);
 }
 
-/* 1 when the user closed the window (cancel). */
+/* 1 when the player closed the window (cancel). */
 static int progress_ui_update(const char *phase, int pct)
 {
     SDL_Event ev;
@@ -1344,10 +1345,10 @@ static void load_tables(const char *source)
 }
 
 #ifndef ICO_HEADLESS
-/* The menus do not use the game's lettering, so the files an earlier
-   version cut from the disc's menu sheets on its first
-   start (gamefont-<version>-<disc SHA-1>.bin in the per-user folder)
-   are of no use: removed, once (nothing is left to find after that) */
+/* The menus do not use the game's lettering, so lettering files cut from
+   the disc's menu sheets (gamefont-<version>-<disc SHA-1>.bin in the
+   per-user folder) are of no use: removed at start (after the first
+   removal there is nothing left to find) */
 static void remove_old_lettering(void)
 {
     char pref[ICO_PATH_MAX];
@@ -1359,7 +1360,7 @@ static void remove_old_lettering(void)
     if (removed > 0) {
         fprintf(stderr,
                 "ico_pc: removed %d file(s) of the game's lettering from the user "
-                "folder (the menus no longer use them)\n",
+                "folder (nothing uses them)\n",
                 removed);
     }
 }

@@ -344,7 +344,8 @@ static void video_settings(RdSettings *rs, int w, int h)
     rs->modelPack = (uint8_t)(o.modelPack != 0);
     rs->dumpModels = (uint8_t)(o.dumpModels != 0 && ico_opt_developer_mode());
     /* rd presents between ticks, in both presets; ICO_RD_S2_LEGACY=1 takes
-       the present's alpha the older way (rd.h RdPresentClock) */
+       the present's alpha from the raw measured time instead of the present
+       clock (rd.h RdPresentClock) */
     {
         const char *e = getenv("ICO_RD_S2_LEGACY");
 
@@ -361,13 +362,15 @@ static void video_settings(RdSettings *rs, int w, int h)
     s_pres.vsync = rs->vsync && rs->interpolate;
     /* A cap equal to the display's rate (60 on 59.94 or 60.00 Hz, 120 on
        119.88 or 120.00) that is a whole multiple of the game's rate takes
-       the vsync lock (issue 74, pace_policy.h): the game steps on a grid of
+       the vsync lock (pace_policy.h; docs/port/DISPLAY.md, "The vsync
+       lock"): the game steps on a grid of
        the display's refresh, n presents a step.  Mailbox when the display's
        timing of presents is in use (rhi_present_timing; the lock keeps the
        presents off the refreshes), else FIFO, which shows the presents in
        order whatever their phase.  A cap equal to the refresh with no
        whole multiple (144 on 59.94) takes FIFO and the game's own timer.
-       D3D12 is FIFO already. */
+       D3D12 has no mailbox mode: its presents with vsync are always FIFO
+       (d3d12_device.c rhi_prefer_mailbox). */
     {
         const Uint64 refresh = display_refresh_ns(0);
         const Uint64 simPeriod = s_pres.paceHz == 50 ? 20000000ull : 16683333ull;
@@ -1419,7 +1422,8 @@ static void frame_dump(void)
     const int ok = rd_dump_on_demand(dump, png);
     /* the picture as presented, frame-<stamp>-present.png, at the next
        present (the .png above is the whole DISPLAY frame, which at 16:9 is
-       wider than the window's picture; Gate B reads that one) */
+       wider than the window's picture; tools/native_frame_check.py reads
+       that one) */
     if (ico_frame_present_path(dir, stamp, s_pres.presentPng, sizeof(s_pres.presentPng)) == 0 &&
         !rd_capture_presented(s_pres.presentPng)) {
         fprintf(stderr, "window: F12: the presented picture could not be armed\n");
@@ -1449,7 +1453,7 @@ static void frame_dump(void)
 /* Shift+F12 in photo mode, the aspect sweep: the paused frame captured at
    4:3, 16:9, 32:9, 48:9 and 60:9 into <pref>/dumps/sweep-<time>.zip, each
    aspect's <aspect>.rddump and <aspect>.png (dump_zip.h ico_sweep_zip), for
-   the Gate B harness (tools/native_frame_check.py).
+   tools/native_frame_check.py.
 
    The game builds its frame at the width gsFrame holds, latched at each
    flip from ico_video_frame (GsBase.c gsbHostFrameLatch), so the sweep forces
@@ -1827,8 +1831,8 @@ int ico_window_pump(void)
             break;
         }
     }
-    /* the pump's parts, for the slow-step line (a pump of 52 ms under the
-       lock in rc7's log, with no setting changed: which part) */
+    /* the pump's parts, for the slow-step line: which part of a long pump
+       took the time */
     s_pres.pumpEventsMs = (double)(SDL_GetTicksNS() - t0) / 1e6;
     s_pres.pumpEvents = events;
 #ifdef ICO_IOS
@@ -2923,9 +2927,9 @@ static int present_once(float a, Uint64 refresh, Uint64 period)
            the new chain: ~140 ms on NVIDIA's Windows driver) is the
            rebuild's, a pause of the host.  Under the lock it is paused out
            after this pace (pace_lock_vsync keeps its own due time); on
-           the timer path now, before the deadline is judged (rc7 applied
-           it after the pace, so the lag was judged first and dropped: a
-           resync, a black screen, at most frame rate changes) */
+           the timer path now, before the deadline is judged (applied after
+           the pace, the lag would be judged first and dropped: a resync, a
+           black screen, at most frame rate changes) */
         RhiStats st;
 
         rhi_get_stats(&st);
@@ -3375,7 +3379,7 @@ static void pace(int hz)
            vblank past the deadline.  A FIFO present returns on the
            first vblank after it is made, so on the last return's grid of
            refreshes; starting one just before the deadline blocked a whole
-           refresh and ran the step late (issue 74).  A new frame is held
+           refresh and ran the step late.  A new frame is held
            back (to the next vsync) at most once and never once the deadline
            has passed, so a game behind still shows each frame
            (pace_policy.h pace_fifo_hold) */

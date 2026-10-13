@@ -2308,7 +2308,7 @@ void ico_diag_arm_vectored(void)
 
 #endif
 
-/* --- Float faults (issue 19) --------------------------------------------------- */
+/* --- Float faults ------------------------------------------------------------- */
 
 #define FLOAT_FAULT_SITES 32
 

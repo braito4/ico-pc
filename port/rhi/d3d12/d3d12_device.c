@@ -654,11 +654,12 @@ bool rhi_device_lost(void)
     return g_dx.deviceLost;
 }
 
-/* The performance entry points (rhi.h).  Mostly not implemented on
- * D3D12 yet: of the counters only swapchains, presents and fence waits
- * with their times are kept (the rest read zero), timestamps are
+/* The performance entry points (rhi.h) on D3D12: of the counters only
+ * swapchains, presents and fence waits with their times and the frame
+ * latency wait (acquireNs) are kept (the rest read zero), timestamps are
  * unsupported (nothing is written, nothing read back) and there is no
- * mailbox mode (DXGI's flip model with sync interval 1 is FIFO). */
+ * mailbox mode (DXGI's flip model with sync interval 1 is FIFO;
+ * docs/port/RHI.md, "Direct3D 12"). */
 void rhi_get_stats(RhiStats *out)
 {
     if (out) {

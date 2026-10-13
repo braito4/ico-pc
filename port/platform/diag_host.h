@@ -162,7 +162,7 @@ double ico_diag_uptime(void);
    for timing the host's work; its zero is arbitrary. */
 unsigned long long ico_diag_now_ns(void);
 
-/* Issue 19: a NaN reached game code that the PS2 never fed one (its FPU
+/* A NaN reached game code that the PS2 never fed one (its FPU
    has no NaN): site names the check, caller is a return address (NULL if
    none), logged as module+offset (libmain.so+0x..., ico_pc+0x...) once
    ico_diag_init has found the program's extent, else as a plain pointer.
