@@ -141,7 +141,7 @@ save backup tools make. [How to bring it over](PORTABLE_MODE.md#bring-a-ps2-save
 ## Which devices does it run on?
 
 Windows and Linux PCs, the Steam Deck, 64-bit ARM Linux handhelds, Android
-phones and tablets (experimental), and, contributed and untested by the
+phones and tablets, and, contributed and untested by the
 maintainer, iPhones through LiveContainer and Apple-silicon Macs. The
 [supported platforms table](../README.md#supported-platforms) says what to
 download for each and how well it is tested.

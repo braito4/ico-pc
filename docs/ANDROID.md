@@ -3,8 +3,8 @@
 [Back to the front page](../README.md)
 
 > [!NOTE]
-> Android support is experimental in this version. It plays, but it can be
-> slower than on a PC. See [Known limits](#known-limits).
+> On a phone the game can be slower than on a PC. See
+> [Known limits](#known-limits).
 
 ## What you need
 
@@ -300,6 +300,5 @@ Graphics driver**.
 - Options > Controls has Touch size and Touch opacity for the on-screen
   buttons.
 
-Android is **experimental** in this version: it works, but expect rough
-edges, and tell us what you find on the
+Tell us what you find on the
 [issues page](https://github.com/nathanialf/ico-pc/issues).

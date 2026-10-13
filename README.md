@@ -32,8 +32,7 @@ on.
   - a 64-bit ARM Linux handheld or board with an up-to-date graphics
     driver (tested on one handheld so far);
   - or a 64-bit Android phone or tablet with Android 10 or later, usually
-    one from 2022 or newer. Android support is experimental in this
-    version. [More about Android](docs/ANDROID.md);
+    one from 2022 or newer. [More about Android](docs/ANDROID.md);
   - or an iPhone (iOS 15 or newer) or an Apple-silicon Mac (macOS 12 or
     newer), both contributed and untested by the maintainer; see
     [Supported platforms](#supported-platforms).
@@ -48,7 +47,7 @@ on.
 | Linux PC, 64-bit x86: SteamOS 3.5, Debian 13, Ubuntu 24.04 or newer | `-linux.tar.gz` (or `-linux-portable.tar.gz`) | Built and checked by the automatic tests for every release. |
 | Steam Deck | `-linux.tar.gz` | Supported; [Steam Deck tips](docs/TROUBLESHOOTING.md#steam-deck). |
 | Linux handheld or board, 64-bit ARM: Debian 13, Ubuntu 24.04 or newer | `-linux-arm64.tar.gz` | Tested on one handheld so far. |
-| Android phone or tablet, 64-bit, Android 10 or newer (usually 2022 or newer) | `-android.apk` | Experimental: it plays, but expect rough edges. [The Android guide](docs/ANDROID.md). |
+| Android phone or tablet, 64-bit, Android 10 or newer (usually 2022 or newer) | `-android.apk` | Supported. It can be slower than on a PC. [The Android guide](docs/ANDROID.md). |
 | iPhone, iOS 15 or newer, through [LiveContainer](https://github.com/LiveContainer/LiveContainer) | `-ios-unsigned.ipa` | Contributed by katsifolis. The maintainer has no Apple device, so these builds are not tested here; problem reports are welcome. |
 | Apple-silicon Mac, macOS 12 or newer | No download yet: build it yourself with `tools/package_macos.sh` ([Building](docs/BUILDING.md#macos-application)) | Contributed by katsifolis and braito4, untested by the maintainer. |
 
