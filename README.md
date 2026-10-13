@@ -49,7 +49,7 @@ on.
 | Linux handheld or board, 64-bit ARM: Debian 13, Ubuntu 24.04 or newer | `-linux-arm64.tar.gz` | Tested on one handheld so far. |
 | Android phone or tablet, 64-bit, Android 10 or newer (usually 2022 or newer) | `-android.apk` | Supported. It can be slower than on a PC. [The Android guide](docs/ANDROID.md). |
 | iPhone, iOS 15 or newer, through [LiveContainer](https://github.com/LiveContainer/LiveContainer) | `-ios-unsigned.ipa` | Contributed by katsifolis. The maintainer has no Apple device, so these builds are not tested here; problem reports are welcome. |
-| Apple-silicon Mac, macOS 12 or newer | No download yet: build it yourself with `tools/package_macos.sh` ([Building](docs/BUILDING.md#macos-application)) | Contributed by braito4, untested by the maintainer. |
+| Apple-silicon Mac, macOS 12 or newer | `-macos-arm64.dmg` (or `.zip`) | Contributed by braito4, untested by the maintainer. The app is not notarized: the first time, right-click **ICO** and choose **Open**. |
 
 Not supported: 32-bit systems, Windows 7 and 8, Intel Macs, and any disc
 other than the PAL release (SCES-50760).

@@ -2,8 +2,10 @@
 # Build and package the native Apple silicon macOS app.
 # tools/package_macos.sh [<label>] [CMake arguments...]
 # <label> (v0.7.0) gives the bundle its version, as package_win.sh does
-# (CMakeLists.txt ICO_VERSION_LABEL; 0.0.0 without one). The other
-# arguments go to CMake (e.g. -DICO_DXC=/path/to/host/dxc).
+# (CMakeLists.txt ICO_VERSION_LABEL; 0.0.0 without one), and the files
+# their names: dist/ico-pc-<label>-macos-arm64.zip, .dmg and .map
+# (ico-pc-macos-arm64.* without a label). The other arguments go to CMake
+# (e.g. -DICO_DXC=/path/to/host/dxc).
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
@@ -42,10 +44,11 @@ ditto "$bundle" "$root/dist/ICO.app"
 xattr -cr "$root/dist/ICO.app"
 codesign --force --deep --sign - "$root/dist/ICO.app"
 codesign --verify --deep --strict "$root/dist/ICO.app"
-ditto -c -k --sequesterRsrc --keepParent "$bundle" "$root/dist/ico-pc-macos-arm64.zip"
+name="ico-pc${label:+-$label}-macos-arm64"
+ditto -c -k --sequesterRsrc --keepParent "$bundle" "$root/dist/$name.zip"
 hdiutil create -quiet -volname ICO -srcfolder "$stage" -ov -format UDZO \
-    "$root/dist/ico-pc-macos-arm64.dmg"
-cp "$app/Contents/MacOS/ico_pc.map" "$root/dist/ico-pc-macos-arm64.map"
+    "$root/dist/$name.dmg"
+cp "$app/Contents/MacOS/ico_pc.map" "$root/dist/$name.map"
 echo "App: $root/dist/ICO.app"
-echo "Zip: $root/dist/ico-pc-macos-arm64.zip"
-echo "DMG: $root/dist/ico-pc-macos-arm64.dmg"
+echo "Zip: $root/dist/$name.zip"
+echo "DMG: $root/dist/$name.dmg"

@@ -851,13 +851,17 @@ ctest skip convention.
 
 ## Continuous integration
 
-`.github/workflows/ios.yml` runs only when a release is published (never
-for a push or a pull request): on `macos-15` it builds the tagged source
-with `tools/package_ios.sh <tag>` (the tag must be `vX.Y.Z`), building the
-pinned DXC from source on a cache miss, and a second job on Ubuntu attaches
-`ico-pc-<tag>-ios-unsigned.ipa` to that release (`--clobber`, so a re-run
-replaces it). The workflow reads the repository only; the upload job alone
-may write to it. No secret, signing identity or game data is used.
+`.github/workflows/ios.yml` (the "Apple packages" workflow) runs only when
+a release is published (never for a push or a pull request): on `macos-15`
+it builds the tagged source with `tools/package_ios.sh <tag>` (the tag must
+be `vX.Y.Z`), building the pinned DXC from source on a cache miss, and a
+second job on Ubuntu attaches `ico-pc-<tag>-ios-unsigned.ipa` to that
+release (`--clobber`, so a re-run replaces it). An independent pair of jobs
+does the same for the macOS app with `tools/package_macos.sh <tag>`,
+attaching `ico-pc-<tag>-macos-arm64.zip` and `.dmg` (the app is ad-hoc
+signed, not notarized). The workflow reads the repository only; the upload
+jobs alone may write to it. No secret, signing identity or game data is
+used.
 
 `.github/workflows/ci.yml` runs on every push to main, every pull request and
 every pushed `v*` tag (which also packages for arm64, see
