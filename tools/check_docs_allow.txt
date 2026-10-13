@@ -33,3 +33,7 @@ docs/LEGAL.md: Entertainment Inc\. \(formerly
 
 # The third-party notice records the versions of the libraries it lists.
 docs/THIRD_PARTY.md: v?0\.[0-9]+\.[0-9]+
+# GS render-target names, the R8 texture format and the VU1 bone matrices in the developer docs
+docs/port/*.md: \bAA[01]\b
+docs/port/*.md: \bR8\b
+docs/port/*.md: \bB[01] \(
