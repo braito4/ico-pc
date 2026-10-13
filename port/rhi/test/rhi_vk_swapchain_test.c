@@ -21,8 +21,9 @@
  * desktop without the switch keeps the old one.  A list that moves the
  * backbuffer to PRESENT signals the present semaphore with its own submit:
  * such a frame costs one submit, and a frame whose drawing list does not
- * present costs one submit per list and none more.  Exit 77 when SDL has
- * no offscreen Vulkan surface or no device presents to it. */
+ * present costs one submit per list and none more.  The display's timing
+ * of presents on a stand-in for vkWaitForPresentKHR (presentTiming).  Exit
+ * 77 when SDL has no offscreen Vulkan surface or no device presents to it. */
 #include "rhi.h"
 #include "vk/rhi_vk.h"
 #include <SDL3/SDL.h>
@@ -127,8 +128,7 @@ static int lifecycle(SDL_Window *win, RhiFormat fmt)
     vkr_test_force_present_result(RHI_VK_TEST_SUBOPTIMAL);
     failures += frame(win, fmt, 10);
     failures += frame(win, fmt, 11);
-    /* a suboptimal present was shown (rhi_present_shown: the window's
-       vsync lock judges it) */
+    /* a suboptimal present was shown (rhi_present_shown) */
     if (!rhi_present_shown()) {
         printf("FAIL a suboptimal present not reported shown\n");
         failures++;
@@ -149,7 +149,7 @@ static int lifecycle(SDL_Window *win, RhiFormat fmt)
     }
     rhi_present();
     /* nothing reached the display (a minimised window has no swapchain
-       either): the window's vsync lock does not judge it */
+       either) */
     if (rhi_present_shown()) {
         printf("FAIL a present without a surface reported shown\n");
         failures++;
@@ -448,6 +448,105 @@ static int run(SDL_Window *win)
     return failures ? 1 : 0;
 }
 
+/* The display's timing of presents' notes so far: in order of id, each
+   after the last; *timed counts those with a time */
+static int timingNotes(uint64_t *lastId, unsigned *notes, unsigned *timed)
+{
+    uint64_t id = 0, ns = 0;
+    int r, failures = 0;
+
+    while ((r = rhi_present_timing_next(&id, &ns)) == 1) {
+        if (id <= *lastId) {
+            printf("FAIL present timing: id %llu after %llu\n", (unsigned long long)id,
+                   (unsigned long long)*lastId);
+            failures++;
+        }
+        *lastId = id;
+        ++*notes;
+        *timed += ns != 0;
+    }
+    if (r < 0) {
+        printf("FAIL present timing stopped\n");
+        failures++;
+    }
+    return failures;
+}
+
+/* The display's timing of presents (rhi_present_timing) on the test's
+   stand-in for vkWaitForPresentKHR (vkr_test_fake_present_wait; lavapipe's
+   headless surface does not offer it): the thread notes the presents in
+   order, with a time, through a resize and the surface's lifecycle
+   (suboptimal, released and made again, lost), never waits on a swapchain
+   that is made again or destroyed meanwhile, and stops at rhi_shutdown */
+static int presentTiming(SDL_Window *win)
+{
+    RhiDeviceDesc dd = {win, true, true, "rhi_vk_swapchain_test"};
+    uint64_t lastId = 0;
+    unsigned notes = 0, timed = 0;
+    int failures = 0;
+
+    SDL_SetWindowSize(win, 64, 48);
+    SDL_SyncWindow(win);
+    vkr_test_fake_present_wait(1);
+    if (!rhi_init(&dd)) {
+        printf("FAIL rhi_init with the present wait stand-in\n");
+        vkr_test_fake_present_wait(0);
+        return 1;
+    }
+    const RhiFormat fmt = rhi_swapchain_format();
+    if (!rhi_present_timing()) {
+        printf("FAIL present timing not in use with the stand-in\n");
+        failures++;
+    }
+    for (int n = 0; n < 8 && !failures; n++) {
+        if (n == 4) {
+            SDL_SetWindowSize(win, 96, 64);
+            SDL_SyncWindow(win);
+            if (!rhi_resize_swapchain(96, 64, true)) {
+                printf("FAIL rhi_resize_swapchain\n");
+                failures++;
+            }
+        }
+        failures += frame(win, fmt, 30 + n);
+        SDL_Delay(5);
+        failures += timingNotes(&lastId, &notes, &timed);
+    }
+    if (!failures) {
+        failures += lifecycle(win, fmt);
+    }
+    for (int n = 0; n < 4 && !failures; n++) {
+        failures += frame(win, fmt, 40 + n);
+    }
+    /* the last present noted within 200 ms */
+    for (int i = 0; i < 40 && lastId < rhi_present_last_id(); i++) {
+        SDL_Delay(5);
+        failures += timingNotes(&lastId, &notes, &timed);
+    }
+    printf("present timing: %u notes, %u with a time, the last %llu of %llu, %u waits misused\n",
+           notes, timed, (unsigned long long)lastId, (unsigned long long)rhi_present_last_id(),
+           vkr_test_present_wait_misuse());
+    if (notes < 10 || timed * 2 < notes) {
+        printf("FAIL present timing: %u notes, %u timed\n", notes, timed);
+        failures++;
+    }
+    if (lastId != rhi_present_last_id()) {
+        printf("FAIL the last present not noted\n");
+        failures++;
+    }
+    rhi_wait_idle();
+    rhi_shutdown(); /* the thread stops */
+    vkr_test_fake_present_wait(0);
+    if (vkr_test_present_wait_misuse() != 0) {
+        printf("FAIL %u waits ended on another swapchain\n", vkr_test_present_wait_misuse());
+        failures++;
+    }
+    if (rhi_vk_validation_error_count()) {
+        printf("FAIL %u validation error(s)\n", rhi_vk_validation_error_count());
+        failures++;
+    }
+    return failures;
+}
+
 int main(void)
 {
     SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "offscreen");
@@ -462,6 +561,9 @@ int main(void)
         return 77;
     }
     int rc = run(win);
+    if (rc == 0 && presentTiming(win) != 0) {
+        rc = 1;
+    }
     SDL_DestroyWindow(win);
     SDL_Quit();
     if (rc == 0) {

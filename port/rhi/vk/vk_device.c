@@ -727,7 +727,7 @@ static bool vkr_create_device(void)
         g_vkr.apiVersion = s_instanceApi;
     }
 #endif
-    const char *exts[8];
+    const char *exts[12];
     uint32_t extCount = 0;
     if (g_vkr.surface) {
         exts[extCount++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
@@ -875,10 +875,82 @@ static bool vkr_create_device(void)
         }
     }
 
+    /* the display's timing of presents (rhi_present_timing): VK_KHR_present_id
+     * and VK_KHR_present_wait on a window, with SDL for the thread that
+     * waits on each present (vk_swapchain.c).  Not NVIDIA's driver outside
+     * Windows: waits on presents there have hung vkQueuePresentKHR (NVIDIA
+     * developer forum, "VK_KHR_present_{id,wait} causes device loss on
+     * Nvidia 525.60.11" and bug 4924590, drivers 525 to 590 on X11).
+     * ICO_VK_NO_PRESENT_WAIT=1 leaves it off. */
+    VkPhysicalDevicePresentIdFeaturesKHR qPid = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_ID_FEATURES_KHR};
+    VkPhysicalDevicePresentWaitFeaturesKHR qPw = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_WAIT_FEATURES_KHR};
+    g_vkr.presentWait = false;
+    if (g_vkr.surface) {
+        const char *off = getenv("ICO_VK_NO_PRESENT_WAIT");
+        const char *why = NULL;
+        bool offered = vkr_device_has_ext(g_vkr.phys, VK_KHR_PRESENT_ID_EXTENSION_NAME) &&
+                       vkr_device_has_ext(g_vkr.phys, VK_KHR_PRESENT_WAIT_EXTENSION_NAME);
+        if (offered) {
+            qPid.pNext = &qPw;
+            VkPhysicalDeviceFeatures2 q = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+                                           .pNext = &qPid};
+            vkGetPhysicalDeviceFeatures2(g_vkr.phys, &q);
+            offered = qPid.presentId && qPw.presentWait;
+        }
+#ifndef ICO_RHI_HAVE_SDL
+        why = "no thread to wait with";
+#endif
+#ifndef _WIN32
+        {
+            VkPhysicalDeviceDriverProperties drv = {
+                .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
+            VkPhysicalDeviceProperties2 p2 = {
+                .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, .pNext = &drv};
+            vkGetPhysicalDeviceProperties2(g_vkr.phys, &p2);
+            if (drv.driverID == VK_DRIVER_ID_NVIDIA_PROPRIETARY) {
+                why = "NVIDIA's driver outside Windows";
+            }
+        }
+#endif
+        if (off && off[0] && off[0] != '0') {
+            why = "ICO_VK_NO_PRESENT_WAIT";
+        }
+        g_vkr.presentWait = offered && !why;
+        if (vkr_present_wait_fake()) {
+            /* a test's stand-in: the thread without the extensions */
+            g_vkr.presentWait = false;
+            g_vkr.presentWaitFake = true;
+            g_vkr.waitForPresent = vkr_present_wait_fake();
+            VKR_LOG("display timing (present wait): on (a test's stand-in)");
+        } else {
+            VKR_LOG("display timing (present wait): %s%s%s",
+                    g_vkr.presentWait ? "on"
+                    : offered         ? "off"
+                                      : "not offered by the driver",
+                    !g_vkr.presentWait && offered && why ? ", " : "",
+                    !g_vkr.presentWait && offered && why ? why : "");
+        }
+        qPid.pNext = NULL;
+        qPid.presentId = VK_TRUE;
+        qPw.pNext = NULL;
+        qPw.presentWait = VK_TRUE;
+        if (g_vkr.presentWait) {
+            exts[extCount++] = VK_KHR_PRESENT_ID_EXTENSION_NAME;
+            exts[extCount++] = VK_KHR_PRESENT_WAIT_EXTENSION_NAME;
+        }
+    }
+
     VkPhysicalDeviceDynamicRenderingFeatures dyn = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES,
         .dynamicRendering = VK_TRUE,
     };
+    if (g_vkr.presentWait) {
+        qPw.pNext = dyn.pNext;
+        qPid.pNext = &qPw;
+        dyn.pNext = &qPid;
+    }
     if (g_vkr.interlock) {
         qInterlock.pNext = dyn.pNext;
         dyn.pNext = &qInterlock;
@@ -946,6 +1018,17 @@ static bool vkr_create_device(void)
     volkLoadDevice(g_vkr.device);
 #endif
     vkGetDeviceQueue(g_vkr.device, g_vkr.queueFamily, 0, &g_vkr.queue);
+    if (g_vkr.presentWait) {
+        g_vkr.waitForPresent =
+            (PFN_vkWaitForPresentKHR)vkGetDeviceProcAddr(g_vkr.device, "vkWaitForPresentKHR");
+        if (!g_vkr.waitForPresent) {
+            VKR_LOG("display timing (present wait): off, vkWaitForPresentKHR not found");
+            g_vkr.presentWait = false;
+        }
+    }
+    if (g_vkr.presentWaitFake) {
+        g_vkr.presentWait = true; /* the extensions stay off (vkr_present_wait_fake) */
+    }
     {
         /* GPU timestamps when the queue writes them */
         uint32_t qn = 0;
@@ -1200,6 +1283,7 @@ void rhi_shutdown(void)
 {
     if (g_vkr.device) {
         vkDeviceWaitIdle(g_vkr.device);
+        vkr_present_wait_shutdown(); /* the thread waiting on presents */
         vkr_swapchain_destroy();
         vkr_frames_shutdown();
         vkr_release_all_objects();

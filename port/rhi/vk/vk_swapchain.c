@@ -44,6 +44,270 @@ static uint64_t s_swapMadeNs, s_pollNs;
  * so the same pair is not rebuilt at every present */
 static uint32_t s_pollStuckW, s_pollStuckH, s_pollMadeW, s_pollMadeH;
 
+/* ------------------------------------------------- the display's timing
+ * (rhi_present_timing): a thread waits on each present's id in turn
+ * (vkWaitForPresentKHR, which the spec lets run beside any other call on
+ * the swapchain but vkDestroySwapchainKHR) and notes when it returned, on
+ * SDL_GetTicksNS's clock, the window's.  A wait that returned at once found
+ * the present on the screen already: the time of the one before when that
+ * was under half a millisecond before (the same refresh: a present passed
+ * over in mailbox mode is satisfied by the one after it), else not known.
+ * Before the swapchain is made again or destroyed the thread is held out of
+ * its waits (vkr_pw_pause: a wait ends within VKR_PW_WAIT_NS); the new
+ * swapchain's presents are waited on from its first. */
+#ifdef ICO_RHI_HAVE_SDL
+#define VKR_PW_NOTES 64
+#define VKR_PW_WAIT_NS 10000000ull
+
+static struct {
+    SDL_Mutex *lock;
+    SDL_Condition *cond;
+    SDL_Thread *thread;
+    bool quit, pause, busy, failed;
+    VkSwapchainKHR swapchain; /* the one waited on (none: nothing to wait for) */
+    uint64_t posted;          /* the last id presented to it */
+    uint64_t next;            /* the next id to wait for */
+    uint64_t lastNs;          /* the last note's time */
+    uint64_t noteId[VKR_PW_NOTES], noteNs[VKR_PW_NOTES];
+    unsigned head, count;
+} s_pw;
+
+static void vkr_pw_note(uint64_t id, uint64_t ns)
+{
+    if (s_pw.count == VKR_PW_NOTES) {
+        s_pw.head = (s_pw.head + 1) % VKR_PW_NOTES; /* the oldest, never taken */
+        s_pw.count--;
+    }
+    const unsigned i = (s_pw.head + s_pw.count++) % VKR_PW_NOTES;
+    s_pw.noteId[i] = id;
+    s_pw.noteNs[i] = ns;
+}
+
+static int SDLCALL vkr_pw_thread(void *u)
+{
+    (void)u;
+    SDL_LockMutex(s_pw.lock);
+    while (!s_pw.quit) {
+        if (s_pw.pause || s_pw.failed || !s_pw.swapchain || s_pw.next == 0 ||
+            s_pw.next > s_pw.posted) {
+            SDL_WaitCondition(s_pw.cond, s_pw.lock);
+            continue;
+        }
+        const uint64_t id = s_pw.next;
+        const VkSwapchainKHR sc = s_pw.swapchain;
+        s_pw.busy = true;
+        SDL_UnlockMutex(s_pw.lock);
+        const uint64_t t0 = SDL_GetTicksNS();
+        const VkResult r = g_vkr.waitForPresent(g_vkr.device, sc, id, VKR_PW_WAIT_NS);
+        const uint64_t t = SDL_GetTicksNS();
+        SDL_LockMutex(s_pw.lock);
+        s_pw.busy = false;
+        SDL_BroadcastCondition(s_pw.cond); /* vkr_pw_pause */
+        if (r == VK_TIMEOUT) {
+            continue; /* not on the screen yet: waited for again */
+        }
+        if (r == VK_SUCCESS || r == VK_SUBOPTIMAL_KHR) {
+            uint64_t ns = t;
+            if (t - t0 < 100000ull) {
+                /* on the screen before the wait: the refresh of the note
+                   before when that was just now, else not known */
+                ns = s_pw.lastNs != 0 && t - s_pw.lastNs < 500000ull ? s_pw.lastNs : 0;
+            }
+            if (ns != 0) {
+                s_pw.lastNs = ns;
+            }
+            vkr_pw_note(id, ns);
+            s_pw.next = id + 1;
+        } else if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_ERROR_SURFACE_LOST_KHR) {
+            s_pw.next = s_pw.posted + 1; /* the swapchain is going: not timed */
+        } else {
+            VKR_LOG("display timing: vkWaitForPresentKHR returned %d; stopped", (int)r);
+            s_pw.failed = true;
+        }
+    }
+    SDL_UnlockMutex(s_pw.lock);
+    return 0;
+}
+
+/* the thread out of its waits, and none started, until vkr_pw_resume */
+static void vkr_pw_pause(void)
+{
+    if (!s_pw.lock) {
+        return;
+    }
+    SDL_LockMutex(s_pw.lock);
+    s_pw.pause = true;
+    while (s_pw.busy) {
+        SDL_WaitCondition(s_pw.cond, s_pw.lock);
+    }
+    s_pw.swapchain = VK_NULL_HANDLE;
+    SDL_UnlockMutex(s_pw.lock);
+}
+
+/* waits on sc's presents from its first (the thread started the first
+ * time) */
+static void vkr_pw_resume(VkSwapchainKHR sc)
+{
+    if (!g_vkr.presentWait) {
+        return;
+    }
+    if (!s_pw.lock) {
+        s_pw.lock = SDL_CreateMutex();
+        s_pw.cond = SDL_CreateCondition();
+        if (s_pw.lock && s_pw.cond) {
+            s_pw.thread = SDL_CreateThread(vkr_pw_thread, "present-wait", NULL);
+        }
+        if (!s_pw.thread) {
+            VKR_LOG("display timing: no thread (%s); off", SDL_GetError());
+            g_vkr.presentWait = false;
+            return;
+        }
+    }
+    SDL_LockMutex(s_pw.lock);
+    s_pw.swapchain = sc;
+    s_pw.next = g_vkr.presentId + 1;
+    s_pw.pause = false;
+    SDL_BroadcastCondition(s_pw.cond);
+    SDL_UnlockMutex(s_pw.lock);
+}
+
+/* rhi_present: the id it gave sc's queue */
+static void vkr_pw_posted(uint64_t id)
+{
+    if (!s_pw.lock) {
+        return;
+    }
+    SDL_LockMutex(s_pw.lock);
+    s_pw.posted = id;
+    SDL_BroadcastCondition(s_pw.cond);
+    SDL_UnlockMutex(s_pw.lock);
+}
+
+/* the test's stand-in (vkr_test_fake_present_wait) */
+static int s_pwFake;
+static uint32_t s_pwMisuse;
+
+static VkResult VKAPI_CALL vkr_pw_fake_wait(VkDevice device, VkSwapchainKHR swapchain,
+                                            uint64_t presentId, uint64_t timeout)
+{
+    (void)device;
+    (void)presentId;
+    const bool shown = timeout >= 2000000ull;
+    SDL_DelayNS(shown ? 2000000ull : timeout);
+    if (*(volatile VkSwapchainKHR *)&g_vkr.swapchain != swapchain) {
+        s_pwMisuse++;
+    }
+    return shown ? VK_SUCCESS : VK_TIMEOUT;
+}
+
+void vkr_test_fake_present_wait(int on)
+{
+    s_pwFake = on;
+}
+
+uint32_t vkr_test_present_wait_misuse(void)
+{
+    return s_pwMisuse;
+}
+
+PFN_vkWaitForPresentKHR vkr_present_wait_fake(void)
+{
+    return s_pwFake ? vkr_pw_fake_wait : NULL;
+}
+
+void vkr_present_wait_shutdown(void)
+{
+    if (s_pw.thread) {
+        SDL_LockMutex(s_pw.lock);
+        s_pw.quit = true;
+        SDL_BroadcastCondition(s_pw.cond);
+        SDL_UnlockMutex(s_pw.lock);
+        SDL_WaitThread(s_pw.thread, NULL);
+    }
+    if (s_pw.cond) {
+        SDL_DestroyCondition(s_pw.cond);
+    }
+    if (s_pw.lock) {
+        SDL_DestroyMutex(s_pw.lock);
+    }
+    memset(&s_pw, 0, sizeof(s_pw));
+}
+
+bool rhi_present_timing(void)
+{
+    bool on = false;
+    if (g_vkr.presentWait && s_pw.lock) {
+        SDL_LockMutex(s_pw.lock);
+        on = !s_pw.failed;
+        SDL_UnlockMutex(s_pw.lock);
+    }
+    return on;
+}
+
+int rhi_present_timing_next(uint64_t *id, uint64_t *ns)
+{
+    int r = -1;
+    if (g_vkr.presentWait && s_pw.lock) {
+        SDL_LockMutex(s_pw.lock);
+        r = s_pw.failed ? -1 : s_pw.count > 0;
+        if (r > 0) {
+            *id = s_pw.noteId[s_pw.head];
+            *ns = s_pw.noteNs[s_pw.head];
+            s_pw.head = (s_pw.head + 1) % VKR_PW_NOTES;
+            s_pw.count--;
+        }
+        SDL_UnlockMutex(s_pw.lock);
+    }
+    return r;
+}
+#else
+void vkr_test_fake_present_wait(int on)
+{
+    (void)on;
+}
+
+uint32_t vkr_test_present_wait_misuse(void)
+{
+    return 0;
+}
+
+PFN_vkWaitForPresentKHR vkr_present_wait_fake(void)
+{
+    return NULL;
+}
+
+static void vkr_pw_pause(void) {}
+
+static void vkr_pw_resume(VkSwapchainKHR sc)
+{
+    (void)sc;
+}
+
+static void vkr_pw_posted(uint64_t id)
+{
+    (void)id;
+}
+
+void vkr_present_wait_shutdown(void) {}
+
+bool rhi_present_timing(void)
+{
+    return false;
+}
+
+int rhi_present_timing_next(uint64_t *id, uint64_t *ns)
+{
+    (void)id;
+    (void)ns;
+    return -1;
+}
+#endif
+
+uint64_t rhi_present_last_id(void)
+{
+    return g_vkr.presentWait ? g_vkr.presentId : 0;
+}
+
 static void vkr_destroy_swap_resources(void)
 {
     for (uint32_t i = 0; i < g_vkr.swapImageCount; i++) {
@@ -62,6 +326,7 @@ void vkr_swapchain_destroy(void)
     if (!g_vkr.device) {
         return;
     }
+    vkr_pw_pause();
     vkr_destroy_swap_resources();
     if (g_vkr.swapchain) {
         vkDestroySwapchainKHR(g_vkr.device, g_vkr.swapchain, NULL);
@@ -239,6 +504,7 @@ bool vkr_swapchain_create(uint32_t w, uint32_t h, bool vsync)
         }
     }
     VkSwapchainKHR old = g_vkr.swapchain;
+    vkr_pw_pause(); /* no wait on the old one while it is retired */
     VkSwapchainCreateInfoKHR ci = {
         .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
         .surface = g_vkr.surface,
@@ -329,6 +595,7 @@ bool vkr_swapchain_create(uint32_t w, uint32_t h, bool vsync)
     g_vkr.swapAcquired = false;
     g_vkr.presentSignalled = false;
     g_vkr.acquireWaitPending = false;
+    vkr_pw_resume(sc);
     /* a line when the present mode, the image count or the size differs
        from the last swapchain (always the first).  The size counts so a
        log shows every rebuild the renderer's output then follows (a
@@ -662,6 +929,16 @@ void rhi_present(void)
         .pSwapchains = &g_vkr.swapchain,
         .pImageIndices = &g_vkr.swapImage,
     };
+    /* the display's timing: an id the thread waits on (rhi_present_timing) */
+    uint64_t presentId = 0;
+    VkPresentIdKHR pid = {.sType = VK_STRUCTURE_TYPE_PRESENT_ID_KHR, .swapchainCount = 1};
+    if (g_vkr.presentWait) {
+        presentId = ++g_vkr.presentId;
+        pid.pPresentIds = &presentId;
+        if (!g_vkr.presentWaitFake) {
+            pi.pNext = &pid;
+        }
+    }
     const uint64_t t0 = vkr_now_ns();
     VkResult r = vkQueuePresentKHR(g_vkr.queue, &pi);
     g_vkr.stats.presentNs += vkr_now_ns() - t0;
@@ -702,6 +979,9 @@ void rhi_present(void)
     }
     /* an image queued for the display (a suboptimal one too: it is shown) */
     s_presentShown = r == VK_SUCCESS || r == VK_SUBOPTIMAL_KHR;
+    if (presentId != 0 && s_presentShown && !rebuild) {
+        vkr_pw_posted(presentId);
+    }
     if (!rebuild && (r == VK_SUCCESS || r == VK_SUBOPTIMAL_KHR)) {
         vkr_poll_surface(); /* a size change the present did not report */
     }

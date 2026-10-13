@@ -1,49 +1,51 @@
 /*
  * port/platform/test/pace_loop_test.c
  *
- * The vsync lock's loop (pace_policy.h pace_lock_vsync, issue 74) under a
- * fake clock and a fake FIFO present: a present costs the replay's time,
- * then blocks until the first vblank after it (a display running at its
- * own rate), or returns at once (a compositor that does not block).  Each
- * simulated vsync the test calls the loop as window_host.c's pace() does,
- * then runs the game's step (its own cost); a game frame closes every two
- * steps.
+ * The vsync lock's loop (pace_policy.h pace_lock_vsync, issue 74): the
+ * simulation on a grid of the wall clock, n presents a step, under a fake
+ * clock and a fake swapchain.  Each simulated vsync the test calls the loop
+ * as window_host.c's pace() does, then runs the game's step (its own cost);
+ * a game frame closes every two steps.
  *
- *   60 Hz on 59.94: the step is never late (it starts within 0.5 ms of the
- *     vblank the vsync's last present returned on), one present a refresh
- *     (3600 +- 1 in 60 s), the alphas exactly 1/2, 1 a frame and strictly
- *     increasing inside it, the audio's ratio 60 / 59.94;
- *   120 Hz: two presents a vsync, alphas 1/4, 2/4, 3/4, 4/4;
- *   return jitter of 0.4 ms keeps the lock; a 30 ms step is caught up
- *     (a step without a present), the steps stay one a vblank;
- *   a present that returns at once drops the lock after three misses;
- *   a display 2 % slower than it reports drops it, 1 % does not;
- *   the v0.6.1 loop (the step on the simulation's own 59.94 Hz timer,
- *     presenting while the last present returned before the deadline) ran
- *     the step a refresh late on a 60.00 Hz display: the model here shows it.
+ * The fake's mailbox display: a present costs its CPU time and returns; its
+ * picture is ready a GPU time later (never before the one before it); at
+ * each vblank the display shows the newest picture presented that is ready
+ * (one passed over is dropped; a vblank without a new one shows the last
+ * again, a repeat).  Its display clock (present wait): a wait for a present
+ * (the backend's thread waiting on each present) notes each present at
+ * the vblank that showed it or a later one, plus a wake-up.
  *
- * A queued FIFO swapchain (Fake.depth > 0: up to depth pictures wait for the
- * display, one leaves at each vblank; a present returns at once while there
- * is room and waits for a vblank when there is none, as on NVIDIA, whose
- * acquire does not wait): the lock holds from an empty queue at the start,
- * after a 300 ms step, after a swapchain rebuild (quick, and one long enough
- * to be a stall), at 60 and 120 Hz, depth 2 and 3 (the v0.6.2 rc1 lock took
- * every at-once return from the empty queue for a miss, slept a period, let
- * the display drain the queue again, and dropped about 100 ms in).
- * A window minimised or occluded for 10 s (presents return at once and are
- * reported not shown) keeps the lock; judged, the same presents drop it.
- * The first frame after a reset has the alphas 1/2, 1 (not 1, 1).
- * NVIDIA's FIFO as the v0.7.0 rc2 log shows it (Fake.nv: the acquire and
- * the present return at once, the replay waits for the GPU's frame two
- * before, the GPU for the display to free an image; a return is the GPU's
- * and the CPU's time after a vblank): the work rising by 5.8 ms over 12
- * vsyncs (a menu closing) dropped the rc2 lock 13 vsyncs in ("the display
- * did not keep its refresh rate"); the rate measured over windows holds at
- * any speed of change either way, and still drops a display 2.5 % off.
- * The log's trace (pace_lock_trace_text) of the first and last presents.
- * Without the lock, under FIFO at 144 Hz with the game behind (a step
- * longer than the period), every new frame is still presented
- * (pace_fifo_hold), where the rc1 guard presented none.
+ *   60.00 Hz, the grid on the reported refresh: every step starts on its
+ *     due time and the due times are a period apart; one present a step;
+ *     the alphas exactly 1/2, 1; no picture repeated or dropped in 60 s; the
+ *     audio's ratio 60 / 59.94.  At 59.94 Hz the ratio is 1;
+ *   the v0.7.0 rc3 log (RTX 3090, FIFO): present returns 8.85, 31.71, 9.43
+ *     ms apart, and the old lock stepped on each.  Presents of 0.9, 1.2 and
+ *     13 ms in turn (the same two quick returns and a slow one) leave every
+ *     step on the grid; one of 25 ms ends past the next step's due time,
+ *     which then starts late, and the grid does not move;
+ *   120 Hz: two presents a step, alphas 1/4, 2/4, 3/4, 4/4;
+ *   the phase: presents that finish near a vblank (GPU time jitter) repeat
+ *     and drop pictures without the display clock; with it the grid moves
+ *     away from the vblank and, from 16 starting phases and at two loads
+ *     (4K's among them), none does over the last 30 s;
+ *   a display 50 ppm faster than it reports: pictures repeated or dropped
+ *     in 10 minutes without the clock, none after the first 10 s with it
+ *     (the slot follows the display to within 3 ppm);
+ *   without the clock (FIFO, as the window takes then): at 16 phases and
+ *     two loads only the display's drift slips a picture, where mailbox
+ *     repeats and drops them all the time at some phases;
+ *   a display clock 2 % off the report, one that stops: left, the slot
+ *     back on the report;
+ *   off the screen for 10 s: no presents, the steps go on on the grid;
+ *   a 30 ms step: that step's lag caught up, back on the grid; a 300 ms
+ *     step: the lag dropped, the grid from then;
+ *   the FIFO models of the old lock's tests (a present blocking to the
+ *     vblank after it, a queue of 2 or 3 images, NVIDIA's fence waits and
+ *     a menu closing) on a FIFO-only swapchain: the grid never moves and
+ *     the steps start on it while the presents return before it;
+ *   the first frame after a reset 1/2, 1; nothing presented: the grid;
+ *   pace_fifo_hold (no lock at 144 Hz); the nominal ratio; the log's trace.
  */
 #include <stdio.h>
 #include <string.h>
@@ -62,49 +64,63 @@ static int fails;
 #define MS 1000000ull
 #define SEC 1000000000ull
 #define NTSC 16683333ull
+#define R60 16666667ull /* what the window takes from a reported 60.00 Hz */
+#define D60 (1e9 / 60.0)
 #define ALPHA_LOG 64
+#define PICS 64
+
+enum { F_MAILBOX, F_FIFO, F_BLOCK, F_QUEUE, F_NV };
+
+typedef struct Pic {
+    uint64_t id, ready;
+} Pic;
 
 typedef struct Fake {
+    int mode;
     uint64_t now;
-    uint64_t phase, display; /* vblanks at phase + k * display */
-    uint64_t cost;           /* a replay's CPU time */
-    uint64_t jitterMax;      /* a present returns up to this after its vblank */
+    uint64_t phase; /* a vblank: vblank k at phase + k * display */
+    double display; /* ns between vblanks */
+    uint64_t cost;  /* a present's CPU time */
     uint32_t rng;
-    int atOnce; /* the present does not block */
-    /* a queued swapchain (0: the present blocks to the first vblank after
-       the replay): pictures waiting for the display, one leaves a vblank */
-    unsigned depth, queued;
-    uint64_t vbIdx; /* the vblank the queue was last drained to */
-    /* the window off the screen for vsyncs [hiddenFrom, hiddenTo): the
-       present returns at once and is not shown */
+    /* present costs in turn (0 entries: cost) */
+    const uint64_t *costs;
+    unsigned nCosts, costAt;
+    /* mailbox: a picture is ready gpu (+ up to gpuJitter) after its present
+       returns; the display's state */
+    uint64_t gpu, gpuJitter;
+    Pic pics[PICS];
+    unsigned nPics;
+    uint64_t nextId, shownId, vbDone, lastReady;
+    uint64_t countFrom; /* repeats and drops counted from then */
+    unsigned repeats, drops;
+    /* the display clock: each present noted at the vblank that showed it
+       or a later one (one passed over: when the next was shown), this long
+       after it */
+    uint64_t wake, wakeJitter;
+    int clockFails;
+#define NOTES 4096
+    uint64_t noteId[NOTES], noteAt[NOTES];
+    unsigned noteHead, noteCount;
+    uint64_t noted; /* the last present noted */
+    /* the window off the screen for vsyncs [hiddenFrom, hiddenTo) */
     unsigned vsync, hiddenFrom, hiddenTo;
-    int ignoreShown; /* the loop is not told (the rc1 window) */
-    /* a swapchain rebuild at vsync rebuildAt: the queue empty, rebuildNs
-       spent */
+    /* FIFO models (the old lock's tests) */
+    uint64_t jitterMax; /* F_BLOCK, F_QUEUE: a return up to this after its vblank */
+    unsigned depth, queued;
+    uint64_t vbIdx;
     unsigned rebuildAt;
     uint64_t rebuildNs;
-    unsigned presents;
-    uint64_t lastVblank; /* the vblank the last present returned on */
-    /* NVIDIA's FIFO (nv): the acquire and the present return at once; the
-       replay waits at its start for the GPU to finish the frame two before
-       (RHI_FRAMES_IN_FLIGHT 2, vk_cmd.c's timeline wait: the log's "fence
-       waits"), and the GPU draws a frame into its image only when the
-       display has let go of it (three images: frame i's image is free once
-       frame i - 2 is on the screen).  So a present returns the GPU's time
-       (gpu) and the CPU's tail (tail) after a vblank, never on it, and a
-       change in either moves every later return. */
-    int nv;
-    uint64_t pre, tail, gpu; /* the replay before the wait, after it; the GPU's time */
-    uint64_t tailJitter;     /* the tail varies by up to this */
-    /* the work ramps by rampTail and rampGpu over rampLen vsyncs from
-       rampAt (a menu closing, the scene drawn again) */
+    /* F_NV: the acquire and the present return at once; the replay waits
+       at its start for the GPU to finish the frame two before
+       (RHI_FRAMES_IN_FLIGHT 2), and the GPU draws into an image only when
+       the display let go of it (three images) */
+    uint64_t pre, tail, gpuNv, tailJitter;
     unsigned rampAt, rampLen;
-    int64_t rampTail, rampGpu; /* below 0: the work falls */
-    uint64_t firstExtra;       /* the first present's extra time (a swapchain rebuild) */
+    int64_t rampTail, rampGpu;
 #define NV_RING 8
     uint64_t gpuDone[NV_RING], showAt[NV_RING];
-    unsigned nvCount; /* frames since the queue was empty */
-    /* the alphas since the last frame closed */
+    unsigned nvCount;
+    unsigned presents;
     float alpha[ALPHA_LOG];
     unsigned nAlpha;
 } Fake;
@@ -120,15 +136,107 @@ static uint32_t f_rand(Fake *f)
     return f->rng >> 8;
 }
 
+static uint64_t f_vb(const Fake *f, uint64_t k)
+{
+    return f->phase + (uint64_t)((double)k * f->display);
+}
+
+/* the last vblank at or before t */
+static uint64_t f_vb_index(const Fake *f, uint64_t t)
+{
+    uint64_t k = (uint64_t)((double)(t - f->phase) / f->display);
+
+    while (f_vb(f, k + 1) <= t) {
+        k++;
+    }
+    while (k > 0 && f_vb(f, k) > t) {
+        k--;
+    }
+    return k;
+}
+
 static int f_hidden(const Fake *f)
 {
     return f->vsync >= f->hiddenFrom && f->vsync < f->hiddenTo;
 }
 
+/* the mailbox display's vblanks up to t */
+static void f_display_to(Fake *f, uint64_t t)
+{
+    for (;;) {
+        const uint64_t v = f_vb(f, f->vbDone + 1);
+        int best = -1;
+
+        if (v > t) {
+            break;
+        }
+        f->vbDone++;
+        for (unsigned i = 0; i < f->nPics; i++) {
+            if (f->pics[i].ready <= v) {
+                best = (int)i;
+            }
+        }
+        if (f->mode == F_FIFO) {
+            /* in order: the next one when it is ready */
+            best = f->nPics > 0 && f->pics[0].ready <= v ? 0 : -1;
+        }
+        if (best >= 0) {
+            const uint64_t at = v + f->wake + (f->wakeJitter ? f_rand(f) % f->wakeJitter : 0);
+
+            if (v >= f->countFrom) {
+                f->drops += (unsigned)best;
+            }
+            f->shownId = f->pics[best].id;
+            /* the clock's notes: this present and any passed over */
+            while (f->noted < f->shownId && f->noteCount < NOTES) {
+                const unsigned i = (f->noteHead + f->noteCount++) % NOTES;
+
+                f->noteId[i] = ++f->noted;
+                f->noteAt[i] = at;
+            }
+            memmove(f->pics, f->pics + best + 1, (f->nPics - (unsigned)best - 1) * sizeof(Pic));
+            f->nPics -= (unsigned)best + 1;
+        } else if (f->shownId != 0 && v >= f->countFrom && !f_hidden(f)) {
+            f->repeats++;
+        }
+    }
+}
+
+static uint64_t f_cost(Fake *f)
+{
+    return f->nCosts ? f->costs[f->costAt++ % f->nCosts] : f->cost;
+}
+
+static void f_present_mailbox(Fake *f)
+{
+    f_display_to(f, f->now);
+    if (f->mode == F_FIFO) {
+        /* three images: the acquire waits while one is on the screen and
+           two wait for it */
+        while (f->nPics >= 2) {
+            f->now = f_vb(f, f->vbDone + 1);
+            f_display_to(f, f->now);
+        }
+    }
+    f->now += f_cost(f);
+    f_display_to(f, f->now);
+    uint64_t ready = f->now + f->gpu + (f->gpuJitter ? f_rand(f) % f->gpuJitter : 0);
+
+    if (ready < f->lastReady) {
+        ready = f->lastReady; /* the GPU's work in order */
+    }
+    f->lastReady = ready;
+    if (f->nPics == PICS) {
+        memmove(f->pics, f->pics + 1, (PICS - 1) * sizeof(Pic));
+        f->nPics--;
+    }
+    f->pics[f->nPics++] = (Pic){++f->nextId, ready};
+}
+
 /* the queue after the vblanks up to now */
 static void f_drain(Fake *f)
 {
-    const uint64_t cur = (f->now - f->phase) / f->display;
+    const uint64_t cur = f_vb_index(f, f->now);
     const uint64_t pop = cur - f->vbIdx;
 
     f->queued = pop >= f->queued ? 0 : f->queued - (unsigned)pop;
@@ -151,9 +259,9 @@ static uint64_t f_ramp(const Fake *f, uint64_t base, int64_t full)
 /* the first vblank at or after t */
 static uint64_t f_vblank_at(const Fake *f, uint64_t t)
 {
-    const uint64_t k = (t - f->phase + f->display - 1) / f->display;
+    const uint64_t k = f_vb_index(f, t);
 
-    return f->phase + k * f->display;
+    return f_vb(f, k) == t ? t : f_vb(f, k + 1);
 }
 
 static void f_present_nv(Fake *f)
@@ -162,15 +270,10 @@ static void f_present_nv(Fake *f)
     uint64_t start;
 
     f->now += f->pre;
-    if (i == 0) {
-        f->now += f->firstExtra;
-        f->firstExtra = 0;
-    }
     if (i >= 2 && f->now < f->gpuDone[(i - 2) % NV_RING]) {
         f->now = f->gpuDone[(i - 2) % NV_RING]; /* the fence wait */
     }
-    f->now += f_ramp(f, f->tail, f->rampTail) +
-              (f->tailJitter ? f_rand(f) % f->tailJitter : 0); /* then submit and present */
+    f->now += f_ramp(f, f->tail, f->rampTail) + (f->tailJitter ? f_rand(f) % f->tailJitter : 0);
     start = f->now;
     if (i >= 1 && start < f->gpuDone[(i - 1) % NV_RING]) {
         start = f->gpuDone[(i - 1) % NV_RING];
@@ -178,63 +281,52 @@ static void f_present_nv(Fake *f)
     if (i >= 3 && start < f->showAt[(i - 2) % NV_RING]) {
         start = f->showAt[(i - 2) % NV_RING]; /* the image is free */
     }
-    f->gpuDone[i % NV_RING] = start + f_ramp(f, f->gpu, f->rampGpu);
-    /* on the screen at the first vblank after it is drawn, a vblank after
-       the frame before at the earliest */
+    f->gpuDone[i % NV_RING] = start + f_ramp(f, f->gpuNv, f->rampGpu);
     uint64_t show = f_vblank_at(f, f->gpuDone[i % NV_RING]);
 
     if (i >= 1 && show <= f->showAt[(i - 1) % NV_RING]) {
-        show = f->showAt[(i - 1) % NV_RING] + f->display;
+        show = f->showAt[(i - 1) % NV_RING] + (uint64_t)f->display;
     }
     f->showAt[i % NV_RING] = show;
     f->nvCount++;
-    f->lastVblank = f->now; /* never on a vblank: no late measure */
 }
 
 static bool f_present(void *u, float a)
 {
     Fake *f = u;
 
-    if (f->nv) {
-        f->presents++;
-        if (f->nAlpha < ALPHA_LOG) {
-            f->alpha[f->nAlpha++] = a;
-        }
-        f_present_nv(f);
-        return true;
-    }
-    f->now += f->cost;
     f->presents++;
     if (f->nAlpha < ALPHA_LOG) {
         f->alpha[f->nAlpha++] = a;
     }
-    if (f->atOnce || f_hidden(f)) {
-        f->lastVblank = f->now;
-        return true;
-    }
-    if (f->depth > 0) {
+    switch (f->mode) {
+    case F_MAILBOX:
+    case F_FIFO:
+        f_present_mailbox(f);
+        break;
+    case F_NV:
+        f_present_nv(f);
+        break;
+    case F_QUEUE:
+        f->now += f->cost;
         f_drain(f);
         if (f->queued >= f->depth) {
             /* full: wait for the vblank that takes one */
-            f->now = f->phase + (f->vbIdx + 1) * f->display;
+            f->now = f_vb(f, f->vbIdx + 1);
             f_drain(f);
-            f->lastVblank = f->now;
             f->now += f->jitterMax ? f_rand(f) % f->jitterMax : 0;
-        } else {
-            f->lastVblank = f->now; /* at once: no vblank waited for */
         }
         f->queued++;
-        return true;
+        break;
+    default: /* F_BLOCK: to the first vblank after the replay */
+        f->now += f->cost;
+        f->now = f_vb(f, f_vb_index(f, f->now) + 1) + (f->jitterMax ? f_rand(f) % f->jitterMax : 0);
+        break;
     }
-    /* the first vblank after the replay */
-    const uint64_t k = (f->now - f->phase) / f->display + 1;
-
-    f->lastVblank = f->phase + k * f->display;
-    f->now = f->lastVblank + (f->jitterMax ? f_rand(f) % f->jitterMax : 0);
     return true;
 }
 
-static bool f_shown(void *u)
+static bool f_visible(void *u)
 {
     return !f_hidden(u);
 }
@@ -248,37 +340,80 @@ static void f_sleep(void *u, uint64_t ns)
     }
 }
 
+static uint64_t f_present_id(void *u)
+{
+    return ((Fake *)u)->nextId;
+}
+
+/* the display clock: the next note made by now */
+static int f_shown(void *u, uint64_t *id, uint64_t *ns)
+{
+    Fake *f = u;
+
+    if (f->clockFails) {
+        return -1;
+    }
+    f_display_to(f, f->now);
+    if (f->noteCount == 0 || f->noteAt[f->noteHead] > f->now) {
+        return 0;
+    }
+    *id = f->noteId[f->noteHead];
+    *ns = f->noteAt[f->noteHead];
+    f->noteHead = (f->noteHead + 1) % NOTES;
+    f->noteCount--;
+    return 1;
+}
+
+typedef struct Opt {
+    unsigned n;
+    uint64_t report; /* the refresh the display reports */
+    uint64_t step, stepJitter;
+    double seconds;
+    unsigned bigAt; /* the step after vsync bigAt takes bigStep */
+    uint64_t bigStep;
+    bool fifo, clock; /* a FIFO-only swapchain; the display clock offered */
+} Opt;
+
 typedef struct Run {
-    unsigned steps, presents, debtSteps;
-    uint64_t lateMax;      /* the step's start after the vblank its last present returned on */
-    int alphaBad;          /* an alpha not the exact fraction, or not increasing in a frame */
-    unsigned alphaChecked; /* the alphas checked */
-    int dropped;           /* PaceLock.dropped at the end */
-    unsigned dropVsync;    /* the vsync it dropped at (0: held) */
-    double ratio;          /* pace_lock_rate_ratio over the last 10 s */
-    unsigned fillPresents, unshown, gridSteps;
+    unsigned steps, presents, held, skipped, unshown, resyncs;
+    unsigned lateSteps;  /* steps that started 0.5 ms or more after their due time */
+    uint64_t lateMax;    /* the latest step start against its due time */
+    uint64_t gridDevMax; /* the most a due time was off a period (and the clock's nudge) after
+                            the one before */
+    int alphaBad;        /* an alpha not the exact fraction, or not increasing in a frame */
+    unsigned alphaChecked;
+    double ratio; /* pace_lock_rate_ratio over the last 10 s */
+    unsigned repeats, drops;
+    PaceLock L;
 } Run;
 
-/* seconds of simulated vsyncs: the loop, then the step (stepNs; bigStep at
-   vsync bigAt) */
-static Run run(Fake *f, unsigned n, uint64_t refreshNominal, uint64_t stepNs, double seconds,
-               unsigned bigAt, uint64_t bigStep)
+static Run run(Fake *f, const Opt *o)
 {
-    PaceLock L;
-    const PaceLockIo io = {f, f_now, f_present, f_sleep, f->ignoreShown ? NULL : f_shown};
-    const uint64_t start = f->now, end = start + (uint64_t)(seconds * 1e9);
-    Run r = {0};
-    unsigned vsync = 0;
-    bool newFrame = true;
-    unsigned presentsAtStep = 0, fillAtFrame = 0;
+    Run r;
+    PaceLock *L = &r.L;
+    const PaceLockIo io = {f,
+                           f_now,
+                           f_present,
+                           f_sleep,
+                           f_visible,
+                           o->clock ? f_present_id : NULL,
+                           o->clock ? f_shown : NULL};
+    const uint64_t start = f->now, end = start + (uint64_t)(o->seconds * 1e9);
+    const uint64_t ratioAt = start + (uint64_t)((o->seconds - 10.0) * 1e9);
+    unsigned vsync = 0, gapsAtFrame = 0;
+    bool newFrame = true, ratioStarted = false;
 
-    pace_lock_reset(&L, n, refreshNominal, NTSC, f->now);
-    if (f->depth > 0) {
-        f_drain(f); /* an empty queue at the start */
+    memset(&r, 0, sizeof r);
+    pace_lock_reset(L, o->n, o->report, NTSC, f->now, !o->fifo, o->clock);
+    f->vbDone = f_vb_index(f, f->now);
+    f->vbIdx = f->vbDone;
+    if (f->countFrom == 0) {
+        f->countFrom = start + SEC;
     }
     while (f->now < end) {
-        const unsigned before = L.debtSteps, gridBefore = L.gridSteps;
-        const uint64_t ratioAt = start + (uint64_t)((seconds - 10.0) * 1e9);
+        const uint64_t before = L->due;
+        const double periodBefore = L->slotNs * o->n;
+        const unsigned resyncs = L->resyncs;
 
         f->vsync = vsync;
         if (f->rebuildAt != 0 && vsync == f->rebuildAt) {
@@ -290,168 +425,513 @@ static Run run(Fake *f, unsigned n, uint64_t refreshNominal, uint64_t stepNs, do
         }
         if (newFrame) {
             /* the frame that just closed: its alphas were 1 / (2n) .. 1 */
-            for (unsigned i = 0; i < f->nAlpha; i++) {
-                const float want = pace_lock_alpha(i + 1, n, 2);
+            const unsigned gaps = L->held + L->skipped + L->unshown;
 
-                if (vsync <= 4 || L.debtSteps != 0 || L.gridSteps != 0 ||
-                    L.fillPresents != fillAtFrame) {
-                    continue;
-                }
+            for (unsigned i = 0; i < f->nAlpha && vsync > 4 && gaps == gapsAtFrame; i++) {
                 r.alphaChecked++;
-                if (f->alpha[i] != want || (i > 0 && !(f->alpha[i] > f->alpha[i - 1]))) {
+                if (f->alpha[i] != pace_lock_alpha(i + 1, o->n, 2) ||
+                    (i > 0 && !(f->alpha[i] > f->alpha[i - 1]))) {
                     r.alphaBad++;
                 }
             }
             f->nAlpha = 0;
-            fillAtFrame = L.fillPresents;
+            gapsAtFrame = gaps;
         }
-        if (f->now < ratioAt + NTSC && f->now >= ratioAt) {
-            (void)pace_lock_rate_ratio(&L); /* the block starts */
+        if (!ratioStarted && f->now >= ratioAt) {
+            ratioStarted = true;
+            (void)pace_lock_rate_ratio(L); /* the block starts */
         }
-        (void)pace_lock_vsync(&L, &io, newFrame);
+        const uint64_t due = pace_lock_vsync(L, &io, newFrame);
+        const double dev = (double)due - (double)before - periodBefore;
+        const uint64_t late = f->now - due;
+
         vsync++;
-        if (L.dropped) {
-            r.dropped = L.dropped;
-            r.dropVsync = vsync;
-            break;
+        if (L->resyncs == resyncs && vsync > 1) {
+            const double a = dev < 0 ? -dev : dev;
+
+            if ((uint64_t)a > r.gridDevMax) {
+                r.gridDevMax = (uint64_t)a;
+            }
         }
-        /* the step starts now */
-        if (L.debtSteps == before && L.gridSteps == gridBefore && f->presents != presentsAtStep &&
-            !f->atOnce && f->now - f->lastVblank > r.lateMax) {
-            r.lateMax = f->now - f->lastVblank;
+        if (late > r.lateMax) {
+            r.lateMax = late;
         }
-        presentsAtStep = f->presents;
-        r.steps++;
-        f->now += vsync == bigAt ? bigStep : stepNs;
+        if (late >= MS / 2) {
+            r.lateSteps++;
+        }
+        f->now += vsync == o->bigAt ? o->bigStep
+                                    : o->step + (o->stepJitter ? f_rand(f) % o->stepJitter : 0);
         newFrame = vsync % 2 == 0; /* a frame every two steps */
     }
+    f_display_to(f, f->now);
+    r.steps = L->steps;
     r.presents = f->presents;
-    r.debtSteps = L.debtSteps;
-    r.fillPresents = L.fillPresents;
-    r.unshown = L.unshown;
-    r.gridSteps = L.gridSteps;
-    r.ratio = pace_lock_rate_ratio(&L);
+    r.held = L->held;
+    r.skipped = L->skipped;
+    r.unshown = L->unshown;
+    r.resyncs = L->resyncs;
+    r.repeats = f->repeats;
+    r.drops = f->drops;
+    r.ratio = pace_lock_rate_ratio(L);
     return r;
 }
 
-static Fake fake(uint64_t display)
+static Fake fake(double display)
 {
-    Fake f = {0};
+    Fake f;
 
+    memset(&f, 0, sizeof f);
+    f.mode = F_MAILBOX;
     f.now = 5 * SEC;
     f.phase = 5 * SEC - 13 * MS; /* the display's own phase (before the start) */
     f.display = display;
     f.cost = 2 * MS;
+    f.gpu = 5 * MS;
+    f.wake = 30000ull;
+    f.wakeJitter = 100000ull;
     f.rng = 12345;
     return f;
 }
 
-/* 60.00 Hz display (16.667 ms) under the 59.94 simulation */
-static void test60(void)
+static Opt opt(unsigned n, uint64_t report, double seconds)
 {
-    Fake f = fake(16666667ull);
-    const Run r = run(&f, 1, 16666667ull, 3 * MS, 60.0, 0, 0);
+    Opt o;
 
-    printf("60 Hz: %u presents, %u steps, late max %.3f ms, ratio %.6f\n", r.presents, r.steps,
-           (double)r.lateMax / 1e6, r.ratio);
-    CHECK(r.dropped == 0);
-    CHECK(r.lateMax < MS / 2);
-    CHECK(r.presents >= 3599 && r.presents <= 3601);
-    CHECK(r.steps >= 3599 && r.steps <= 3601); /* one step a vblank: the display is the clock */
-    CHECK(r.alphaBad == 0 && r.alphaChecked >= 3590);
-    /* the audio plays 60 / 59.94 faster */
-    CHECK(r.ratio > 1.000951 && r.ratio < 1.001051);
+    memset(&o, 0, sizeof o);
+    o.n = n;
+    o.report = report;
+    o.step = 3 * MS;
+    o.seconds = seconds;
+    return o;
 }
 
-/* 59.94 Hz display: the simulation at its own rate, ratio 1 */
+/* 60.00 Hz (16.6667 ms) under the 59.94 simulation: the grid on the
+   report, mailbox, without and with the display clock */
+static void test60(void)
+{
+    for (int clock = 0; clock < 2; clock++) {
+        Fake f = fake(D60);
+        Opt o = opt(1, R60, 60.0);
+
+        o.clock = clock != 0;
+        const Run r = run(&f, &o);
+
+        printf("60 Hz%s: %u presents, %u steps, late max %.3f ms, grid off by %.3f ms at most, "
+               "%u repeated and %u dropped, ratio %.6f, %u refreshes timed\n",
+               clock ? " (clock)" : "", r.presents, r.steps, (double)r.lateMax / 1e6,
+               (double)r.gridDevMax / 1e6, r.repeats, r.drops, r.ratio, r.L.seen);
+        CHECK(r.lateMax == 0);
+        CHECK(r.gridDevMax <= (clock ? 20001u : 1u)); /* a period, and a nudge at most */
+        CHECK(r.presents == r.steps);                 /* one present a step */
+        CHECK(r.steps >= 3599 && r.steps <= 3601);
+        CHECK(r.alphaBad == 0 && r.alphaChecked >= 3590);
+        CHECK(r.repeats == 0 && r.drops == 0);
+        CHECK(r.held == 0 && r.skipped == 0 && r.resyncs == 0);
+        /* the audio plays 60 / 59.94 faster */
+        CHECK(r.ratio > 1.000951 && r.ratio < 1.001051);
+        CHECK(!clock || (r.L.clock == PACE_CLOCK_ON && r.L.seen > 3000));
+    }
+}
+
+/* 59.94 Hz: the simulation at its own rate, ratio 1 */
 static void test5994(void)
 {
-    Fake f = fake(16683350ull);
-    const Run r = run(&f, 1, 16683350ull, 3 * MS, 30.0, 0, 0);
+    Fake f = fake(1e9 * 1001.0 / 60000.0);
+    Opt o = opt(1, 16683333ull, 30.0);
+    const Run r = run(&f, &o);
 
-    CHECK(r.dropped == 0);
-    CHECK(r.lateMax < MS / 2);
+    CHECK(r.lateMax == 0 && r.repeats == 0 && r.drops == 0);
     CHECK(r.ratio > 0.99995 && r.ratio < 1.00005);
 }
 
-/* 120 Hz: two presents a vsync, alphas 1/4, 2/4, 3/4, 4/4 */
+/* the rc3 return pattern: two quick presents, then a slow one */
+static void testRc3Pattern(void)
+{
+    /* the log's returns (ms since the one before) under the old lock, which
+       stepped on each: the steps were as far apart */
+    static const double trace[] = {8.85, 31.71, 9.43, 8.88, 31.92, 9.27, 8.85};
+    double lo = 1e9, hi = 0;
+
+    for (unsigned i = 0; i < sizeof trace / sizeof trace[0]; i++) {
+        lo = trace[i] < lo ? trace[i] : lo;
+        hi = trace[i] > hi ? trace[i] : hi;
+    }
+    printf("rc3 lock: steps %.2f to %.2f ms apart (the grid: 16.67)\n", lo, hi);
+    CHECK(hi - lo > 20.0);
+
+    static const uint64_t fits[] = {900000ull, 1200000ull, 13000000ull};
+    static const uint64_t over[] = {900000ull, 1200000ull, 25000000ull};
+
+    for (int clock = 0; clock < 2; clock++) {
+        Fake f = fake(D60);
+        Opt o = opt(1, R60, 60.0);
+        Run r;
+
+        o.step = 2 * MS;
+        o.clock = clock != 0;
+        f.costs = fits;
+        f.nCosts = 3;
+        r = run(&f, &o);
+        printf("presents of 0.9, 1.2, 13 ms%s: late max %.3f ms, grid off by %.3f ms, %u "
+               "presents, %u steps\n",
+               clock ? " (clock)" : "", (double)r.lateMax / 1e6, (double)r.gridDevMax / 1e6,
+               r.presents, r.steps);
+        CHECK(r.lateMax == 0);
+        CHECK(r.gridDevMax <= (clock ? 20001u : 1u));
+        CHECK(r.presents == r.steps);
+        CHECK(r.steps >= 3599 && r.steps <= 3601);
+        CHECK(r.alphaBad == 0 && r.alphaChecked >= 3590);
+
+        /* a 25 ms present: the step after it starts late, the grid stays */
+        f = fake(D60);
+        f.costs = over;
+        f.nCosts = 3;
+        r = run(&f, &o);
+        printf("presents of 0.9, 1.2, 25 ms%s: %u steps late (max %.3f ms), grid off by %.3f "
+               "ms, %u steps, %u resyncs\n",
+               clock ? " (clock)" : "", r.lateSteps, (double)r.lateMax / 1e6,
+               (double)r.gridDevMax / 1e6, r.steps, r.resyncs);
+        CHECK(r.lateSteps >= 1190 && r.lateSteps <= 1210); /* every third */
+        CHECK(r.lateMax < 11 * MS);                        /* 2 + 25 - 16.67 */
+        CHECK(r.gridDevMax <= (clock ? 20001u : 1u));
+        CHECK(r.steps >= 3599 && r.steps <= 3601);
+        CHECK(r.resyncs == 0);
+        CHECK(r.presents == r.steps);
+    }
+}
+
+/* 120 Hz: two presents a step, alphas 1/4, 2/4, 3/4, 4/4 */
 static void test120(void)
 {
-    Fake f = fake(8333333ull);
-    Run r;
+    for (int clock = 0; clock < 2; clock++) {
+        Fake f = fake(1e9 / 120.0);
+        Opt o = opt(2, 8333333ull, 60.0);
+        Run r;
 
-    f.cost = 1 * MS;
-    r = run(&f, 2, 8333333ull, 3 * MS, 60.0, 0, 0);
-    printf("120 Hz: %u presents, %u steps, late max %.3f ms\n", r.presents, r.steps,
-           (double)r.lateMax / 1e6);
-    CHECK(r.dropped == 0);
-    CHECK(r.lateMax < MS / 2);
-    CHECK(r.presents >= 7198 && r.presents <= 7202); /* a vsync's two at either end */
-    CHECK(r.steps >= 3599 && r.steps <= 3601);
-    CHECK(r.alphaBad == 0 && r.alphaChecked >= 7190);
-    /* the alphas of the last frame, exactly */
+        f.cost = 1 * MS;
+        f.gpu = 3 * MS;
+        o.clock = clock != 0;
+        r = run(&f, &o);
+        printf("120 Hz%s: %u presents, %u steps, late max %.3f ms, %u repeated, %u dropped\n",
+               clock ? " (clock)" : "", r.presents, r.steps, (double)r.lateMax / 1e6, r.repeats,
+               r.drops);
+        CHECK(r.lateMax == 0);
+        CHECK(r.presents == 2 * r.steps);
+        CHECK(r.steps >= 3599 && r.steps <= 3601);
+        CHECK(r.alphaBad == 0 && r.alphaChecked >= 7180);
+        CHECK(r.repeats == 0 && r.drops == 0);
+    }
     CHECK(pace_lock_alpha(1, 2, 2) == 0.25f && pace_lock_alpha(4, 2, 2) == 1.0f);
 }
 
-/* returns jitter by up to 0.4 ms: still held, never late past it */
-static void testJitter(void)
+/* Presents that finish near a vblank: the GPU's time jitters by 3 ms.
+   Without the clock the grid stays where it starts, and where that puts
+   the presents' ends around a vblank pictures repeat and drop for as long
+   as it runs; with it the grid moves away from the vblank.  16 starting
+   phases, two loads: a 2 ms present and 8 ms of GPU; and 4K's (the rc3
+   log: a 6 ms replay and 11 ms of GPU, a picture ready more than a refresh
+   after its step). */
+static void testPhase(void)
 {
-    Fake f = fake(16666667ull);
-    Run r;
+    unsigned without = 0, withLast = 0, phases = 0;
 
-    f.jitterMax = 400000ull;
-    r = run(&f, 1, 16666667ull, 3 * MS, 60.0, 0, 0);
-    CHECK(r.dropped == 0);
-    CHECK(r.lateMax < MS / 2);
-    CHECK(r.presents >= 3599 && r.presents <= 3601);
+    for (unsigned p = 0; p < 32; p++) {
+        for (int clock = 0; clock < 2; clock++) {
+            Fake f = fake(D60);
+            Opt o = opt(1, R60, 60.0);
+
+            f.phase = 5 * SEC - (uint64_t)((double)(p % 16) * D60 / 16.0);
+            f.cost = p < 16 ? 2 * MS : 6 * MS;
+            f.gpu = p < 16 ? 8 * MS : 11 * MS;
+            f.gpuJitter = 3 * MS;
+            o.stepJitter = p < 16 ? 0 : 2 * MS;
+            o.clock = clock != 0;
+            if (clock) {
+                f.countFrom = 5 * SEC + 30 * SEC; /* the last 30 s */
+            }
+            const Run r = run(&f, &o);
+
+            if (clock) {
+                withLast += r.repeats + r.drops;
+                if (r.repeats + r.drops) {
+                    printf("  load %u phase %u/16 with the clock: %u repeated, %u dropped in the "
+                           "last 30 s (%u late, %u early)\n",
+                           p / 16, p % 16, r.repeats, r.drops, r.L.late, r.L.early);
+                }
+                CHECK(r.gridDevMax <= 20001u);
+                CHECK(r.lateMax == 0);
+                CHECK(r.alphaBad == 0);
+            } else {
+                without += r.repeats + r.drops;
+                phases += r.repeats + r.drops > 0;
+            }
+        }
+    }
+    printf("presents near a vblank, 2 loads x 16 phases x 60 s: %u repeated or dropped without "
+           "the clock (%u runs), %u with it over the last 30 s\n",
+           without, phases, withLast);
+    CHECK(phases >= 6);
+    CHECK(without > 2000);
+    CHECK(withLast == 0);
 }
 
-/* one 30 ms step: its vblanks are caught up by a step without a present,
-   the lock holds and the steps stay one a vblank */
-static void testStall(void)
+/* Without the display clock the lock presents through FIFO: the grid's
+   phase against the vblanks is whatever it starts at, and under mailbox a
+   phase that puts the presents' ends around a vblank repeats and drops
+   pictures for the whole session; FIFO shows them in order, a refresh
+   later where one is late, so only the display's drift slips a picture
+   (50 ppm: one every 5.5 minutes).  Two loads (a 3 +- 1 ms step, 2 ms
+   presents, 6 +- 1 ms GPU; and 6 ms presents, 11 +- 1.5 ms GPU) at 16
+   phases, 50 ppm both ways, 5 minutes each, counted after the first. */
+static void testNoClockMode(void)
 {
-    Fake f = fake(16666667ull);
-    const Run r = run(&f, 1, 16666667ull, 3 * MS, 20.0, 600, 30 * MS);
+    static const uint64_t cost[] = {2 * MS, 6 * MS}, gpu[] = {6 * MS, 11 * MS},
+                          gj[] = {2 * MS, 3 * MS};
+    static const double ppm[] = {50.0, -50.0};
+    unsigned mbRuns = 0, mbEvents = 0, fifoRuns = 0, fifoEvents = 0, fifoMax = 0;
 
-    CHECK(r.dropped == 0);
-    CHECK(r.debtSteps == 1);
+    for (unsigned l = 0; l < 2; l++) {
+        for (unsigned a = 0; a < 2; a++) {
+            for (unsigned p = 0; p < 16; p++) {
+                for (int fifo = 0; fifo < 2; fifo++) {
+                    Fake f = fake(D60 * (1.0 - ppm[a] * 1e-6));
+                    Opt o = opt(1, R60, 300.0);
+
+                    f.mode = fifo ? F_FIFO : F_MAILBOX;
+                    f.phase = 5 * SEC - (uint64_t)((double)p * D60 / 16.0);
+                    f.cost = cost[l];
+                    f.gpu = gpu[l];
+                    f.gpuJitter = gj[l];
+                    f.rng = 1000u + p * 7u + l;
+                    f.countFrom = 5 * SEC + 60 * SEC;
+                    o.stepJitter = 2 * MS;
+                    o.fifo = fifo != 0;
+                    const Run r = run(&f, &o);
+                    const unsigned ev = r.repeats + r.drops;
+
+                    CHECK(r.lateMax < MS / 2 || fifo);
+                    CHECK(r.gridDevMax <= 1u);
+                    if (fifo) {
+                        fifoRuns += ev > 0;
+                        fifoEvents += ev;
+                        fifoMax = ev > fifoMax ? ev : fifoMax;
+                    } else {
+                        mbRuns += ev > 0;
+                        mbEvents += ev;
+                    }
+                }
+            }
+        }
+    }
+    printf("no display clock, 64 runs of 5 min: mailbox %u runs with %u pictures repeated or "
+           "dropped, FIFO %u runs with %u (at most %u in one)\n",
+           mbRuns, mbEvents, fifoRuns, fifoEvents, fifoMax);
+    CHECK(mbRuns >= 16 && mbEvents > 10000);
+    CHECK(fifoMax <= 4);
+}
+
+/* A display 50 ppm faster than its report (a crystal off): without the
+   clock the grid slides across the vblanks, with it the slot follows */
+static void testDrift(void)
+{
+    const double d = D60 * (1.0 - 50e-6);
+    Fake f = fake(d);
+    Opt o = opt(1, R60, 600.0);
+    Run r;
+
+    f.gpu = 6 * MS;
+    f.gpuJitter = 1 * MS;
+    r = run(&f, &o);
+    printf("a display 50 ppm fast, 10 min without the clock: %u repeated, %u dropped\n", r.repeats,
+           r.drops);
+    CHECK(r.repeats + r.drops > 0);
+    f = fake(d);
+    f.gpu = 6 * MS;
+    f.gpuJitter = 1 * MS;
+    f.countFrom = 5 * SEC + 10 * SEC;
+    o.clock = true;
+    r = run(&f, &o);
+    printf("with the clock: %u repeated, %u dropped after 10 s, slot %.3f ns (display %.3f), "
+           "phase moved %.3f ms, %u refreshes timed\n",
+           r.repeats, r.drops, r.L.slotNs, d, r.L.nudgeSum / 1e6, r.L.seen);
+    CHECK(r.repeats + r.drops == 0);
+    CHECK(r.L.slotNs > d - 50.0 && r.L.slotNs < d + 50.0); /* 3 ppm: the wake-ups' noise */
+    CHECK(r.L.clock == PACE_CLOCK_ON);
+    CHECK(r.lateMax == 0);
+}
+
+/* clocks not believed: 2 % off the report, one that stops */
+static void testClockLeft(void)
+{
+    Fake f = fake(D60 * 1.02);
+    Opt o = opt(1, R60, 30.0);
+    Run r;
+
+    o.clock = true;
+    r = run(&f, &o);
+    printf("a clock 2 %% off: left %d, slot %.1f ns\n", r.L.clock, r.L.slotNs);
+    CHECK(r.L.clock == PACE_CLOCK_LEFT_PERIOD);
+    CHECK(r.L.slotNs == (double)R60);
+    CHECK(r.lateMax == 0);
+
+    f = fake(D60);
+    f.clockFails = 1;
+    r = run(&f, &o);
+    CHECK(r.L.clock == PACE_CLOCK_LEFT_ERROR);
+    CHECK(r.lateMax == 0 && r.presents == r.steps);
+}
+
+/* off the screen for 10 s: no presents, the steps go on on the grid */
+static void testHidden(void)
+{
+    Fake f = fake(D60);
+    Opt o = opt(1, R60, 30.0);
+    Run r;
+
+    f.hiddenFrom = 300;
+    f.hiddenTo = 900;
+    o.clock = true;
+    r = run(&f, &o);
+    printf("hidden 10 s: %u presents, %u steps, %u not presented, late max %.3f ms\n", r.presents,
+           r.steps, r.unshown, (double)r.lateMax / 1e6);
+    CHECK(r.unshown == 600);
+    CHECK(r.presents == r.steps - 600);
+    CHECK(r.steps >= 1799 && r.steps <= 1801);
+    CHECK(r.lateMax == 0);
+    CHECK(r.gridDevMax <= 20001u);
+    CHECK(r.L.clock == PACE_CLOCK_ON);
+}
+
+/* one 30 ms step: the two steps after it are late, the next ones on the
+   grid; a 300 ms step (a stage load): the lag dropped, the grid from then */
+static void testLongSteps(void)
+{
+    Fake f = fake(D60);
+    Opt o = opt(1, R60, 20.0);
+    Run r;
+
+    o.bigAt = 600;
+    o.bigStep = 30 * MS;
+    r = run(&f, &o);
+    printf("a 30 ms step: %u late (max %.3f ms), %u resyncs, %u presents skipped\n", r.lateSteps,
+           (double)r.lateMax / 1e6, r.resyncs, r.skipped);
+    /* the step after it (the new frame presented, 15.3 ms late) and the
+       one after that (no present: 2 ms) */
+    CHECK(r.resyncs == 0);
+    CHECK(r.lateSteps == 2);
+    CHECK(r.lateMax < 16 * MS);
+    CHECK(r.gridDevMax <= 1u);
     CHECK(r.steps >= 1199 && r.steps <= 1201);
-    CHECK(r.presents >= 1198 && r.presents <= 1200);
+    f = fake(D60);
+    o.bigStep = 300 * MS;
+    r = run(&f, &o);
+    printf("a 300 ms step: %u resyncs, %.0f ms dropped\n", r.resyncs, (double)r.L.droppedNs / 1e6);
+    CHECK(r.resyncs == 1);
+    CHECK(r.L.droppedNs > 280 * MS && r.L.droppedNs < 290 * MS); /* 300 less a period */
+    CHECK(r.lateSteps <= 1);
 }
 
-/* a present that returns at once: three misses drop the lock */
-static void testAtOnce(void)
+/* The FIFO models of the old lock's tests on a FIFO-only swapchain (D3D12,
+   a Vulkan surface without mailbox).  A queue of 2 or 3 images that the
+   display drains one a vblank: a present returns at once while there is
+   room, so on the display's rate the steps are on the grid. */
+static void testFifoModels(void)
 {
-    Fake f = fake(16666667ull);
-    Run r;
+    static const struct {
+        unsigned depth, n;
+        double display;
+        uint64_t cost;
+    } q[] = {{2, 1, D60, 2 * MS}, {3, 1, D60, 2 * MS}, {3, 2, 1e9 / 120.0, 1 * MS}};
 
-    f.atOnce = 1;
-    r = run(&f, 1, 16666667ull, 3 * MS, 10.0, 0, 0);
-    printf("at once: dropped %d at vsync %u\n", r.dropped, r.dropVsync);
-    CHECK(r.dropped == PACE_LOCK_DROP_AT_ONCE);
-    CHECK(r.dropVsync >= 3 && r.dropVsync <= 8);
+    for (unsigned i = 0; i < sizeof q / sizeof q[0]; i++) {
+        Fake f = fake(q[i].display);
+        Opt o = opt(q[i].n, q[i].n == 1 ? R60 : 8333333ull, 30.0);
+        Run r;
+
+        f.mode = F_QUEUE;
+        f.depth = q[i].depth;
+        f.cost = q[i].cost;
+        o.step = 2 * MS;
+        o.fifo = true;
+        r = run(&f, &o);
+        printf("fifo queue %u, %u a step: late max %.3f ms, %u held, %u presents, %u steps\n",
+               q[i].depth, q[i].n, (double)r.lateMax / 1e6, r.held, r.presents, r.steps);
+        CHECK(r.lateMax == 0);
+        CHECK(r.gridDevMax <= 1u);
+        CHECK(r.presents == q[i].n * r.steps);
+        CHECK(r.steps >= 1799 && r.steps <= 1801);
+        CHECK(r.alphaBad == 0);
+        /* a swapchain rebuild (an empty queue) and a 300 ms step change
+           nothing */
+        f = fake(q[i].display);
+        f.mode = F_QUEUE;
+        f.depth = q[i].depth;
+        f.cost = q[i].cost;
+        f.rebuildAt = 900;
+        f.rebuildNs = 2 * MS;
+        o.bigAt = 1200;
+        o.bigStep = 300 * MS;
+        r = run(&f, &o);
+        CHECK(r.resyncs == 1 && r.lateSteps <= 1 && r.gridDevMax <= 1u);
+    }
+    /* A present that blocks to the vblank after its replay (the old lock's
+       model).  On the display's rate the vblanks keep their place against
+       the grid: where one falls in a slot after the present's end the step
+       is on time, where it falls before it the present would return past
+       the next due time and is held (pace_fifo_hold), the new frame once */
+    {
+        unsigned onTime = 0, held = 0;
+
+        for (unsigned p = 0; p < 8; p++) {
+            Fake f = fake(D60);
+            Opt o = opt(1, R60, 20.0);
+
+            f.mode = F_BLOCK;
+            f.phase = 5 * SEC - (uint64_t)((double)p * D60 / 8.0);
+            o.step = 2 * MS;
+            o.fifo = true;
+            const Run r = run(&f, &o);
+
+            CHECK(r.gridDevMax <= 1u && r.resyncs == 0);
+            CHECK(r.steps >= 1199 && r.steps <= 1201);
+            CHECK(r.lateMax <= 17 * MS);
+            onTime += r.lateSteps == 0 && r.held == 0;
+            held += r.held > 0;
+        }
+        printf("fifo blocking, 8 phases: %u with every step on time and every present made, %u "
+               "with presents held\n",
+               onTime, held);
+        CHECK(onTime >= 5);
+    }
+    /* NVIDIA's FIFO with the fence waits (the rc2 model) and the work rising
+       by 5.8 ms over 12 vsyncs (a menu closing): on the grid */
+    {
+        Fake f = fake(D60);
+        Opt o = opt(1, R60, 30.0);
+        Run r;
+
+        f.mode = F_NV;
+        f.pre = 450000ull;
+        f.tail = 3600000ull;
+        f.tailJitter = 1000000ull;
+        f.gpuNv = 7900000ull;
+        f.rampAt = 600;
+        f.rampLen = 12;
+        f.rampTail = 2700000;
+        f.rampGpu = 3100000;
+        o.step = 800000ull;
+        o.fifo = true;
+        r = run(&f, &o);
+        printf("fifo nv, a menu closing: late max %.3f ms, %u held, %u presents, %u steps\n",
+               (double)r.lateMax / 1e6, r.held, r.presents, r.steps);
+        CHECK(r.lateMax == 0);
+        CHECK(r.gridDevMax <= 1u);
+        CHECK(r.presents == r.steps);
+        CHECK(r.steps >= 1799 && r.steps <= 1801);
+    }
 }
 
-/* a display 2 % slower than it reports drops the lock; 1 % does not */
-static void testSlowDisplay(void)
-{
-    /* 2 % of 16.666667 ms is 0.3333333 ms: 17.00001 and 16.333333 ms (a few
-       ns past the edge: the median of an even count rounds down) */
-    Fake f = fake(17000010ull);
-    Run r = run(&f, 1, 16666667ull, 3 * MS, 10.0, 0, 0);
-
-    printf("2 %% slow: dropped %d at vsync %u\n", r.dropped, r.dropVsync);
-    CHECK(r.dropped == PACE_LOCK_DROP_RATE);
-    f = fake(16666667ull * 101 / 100);
-    r = run(&f, 1, 16666667ull, 3 * MS, 10.0, 0, 0);
-    CHECK(r.dropped == 0);
-    f = fake(16333333ull);
-    r = run(&f, 1, 16666667ull, 3 * MS, 10.0, 0, 0);
-    CHECK(r.dropped == PACE_LOCK_DROP_RATE);
-}
-
-/* A present that did nothing (a movie on the output): the vsync runs on the
-   simulation's grid, a period after the last step, and the lock holds */
+/* A present that did nothing (a movie on the output): the grid */
 static bool f_none(void *u, float a)
 {
     (void)u;
@@ -461,145 +941,30 @@ static bool f_none(void *u, float a)
 
 static void testNothingPresented(void)
 {
-    Fake f = fake(16666667ull);
+    Fake f = fake(D60);
     PaceLock L;
-    const PaceLockIo io = {&f, f_now, f_none, f_sleep, NULL};
+    const PaceLockIo io = {&f, f_now, f_none, f_sleep, NULL, NULL, NULL};
     uint64_t due;
 
-    pace_lock_reset(&L, 1, 16666667ull, NTSC, f.now);
+    pace_lock_reset(&L, 1, R60, NTSC, f.now, true, false);
     due = pace_lock_vsync(&L, &io, true);
-    CHECK(due == 5 * SEC + NTSC);
+    CHECK(due == 5 * SEC + R60);
     CHECK(f.now == due);
     f.now += 3 * MS;
     due = pace_lock_vsync(&L, &io, false);
-    CHECK(due == 5 * SEC + 2 * NTSC);
-    CHECK(L.dropped == 0 && L.misses == 0);
-}
-
-/* The v0.6.1 loop, modelled: the deadline advances by the simulation's
-   period; while the vsync's present returned before it, present again (a
-   blocking FIFO present).  Returns the latest step after its deadline. */
-static uint64_t oldLoopLateMax(uint64_t display, double seconds)
-{
-    Fake f = fake(display);
-    uint64_t deadline = f.now, lateMax = 0;
-    const uint64_t end = f.now + (uint64_t)(seconds * 1e9);
-    int shown = 0;
-
-    while (f.now < end) {
-        deadline += NTSC;
-        shown = 0;
-        for (;;) {
-            if (shown && f.now >= deadline) {
-                break;
-            }
-            f_present(&f, 0.5f);
-            f.nAlpha = 0;
-            shown = 1;
-        }
-        if (f.now - deadline > lateMax) {
-            lateMax = f.now - deadline;
-        }
-        f.now += 3 * MS;
-    }
-    return lateMax;
-}
-
-static void testOldLoop(void)
-{
-    const uint64_t late = oldLoopLateMax(16666667ull, 30.0);
-
-    printf("v0.6.1 loop on 60.00 Hz: step late max %.1f ms\n", (double)late / 1e6);
-    CHECK(late > 10 * MS); /* a whole refresh late: what issue 74 saw */
-}
-
-/* A queued FIFO swapchain (B1 of the v0.6.2 review): depth 2 and 3, a
-   2 ms step (the reviewer's model), the lock from an empty queue */
-static void testQueue(unsigned depth, unsigned n, uint64_t display, uint64_t cost)
-{
-    Fake f = fake(display);
-    Run r;
-
-    f.depth = depth;
-    f.cost = cost;
-    r = run(&f, n, display, 2 * MS, 30.0, 0, 0);
-    printf("queue %u, %u a vsync: dropped %d at vsync %u, %u presents again while filling, "
-           "late max %.3f ms\n",
-           depth, n, r.dropped, r.dropVsync, r.fillPresents, (double)r.lateMax / 1e6);
-    CHECK(r.dropped == 0);
-    CHECK(r.fillPresents >= 1 && r.fillPresents <= 2 * PACE_LOCK_FILL_PRESENTS);
-    CHECK(r.gridSteps <= 1);
-    CHECK(r.lateMax < MS / 2);
-    CHECK(r.steps >= 1799 - depth && r.steps <= 1801 + depth); /* a step a vblank, n vblanks */
-    CHECK(r.alphaBad == 0);
-}
-
-/* a 300 ms step from the steady state (a stage load): the queue drains,
-   the lock catches up and holds */
-static void testQueueLongStep(unsigned depth)
-{
-    Fake f = fake(16666667ull);
-    Run r;
-
-    f.depth = depth;
-    r = run(&f, 1, 16666667ull, 2 * MS, 20.0, 600, 300 * MS);
-    printf("queue %u, a 300 ms step: dropped %d at vsync %u\n", depth, r.dropped, r.dropVsync);
-    CHECK(r.dropped == 0);
-    CHECK(r.debtSteps == PACE_LOCK_DEBT_VSYNCS);
-}
-
-/* a swapchain rebuild (a resize, a mode change): the queue starts empty */
-static void testQueueRebuild(unsigned depth, uint64_t rebuildNs)
-{
-    Fake f = fake(16666667ull);
-    Run r;
-
-    f.depth = depth;
-    f.rebuildAt = 900;
-    f.rebuildNs = rebuildNs;
-    r = run(&f, 1, 16666667ull, 2 * MS, 30.0, 0, 0);
-    printf("queue %u, a rebuild of %.0f ms: dropped %d at vsync %u\n", depth,
-           (double)rebuildNs / 1e6, r.dropped, r.dropVsync);
-    CHECK(r.dropped == 0);
-}
-
-/* the window minimised or occluded for 10 s: its presents return at once
-   (D3D12's DXGI_STATUS_OCCLUDED, Vulkan's 0x0 surface) and the window says
-   they are not shown: not judged, the lock holds and is in force after */
-static void testHidden(void)
-{
-    Fake f = fake(16666667ull);
-    Run r;
-
-    f.depth = 3;
-    f.hiddenFrom = 300;
-    f.hiddenTo = 900;
-    r = run(&f, 1, 16666667ull, 2 * MS, 30.0, 0, 0);
-    printf("hidden 10 s: dropped %d, %u vsyncs not shown, lateMax %.3f ms\n", r.dropped, r.unshown,
-           (double)r.lateMax / 1e6);
-    CHECK(r.dropped == 0);
-    CHECK(r.unshown >= 595 && r.unshown <= 605);
-    CHECK(r.lateMax < MS / 2);
-    /* the rc1 window judged them: three misses */
-    f = fake(16666667ull);
-    f.depth = 3;
-    f.hiddenFrom = 300;
-    f.hiddenTo = 900;
-    f.ignoreShown = 1;
-    r = run(&f, 1, 16666667ull, 2 * MS, 30.0, 0, 0);
-    CHECK(r.dropped == PACE_LOCK_DROP_AT_ONCE && r.dropVsync > 300 && r.dropVsync < 320);
+    CHECK(due == 5 * SEC + 2 * R60);
+    CHECK(L.presents == 0);
 }
 
 /* The first frame after a reset (the lock starting, back from the
-   background) is two vsyncs long like the rest: alphas 1/2, 1 (rc1 took
-   the first close for a one-vsync frame: 1, 1, the picture held a vblank) */
+   background) is two vsyncs long like the rest: alphas 1/2, 1 */
 static void testFirstFrame(void)
 {
-    Fake f = fake(16666667ull);
+    Fake f = fake(D60);
     PaceLock L;
-    const PaceLockIo io = {&f, f_now, f_present, f_sleep, NULL};
+    const PaceLockIo io = {&f, f_now, f_present, f_sleep, NULL, NULL, NULL};
 
-    pace_lock_reset(&L, 1, 16666667ull, NTSC, f.now);
+    pace_lock_reset(&L, 1, R60, NTSC, f.now, true, false);
     (void)pace_lock_vsync(&L, &io, true);
     f.now += 2 * MS;
     (void)pace_lock_vsync(&L, &io, false);
@@ -616,10 +981,11 @@ static void testFirstFrame(void)
    presented over `vsyncs`, the step stepNs long. */
 static unsigned fifoNewFramesShown(uint64_t stepNs, unsigned vsyncs, int rc1)
 {
-    Fake f = fake(6944444ull);
+    Fake f = fake(6944444.0);
     uint64_t deadline = f.now, lastReturn = 0;
     unsigned frame = 0, shownFrame = ~0u, heldFrame = ~0u, shownCount = 0;
 
+    f.mode = F_BLOCK;
     for (unsigned v = 0; v < vsyncs; v++) {
         deadline += NTSC;
         if (v % 2 == 0) {
@@ -628,7 +994,7 @@ static unsigned fifoNewFramesShown(uint64_t stepNs, unsigned vsyncs, int rc1)
         for (;;) {
             const bool shown = shownFrame == frame;
 
-            if (pace_fifo_hold(f.now, lastReturn, f.display, deadline, rc1 ? true : shown,
+            if (pace_fifo_hold(f.now, lastReturn, 6944444ull, deadline, rc1 ? true : shown,
                                heldFrame == frame)) {
                 if (!shown) {
                     heldFrame = frame;
@@ -683,169 +1049,62 @@ static void testNominalRatio(void)
 {
     PaceLock L;
 
-    pace_lock_reset(&L, 1, 16666667ull, NTSC, 1);
+    pace_lock_reset(&L, 1, 16666667ull, NTSC, 1, true, false);
     CHECK(pace_lock_nominal_ratio(&L) > 1.000999 && pace_lock_nominal_ratio(&L) < 1.001001);
-    pace_lock_reset(&L, 2, 8333333ull, NTSC, 1);
+    pace_lock_reset(&L, 2, 8333333ull, NTSC, 1, true, false);
     CHECK(pace_lock_nominal_ratio(&L) > 1.000999 && pace_lock_nominal_ratio(&L) < 1.001001);
-    pace_lock_reset(&L, 1, 16683333ull, NTSC, 1);
+    pace_lock_reset(&L, 1, 16683333ull, NTSC, 1, true, false);
     CHECK(pace_lock_nominal_ratio(&L) == 1.0);
-    pace_lock_reset(&L, 1, 20000000ull, 20000000ull, 1); /* PAL on 50 */
+    pace_lock_reset(&L, 1, 20000000ull, 20000000ull, 1, true, false); /* PAL on 50 */
     CHECK(pace_lock_nominal_ratio(&L) == 1.0);
-    pace_lock_reset(&L, 1, 17500000ull, NTSC, 1); /* 4.7 % off: not trusted */
+    pace_lock_reset(&L, 1, 17500000ull, NTSC, 1, true, false); /* 4.7 % off: not trusted */
     CHECK(pace_lock_nominal_ratio(&L) == 1.0);
 }
 
-/* The v0.7.0 rc2 log (RTX 3090, Vulkan, 3840x2160, 60.00 Hz): the frame
-   rate from uncapped to 60, the swapchain made again in FIFO (the first
-   present 143 ms), the game paused in a menu (GPU 7.9 ms, the replay's CPU
-   3.6 ms after a fence wait of 9 ms, acquire 0); the lock held 10 s, then
-   the menu closed and the work rose to the game's (GPU 11 ms, the replay's
-   CPU 6.3 ms) and the lock dropped: "the display did not keep its refresh
-   rate, 3 misses in a row". */
-static Fake nvFake(void)
-{
-    Fake f = fake(16666667ull);
-
-    f.nv = 1;
-    f.pre = 450000ull;
-    f.tail = 3600000ull;
-    f.tailJitter = 1000000ull;
-    f.gpu = 7900000ull;
-    f.firstExtra = 143 * MS;
-    return f;
-}
-
-static Run nvRun(unsigned rampLen, int64_t rampTail, int64_t rampGpu, double seconds)
-{
-    Fake f = nvFake();
-
-    f.rampAt = 600;
-    f.rampLen = rampLen;
-    f.rampTail = rampTail;
-    f.rampGpu = rampGpu;
-    return run(&f, 1, 16666667ull, 800000ull, seconds, 0, 0);
-}
-
-static void testNvMenuClose(void)
-{
-    /* the menu closing over 12 vsyncs (0.2 s): the work rises 5.8 ms, half
-       a millisecond a vsync; rc2 dropped the lock 13 vsyncs in */
-    Run r = nvRun(12, 2700000, 3100000, 30.0);
-
-    printf("nv, menu closed over 0.2 s: dropped %d at vsync %u, %u presents, %u steps\n", r.dropped,
-           r.dropVsync, r.presents, r.steps);
-    CHECK(r.dropped == 0);
-    /* a step a vblank, less the 143 ms first present's (its vblanks owed
-       past PACE_LOCK_DEBT_VSYNCS were dropped) */
-    CHECK(r.steps >= 1785 && r.steps <= 1801);
-    /* any speed of change, either way, holds: a step (1 vsync) to 2 s */
-    static const unsigned lens[] = {1, 2, 4, 8, 12, 20, 30, 60, 120};
-
-    for (unsigned k = 0; k < sizeof lens / sizeof lens[0]; k++) {
-        r = nvRun(lens[k], 2700000, 3100000, 20.0);
-        CHECK(r.dropped == 0);
-        /* the scene back to the menu's: the work falls */
-        Fake f = nvFake();
-
-        f.tail += 2700000ull;
-        f.gpu += 3100000ull;
-        f.rampAt = 600;
-        f.rampLen = lens[k];
-        f.rampTail = -2700000;
-        f.rampGpu = -3100000;
-        r = run(&f, 1, 16666667ull, 800000ull, 20.0, 0, 0);
-        CHECK(r.dropped == 0);
-        if (r.dropped) {
-            printf("  ramp of %u vsyncs dropped %d at vsync %u\n", lens[k], r.dropped, r.dropVsync);
-        }
-    }
-    /* a rise of 12 ms (the GPU past a refresh) over 6 vsyncs */
-    r = nvRun(6, 4000000, 8000000, 20.0);
-    CHECK(r.dropped == 0);
-}
-
-/* under the same model a display 2.5 % slower or faster than it reports
-   still drops the lock, after the first second and two windows (the 143
-   ms first present's vblanks are stepped without a present) */
-static void testNvSlowDisplay(void)
-{
-    Fake f = nvFake();
-    Run r;
-
-    f.display = 17083333ull;
-    r = run(&f, 1, 16666667ull, 800000ull, 15.0, 0, 0);
-    printf("nv, 2.5 %% slow: dropped %d at vsync %u\n", r.dropped, r.dropVsync);
-    CHECK(r.dropped == PACE_LOCK_DROP_RATE);
-    CHECK(r.dropVsync > PACE_LOCK_SETTLE + PACE_LOCK_RATE_WINDOWS * PACE_LOCK_RATE_WINDOW);
-    CHECK(r.dropVsync < PACE_LOCK_SETTLE + PACE_LOCK_RATE_WINDOWS * PACE_LOCK_RATE_WINDOW + 20);
-    f = nvFake();
-    f.display = 16250000ull;
-    r = run(&f, 1, 16666667ull, 800000ull, 15.0, 0, 0);
-    CHECK(r.dropped == PACE_LOCK_DROP_RATE);
-    f = nvFake();
-    f.display = 16666667ull * 101 / 100;
-    r = run(&f, 1, 16666667ull, 800000ull, 15.0, 0, 0);
-    CHECK(r.dropped == 0);
-}
-
-/* The log's trace: the first presents after a reset and the last ones, as
-   "ms letter" */
+/* The log's trace: the first presents, with the time to the refresh that
+   showed them where the clock saw it */
 static void testTrace(void)
 {
-    Fake f = fake(16666667ull);
+    Fake f = fake(D60);
     PaceLock L;
-    const PaceLockIo io = {&f, f_now, f_present, f_sleep, NULL};
-    char buf[512];
+    const PaceLockIo io = {&f, f_now, f_present, f_sleep, f_visible, f_present_id, f_shown};
+    char buf[1024];
     unsigned k;
 
-    f.depth = 3;
-    f_drain(&f);
-    pace_lock_reset(&L, 1, 16666667ull, NTSC, f.now);
+    f.vbDone = f_vb_index(&f, f.now);
+    pace_lock_reset(&L, 1, R60, NTSC, f.now, true, true);
     for (unsigned v = 0; v < 100; v++) {
         f.vsync = v;
         (void)pace_lock_vsync(&L, &io, v % 2 == 0);
         f.now += 2 * MS;
     }
-    k = pace_lock_trace_text(&L, false, buf, sizeof buf);
-    printf("trace, first: %s\n", buf);
+    k = pace_lock_trace_text(&L, buf, sizeof buf);
+    printf("trace: %s\n", buf);
     CHECK(k == PACE_LOCK_TRACE_FIRST);
-    CHECK(buf[0] == '0' && buf[1] == '.' && buf[4] == 'u'); /* the first: no interval */
-    CHECK(strstr(buf, "f ") != NULL);                       /* the queue filled */
-    CHECK(strstr(buf, "16.67h") != NULL);
-    k = pace_lock_trace_text(&L, true, buf, sizeof buf);
-    printf("trace, last: %s\n", buf);
-    CHECK(k == PACE_LOCK_TRACE_LAST);
-    CHECK(strcmp(buf + strlen(buf) - 6, "16.67h") == 0);
+    CHECK(strncmp(buf, "0.00", 4) == 0); /* the first: no interval */
+    CHECK(strstr(buf, " 16.67 (") != NULL);
     /* a short buffer: whole entries only */
-    k = pace_lock_trace_text(&L, true, buf, 15);
-    CHECK(k == 2 && strlen(buf) == 13);
+    k = pace_lock_trace_text(&L, buf, 20);
+    CHECK(k >= 1 && strlen(buf) < 20 && buf[strlen(buf) - 1] != ' ');
 }
 
 int main(void)
 {
     test60();
     test5994();
+    testRc3Pattern();
     test120();
-    testJitter();
-    testStall();
-    testAtOnce();
-    testSlowDisplay();
-    testNothingPresented();
-    testOldLoop();
-    testQueue(2, 1, 16666667ull, 2 * MS);
-    testQueue(3, 1, 16666667ull, 2 * MS);
-    testQueue(3, 2, 8333333ull, 1 * MS);
-    testQueue(3, 2, 8333333ull, 2 * MS); /* the display drains one while it fills */
-    testQueueLongStep(2);
-    testQueueLongStep(3);
-    testQueueRebuild(3, 2 * MS);
-    testQueueRebuild(3, 40 * MS);
+    testPhase();
+    testDrift();
+    testNoClockMode();
+    testClockLeft();
     testHidden();
+    testLongSteps();
+    testFifoModels();
+    testNothingPresented();
     testFirstFrame();
     testFifoHold();
     testNominalRatio();
-    testNvMenuClose();
-    testNvSlowDisplay();
     testTrace();
     if (fails) {
         printf("pace_loop_test: %d failures\n", fails);

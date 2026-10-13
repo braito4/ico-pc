@@ -7,6 +7,7 @@
 
 #include <stddef.h>
 #include <stdio.h>
+#include <string.h>
 
 uint64_t pace_slow_threshold(uint64_t refreshNs, uint64_t periodNs, bool injector)
 {
@@ -37,11 +38,6 @@ uint64_t pace_present_gap(int cap, bool uncappedVsync, bool mailbox, uint64_t re
         return r - r / 16;
     }
     return cap > 0 ? 1000000000ull / (uint64_t)cap : 0;
-}
-
-bool pace_gap_as_uncapped(bool uncapped, bool lockDropped, bool wanted, bool mailboxNow)
-{
-    return wanted && (uncapped || (lockDropped && mailboxNow));
 }
 
 bool pace_cap_equals_refresh(int cap, uint64_t refreshNs)
@@ -215,11 +211,15 @@ unsigned pace_lock_presents(int cap, uint64_t periodNs)
     return d * 100 <= x ? (unsigned)n : 0;
 }
 
-bool pace_lock_rate_ok(uint64_t intervalNs, uint64_t refreshNs)
+bool pace_grid_period_ok(unsigned n, uint64_t refreshNs, uint64_t periodNs)
 {
-    const uint64_t d = intervalNs > refreshNs ? intervalNs - refreshNs : refreshNs - intervalNs;
+    if (n == 0 || refreshNs == 0 || periodNs == 0) {
+        return false;
+    }
+    const uint64_t p = (uint64_t)n * refreshNs;
+    const uint64_t d = p > periodNs ? p - periodNs : periodNs - p;
 
-    return d * 50 < refreshNs;
+    return d * 100 < periodNs;
 }
 
 float pace_lock_alpha(unsigned k, unsigned n, unsigned perFrame)
@@ -232,127 +232,255 @@ float pace_lock_alpha(unsigned k, unsigned n, unsigned perFrame)
     return k >= d ? 1.0f : (float)k / (float)d;
 }
 
-void pace_lock_reset(PaceLock *L, unsigned n, uint64_t refreshNs, uint64_t periodNs, uint64_t nowNs)
+void pace_lock_reset(PaceLock *L, unsigned n, uint64_t refreshNs, uint64_t periodNs, uint64_t nowNs,
+                     bool mailbox, bool clock)
 {
     *L = (PaceLock){0};
     L->n = n;
     L->refreshNs = refreshNs;
     L->periodNs = periodNs;
+    L->mailbox = mailbox;
+    L->clock = clock ? PACE_CLOCK_ON : PACE_CLOCK_NONE;
     L->due = nowNs;
+    L->slotNs = (double)refreshNs;
     L->perFrame = 2; /* a game frame every two vsyncs until two closes are seen */
     L->rateClean = true;
-    L->filling = true; /* the queue may be empty (the start, a rebuild, the background) */
 }
 
-PaceLockVerdict pace_lock_judge(PaceLock *L, uint64_t returnNs, unsigned *vblanks)
+/* fmod without libm: the remainder of x / s with the sign of x */
+static double rem_of(double x, double s)
 {
-    const uint64_t r = L->refreshNs;
-    const uint64_t last = L->lastReturn;
-    const bool unjudged = L->unjudged || last == 0 || returnNs < last;
-    const bool fromVblank = L->onVblank;
-
-    L->lastReturn = returnNs;
-    L->unjudged = false;
-    L->onVblank = false;
-    *vblanks = 1;
-    if (unjudged) {
-        return PACE_LOCK_UNJUDGED;
-    }
-    const uint64_t iv = returnNs - last;
-
-    if (iv * 2 < r) {
-        *vblanks = 0;
-        return PACE_LOCK_MISS_AT_ONCE;
-    }
-    if (iv * 2 >= 3 * r) {
-        /* a stall: the queue drained meanwhile (this return may not have
-           waited for a vblank) */
-        *vblanks = (unsigned)((iv + r / 2) / r);
-        L->filling = true;
-        return PACE_LOCK_STALL;
-    }
-    L->onVblank = true;
-    if (!fromVblank) {
-        /* the interval started at a return that may not have been on a
-           vblank (the first, after a sleep, at once): one vblank, not a
-           measure of the refresh */
-        return PACE_LOCK_UNJUDGED;
-    }
-    if (L->settled < PACE_LOCK_SETTLE) {
-        /* the first second after a (re)start: the queue and the work
-           settle; nothing summed */
-        L->settled++;
-        return PACE_LOCK_HIT;
-    }
-    /* the rate: the mean over a window of intervals, whose sum is the
-       window's last return less its first, so a change of the work (which
-       moves every return after a vblank) changes it by that change over the
-       window, not by that change an interval */
-    L->rateSumNs += iv;
-    if (++L->rateCount < PACE_LOCK_RATE_WINDOW) {
-        return PACE_LOCK_HIT;
-    }
-    L->rateMeanNs = L->rateSumNs / L->rateCount;
-    L->rateSumNs = 0;
-    L->rateCount = 0;
-    if (pace_lock_rate_ok(L->rateMeanNs, r)) {
-        L->rateOut = 0;
-        return PACE_LOCK_HIT;
-    }
-    L->rateOut++;
-    return PACE_LOCK_MISS_RATE;
+    return x - s * (double)(int64_t)(x / s);
 }
 
-/* the trace: a present's interval and letter */
-static void lock_trace(PaceLock *L, uint64_t ivNs, char v)
+/* e wrapped to (-s/2, s/2] */
+static double wrap_half(double e, double s)
 {
-    const uint64_t us = ivNs / 1000u;
-    const uint32_t u = us > 0xffffffffu ? 0xffffffffu : (uint32_t)us;
-
-    if (L->traceFirstCount < PACE_LOCK_TRACE_FIRST) {
-        L->traceFirstUs[L->traceFirstCount] = u;
-        L->traceFirstV[L->traceFirstCount++] = v;
+    e = rem_of(e, s);
+    if (e > s / 2) {
+        e -= s;
+    } else if (e <= -s / 2) {
+        e += s;
     }
-    L->traceLastUs[L->traceLastNext] = u;
-    L->traceLastV[L->traceLastNext] = v;
-    L->traceLastNext = (L->traceLastNext + 1) % PACE_LOCK_TRACE_LAST;
-    if (L->traceLastCount < PACE_LOCK_TRACE_LAST) {
-        L->traceLastCount++;
+    return e;
+}
+
+static void pend_pop(PaceLock *L)
+{
+    for (unsigned i = 1; i < L->pendCount; i++) {
+        L->pendId[i - 1] = L->pendId[i];
+        L->pendSlot[i - 1] = L->pendSlot[i];
+        L->pendLate[i - 1] = L->pendLate[i];
+        L->pendNudge[i - 1] = L->pendNudge[i];
+    }
+    if (L->pendCount > 0) {
+        L->pendCount--;
     }
 }
 
-unsigned pace_lock_trace_text(const PaceLock *L, bool last, char *buf, unsigned len)
+static void pend_push(PaceLock *L, uint64_t id, double slot, bool late)
 {
-    const unsigned count = last ? L->traceLastCount : L->traceFirstCount;
-    const unsigned first =
-        last ? (L->traceLastNext + PACE_LOCK_TRACE_LAST - L->traceLastCount) % PACE_LOCK_TRACE_LAST
-             : 0;
+    if (L->pendCount == PACE_GRID_PENDING) {
+        pend_pop(L); /* the oldest: never seen, not waited for again */
+    }
+    L->pendId[L->pendCount] = id;
+    L->pendSlot[L->pendCount] = slot;
+    L->pendLate[L->pendCount] = late;
+    L->pendNudge[L->pendCount] = L->nudgeSum;
+    L->pendCount++;
+}
+
+/* the display clock is left: the slot back to the report */
+static void clock_leave(PaceLock *L, int why)
+{
+    L->clock = why;
+    L->pendCount = 0;
+    L->nudgeLeft = 0.0;
+    L->slotNs = (double)L->refreshNs;
+}
+
+static double median_lat(const PaceLock *L)
+{
+    double v[PACE_GRID_RING];
+    unsigned i, j;
+    const unsigned n = L->latCount;
+
+    for (i = 0; i < n; i++) {
+        v[i] = L->lat[i];
+    }
+    for (i = 1; i < n; i++) {
+        const double x = v[i];
+        for (j = i; j > 0 && v[j - 1] > x; j--) {
+            v[j] = v[j - 1];
+        }
+        v[j] = x;
+    }
+    return n ? v[n / 2] : 0.0;
+}
+
+/* the display clock saw the oldest pending present on the screen at the
+   refresh at t */
+static void clock_seen(PaceLock *L, uint64_t t)
+{
+    const double s = L->slotNs;
+    /* the refresh's offset after the slot the present was made in (the
+       grid then: the moves made since are in nudgeSum's difference) */
+    double ph = rem_of((double)t - L->pendSlot[0] - (L->nudgeSum - L->pendNudge[0]), s);
+
+    if (ph < 0.0) {
+        ph += s;
+    }
+    L->seen++;
+    if (!L->targetSet) {
+        /* the phase found, once the moves still owed are made */
+        L->target = rem_of(ph - L->nudgeLeft, s);
+        if (L->target < 0.0) {
+            L->target += s;
+        }
+        L->targetSet = true;
+    }
+    /* the error left once the moves the steps still owe are made */
+    const double e = wrap_half(ph - L->nudgeLeft - L->target, s);
+
+    L->nudgeLeft += PACE_GRID_KP * e;
+    L->slotNs += PACE_GRID_KI * e;
+    const double away = L->slotNs - (double)L->refreshNs;
+
+    if ((away < 0.0 ? -away : away) * 100.0 > (double)L->refreshNs) {
+        clock_leave(L, PACE_CLOCK_LEFT_PERIOD);
+        return;
+    }
+    const double lat = (double)t - L->pendSlot[0];
+
+    for (unsigned i = 0; i < L->traceCount; i++) {
+        if (L->traceId[i] == L->pendId[0] && lat > 0.0) {
+            L->traceShowUs[i] = lat / 1000.0 > 4e9 ? 0xffffffffu : (uint32_t)(lat / 1000.0);
+        }
+    }
+    if (L->pendLate[0]) {
+        return; /* after a slow step: late for that, not for the phase */
+    }
+    /* a picture a refresh later or earlier than the run: the presents
+       finish near a refresh; the wanted offset moves away from it, the
+       way the first such picture says (later: the grid earlier) until
+       PACE_GRID_CLEAN pictures in a row are shown with the run.  With the
+       ends straddling a refresh the run's median takes either side, and a
+       way chosen each time went back and forth */
+    if (L->latCount >= PACE_GRID_RING_MIN) {
+        const double med = median_lat(L);
+        const int off = lat > med + s / 2 ? 1 : (lat < med - s / 2 ? -1 : 0);
+
+        if (off != 0) {
+            if (off > 0) {
+                L->late++;
+            } else {
+                L->early++;
+            }
+            if (L->away == 0) {
+                L->away = off;
+                L->awayMoved = 0.0;
+            }
+            L->clean = 0;
+            /* half a refresh at most: past it the pictures are late for
+               something else than the phase (a slow GPU), and the grid
+               stays */
+            if (L->awayMoved < s / 2) {
+                L->awayMoved += s / 64.0;
+                L->target = rem_of(L->target + (double)L->away * s / 64.0, s);
+                if (L->target < 0.0) {
+                    L->target += s;
+                }
+            }
+        } else if (L->away != 0 && ++L->clean >= PACE_GRID_CLEAN) {
+            L->away = 0;
+        }
+    }
+    L->lat[L->latNext] = lat;
+    L->latNext = (L->latNext + 1) % PACE_GRID_RING;
+    if (L->latCount < PACE_GRID_RING) {
+        L->latCount++;
+    }
+}
+
+/* the display clock's news: each present it saw on the screen since the
+   last call, oldest first */
+static void clock_take(PaceLock *L, const PaceLockIo *io)
+{
+    uint64_t id, t;
+    int r;
+
+    while (L->clock == PACE_CLOCK_ON && (r = io->shown(io->user, &id, &t)) != 0) {
+        if (r < 0) {
+            clock_leave(L, PACE_CLOCK_LEFT_ERROR);
+            break;
+        }
+        /* presents before it that it never named: not timed */
+        while (L->pendCount > 0 && L->pendId[0] < id) {
+            pend_pop(L);
+        }
+        if (L->pendCount == 0 || L->pendId[0] != id) {
+            continue; /* not one of the lock's (made before its reset) */
+        }
+        if (t != 0) {
+            clock_seen(L, t);
+        } else {
+            L->seenNoTime++;
+        }
+        if (L->clock == PACE_CLOCK_ON) {
+            pend_pop(L);
+        }
+    }
+}
+
+/* a present's interval from the one before, for the log */
+static void lock_trace(PaceLock *L, uint64_t returnNs, uint64_t id)
+{
+    if (L->traceCount >= PACE_LOCK_TRACE_FIRST) {
+        return;
+    }
+    const uint64_t us =
+        L->lastReturn != 0 && returnNs > L->lastReturn ? (returnNs - L->lastReturn) / 1000u : 0;
+
+    L->traceUs[L->traceCount] = us > 0xffffffffu ? 0xffffffffu : (uint32_t)us;
+    L->traceShowUs[L->traceCount] = 0;
+    L->traceId[L->traceCount] = id;
+    L->traceCount++;
+}
+
+static int ms_text(char *buf, unsigned len, const char *fmt, uint32_t us)
+{
+    const unsigned frac = (us % 1000u + 5u) / 10u;
+
+    return snprintf(buf, len, fmt, us / 1000u, frac > 99u ? 99u : frac);
+}
+
+unsigned pace_lock_trace_text(const PaceLock *L, char *buf, unsigned len)
+{
     unsigned at = 0, i;
 
     if (len == 0) {
         return 0;
     }
     buf[0] = '\0';
-    for (i = 0; i < count; i++) {
-        const unsigned k = last ? (first + i) % PACE_LOCK_TRACE_LAST : i;
-        const uint32_t us = last ? L->traceLastUs[k] : L->traceFirstUs[k];
-        const char v = last ? L->traceLastV[k] : L->traceFirstV[k];
-        const int w = snprintf(buf + at, len - at, "%s%u.%02u%c", i ? " " : "", us / 1000u,
-                               (us % 1000u + 5u) / 10u > 99u ? 99u : (us % 1000u + 5u) / 10u, v);
+    for (i = 0; i < L->traceCount; i++) {
+        char one[48];
+        int w = ms_text(one, sizeof one, i ? " %u.%02u" : "%u.%02u", L->traceUs[i]);
 
+        if (L->traceShowUs[i] != 0 && w > 0) {
+            w += ms_text(one + w, sizeof one - (unsigned)w, " (%u.%02u)", L->traceShowUs[i]);
+        }
         if (w < 0 || (unsigned)w >= len - at) {
-            buf[at] = '\0';
             break;
         }
+        memcpy(buf + at, one, (size_t)w + 1u);
         at += (unsigned)w;
     }
     return i;
 }
 
 /* a step at dueNs: counted, and the rate block's */
-static uint64_t lock_step(PaceLock *L, uint64_t dueNs)
+static void lock_step(PaceLock *L, uint64_t dueNs)
 {
-    L->due = dueNs;
     L->steps++;
     if (L->rateSteps == 0 && L->rateFirst == 0) {
         L->rateFirst = dueNs;
@@ -360,38 +488,16 @@ static uint64_t lock_step(PaceLock *L, uint64_t dueNs)
         L->rateSteps++;
     }
     L->rateLast = dueNs;
-    return dueNs;
-}
-
-/* this vsync on the simulation's own grid: the step due a period after the
-   last; the next interval spans the sleep and is not judged */
-static uint64_t lock_grid(PaceLock *L, const PaceLockIo *io, uint64_t now)
-{
-    uint64_t due = L->due + L->periodNs;
-
-    if (now < due) {
-        io->sleepUntil(io->user, due);
-    } else if (now - due > L->periodNs) {
-        /* more than a period behind: the lag is dropped */
-        L->resyncs++;
-        L->droppedNs += now - due;
-        due = now;
-    }
-    if (L->vblanks < L->n) {
-        L->sinceClose += L->n - L->vblanks; /* the vsync's share of the frame */
-    }
-    L->vblanks = 0;
-    L->unjudged = true;
-    L->filling = true; /* the display drained the queue while it slept */
-    L->gridSteps++;
-    L->rateClean = false;
-    return lock_step(L, due);
 }
 
 uint64_t pace_lock_vsync(PaceLock *L, const PaceLockIo *io, bool newFrame)
 {
     uint64_t now = io->now(io->user);
+    const double period = L->slotNs * (double)L->n;
 
+    if (L->clock == PACE_CLOCK_ON && io->shown != NULL) {
+        clock_take(L, io);
+    }
     L->vsyncsSinceClose++;
     if (newFrame) {
         const unsigned v = L->vsyncsSinceClose;
@@ -404,88 +510,101 @@ uint64_t pace_lock_vsync(PaceLock *L, const PaceLockIo *io, bool newFrame)
         L->closeSeen = true;
         L->vsyncsSinceClose = 0;
         L->sinceClose = 0;
+        L->framePresented = false;
+        L->frameHeld = false;
     }
-    if (L->vblanks >= L->n) {
-        /* a stall owed this vsync: its vblanks have passed by the last
-           step's (due then, so the caller sees how late it is) */
-        L->vblanks -= L->n;
-        L->debtSteps++;
-        return lock_step(L, L->due);
-    }
-    unsigned atOnce = 0; /* at-once returns this vsync */
+    /* the next step: a period on, moved by what the clock asks (a little a
+       step) */
+    double nudge = L->nudgeLeft;
 
-    for (;;) {
-        unsigned vb = 0;
+    if (nudge > PACE_GRID_NUDGE_MAX_NS) {
+        nudge = PACE_GRID_NUDGE_MAX_NS;
+    } else if (nudge < -PACE_GRID_NUDGE_MAX_NS) {
+        nudge = -PACE_GRID_NUDGE_MAX_NS;
+    }
+    L->nudgeLeft -= nudge;
+    L->nudgeSum += nudge;
+    const double off = L->dueFrac + period + nudge; /* above 0: a period is ms, a nudge us */
+    uint64_t next = L->due + (uint64_t)off;
+    double nextFrac = off - (double)(uint64_t)off;
+
+    if (now > next && (double)(now - next) > PACE_LOCK_DEBT_VSYNCS * period) {
+        /* far behind (a stage load): the lag is dropped and the grid starts
+           again from now; the presents in flight were on the old one */
+        L->resyncs++;
+        L->droppedNs += now - next;
+        L->rateClean = false;
+        L->due = now - (uint64_t)period;
+        L->dueFrac = 0.0;
+        next = now;
+        nextFrac = 0.0;
+        L->pendCount = 0;
+        L->latCount = L->latNext = 0;
+    }
+    for (unsigned j = 0; j < L->n; j++) {
+        /* the slot: the step's due time for the first present, a refresh
+           apart for the others */
+        const double so = L->dueFrac + (double)j * L->slotNs;
+        const uint64_t slot = L->due + (uint64_t)so;
         const float a = pace_lock_alpha(L->sinceClose + 1, L->n, L->perFrame);
 
-        if (!io->present(io->user, a)) {
-            /* nothing presented: the grid */
-            return lock_grid(L, io, io->now(io->user));
+        L->sinceClose++;
+        if (j > 0 && io->now(io->user) < slot) {
+            io->sleepUntil(io->user, slot);
         }
         now = io->now(io->user);
-        L->presents++;
-        const uint64_t iv = L->lastReturn != 0 && now > L->lastReturn ? now - L->lastReturn : 0;
-
-        if (io->shown != NULL && !io->shown(io->user)) {
-            /* not on the screen (minimised, occluded): not judged, the
-               grid; the next interval spans it */
+        if (io->visible != NULL && !io->visible(io->user)) {
+            /* off the screen: no present, nothing to wait for */
             L->unshown++;
-            L->lastReturn = now;
-            lock_trace(L, iv, 'n');
-            return lock_grid(L, io, now);
-        }
-        const bool measured = L->onVblank && !L->unjudged;
-        const PaceLockVerdict v = pace_lock_judge(L, now, &vb);
-
-        if (v == PACE_LOCK_MISS_AT_ONCE && L->filling && ++atOnce < PACE_LOCK_FILL_PRESENTS) {
-            /* the queue is filling: present again, now */
-            L->fillPresents++;
-            lock_trace(L, iv, 'f');
+            L->pendCount = 0;
             continue;
         }
-        lock_trace(L, iv,
-                   v == PACE_LOCK_MISS_AT_ONCE      ? 'a'
-                   : v == PACE_LOCK_MISS_RATE       ? 'r'
-                   : v == PACE_LOCK_STALL           ? 's'
-                   : v == PACE_LOCK_HIT && measured ? 'h'
-                                                    : 'u');
-        if (v == PACE_LOCK_MISS_AT_ONCE) {
-            L->missesTotal++;
-            if (++L->misses >= PACE_LOCK_MISSES) {
-                L->dropped = PACE_LOCK_DROP_AT_ONCE;
+        if (now >= next && L->framePresented) {
+            /* behind: no picture again until the step */
+            L->skipped++;
+            continue;
+        }
+        /* FIFO: a present that would return on a vblank past the next
+           step, judged from the last present when it waited for one (it
+           took a quarter of a slot or more: the queue was full; one that
+           returned at once says nothing of the vblanks) */
+        if (!L->mailbox && L->lastBlocked &&
+            pace_fifo_hold(now, L->lastReturn, (uint64_t)L->slotNs, next, L->framePresented,
+                           L->frameHeld)) {
+            if (!L->framePresented) {
+                L->frameHeld = true;
             }
-            return lock_grid(L, io, now);
+            L->held++;
+            continue;
         }
-        if (v == PACE_LOCK_MISS_RATE) {
-            /* a window's mean off the refresh: this vsync is still a
-               vblank's; a run of such windows drops the lock */
-            L->missesTotal++;
-            if (L->rateOut >= PACE_LOCK_RATE_WINDOWS) {
-                L->dropped = PACE_LOCK_DROP_RATE;
-                return lock_grid(L, io, now);
-            }
+        if (!io->present(io->user, a)) {
+            continue; /* nothing presented */
         }
-        if (v == PACE_LOCK_HIT || v == PACE_LOCK_MISS_RATE) {
-            L->misses = 0;
-            L->filling = false; /* the queue is full: an at-once return is a miss */
-        }
-        L->sinceClose += vb;
-        L->vblanks += vb;
-        if (L->vblanks >= L->n) {
-            L->vblanks -= L->n;
-            if (L->vblanks > PACE_LOCK_DEBT_VSYNCS * L->n) {
-                /* a long stall: what is past PACE_LOCK_DEBT_VSYNCS
-                   vsyncs is dropped, not caught up */
-                const unsigned drop = L->vblanks - PACE_LOCK_DEBT_VSYNCS * L->n;
+        const uint64_t ret = io->now(io->user);
+        const uint64_t id =
+            L->clock == PACE_CLOCK_ON && io->presentId != NULL ? io->presentId(io->user) : 0;
 
-                L->resyncs++;
-                L->droppedNs += (uint64_t)drop * L->refreshNs;
-                L->vblanks -= drop;
-                L->rateClean = false;
-            }
-            return lock_step(L, now);
+        L->presents++;
+        L->framePresented = true;
+        lock_trace(L, ret, id > L->lastId ? id : 0);
+        L->lastReturn = ret;
+        L->lastBlocked = (double)(ret - now) * 4.0 >= L->slotNs;
+        if (id > L->lastId) {
+            /* not counted for the phase: a present that started half a
+               slot late (a slow step) or took a whole slot (a replay past
+               its slot; at 4K one of 9 to 15 ms at 60 Hz is the normal
+               run): its picture is late for that */
+            L->lastId = id;
+            pend_push(L, id, (double)L->due + so,
+                      (double)(now > slot ? now - slot : 0) * 2.0 >= L->slotNs ||
+                          (double)(ret - now) >= L->slotNs);
         }
     }
+    io->sleepUntil(io->user, next);
+    L->due = next;
+    L->dueFrac = nextFrac;
+    lock_step(L, next);
+    return next;
 }
 
 double pace_lock_nominal_ratio(const PaceLock *L)

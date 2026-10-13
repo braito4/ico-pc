@@ -653,8 +653,7 @@ void rhi_present(void);
  * or a present that did nothing (no swapchain, as at a 0x0 window, a
  * failed acquire, a lost surface) and after a D3D12 present that reported
  * DXGI_STATUS_OCCLUDED (the window minimised or covered: the present did
- * not wait for a vblank).  The window's vsync lock does not judge such a
- * present (port/platform/pace_policy.h). */
+ * not wait for a vblank). */
 bool rhi_present_shown(void);
 /* The window's surface (the Android lifecycle).
  * rhi_release_surface waits for the GPU, destroys the swapchain and the
@@ -861,6 +860,22 @@ bool rhi_present_mailbox(void);
  * allows tearing, else "mailbox" (a flip-model present at sync interval 0
  * replaces the queued frame). */
 const char *rhi_present_mode_name(void);
+/* The display's timing of presents (VK_KHR_present_id and
+ * VK_KHR_present_wait): a thread of the backend's waits on each present and
+ * notes when the display showed it, on SDL_GetTicksNS's clock (the window's
+ * vsync lock keeps its grid on it, port/platform/pace_policy.h).
+ * rhi_present_timing: in use (both extensions on a window, SDL; not
+ * NVIDIA's driver outside Windows, where waits on presents have hung
+ * vkQueuePresentKHR; ICO_VK_NO_PRESENT_WAIT=1 leaves it off).
+ * rhi_present_last_id: the id of the last present that queued an image (0:
+ * none).  rhi_present_timing_next: the next present the display showed,
+ * oldest first: its id and when (*ns 0: on the screen before its wait
+ * began, at a time not known; a present passed over in mailbox mode is
+ * noted when the one after it was shown); 1 one taken, 0 none yet, -1 the
+ * timing stopped (a wait failed).  D3D12, no window: false, 0, -1. */
+bool rhi_present_timing(void);
+uint64_t rhi_present_last_id(void);
+int rhi_present_timing_next(uint64_t *id, uint64_t *ns);
 
 /* A pipeline cache kept across runs: Vulkan loads a VkPipelineCache
  * blob from path at rhi_init when its header names this device (header

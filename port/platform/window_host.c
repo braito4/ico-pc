@@ -151,25 +151,36 @@ static struct {
     Uint64 paceEnd;
     double stepSumMs, stepMaxMs;
     unsigned stepCount;
-    int mailbox;  /* rhi_prefer_mailbox as last applied: vsync on and presenting between ticks */
-    int vsync;    /* vsync on and presenting between ticks */
-    int fifoLock; /* vsync on and the cap equals the display's refresh: FIFO, a present a vblank */
-    /* the vsync lock (pace_policy.h PaceLock): under fifoLock with the cap a
-       whole multiple of the simulation's rate, the display's vblanks are
-       the simulation's clock */
+    int mailbox; /* rhi_prefer_mailbox as last applied: vsync on and presenting between ticks */
+    int vsync;   /* vsync on and presenting between ticks */
+    /* vsync on and the cap equals the display's refresh but no vsync lock
+       (144 on 59.94: no whole multiple of the game's rate): FIFO, a
+       present a vblank, the game's own timer */
+    int fifoLock;
+    /* the vsync lock (pace_policy.h PaceLock): vsync on, the cap equal to
+       the refresh and a whole multiple n of the simulation's rate, n
+       refreshes within 1 % of its period: the simulation on a grid of the
+       wall clock, n presents a step (mailbox with the display's timing of
+       presents, rhi_present_timing; else FIFO) */
+    int gridLock;
+    int paceHz;           /* the simulation's rate the last pace had (50 or 60; 0: none yet) */
+    int clockGone;        /* the display's timing stopped or was not believed: FIFO */
+    int presentModeApply; /* the lock wants another present mode: ico_window_pace applies it */
     PaceLock lock;
     unsigned lockN;       /* n the lock was started with (0: not locked at the last vsync) */
     Uint64 lockRefresh;   /* the refresh it was started with */
-    int lockDropped;      /* PACE_LOCK_DROP_*: dropped until the next settings change */
-    int lockDropApply;    /* a drop for ico_window_pace to apply (the present mode) */
+    int lockMailbox;      /* the swapchain was in mailbox mode when it started */
+    int lockClock;        /* PaceLock.clock last logged */
     int offScreen;        /* the window minimised, hidden, occluded or 0x0 (window_off_screen) */
-    int lockRearm;        /* back on the screen: ico_window_pace tries the lock again */
     uint32_t heldFrame;   /* a new frame pace_fifo_hold held back (+1; 0: none) */
     unsigned lockResyncs; /* lock.resyncs already counted in statResyncs */
     Uint64 lockDroppedNs; /* lock.droppedNs already counted in statDropped */
-    double audioRatio;    /* the audio's rate ratio last set (ico_audio_set_rate_ratio) */
-    Uint64 lastReturn;    /* when the last present returned (0: none yet) */
-    Uint64 lateMaxNs;     /* the block's latest step against when it was due */
+    /* the lock's counts at the 10 s block's start */
+    double lockNudgeAt;
+    unsigned lockSeenAt, lockLateAt, lockEarlyAt, lockHeldAt, lockSkippedAt;
+    double audioRatio; /* the audio's rate ratio last set (ico_audio_set_rate_ratio) */
+    Uint64 lastReturn; /* when the last present returned (0: none yet) */
+    Uint64 lateMaxNs;  /* the block's latest step against when it was due */
     /* the slow-step lines ([dev] slow_step_ms, 0 off): the threshold,
        the block's count and lines, ico_window_pump's time, the renderer's
        texture decodes and pipeline creations at the last pace's end */
@@ -232,13 +243,6 @@ static Uint64 display_refresh_ns(Uint64 fallback)
 
     return dm != NULL && dm->refresh_rate > 1.0f ? (Uint64)(1e9 / (double)dm->refresh_rate)
                                                  : fallback;
-}
-
-/* Words for why the vsync lock was dropped (PaceLock.dropped) */
-static const char *lock_drop_reason(int why)
-{
-    return why == PACE_LOCK_DROP_AT_ONCE ? "presents did not wait for the display"
-                                         : "the display did not keep its refresh rate";
 }
 
 static void video_settings(RdSettings *rs, int w, int h)
@@ -312,23 +316,40 @@ static void video_settings(RdSettings *rs, int w, int h)
        so it cannot hold the simulation back */
     s_pres.vsync = rs->vsync && rs->interpolate;
     /* A cap equal to the display's rate (60 on 59.94 or 60.00 Hz, 120 on
-       119.88 or 120.00) takes FIFO instead: the blocking present locks each
-       present to a vblank, one picture a refresh, which a timer between
-       mailbox presents cannot do against the simulation's 59.94 Hz clock
-       (issue 74).  D3D12 is FIFO already. */
+       119.88 or 120.00) that is a whole multiple of the game's rate takes
+       the vsync lock (issue 74, pace_policy.h): the game steps on a grid of
+       the display's refresh, n presents a step.  Mailbox when the display's
+       timing of presents is in use (rhi_present_timing; the lock keeps the
+       presents off the refreshes), else FIFO, which shows the presents in
+       order whatever their phase.  A cap equal to the refresh with no
+       whole multiple (144 on 59.94) takes FIFO and the game's own timer.
+       D3D12 is FIFO already. */
     {
-        /* not after the lock was dropped (pace), until the options change
-           (video_apply) */
-        const int lock = s_pres.vsync &&
-                         pace_cap_equals_refresh(s_pres.framerate, display_refresh_ns(0)) &&
-                         !s_pres.lockDropped;
-        if (lock != s_pres.fifoLock && !(s_pres.lockDropped && !lock)) {
-            fprintf(stderr, "window: the cap %s the refresh: present mode %s\n",
-                    lock ? "equals" : "no longer equals", lock ? "fifo" : "as the options say");
+        const Uint64 refresh = display_refresh_ns(0);
+        const Uint64 simPeriod = s_pres.paceHz == 50 ? 20000000ull : 16683333ull;
+        const int capEq = s_pres.vsync && pace_cap_equals_refresh(s_pres.framerate, refresh);
+        const unsigned n = capEq ? pace_lock_presents(s_pres.framerate, simPeriod) : 0;
+        const int grid = n > 0 && pace_grid_period_ok(n, refresh, simPeriod);
+        const int gridMailbox = grid && rhi_present_timing() && !s_pres.clockGone;
+        const int fifo = capEq && !gridMailbox;
+
+        if (grid != s_pres.gridLock || fifo != s_pres.fifoLock) {
+            if (grid) {
+                fprintf(stderr,
+                        "window: the cap equals the refresh: the game steps every %.4f ms (%u "
+                        "refresh%s), present mode %s\n",
+                        (double)(n * refresh) / 1e6, n, n == 1 ? "" : "es",
+                        gridMailbox ? "mailbox (the display's timing in use)" : "fifo");
+            } else {
+                fprintf(stderr, "window: the cap %s the refresh: present mode %s\n",
+                        capEq ? "equals" : "no longer equals",
+                        capEq ? "fifo" : "as the options say");
+            }
         }
-        s_pres.fifoLock = lock;
+        s_pres.gridLock = grid;
+        s_pres.fifoLock = fifo && !grid; /* the timer path's FIFO (no lock) */
+        s_pres.mailbox = s_pres.vsync && !fifo;
     }
-    s_pres.mailbox = s_pres.vsync && !s_pres.fifoLock;
     rhi_prefer_mailbox(s_pres.mailbox != 0);
 }
 
@@ -449,9 +470,9 @@ static void video_apply(int force)
     }
     s_videoSerial = ico_video_serial();
     if (!force) {
-        /* a settings change tries the vsync lock again (pace drops it when
-           the display does not hold it) */
-        s_pres.lockDropped = 0;
+        /* a settings change tries the display's timing again (the lock
+           leaves it when it stops or is not believed) */
+        s_pres.clockGone = 0;
     }
     ico_video_get(&o);
     /* on a change of the options only (never a resize's forced call: a
@@ -1007,7 +1028,8 @@ int ico_window_open(unsigned int gsW, unsigned int gsH)
                 o.modelPack ? "on" : "off", o.dumpModels && ico_opt_developer_mode() ? "on" : "off",
                 rhi_limits()->depthStencilFormatName);
         fprintf(stderr, "window: present mode %s%s\n", rhi_present_mode_name(),
-                s_pres.fifoLock         ? " (the cap equals the refresh)"
+                s_pres.gridLock         ? " (the cap equals the refresh: the vsync lock)"
+                : s_pres.fifoLock       ? " (the cap equals the refresh)"
                 : rhi_present_mailbox() ? " (vsync without waiting on the display)"
                                         : "");
         /* a program hooking the graphics API, once */
@@ -2257,26 +2279,45 @@ static void pace_log(Uint64 now)
        simulation runs at the display's rate over n (0.1 % fast on a 60.00
        Hz screen), and the audio plays the samples that much faster, so its
        queue neither grows nor runs dry; 1 otherwise */
-    char lock[192];
+    char lock[256];
     double ratio = 1.0;
 
     if (s_pres.lockN > 0) {
+        const PaceLock *L = &s_pres.lock;
         /* 0: the block is too short to measure (F11's one-second lines):
            the last ratio stays */
         const double r = pace_lock_rate_ratio(&s_pres.lock);
+        char timing[160];
 
         ratio = r > 0.0 ? r : (s_pres.audioRatio > 0.0 ? s_pres.audioRatio : 1.0);
+        if (L->clock == PACE_CLOCK_ON) {
+            snprintf(timing, sizeof(timing),
+                     "display timing on: %u presents timed, phase nudge %+.3f ms, %u late, %u "
+                     "early",
+                     L->seen - s_pres.lockSeenAt, (L->nudgeSum - s_pres.lockNudgeAt) / 1e6,
+                     L->late - s_pres.lockLateAt, L->early - s_pres.lockEarlyAt);
+        } else {
+            snprintf(timing, sizeof(timing), "display timing %s",
+                     L->clock == PACE_CLOCK_NONE         ? "off"
+                     : L->clock == PACE_CLOCK_LEFT_ERROR ? "stopped"
+                                                         : "left (its refresh was off the report)");
+        }
         snprintf(lock, sizeof(lock),
-                 "lock held (%u present%s a vsync, audio rate x%.4f, refresh measured %.3f ms, "
-                 "%u misses)",
-                 s_pres.lockN, s_pres.lockN == 1 ? "" : "s", ratio,
-                 (double)s_pres.lock.rateMeanNs / 1e6, s_pres.lock.missesTotal);
+                 "lock held (grid %.4f ms, %u present%s a step, %s, audio rate x%.4f, %s, %u "
+                 "presents held, %u skipped)",
+                 L->slotNs * (double)L->n / 1e6, L->n, L->n == 1 ? "" : "s",
+                 L->mailbox ? "mailbox" : "fifo", ratio, timing, L->held - s_pres.lockHeldAt,
+                 L->skipped - s_pres.lockSkippedAt);
+        s_pres.lockNudgeAt = L->nudgeSum;
+        s_pres.lockSeenAt = L->seen;
+        s_pres.lockLateAt = L->late;
+        s_pres.lockEarlyAt = L->early;
+        s_pres.lockHeldAt = L->held;
+        s_pres.lockSkippedAt = L->skipped;
     } else if (s_pres.fifoLock) {
         /* fifo with a cap that is not a whole multiple of the game's rate
            (144 on 59.94): nothing is locked */
         snprintf(lock, sizeof(lock), "no lock (fifo, steps on the game's own timer)");
-    } else if (s_pres.lockDropped) {
-        snprintf(lock, sizeof(lock), "lock dropped (%s)", lock_drop_reason(s_pres.lockDropped));
     } else {
         snprintf(lock, sizeof(lock), "lock off");
     }
@@ -2433,21 +2474,12 @@ void ico_window_pace(int hz)
         }
     }
     pace(hz);
-    if (s_pres.lockDropApply) {
-        /* the vsync lock was dropped: the present mode as if the cap did
-           not equal the refresh (mailbox, the timer) */
-        s_pres.lockDropApply = 0;
+    if (s_pres.presentModeApply) {
+        /* the vsync lock wants another present mode (the display's timing
+           came up with the device, or stopped; the game's rate changed):
+           the swapchain is made again */
+        s_pres.presentModeApply = 0;
         video_apply(1);
-    }
-    if (s_pres.lockRearm) {
-        /* back on the screen: a lock dropped meanwhile (presents that
-           did not wait while the window was away) is tried again, and the
-           present mode follows */
-        s_pres.lockRearm = 0;
-        if (s_pres.lockDropped) {
-            s_pres.lockDropped = 0;
-            video_apply(1);
-        }
     }
     perf_drain(); /* every vsync, so the record queue never overflows */
     if (s_autoRes.tickBudget) {
@@ -2540,13 +2572,11 @@ static bool lock_io_present(void *u, float a)
     return present_once(a, c->refresh, c->period) != 0;
 }
 
-/* the present reached the display: the window on the screen and the
-   backend's present shown (not DXGI_STATUS_OCCLUDED, a swapchain there);
-   without a swapchain (no window surface) nothing waits for a display */
-static bool lock_io_shown(void *u)
+/* the window on the screen: off it, nothing is presented */
+static bool lock_io_visible(void *u)
 {
     (void)u;
-    return !s_pres.offScreen && (rhi_present_shown() || rhi_swapchain_format() == RHI_FMT_UNKNOWN);
+    return !s_pres.offScreen;
 }
 
 static void lock_io_sleep(void *u, uint64_t ns)
@@ -2559,31 +2589,95 @@ static void lock_io_sleep(void *u, uint64_t ns)
     }
 }
 
-/* One simulated vsync under the vsync lock (pace_policy.h): n presents,
-   the step right after the n-th returns.  s_deadline is when the step
-   was due. */
+/* the display's timing of presents (rhi_present_timing) */
+static uint64_t lock_io_present_id(void *u)
+{
+    (void)u;
+    return rhi_present_last_id();
+}
+
+static int lock_io_shown(void *u, uint64_t *id, uint64_t *ns)
+{
+    (void)u;
+    return rhi_present_timing_next(id, ns);
+}
+
+/* Words for the display's timing (PaceLock.clock) */
+static const char *lock_clock_words(int clock)
+{
+    switch (clock) {
+    case PACE_CLOCK_ON:
+        return "in use";
+    case PACE_CLOCK_LEFT_ERROR:
+        return "stopped (a wait on a present failed); presenting fifo until the display "
+               "settings change";
+    case PACE_CLOCK_LEFT_PERIOD:
+        return "left (it gave a refresh more than 1 % off the one the display reports); "
+               "presenting fifo until the display settings change";
+    default:
+        return s_pres.clockGone ? "left earlier (fifo until the display settings change)"
+               : rhi_present_timing()
+                   ? "not used"
+                   : "not offered (the driver does not say when a picture reaches the screen)";
+    }
+}
+
+/* One simulated vsync under the vsync lock (pace_policy.h): n presents in
+   the step's slots, then the next step's due time on the grid.  s_deadline
+   is when the step was due. */
 static void pace_locked(unsigned n, Uint64 period)
 {
     LockIoCtx ctx;
-    const PaceLockIo io = {&ctx, lock_io_now, lock_io_present, lock_io_sleep, lock_io_shown};
+    const int clock = rhi_present_timing();
+    const PaceLockIo io = {&ctx,
+                           lock_io_now,
+                           lock_io_present,
+                           lock_io_sleep,
+                           lock_io_visible,
+                           clock ? lock_io_present_id : NULL,
+                           clock ? lock_io_shown : NULL};
 
     ctx.refresh = display_refresh_ns(period);
     ctx.period = period;
     s_pres.statVsyncs++;
-    if (s_pres.lockN != n || s_pres.lockRefresh != ctx.refresh) {
+    if (s_pres.lockN != n || s_pres.lockRefresh != ctx.refresh ||
+        s_pres.lockMailbox != (int)rhi_present_mailbox()) {
         /* a new lock: from the last step's due time */
-        pace_lock_reset(&s_pres.lock, n, ctx.refresh, period, s_deadline);
+        pace_lock_reset(&s_pres.lock, n, ctx.refresh, period, s_deadline, rhi_present_mailbox(),
+                        clock && !s_pres.clockGone);
         s_pres.lockN = n;
         s_pres.lockRefresh = ctx.refresh;
+        s_pres.lockMailbox = rhi_present_mailbox();
+        s_pres.lockClock = s_pres.lock.clock;
         s_pres.lockResyncs = 0;
         s_pres.lockDroppedNs = 0;
+        s_pres.lockNudgeAt = 0.0;
+        s_pres.lockSeenAt = s_pres.lockLateAt = s_pres.lockEarlyAt = 0;
+        s_pres.lockHeldAt = s_pres.lockSkippedAt = 0;
         s_pres.nextPresent = 0;
+        {
+            static unsigned s_lines;
+
+            if (s_lines++ < 8) {
+                fprintf(stderr,
+                        "window: vsync lock: the game steps every %.4f ms (%u refresh%s of "
+                        "%.4f ms), %u present%s a step, present mode %s, display timing %s\n",
+                        (double)(n * ctx.refresh) / 1e6, n, n == 1 ? "" : "es",
+                        (double)ctx.refresh / 1e6, n, n == 1 ? "" : "s", rhi_present_mode_name(),
+                        lock_clock_words(s_pres.lock.clock));
+            }
+        }
         /* the audio at the display's nominal rate until the first
            measured block (the 10 s line) */
         s_pres.audioRatio = pace_lock_nominal_ratio(&s_pres.lock);
         ico_audio_set_rate_ratio(s_pres.audioRatio);
     }
-    /* the frame closed in the step that was due at the last return */
+    /* the present mode the lock wants: mailbox with the display's timing,
+       FIFO without (video_settings) */
+    if ((clock && !s_pres.clockGone) != s_pres.mailbox) {
+        s_pres.presentModeApply = 1;
+    }
+    /* the frame closed in the step that was due at s_deadline */
     const int newFrame = frame_seen(s_deadline);
 
     s_deadline = pace_lock_vsync(&s_pres.lock, &io, newFrame != 0);
@@ -2592,47 +2686,34 @@ static void pace_locked(unsigned n, Uint64 period)
     s_pres.statDropped += s_pres.lock.droppedNs - s_pres.lockDroppedNs;
     s_pres.lockResyncs = s_pres.lock.resyncs;
     s_pres.lockDroppedNs = s_pres.lock.droppedNs;
-    /* the trace for the log: the first presents of each lock (a few
-       locks a session), and the last ones when it drops */
-    if (!s_pres.lock.traceLogged &&
-        (s_pres.lock.traceFirstCount >= PACE_LOCK_TRACE_FIRST || s_pres.lock.dropped)) {
+    if (s_pres.lock.clock != s_pres.lockClock) {
+        /* the display's timing stopped or was not believed: FIFO until the
+           next settings change */
+        s_pres.lockClock = s_pres.lock.clock;
+        fprintf(stderr, "window: vsync lock: display timing %s\n",
+                lock_clock_words(s_pres.lock.clock));
+        if (s_pres.lock.clock != PACE_CLOCK_ON) {
+            s_pres.clockGone = 1;
+            s_pres.presentModeApply = 1;
+        }
+    }
+    /* the first presents of each lock (a few locks a session), for the
+       log: diagnostics only */
+    if (!s_pres.lock.traceLogged && s_pres.lock.traceCount >= PACE_LOCK_TRACE_FIRST &&
+        s_pres.lock.steps >= PACE_LOCK_TRACE_FIRST + 30) {
         static unsigned s_traces;
 
         s_pres.lock.traceLogged = true;
         if (s_traces++ < 8) {
-            char t[PACE_LOCK_TRACE_FIRST * 10];
-            const unsigned k = pace_lock_trace_text(&s_pres.lock, false, t, sizeof t);
+            char t[PACE_LOCK_TRACE_FIRST * 20];
+            const unsigned k = pace_lock_trace_text(&s_pres.lock, t, sizeof t);
 
             fprintf(stderr,
-                    "window: vsync lock, the first %u presents (ms since the one before: h a "
-                    "refresh, u a refresh not measured, f at once while the queue filled, a at "
-                    "once, s late, r a refresh that ended a measure off the rate, n not "
-                    "shown): %s\n",
+                    "window: vsync lock, the first %u presents (ms since the one before; in "
+                    "brackets ms from the time it was due to the refresh that showed it, where "
+                    "the display said): %s\n",
                     k, t);
         }
-    }
-    if (s_pres.lock.dropped) {
-        char t[PACE_LOCK_TRACE_LAST * 10];
-
-        if (s_pres.lock.dropped == PACE_LOCK_DROP_AT_ONCE) {
-            fprintf(stderr,
-                    "window: vsync lock dropped (%s, %u in a row); presenting on a timer "
-                    "until the display settings change\n",
-                    lock_drop_reason(s_pres.lock.dropped), PACE_LOCK_MISSES);
-        } else {
-            fprintf(stderr,
-                    "window: vsync lock dropped (%s: %.3f ms a refresh over the last %u "
-                    "refreshes, %.3f ms expected, %u times in a row); presenting on a timer "
-                    "until the display settings change\n",
-                    lock_drop_reason(s_pres.lock.dropped), (double)s_pres.lock.rateMeanNs / 1e6,
-                    PACE_LOCK_RATE_WINDOW, (double)s_pres.lock.refreshNs / 1e6,
-                    PACE_LOCK_RATE_WINDOWS);
-        }
-        (void)pace_lock_trace_text(&s_pres.lock, true, t, sizeof t);
-        fprintf(stderr, "window: vsync lock, the last presents before it dropped: %s\n", t);
-        s_pres.lockDropped = s_pres.lock.dropped;
-        s_pres.lockDropApply = 1;
-        s_pres.lockN = 0;
     }
     pace_log(SDL_GetTicksNS());
 }
@@ -2675,19 +2756,27 @@ static void pace(int hz)
             }
             if (!off) {
                 s_pres.lockN = 0; /* pace_locked resets the lock */
-                s_pres.lockRearm = 1;
             }
             s_pres.offScreen = off;
         }
     }
 
-    /* the vsync lock: the cap equals the refresh under FIFO and is a whole
-       multiple of the simulation's rate (60 or 120 on 59.94) */
+    /* the vsync lock: the cap equals the refresh and is a whole multiple
+       of the simulation's rate (60 or 120 on 59.94), n refreshes within 1 %
+       of its period (video_settings decided it for the rate the last pace
+       had: a new rate decides again) */
+    if (hz != s_pres.paceHz) {
+        /* video_settings took NTSC before the first pace */
+        if ((hz == 50) != (s_pres.paceHz == 50)) {
+            s_pres.presentModeApply = 1;
+        }
+        s_pres.paceHz = hz;
+    }
     {
-        const unsigned n = s_pres.fifoLock && !s_pres.lockDropped && rd_interpolation_active()
+        const unsigned n = s_pres.gridLock && rd_interpolation_active()
                                ? pace_lock_presents(s_pres.framerate, period)
                                : 0;
-        if (n > 0) {
+        if (n > 0 && pace_grid_period_ok(n, display_refresh_ns(period), period)) {
             pace_locked(n, period);
             return;
         }
@@ -2740,17 +2829,11 @@ static void pace(int hz)
            gap: FIFO's blocking present is the timer (s_pres.fifoLock).
            Any other cap is its own gap, on the drift-free grid
            (pace_policy.h pace_present_gap, pace_next_present) */
-        /* after a dropped vsync lock the cap equals the refresh: in
-           mailbox mode "uncapped"'s gap, not one of exactly a refresh,
-           which repeats pictures (pace_policy.h pace_gap_as_uncapped) */
-        gap =
-            s_pres.fifoLock
-                ? 0
-                : pace_present_gap(s_pres.framerate,
-                                   pace_gap_as_uncapped(s_pres.framerate == ICO_FRAMERATE_UNCAPPED,
-                                                        s_pres.lockDropped != 0,
-                                                        s_pres.mailbox != 0, rhi_present_mailbox()),
-                                   rhi_present_mailbox(), refresh);
+        gap = s_pres.fifoLock
+                  ? 0
+                  : pace_present_gap(s_pres.framerate,
+                                     s_pres.framerate == ICO_FRAMERATE_UNCAPPED && s_pres.mailbox,
+                                     rhi_present_mailbox(), refresh);
         if (!gap) {
             s_pres.nextPresent = 0;
         }
@@ -2773,10 +2856,7 @@ static void pace(int hz)
            back (to the next vsync) at most once and never once the deadline
            has passed, so a game behind still shows each frame
            (pace_policy.h pace_fifo_hold) */
-        /* also after a dropped lock on a backend without mailbox (D3D12:
-           still FIFO), where the cap's gap is a hair under the period */
-        if ((s_pres.fifoLock || (s_pres.lockDropped && !rhi_present_mailbox())) &&
-            refresh < period &&
+        if (s_pres.fifoLock && refresh < period &&
             pace_fifo_hold(now, s_pres.lastReturn, refresh, s_deadline,
                            s_pres.presentedFrame == s_pres.frame,
                            s_pres.heldFrame == s_pres.frame + 1u)) {

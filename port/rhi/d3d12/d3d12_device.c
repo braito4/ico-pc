@@ -675,6 +675,24 @@ bool rhi_present_mailbox(void)
     return false;
 }
 
+/* rhi.h: no display timing of presents (the vsync lock presents FIFO) */
+bool rhi_present_timing(void)
+{
+    return false;
+}
+
+uint64_t rhi_present_last_id(void)
+{
+    return 0;
+}
+
+int rhi_present_timing_next(uint64_t *id, uint64_t *ns)
+{
+    (void)id;
+    (void)ns;
+    return -1;
+}
+
 void rhi_set_pipeline_cache_path(const char *path)
 {
     (void)path; /* the driver keeps its own shader cache */

@@ -85,6 +85,9 @@
     X(prefer_mailbox)                                                                              \
     X(present_mailbox)                                                                             \
     X(present_mode_name)                                                                           \
+    X(present_timing)                                                                              \
+    X(present_last_id)                                                                             \
+    X(present_timing_next)                                                                         \
     X(set_pipeline_cache_path)                                                                     \
     X(set_vulkan_loader)                                                                           \
     X(injector_name)                                                                               \

@@ -446,6 +446,21 @@ const char *rhi_present_mode_name(void)
     return be()->present_mode_name();
 }
 
+bool rhi_present_timing(void)
+{
+    return s_up && be()->present_timing();
+}
+
+uint64_t rhi_present_last_id(void)
+{
+    return s_up ? be()->present_last_id() : 0;
+}
+
+int rhi_present_timing_next(uint64_t *id, uint64_t *ns)
+{
+    return s_up ? be()->present_timing_next(id, ns) : -1;
+}
+
 void rhi_set_pipeline_cache_path(const char *path)
 {
     be()->set_pipeline_cache_path(path);

@@ -282,6 +282,14 @@ typedef struct VkrState {
     /* the swapchain's present mode (rhi_present_mode_name) */
     VkPresentModeKHR presentMode;
 
+    /* the display's timing of presents (rhi_present_timing): present ids
+     * and waits enabled, the last id given to a present (ids keep rising
+     * across swapchains), vkWaitForPresentKHR */
+    bool presentWait;
+    bool presentWaitFake; /* vkr_test_fake_present_wait: no ids chained */
+    uint64_t presentId;
+    PFN_vkWaitForPresentKHR waitForPresent;
+
     /* hazard tracking (vk_cmd.c, "Hazards") */
     bool globalBarriers; /* ICO_VK_GLOBAL_BARRIERS=1: a global barrier before every pass and copy */
     uint64_t hzEpoch;    /* the last command list's epoch (one per rhi_begin_commands) */
@@ -394,5 +402,10 @@ bool vkr_create_window_surface(void *sdlWindow, VkSurfaceKHR *out);
 #endif
 bool vkr_swapchain_create(uint32_t w, uint32_t h, bool vsync);
 void vkr_swapchain_destroy(void);
+/* the thread waiting on presents (rhi_present_timing) stopped, before the
+ * device goes */
+void vkr_present_wait_shutdown(void);
+/* vkr_test_fake_present_wait's stand-in, NULL when it is off */
+PFN_vkWaitForPresentKHR vkr_present_wait_fake(void);
 
 #endif /* PORT_RHI_VK_VK_INTERNAL_H */

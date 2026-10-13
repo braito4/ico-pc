@@ -27,6 +27,17 @@ uint32_t rhi_vk_validation_error_count(void);
 void vkr_test_force_present_result(int32_t result);
 uint32_t vkr_test_swapchain_creations(void);
 
+/* For rhi_vk_swapchain_test: the display's timing of presents
+ * (rhi_present_timing) on a stand-in for vkWaitForPresentKHR, which
+ * lavapipe's headless surface does not offer: from the next rhi_init the
+ * thread runs as with the extensions, no VkPresentIdKHR is chained, and a
+ * wait returns VK_SUCCESS 2 ms after it began (its timeout, if shorter:
+ * VK_TIMEOUT).  vkr_test_present_wait_misuse counts the waits that ended on
+ * another swapchain than they began on (one made again or destroyed during
+ * a wait: never, the thread is held out first). */
+void vkr_test_fake_present_wait(int on);
+uint32_t vkr_test_present_wait_misuse(void);
+
 /* For rhi_vk_test's limits cell (ICO_VK_FAKE_LIMITS): the name of the
  * VkPhysicalDeviceLimits member the last pipeline, allocation or sampler
  * reached ("maxBoundDescriptorSets", ...), NULL when none since rhi_init;
