@@ -644,6 +644,7 @@ void rhi_get_stats(RhiStats *out)
 {
     if (out) {
         memset(out, 0, sizeof(*out));
+        out->swapchains = g_dx.swapchains;
     }
 }
 

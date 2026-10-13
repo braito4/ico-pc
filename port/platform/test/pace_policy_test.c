@@ -437,10 +437,33 @@ static void testLockPause(void)
     CHECK(L.resyncs == 0 && L.droppedNs == 0);
 }
 
+/* The first present on a swapchain made since the last one
+   (pace_first_present_pause): its cost over a refresh, once; any other
+   present, or a first one within a refresh, nothing */
+static void testFirstPresentPause(void)
+{
+    uint64_t seen = 0;
+    const uint64_t r60 = 16666667ull;
+
+    /* the first swapchain's first present (the open): within a refresh */
+    CHECK(pace_first_present_pause(1, &seen, 5000000ull, r60) == 0 && seen == 1);
+    /* the same swapchain: a slow present is the game's, not a pause */
+    CHECK(pace_first_present_pause(1, &seen, 153400000ull, r60) == 0);
+    /* a rebuild (rc7's 153.4 ms first present): the excess over a refresh,
+       once */
+    CHECK(pace_first_present_pause(2, &seen, 153400000ull, r60) == 153400000ull - r60);
+    CHECK(seen == 2);
+    CHECK(pace_first_present_pause(2, &seen, 153400000ull, r60) == 0);
+    /* two rebuilds before a present: one first present */
+    CHECK(pace_first_present_pause(4, &seen, 20000000ull, r60) == 20000000ull - r60);
+    CHECK(pace_first_present_pause(4, &seen, 20000000ull, r60) == 0 && seen == 4);
+}
+
 int main(void)
 {
     PaceHist h = {0};
     testLockPause();
+    testFirstPresentPause();
     int i, flips;
     bool last;
 

@@ -217,6 +217,11 @@ void rd__perf_collect_gpu(void)
     push(r);
 }
 
+double rd_last_replay_ms(void)
+{
+    return g_rdPerf.totalMs;
+}
+
 void rd__perf_end(void)
 {
     RdPerfRecord *r = &g_rdPerf;

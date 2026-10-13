@@ -667,6 +667,7 @@ bool vkr_swapchain_create(uint32_t w, uint32_t h, bool vsync)
         return false;
     }
     s_creations++;
+    g_vkr.stats.swapchains++;
     s_swapMadeNs = vkr_now_ns(); /* the poll runs at every present again */
     vkr_destroy_swap_resources();
     /* the old swapchain stays until the first present on the new one

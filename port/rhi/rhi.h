@@ -793,8 +793,8 @@ bool rhi_readback_texture(RhiTexture t, RhiViewAspect aspect, void *dst, size_t 
 
 /* ------------------------------------------------------------- performance
  * Counters since rhi_init, cumulative: the caller takes differences
- * (rd_core's per-replay records).  D3D12: not implemented, every field
- * reads 0.  The
+ * (rd_core's per-replay records).  D3D12: only swapchains is counted;
+ * every other field reads 0.  The
  * *Ns fields are CPU time blocked in the backend: fenceWaitNs on GPU
  * completion (rhi_wait_frame, rhi_wait_idle, readbacks), acquireNs in the
  * swapchain acquire, presentNs in the present call. */
@@ -810,6 +810,10 @@ typedef struct RhiStats {
     uint64_t fenceWaits, fenceWaitNs;
     uint64_t waitIdles, readbacks;
     uint64_t acquireNs, presentNs;
+    /* swapchains made (rhi_resize_swapchain, a surface made again, a
+     * rebuild a present found necessary): the first present on a new one
+     * carries its warm-up (window_host.c, pace_first_present_pause) */
+    uint64_t swapchains;
     /* the by-region barriers before destination-read draws that only the
      * validation layer's synchronisation checks need (Vulkan, under the
      * layer or ICO_VK_STORAGE_BARRIERS=1; vk_cmd.c vkr_dst_order): not in

@@ -624,6 +624,16 @@ void pace_lock_pause(PaceLock *L, uint64_t ns)
     }
 }
 
+uint64_t pace_first_present_pause(uint64_t swapchains, uint64_t *seen, uint64_t costNs,
+                                  uint64_t refreshNs)
+{
+    if (swapchains == *seen) {
+        return 0;
+    }
+    *seen = swapchains;
+    return costNs > refreshNs ? costNs - refreshNs : 0;
+}
+
 double pace_lock_nominal_ratio(const PaceLock *L)
 {
     if (L->n == 0 || L->refreshNs == 0 || L->periodNs == 0) {

@@ -1529,6 +1529,11 @@ typedef struct RdPerfRecord {
  * dropped when nobody pops); false when there is none. */
 bool rd_perf_pop(RdPerfRecord *out);
 
+/* The CPU time of the replay finished last (its RdPerfRecord.totalMs,
+ * popped or not): with interpolation off the window's pacing reads the
+ * frame's one replay, rd_end_frame's present, after the step. */
+double rd_last_replay_ms(void);
+
 #ifdef __cplusplus
 }
 

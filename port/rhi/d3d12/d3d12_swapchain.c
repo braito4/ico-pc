@@ -91,6 +91,7 @@ bool dx_swapchain_create(uint32_t w, uint32_t h, bool vsync)
     if (!DX_CHECK(hr)) {
         return false;
     }
+    g_dx.swapchains++;
     /* SDL owns fullscreen (F11); no DXGI Alt+Enter */
     IDXGIFactory4_MakeWindowAssociation(g_dx.factory, g_dx.hwnd, DXGI_MWA_NO_ALT_ENTER);
     g_dx.vsync = vsync;
@@ -111,6 +112,7 @@ bool rhi_resize_swapchain(uint32_t width, uint32_t height, bool vsync)
                                                 DXGI_FORMAT_B8G8R8A8_UNORM, dx_swap_flags()))) {
         return false;
     }
+    g_dx.swapchains++;
     g_dx.vsync = vsync;
     return dx_register_swap_buffers(width, height);
 }

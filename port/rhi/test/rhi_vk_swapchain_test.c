@@ -415,13 +415,26 @@ static int run(SDL_Window *win)
         printf("FAIL swapchain format %d\n", (int)fmt);
         failures++;
     }
+    uint64_t idleBefore = 0, idleAfter = 0;
     for (int n = 0; n < 6 && !failures; n++) {
+        RhiStats s0, s1;
+
+        rhi_get_stats(&s0);
         if (n == 3) {
             /* resize as rd_present would on a window event */
             SDL_SetWindowSize(win, 128, 96);
             SDL_SyncWindow(win);
             if (!rhi_resize_swapchain(128, 96, true)) {
                 printf("FAIL rhi_resize_swapchain\n");
+                failures++;
+                break;
+            }
+            /* counted for the window's pacing (RhiStats.swapchains: the
+               first present on the new chain is the rebuild's) */
+            rhi_get_stats(&s1);
+            if (s1.swapchains != s0.swapchains + 1) {
+                printf("FAIL the resize counted %llu swapchain(s), want 1\n",
+                       (unsigned long long)(s1.swapchains - s0.swapchains));
                 failures++;
                 break;
             }
@@ -435,10 +448,31 @@ static int run(SDL_Window *win)
             }
         }
         failures += frame(win, fmt, n);
+        rhi_get_stats(&s1);
         if (n == 3 && vkr_test_retired_swapchain()) {
             printf("FAIL the replaced swapchain is still held after a present\n");
             failures++;
         }
+        /* the presents after the first on the new chain: no swapchain
+           made, nothing held, and no wait for the device beyond what a
+           frame before the rebuild took (the pump path stays cheap) */
+        if (n == 1 || n == 2) {
+            idleBefore += s1.waitIdles - s0.waitIdles;
+        } else if (n == 4 || n == 5) {
+            idleAfter += s1.waitIdles - s0.waitIdles;
+            if (vkr_test_retired_swapchain() || s1.swapchains != s0.swapchains) {
+                printf("FAIL frame %d after the rebuild: a swapchain made (%llu) or held (%u)\n", n,
+                       (unsigned long long)(s1.swapchains - s0.swapchains),
+                       vkr_test_retired_swapchain());
+                failures++;
+            }
+        }
+    }
+    if (!failures && idleAfter > idleBefore) {
+        printf("FAIL the two frames after the first present on the new swapchain waited idle %llu "
+               "times, the two before the rebuild %llu\n",
+               (unsigned long long)idleAfter, (unsigned long long)idleBefore);
+        failures++;
     }
     if (!failures) {
         failures += submitCounts(win, fmt);

@@ -209,6 +209,7 @@ typedef struct DxState {
     IDXGISwapChain3 *swapchain;
     uint32_t swapWidth, swapHeight;
     bool vsync, tearing;
+    uint64_t swapchains; /* made or resized (RhiStats.swapchains) */
     uint32_t swapCount;
     uint32_t swapTextures[4];
     uint32_t swapIndex;

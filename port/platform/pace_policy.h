@@ -271,6 +271,16 @@ uint64_t pace_lock_vsync(PaceLock *L, const PaceLockIo *io, bool newFrame);
  * Called between vsyncs, never inside pace_lock_vsync. */
 void pace_lock_pause(PaceLock *L, uint64_t ns);
 
+/* The first present on a swapchain made since the last one (swapchains:
+ * the backend's count, RhiStats.swapchains, against *seen, which it
+ * updates): what it cost over a refresh is the rebuild's (the first
+ * acquire, the compositor taking the new chain: ~140 ms on NVIDIA's
+ * Windows driver), a pause of the host for the caller to take out of the
+ * pacing before it judges the lag.  Returns the pause: 0 for any other
+ * present, or one within a refresh. */
+uint64_t pace_first_present_pause(uint64_t swapchains, uint64_t *seen, uint64_t costNs,
+                                  uint64_t refreshNs);
+
 /* The trace as text: "16.67 (12.40) 16.66 (12.38) 1.20 ..." (ms since the
  * return before, and in brackets ms from the present's slot to the refresh
  * that showed it where the clock saw it).  Returns the presents written. */

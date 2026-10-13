@@ -177,10 +177,14 @@ static struct {
     unsigned lockResyncs; /* lock.resyncs already counted in statResyncs */
     Uint64 lockDroppedNs; /* lock.droppedNs already counted in statDropped */
     /* a host pause to take out of the pacing (pace_paused): the time a
-       swapchain rebuild took (video_apply), applied before the next pace,
-       and the first present on the new chain's excess over a refresh */
+       swapchain rebuild took (video_apply, a size event, fullscreen),
+       applied before the next pace, and under the lock the first present
+       on the new chain's excess over a refresh (present_once), applied
+       after it */
     Uint64 pausePendingNs;
-    int rebuilt; /* a swapchain rebuilt: the next present's cost is its first */
+    /* RhiStats.swapchains at the last present accounted: a present on a
+       newer swapchain is the first on it (pace_first_present_pause) */
+    Uint64 swapchains;
     /* the lock's counts at the 10 s block's start */
     double lockNudgeAt;
     unsigned lockSeenAt, lockLateAt, lockEarlyAt, lockHeldAt, lockSkippedAt;
@@ -191,6 +195,10 @@ static struct {
        the block's count and lines, ico_window_pump's time, the renderer's
        texture decodes and pipeline creations at the last pace's end */
     double slowMs, pumpMs;
+    /* the pump's parts: the event queue (and its events), video_apply,
+       ico_input_sdl_update */
+    double pumpEventsMs, pumpSettingsMs, pumpInputMs;
+    unsigned pumpEvents;
     unsigned slowSteps, slowLogged;
     uint32_t decodes, pipeCreates;
     /* the present clock alpha is taken from (rd.h RdPresentClock) */
@@ -530,7 +538,6 @@ static void video_apply(int force)
 
         rd_resize_output((uint32_t)w, (uint32_t)h);
         s_pres.pausePendingNs += SDL_GetTicksNS() - t0;
-        s_pres.rebuilt = 1;
     }
 }
 
@@ -539,8 +546,8 @@ static void video_apply(int force)
    that time (a resync: a jump) nor runs it off in a burst of steps */
 static void pace_paused(Uint64 ns)
 {
-    if (ns == 0) {
-        return;
+    if (ns == 0 || s_deadline == 0) {
+        return; /* nothing, or the pacer not started (a size event at open) */
     }
     s_deadline += ns;
     if (s_pres.tickAt != 0) {
@@ -650,7 +657,13 @@ static int s_pixW, s_pixH;
 static void window_pixel_size(int w, int h)
 {
     WINDOW_PIX_NOTE(w, h);
-    rd_resize_output((uint32_t)w, (uint32_t)h);
+    {
+        /* the swapchain at the new size: a pause of the host (video_apply) */
+        const Uint64 t0 = SDL_GetTicksNS();
+
+        rd_resize_output((uint32_t)w, (uint32_t)h);
+        s_pres.pausePendingNs += SDL_GetTicksNS() - t0;
+    }
     ico_video_set_window(w, h);
     video_apply(1);
     touch_layout_update();
@@ -1588,7 +1601,14 @@ static void window_fullscreen_event(int entered)
 {
     IcoVideoOptions o;
 
-    s_fullscreen = window_fullscreen();
+    {
+        /* the surface made again on the window (rhi_recreate_surface, the
+           swapchain with it): a pause of the host (video_apply) */
+        const Uint64 t0 = SDL_GetTicksNS();
+
+        s_fullscreen = window_fullscreen();
+        s_pres.pausePendingNs += SDL_GetTicksNS() - t0;
+    }
     ico_video_get(&o);
     fprintf(stderr, "window: %s fullscreen; the window is %s, the option says %s\n",
             entered ? "entered" : "left", s_fullscreen ? "fullscreen" : "windowed",
@@ -1610,6 +1630,7 @@ int ico_window_pump(void)
     SDL_Event e;
     IcoHotkey hotkey;
     int quit = 0;
+    unsigned events = 0;
     const Uint64 t0 = SDL_GetTicksNS();
 
     if (device_lost_quit()) {
@@ -1621,6 +1642,7 @@ int ico_window_pump(void)
     }
 
     while (SDL_PollEvent(&e)) {
+        events++;
         switch (e.type) {
         case SDL_EVENT_QUIT:
         case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
@@ -1714,6 +1736,10 @@ int ico_window_pump(void)
             break;
         }
     }
+    /* the pump's parts, for the slow-step line (a pump of 52 ms under the
+       lock in rc7's log, with no setting changed: which part) */
+    s_pres.pumpEventsMs = (double)(SDL_GetTicksNS() - t0) / 1e6;
+    s_pres.pumpEvents = events;
 #ifdef ICO_IOS
     if (!quit) {
         wait_foreground();
@@ -1740,7 +1766,12 @@ int ico_window_pump(void)
     /* the Settings menu's changes; forced when the
        renderer's output followed a swapchain rebuilt at another size, so
        aspect "auto" and resolution "window" follow it as on a resize */
-    video_apply(rd_output_followed(NULL, NULL) ? 1 : 0);
+    {
+        const Uint64 t1 = SDL_GetTicksNS();
+
+        video_apply(rd_output_followed(NULL, NULL) ? 1 : 0);
+        s_pres.pumpSettingsMs = (double)(SDL_GetTicksNS() - t1) / 1e6;
+    }
     /* a hard camera cut or stage change the game signalled during the
        step that just ran: the frame it recorded is not blended from the
        one before (the step closes the previous frame before the game's
@@ -1753,7 +1784,12 @@ int ico_window_pump(void)
     sweep_pump();                /* Shift+F12's aspect sweep */
     set_capture(capture_mode()); /* play and photo mode */
     pointer_visibility();        /* the pointer in the menus */
-    ico_input_sdl_update();
+    {
+        const Uint64 t1 = SDL_GetTicksNS();
+
+        ico_input_sdl_update(); /* the pads sampled, the rumble sent */
+        s_pres.pumpInputMs = (double)(SDL_GetTicksNS() - t1) / 1e6;
+    }
     /* the popups' clock; the presenter draws them on its overlay at each
        present (port/ui/ui_host.c) */
     ui_host_vsync(ico_host_main_ticks());
@@ -2466,11 +2502,12 @@ static void slow_step(double ms)
     fprintf(stderr,
             "window: slow step %.1f ms at vsync %u (Main tick %u, stage %d%s): step %.1f "
             "(vsync callbacks %.1f, audio %.1f, game threads %.1f in %lu switches, achievements "
-            "%.1f), pump %.1f, other %.1f; %u disc reads (%u sectors), %u texture decodes, %u "
-            "pipelines created, memory card %s\n",
+            "%.1f), pump %.1f (events %.1f in %u, settings %.1f, input %.1f), other %.1f; %u "
+            "disc reads (%u sectors), %u texture decodes, %u pipelines created, memory card %s\n",
             ms, ico_host_vsync_count(), ico_host_main_ticks(), p.stage,
             p.loading ? ", loading" : "", p.totalMs, p.hooksMs, p.audioMs, p.threadsMs, p.switches,
-            p.achMs, s_pres.pumpMs, other > 0.0 ? other : 0.0, p.cdReads, p.cdSectors,
+            p.achMs, s_pres.pumpMs, s_pres.pumpEventsMs, s_pres.pumpEvents, s_pres.pumpSettingsMs,
+            s_pres.pumpInputMs, other > 0.0 ? other : 0.0, p.cdReads, p.cdSectors,
             tc != NULL ? tc->decodes - s_pres.decodes : 0u,
             rs != NULL ? rs->pipelineCreates - s_pres.pipeCreates : 0u,
             p.mcPending ? "busy" : "idle");
@@ -2579,21 +2616,38 @@ static int frame_seen(Uint64 closeAt)
    nothing was presented */
 static int present_once(float a, Uint64 refresh, Uint64 period)
 {
-    const Uint64 t0 = SDL_GetTicksNS();
+    Uint64 t0 = SDL_GetTicksNS();
     ico_diag_present_enter();
     const int ok = rd_present(a);
     ico_diag_present_leave();
     const Uint64 now = SDL_GetTicksNS();
 
     s_pres.cost = now - t0;
-    if (s_pres.rebuilt) {
-        /* the first present on a rebuilt swapchain (the first acquire and
-           the pipelines' warm-up on it): what it took past a refresh is
-           the rebuild's, paused out of the pacing after this pace */
-        s_pres.rebuilt = 0;
-        if (s_pres.cost > refresh) {
-            s_pres.pausePendingNs += s_pres.cost - refresh;
+    {
+        /* the first present on a swapchain made since the last one (a
+           frame rate change's rebuild in video_apply, a size event,
+           fullscreen, a rebuild this present found necessary): what it
+           took past a refresh (the first acquire, the compositor taking
+           the new chain: ~140 ms on NVIDIA's Windows driver) is the
+           rebuild's, a pause of the host.  Under the lock it is paused out
+           after this pace (pace_lock_vsync keeps its own due time); on
+           the timer path now, before the deadline is judged (rc7 applied
+           it after the pace, so the lag was judged first and dropped: a
+           resync, a black screen, at most frame rate changes) */
+        RhiStats st;
+
+        rhi_get_stats(&st);
+        const Uint64 pause =
+            pace_first_present_pause(st.swapchains, &s_pres.swapchains, s_pres.cost, refresh);
+
+        if (pause != 0 && s_pres.lockN != 0) {
+            s_pres.pausePendingNs += pause;
+        } else if (pause != 0) {
+            pace_paused(pause);
+            t0 += pause; /* the present as if it started a refresh before its return */
         }
+        s_pres.cost -= pause; /* the present's own time, a refresh: what the history and the
+                                 loop's judgement of the next present see */
     }
     if (!ok) {
         return 0;
@@ -2862,6 +2916,16 @@ static void pace(int hz)
            (the frame whole: t 1) */
         if (newFrame) {
             boot_log(1.0f);
+            /* that present ran inside the step (rd_end_frame's replay):
+               the first on a swapchain made since the last one is the
+               rebuild's past a refresh (as present_once), paused out
+               before the deadline is judged */
+            RhiStats st;
+
+            rhi_get_stats(&st);
+            pace_paused(pace_first_present_pause(st.swapchains, &s_pres.swapchains,
+                                                 (Uint64)(rd_last_replay_ms() * 1e6),
+                                                 display_refresh_ns(period)));
         }
         now = SDL_GetTicksNS();
         if (now < s_deadline) {

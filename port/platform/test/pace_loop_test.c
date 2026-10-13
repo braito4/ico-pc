@@ -1019,6 +1019,70 @@ static void testPause(void)
     }
 }
 
+/* Four frame rate changes within 10 s (rc7's log: 240 -> original ->
+   uncapped -> 60 -> 120 -> 60 gave 3 resyncs dropping 404 ms, the screen
+   black at those).  Each change, on the lock's side: the swapchain rebuilt
+   between vsyncs (140 ms, the host's pause: pace_lock_pause), the lock
+   started again from the moved due time (pace_locked resets it when the
+   present mode flips), and the first present on the new chain taking 150
+   ms, whose excess over a refresh the host pauses out after that vsync
+   (present_once).  No lag is dropped and the step after each change starts
+   on the grid; without the pauses every change is a resync. */
+static void testChanges(void)
+{
+    for (int paused = 0; paused < 2; paused++) {
+        Fake f = fake(D60);
+        PaceLock L;
+        const PaceLockIo io = {&f, f_now, f_present, f_sleep, NULL, NULL, NULL};
+        unsigned changes = 0, late = 0, resyncs = 0;
+        uint64_t dropped = 0;
+
+        f.mode = F_FIFO;
+        f.cost = 2 * MS;
+        f.gpu = 6 * MS;
+        pace_lock_reset(&L, 1, R60, NTSC, f.now, false, false);
+        for (unsigned v = 0; v < 600; v++) {
+            const bool change = v > 0 && v % 120 == 0; /* at 2, 4, 6 and 8 s */
+
+            if (change) {
+                f.now += 140 * MS; /* the rebuild, in the pump */
+                if (paused) {
+                    pace_lock_pause(&L, 140 * MS);
+                }
+                /* the lock started again from the step's due time (its
+                   counts start again too: summed here) */
+                resyncs += L.resyncs;
+                dropped += L.droppedNs;
+                pace_lock_reset(&L, 1, R60, NTSC, L.due, false, false);
+                f.cost = 150 * MS; /* the first present on the new chain */
+                changes++;
+            }
+            f.now += 1 * MS; /* the step */
+            const uint64_t next = pace_lock_vsync(&L, &io, v % 2 == 0);
+
+            if (change) {
+                f.cost = 2 * MS;
+                if (paused) {
+                    pace_lock_pause(&L, 150 * MS - R60); /* present_once's rule */
+                }
+            } else if (f.now > next + MS / 2) {
+                late++;
+            }
+        }
+        resyncs += L.resyncs;
+        dropped += L.droppedNs;
+        printf("four changes in 10 s%s: %u resyncs, %.0f ms dropped, %u steps late\n",
+               paused ? " with the pauses" : "", resyncs, (double)dropped / 1e6, late);
+        CHECK(changes == 4);
+        if (paused) {
+            CHECK(resyncs == 0 && dropped == 0);
+            CHECK(late == 0);
+        } else {
+            CHECK(resyncs >= 4);
+        }
+    }
+}
+
 /* FIFO latest ready (VK_EXT_present_mode_fifo_latest_ready, opt-in):
    presents never wait, and at each vblank the display shows the newest
    picture that is ready, dropping older ones.  On the grid with one
@@ -1216,6 +1280,7 @@ int main(void)
     testNominalRatio();
     testTrace();
     testPause();
+    testChanges();
     testLatestReady();
     if (fails) {
         printf("pace_loop_test: %d failures\n", fails);
