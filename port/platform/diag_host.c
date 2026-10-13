@@ -1379,6 +1379,10 @@ static void finish(const char *reason, const char *box_text, int code)
                  "%s\n\nPlease report it at github.com/nathanialf/ico-pc/issues and attach "
                  "the logs folder. The log is:\n%s",
                  box_text, ico_diag_log_path());
+        /* the box runs SDL's dialog from this thread while the main thread
+           hangs; if that call blocks on the stuck window, SIGALRM's default
+           action still ends the process (the log is already written) */
+        alarm(30);
         fatal_box(box);
     }
 #else
