@@ -1,8 +1,8 @@
 /*
  * port/audio/test/adpcm_slots_test.c
  *
- * Issue 67: the ADPCM request daemon (scpSubAdpcmPlay, script.c) with both
- * stream slots taken.  The decision it now makes is AdpcmFadingCloseNow
+ * The ADPCM request daemon (scpSubAdpcmPlay, script.c) with both stream
+ * slots taken.  The decision it makes is AdpcmFadingCloseNow
  * (adpcm_init.c): a stream already fading out is closed at once and gives
  * its slot up; only when none is fading does the PS2's path run (the
  * daemon's AdpcmFadeCloseAll).  The game's adpcm_init.c is compiled into

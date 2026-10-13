@@ -1,7 +1,7 @@
 /*
  * port/save/test/save_test.c
  *
- * The host memory card (port/save/mc_host.c) in two parts, on temporary card
+ * The host memory card (port/save/mc_host.c) in three parts, on temporary card
  * folders under the working directory:
  *
  *   A. the sceMc calls fumi/ios/mcard.c issues, scripted by hand: first boot
@@ -23,7 +23,7 @@
  *      games' entries skipped and named; tools/mc_import (argv[1]) on the
  *      same files; and the second card in port 1.
  *
- * Both run on simulated vsyncs, as host_loop.c drives the hooks. No game
+ * All three run on simulated vsyncs, as host_loop.c drives the hooks. No game
  * data is needed.
  */
 #include <stdint.h>
@@ -862,7 +862,7 @@ static void driver(void *arg)
     CHECK(req.result == 0 && req.dirCount == 0 && req.mask == 0);
     CHECK(file_size(CARD_B "/" PRODUCT "/game.001") < 0);
 
-    /* Saves as they reach a phone (Android, issue 20).
+    /* Saves as they reach a phone (Android).
        A save folder copied or renamed with other capitals: on a file
        system that tells case apart (Linux; Android's app folder) it is
        still found (mc_host.c fold_case), and the load reads it whole. */
@@ -1460,7 +1460,7 @@ static void test_import(const char *cli)
     CHECK(finish(sceMcFuncNoDelete) == 0);
     CHECK(file_size(CARD_J "/" PRODUCT "/game.003") < 0);
     CHECK(file_size(CARD_I "/" PRODUCT "/game.003") == 25600);
-    /* no folder for port 1: no card, as before */
+    /* no folder for port 1: no card again */
     ico_mc_host_set_port_root(1, NULL);
     CHECK(sceMcGetInfo(1, 0, &type, &freeCl, &format) == 0);
     CHECK(finish(sceMcFuncNoCardInfo) == sceMcResFailDetect2 && type == 0);

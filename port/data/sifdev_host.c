@@ -14,8 +14,8 @@
  * Back slashes become slashes, a leading "./", "/" or "\" and an ISO ";1"
  * version suffix are dropped, and a path with a ".." component is refused.
  * Opening with SCE_CREAT makes the missing folders.  Any other device
- * (cdrom0:, the retail build's debugSceOpen) fails with -1 as it did before
- * this file (the disc is read through libcdvd, port/data/cdvd_host.c).
+ * (cdrom0:, the retail build's debugSceOpen) fails with -1 (the disc is
+ * read through libcdvd, port/data/cdvd_host.c).
  *
  * Descriptors are small numbers from 0, the first free one: the tools that
  * write to descriptor 0 without keeping the one sceOpen returned

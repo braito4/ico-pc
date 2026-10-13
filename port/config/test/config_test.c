@@ -433,15 +433,15 @@ static void test_first_run(void)
     CHECK_STR(ico_config_get_string("video.preset", "?"), "original");
     CHECK(ico_config_get_bool("video.vsync", 0) == 1);
     CHECK(ico_config_get_bool("video.fullscreen", 1) == 0);
-    CHECK_STR(ico_config_get_string("video.window_mode", "?"), "windowed"); /* issue 17 */
+    CHECK_STR(ico_config_get_string("video.window_mode", "?"), "windowed");
     CHECK(ico_config_get_bool("video.texture_pack", 0) == 1);
-    /* issue 11: the five effect keys, each on */
+    /* the five effect keys, each on */
     CHECK(ico_config_get_bool("video.effect_glow", 0) == 1);
     CHECK(ico_config_get_bool("video.effect_depth_of_field", 0) == 1);
     CHECK(ico_config_get_bool("video.effect_softening", 0) == 1);
     CHECK(ico_config_get_bool("video.effect_motion_blur", 0) == 1);
     CHECK(ico_config_get_bool("video.effect_fog", 0) == 1);
-    CHECK(ico_config_get_bool("video.effect_cinematic_bars", 0) == 1); /* issue 27 */
+    CHECK(ico_config_get_bool("video.effect_cinematic_bars", 0) == 1);
     CHECK(ico_config_get_bool("video.effects_depth", 0) == 1);
     CHECK(ico_config_get_bool("audio.enabled", 0) == 1);
     CHECK(ico_config_get_float("audio.volume", 0.0) == 1.0);

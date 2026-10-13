@@ -19,7 +19,7 @@
  * renamed with the calls. Code outside the game's include path (port/,
  * SDL) keeps the host functions.
  *
- * Counts are call sites in ico2/ (grep, 2026-10-05).
+ * Counts are call sites in ico2/, counted with grep.
  *
  * 1. Results differ between C libraries. Mapped to newlib copies
  *    (port/math/newlib): rand, qsort, atan2f, acosf, asinf, sinf, fmodf

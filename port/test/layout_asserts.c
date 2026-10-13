@@ -7,8 +7,7 @@
  * still pending a conversion (ICO_LAYOUT_PENDING compiles those too). The
  * runtime structs' asserts are documentation of the EE layout: they hold on a
  * build with the EE's ILP32 layout and compile only with -DICO_LAYOUT_EE=1.
- * The 32-bit host build that checked them every build was retired at Phase 2
- * exit (commit 36a1d73e). */
+ * No build in the tree defines it. */
 
 #include <stddef.h>
 
@@ -3147,7 +3146,7 @@ SIZE(GamesysObjInfo, 0x40); /* config */
 
 /* Host sizes the game's code depends on.  The EE ClipWork is 0xC0 bytes; the host one
  * is wider (WallCfg holds pointers), so a buffer sized from the EE record and cast to it
- * is overrun (issue 71: item.c's avoidInsideOfWall; tools/struct_cast_audit.py looks for
+ * is overrun (item.c's avoidInsideOfWall; tools/struct_cast_audit.py looks for
  * the rest).  item.c keeps its clip in a ClipWork itself and sets the radius by member. */
 _Static_assert(sizeof(ClipWork) == 0xF0, "the host ClipWork is 0xF0 bytes, not the EE's 0xC0");
 _Static_assert(sizeof(ClipWork) > 0xC0, "a 0xC0-byte buffer cannot hold a host ClipWork");

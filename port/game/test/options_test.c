@@ -328,7 +328,7 @@ static void test_mirror_slots(const char *dir)
     ico_opt_reload();
 }
 
-/* issue 11: the five effect switches: on by default, read from [video],
+/* the five effect switches: on by default, read from [video],
    written back every time, and no part of the preset */
 static char *read_text(const char *path)
 {
@@ -817,8 +817,9 @@ static void test_video_auto(const char *dir)
     ico_video_get(&o);
     CHECK(o.resScale == ICO_RES_AUTO && o.framerate == 60 &&
           ico_video_preset(&o) == ICO_VIDEO_ENHANCED);
-    /* a file from before v0.4.2: Enhanced with resolution "window" keeps
-       its preset name and its resolution; the shortcut then writes "auto" */
+    /* a file with Enhanced at resolution "window" (written before "auto"
+       existed) keeps its preset name and its resolution; the shortcut then
+       writes "auto" */
     f = fopen(path, "wb");
     if (f != NULL) {
         fputs("[video]\npreset = \"enhanced\"\nresolution = \"window\"\naspect = "

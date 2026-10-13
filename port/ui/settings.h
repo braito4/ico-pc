@@ -11,8 +11,8 @@
  * port rows whose text is set with lt_ext_set_text from the screens' procs.
  *
  * Entry: the pause menu's Options row (294, layout 57) opens the main page
- * (its right link repointed; the game's Options screen, layout 58, is no
- * longer reached, its settings are on the pages), and an "Options" row (the
+ * (its right link repointed; the game's Options screen, layout 58, is not
+ * reached, its settings are on the pages), and an "Options" row (the
  * Settings menu's entry) is chained after both title menus (12 "Continue / New
  * Game", 13 "New Game"), each in a one-row port layout on the game layout's
  * link chain; the game rows around it are repointed onto it
@@ -240,7 +240,7 @@ typedef enum UiSettingsPage {
     UI_PAGE_REMAP,
     UI_PAGE_EXTRAS,  /* Music, Models, Credits (from the title only), Characters */
     UI_PAGE_MUSIC,   /* Extras > Music, the music gallery (gallery.h) */
-    UI_PAGE_EFFECTS, /* Effects: the game's own picture effects, On/Off (issue 11) */
+    UI_PAGE_EFFECTS, /* Effects: the game's own picture effects, On/Off */
     /* Extras > Characters, the characters' colours (port/game/
        appearance.h): nine stepped colour rows, Randomize, Reset, Back */
     UI_PAGE_CHARACTERS,

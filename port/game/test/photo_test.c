@@ -28,15 +28,15 @@
  *   keys      Cross asks one capture, Triangle, Circle and Start ask to
  *             leave; [photo] keys from a config
  *   name      the capture's file name
- *   basis     (issue 14) the game camera kept at enter is the cameras' basis
+ *   basis     the game camera kept at enter is the cameras' basis
  *             whatever camera ico_photo_camera is given, the picture never
  *             feeding back; ico_photo_fov_now follows the zoom
  *   step      at stick_speed 10, a tick moves the eye 250 and turns the view
  *             25 degrees at most (the renderer blends below 300 and 30);
  *             Select still jumps
- *   steep     (issue 69) entered pitched 60 degrees down: the right stick yaws
+ *   steep     entered pitched 60 degrees down: the right stick yaws
  *             about the world's up (level horizon); L1 rolls once released
- *   mouse     (issue 17) ico_photo_mouse_look: the free camera's yaw grows by the
+ *   mouse     ico_photo_mouse_look: the free camera's yaw grows by the
  *             degrees given, its pitch stops at 85 degrees, a big move
  *             turns 25 degrees a tick at most; the orbit camera's yaw and
  *             pitch, its dolly and pan left alone; nothing while inactive
@@ -442,7 +442,7 @@ int main(int argc, char **argv)
     ico_photo_exit();
     CHECK(!ico_photo_active() && !ico_photo_hud(), "exit");
 
-    /* issue 14: the game camera kept at enter (ico_photo_set_game) is the
+    /* the game camera kept at enter (ico_photo_set_game) is the
        basis whatever camera ico_photo_camera is given, so the picture
        drawn from the photo camera never feeds back into it */
     writeConfig(path, "version = 1\n[photo]\nstick_speed = 1.0\n");
@@ -524,7 +524,7 @@ int main(int argc, char **argv)
     CHECK(memcmp(&out, &game, sizeof(game)) == 0, "step: Select jumps back to the game camera");
     ico_photo_exit();
 
-    /* the mouse's look (issue 17) */
+    /* the mouse's look */
     {
         writeConfig(path, "version = 1\n[photo]\nstick_speed = 1.0\n");
         IcoPhotoState was, now;
@@ -569,7 +569,7 @@ int main(int argc, char **argv)
         ico_photo_exit();
     }
 
-    /* issue 69: entered from a camera pitched 60 degrees down, the right
+    /* entered from a camera pitched 60 degrees down, the right
        stick's X turns the yaw only (the camera's right keeps a zero world-Y
        component, the horizon level); L1 rolls, but only once the shoulder
        was released after enter */

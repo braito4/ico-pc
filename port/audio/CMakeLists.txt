@@ -35,7 +35,7 @@ add_executable(mix_gain_test test/mix_gain_test.c)
 target_compile_options(mix_gain_test PRIVATE ${ICO_SEMANTIC_OPTIONS} ${ICO_PORT_WARNINGS})
 target_link_libraries(mix_gain_test PRIVATE ico_audio)
 
-# adpcm_slots_test: the request daemon's full-slot rule (issue 67): a stream
+# adpcm_slots_test: the request daemon's full-slot rule: a stream
 # already fading out is closed at once and gives its slot up, else the PS2's
 # path runs.  The game's adpcm_init.c with the driver and disc stubbed.
 ico_include_dirs(fumi _ico_adpcm_slots_incs)
@@ -56,8 +56,8 @@ endif()
 
 # --- The Sg sequencer, the SNDN2DRV host and the output ---------------------
 # sce/libsndn2/sound.c is the EE sequencer the game calls (the decomp's
-# libsndn2.a(sound.o) with its ICO_HOST seams, kept upstream like ico2/); it
-# is decomp-shaped game code, so it takes the game's warning set and ICO_HOST.
+# libsndn2.a(sound.o), kept upstream like ico2/); it is decomp-shaped game
+# code, so it takes the game's warning set and ICO_HOST.
 # sndn2_host.c and stream.c are the IOP driver behind its RPC; audio_host.c
 # renders the SPU2 once per vsync into the sinks (wav.c, and out_sdl.c in
 # the window build when SDL3 is there).
@@ -118,7 +118,7 @@ if(ICO_RUN_TESTS)
 endif()
 
 # spu2_bench: `--check` is the 10 s
-# render CRC test of four scenes against the frame-by-frame renderer's
+# render CRC test of five scenes against the frame-by-frame renderer's
 # golden values; without arguments it times the render per vsync.
 # spu2_prof is the same harness over a copy of the SPU2 built with
 # SPU2_PROFILE (per-stage clock_gettime laps); it is not a test.

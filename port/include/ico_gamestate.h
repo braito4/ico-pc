@@ -5,9 +5,8 @@
  * and the event signals a handful of game sites raise through one-line calls
  * in the game sources.  Nothing here writes game state: the view is a
  * snapshot taken once per Main tick, and a signal only appends to a
- * port-side queue.  This is the interface an rcheevos client could sit
- * behind later: named queries, plus ico_gs_peek for the few fixed retail
- * globals.
+ * port-side queue.  The interface is shaped for an rcheevos client: named
+ * queries, plus ico_gs_peek for the few fixed retail globals.
  *
  * Use:
  *   ico_gs_tick();                 once per Main tick: takes the snapshot,
@@ -204,8 +203,8 @@ int ico_gs_achievements_suspended(void);
 /* Reads size (1, 2 or 4) bytes at the retail PAL EE address addr into *out
    (little endian, as the EE), from this tick's snapshot: the fixed globals
    listed there.  0, or -1 for an address outside them (heap objects,
-   pointers, anything else: not addressable).  For a future rcheevos memory
-   callback; the tests call it today. */
+   pointers, anything else: not addressable).  Shaped for an rcheevos memory
+   callback; the tests call it. */
 int ico_gs_peek(unsigned int addr, unsigned int size, unsigned int *out);
 
 /* the table, for documentation and tests */

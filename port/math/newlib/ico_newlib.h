@@ -29,7 +29,7 @@ extern "C" {
 /* sce/libc/stdlib/rand.c: the 32-bit LCG, seed 1 at start-up. */
 int ico_rand(void);
 void ico_srand(unsigned int seed);
-/* the LCG's state word as it is now, for the hand probe's diagnostic lines */
+/* the LCG's state word as it is now, for diagnostics (nothing calls it) */
 unsigned int ico_rand_state(void);
 
 /* sce/libc/stdlib/qsort.c (BSD qsort). The EE prototype takes 32-bit

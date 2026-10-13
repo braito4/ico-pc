@@ -19,13 +19,12 @@
  *     blocks that thread until the same vsync, as libcdvd's does
  *     (sce/libcdvd/cdvd000.c: sceCdSync(0) loops on sceCdDelayThread,
  *     which is CreateSema, SetAlarm and WaitSema): while the drive works
- *     the other threads run, the same-priority Main among them.  An
- *     earlier version completed the command on the spot, assuming the
- *     waiter's order of events did not depend on it; it does: a stage
- *     load then ran start to end without a Main tick, and the stage-load
- *     thread clipped against a collision list (fumi/src/fieldCollision.c
- *     colObjList) that Main had built before StageManager removed every
- *     object.  From the host context (tests) the
+ *     the other threads run, the same-priority Main among them.  The
+ *     waiter's order of events depends on it: completed on the spot, a
+ *     stage load would run start to end without a Main tick, and the
+ *     stage-load thread would clip against a collision list
+ *     (fumi/src/fieldCollision.c colObjList) that Main had built before
+ *     StageManager removed every object.  From the host context (tests) the
  *     wait still completes at once.
  * The drive never reports a tray-open or not-ready state while a disc
  * image is mounted.

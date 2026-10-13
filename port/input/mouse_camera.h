@@ -7,7 +7,7 @@
  * only while the mouse's stick is what moves the camera (input.h
  * IcoBindings.mouse_drives); with the gamepad or the keys in charge, the
  * speed is exactly 1 and the range is the area's own, so the camera
- * behaves as it always did. ico2/omori/src/hand-camera.c declares the three
+ * behaves as on the PS2. ico2/omori/src/hand-camera.c declares the three
  * functions itself, as the game's other calls into the port do.
  */
 #ifndef ICO_PORT_INPUT_MOUSE_CAMERA_H

@@ -39,7 +39,7 @@ void ico_srand(unsigned int seed)
     ico_rand_next = (uint32_t)seed;
 }
 
-/* the state, read by the hand probe's lines (diag_host.h) */
+/* the state word, for diagnostics */
 unsigned int ico_rand_state(void)
 {
     return ico_rand_next;

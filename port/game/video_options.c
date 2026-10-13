@@ -286,8 +286,8 @@ int ico_video_preset(const IcoVideoOptions *o)
         return ICO_VIDEO_ORIGINAL;
     }
     /* Enhanced's resolution: the window's, "auto" on Android; on
-       Android a saved Enhanced with "window" (from before v0.4.2) is still
-       Enhanced, so the player keeps the preset's name (the shortcut writes
+       Android a saved Enhanced with "window" (a file written before "auto"
+       existed) is still Enhanced, so the player keeps the preset's name (the shortcut writes
        "auto") */
     if ((o->resScale == 0 || (s_android && o->resScale == ICO_RES_AUTO)) &&
         o->aspect == ICO_ASPECT_AUTO && o->filter == ICO_FILTER_ANISOTROPIC && o->fullHeight) {
@@ -440,9 +440,8 @@ static void read_config(void)
         fprintf(stderr, "video: texture_filter not understood; \"original\" used\n");
     }
     {
-        /* window_mode when it is a mode, else the older
-           fullscreen bool (a file from before the key, or an older build's
-           save: it writes only the bool) */
+        /* window_mode when it is a mode, else the fullscreen bool (a file
+           without window_mode: the bool alone) */
         const char *wm = ico_config_get_string("video.window_mode", "");
 
         if (wm[0] == '\0') {
@@ -510,7 +509,7 @@ static void read_config(void)
         }
         o.texturePackCacheMb = (int)mb;
     }
-    /* the effects (issue 11) */
+    /* the effects */
     o.effectGlow = ico_config_get_bool("video.effect_glow", 1);
     o.effectDepthOfField = ico_config_get_bool("video.effect_depth_of_field", 1);
     o.effectSoftening = ico_config_get_bool("video.effect_softening", 1);
@@ -703,7 +702,7 @@ void ico_video_frame(IcoFrame *out, int h)
     ico_frame_make(out, s_forceAspect > 0.0f ? s_forceAspect : ico_video_aspect(), h);
 }
 
-/* issue 11: the effect switches, read once a frame at most by the game */
+/* the effect switches, read once a frame at most by the game */
 int ico_video_effect_glow(void)
 {
     if (!s_read) {

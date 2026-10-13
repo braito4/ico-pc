@@ -20,7 +20,8 @@
  * Atlases: one set per rasterised pixel size, built on demand.  The pixel
  * size is round(size * scale): scale 1 in the Original preset (one atlas
  * pixel per y unit), output height / 448 in Enhanced (ui_scale_for).  Each
- * page is 512 x 512, kept as R8 coverage on the CPU and uploaded as an R8
+ * page is 512 to 2048 texels wide (wider for big pixel sizes; font.c
+ * PAGE_MIN, PAGE_MAX) and a few texels less high, kept as R8 coverage on the CPU and uploaded as an R8
  * texture (rd_create_texture_r8: the coverage in GS alpha units, 0x80 = 1.0,
  * a white texel) that font.hlsl's font_ps draws.
  *

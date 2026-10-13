@@ -1,8 +1,7 @@
 /*
  * port/game/test/shadow_spawn_test.c
  *
- * On the PC every shadow came out of its black pool standing on the floor
- * and rose above the pool, where the PS2 lifts it out of the floor.
+ * The PS2 lifts a shadow out of the floor as it rises from its black pool.
  *
  * The depth a shadow starts at is the generator's enemy kind: kind 0 starts
  * the rise bodySize * 100 below the generator (enemy_act.c actEnemyRestart),
@@ -10,8 +9,9 @@
  * (generator.c InitGeneratorGeo).  CreateLayoutedGObj (sceneManager.c) hands
  * it the scene object's SObjSimpleSetting, whose word at 0x30 is the layout
  * row's initArg, 0 in all 92 generator rows of the disc.  Read as a GenGeo
- * (the decompilation's type) the host took the kind from 0x3C, the setting's
- * never written alignment tail: stack contents.
+ * (the decompilation's type) the kind would come from 0x3C, the setting's
+ * never written alignment tail (stack contents), and a shadow would come out
+ * of its pool standing on the floor and rise above it.
  *
  * generator   the real generator.c, its constructor called the way
  *             CreateLayoutedGObj calls it, with the setting's tail filled with

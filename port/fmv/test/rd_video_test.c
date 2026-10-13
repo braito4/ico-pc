@@ -10,8 +10,8 @@
  *   ramp     a 64 x 48 picture shown 1:1 with varied luma and per-2x2 chroma:
  *            every pixel equals the CPU model of the IPU CSC (point-sampled
  *            chroma), bit for bit
- *   mirror   the same picture with the mirror mode on: flipped with the FMV
- *            toggle on, unflipped with it off
+ *   mirror   the same picture with the mirror mode on: flipped; with it
+ *            off: unflipped
  *   crt      a 720 x 576 film at an 800 x 480 output: with the
  *            CRT filter off no CRT pass is drawn and the box is the flat
  *            picture; on (scanlines), each frame and each clear frame is
@@ -22,7 +22,8 @@
  *            (a 576-line film under the 60 Hz video mode) at a 240 x 108
  *            output: the picture is fitted into the 144 x 108 box, its top
  *            band on the box's first rows and its bottom band on the last
- *            (not the 1.2x picture the box used to cut), black around it
+ *            (the whole picture, not a 1.2x picture cut by the box), black
+ *            around it
  *   field    rd_video_field at 1:1: the ramp as previous, current and next
  *            picture (nothing moves), either field, is the ramp woven,
  *            bit for bit the IPU model; then an interlaced film of a bar

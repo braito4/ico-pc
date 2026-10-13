@@ -1,7 +1,7 @@
 /*
  * port/game/photo_view.h
  *
- * Photo mode's camera in the game's own matrices (issue 14): while photo
+ * Photo mode's camera in the game's own matrices: while photo
  * mode is on (port/game/photo_mode.h) and the game is paused, the game
  * draws every tick from the photo camera, so culling, shadows, reflections,
  * the sun, the flare and every full-screen pass follow it as they follow

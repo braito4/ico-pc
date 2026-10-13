@@ -123,7 +123,7 @@ static struct {
        picture shown before the one on screen (its slot is reused once
        freed).  The disc's films are all interlaced (fmv_fields_test: every
        picture a frame picture, progressive_frame 0, top field first, no
-       repeated fields); a progressive picture goes out whole as before. */
+       repeated fields); a progressive picture goes out whole. */
     int loggedFields;
     Slot prev;
     uint32_t decodedFrames;

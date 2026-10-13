@@ -11,7 +11,7 @@
 # CMakeLists.txt) the library's NEON assembly and its armv8 selectors
 # instead, as Android's own build of the library has them (ARMV8,
 # DEFAULT_ARCH D_ARCH_ARMV8_GENERIC): the phone decodes movies several times
-# faster.  x86 and the rest are unchanged.
+# faster.  x86 and the rest take the generic C decoder.
 set(ICO_LIBMPEG2_DIR "${ICO_DEPS_DIR}/libmpeg2" CACHE PATH
     "Ittiam libmpeg2 source tree (tools/fetch_deps.sh)")
 
@@ -116,7 +116,7 @@ if(TARGET ico_pc)
     # movie.c draws its pictures through rd_video.c under ICO_RD.  ico_pc's
     # own definitions carry ICO_HEADLESS only (the game's ICO_RD is in
     # ICO_GAME_DEFINITIONS, on the game libraries), so the window build
-    # names it here; without it the film played its sound and showed no
+    # names it here; without it a film plays its sound and shows no
     # picture.
     if(NOT ICO_HEADLESS)
         set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/movie.c" TARGET_DIRECTORY ico_pc

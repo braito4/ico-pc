@@ -1,16 +1,16 @@
 # port/input/pad-boot.txt: power-on -> boot signs -> title -> New Game
 #
 # Format: port/input/pad_script.h. <tick> = Main tick from 0 (25 per second
-# in PAL: frame step systemStatus[1] = 2, common/src/main.c:37). Buttons are
+# in PAL: frame step systemStatus[1] = 2, common/src/main.c). Buttons are
 # the game's logical word, active high: CROSS 0040, START 0800, LEFT 8000.
 #
-# The boot timings below were first worked out from the code; the measured
-# ones follow the memory card notes ("Measured"). Each step's tick depends on load and memory-card latency,
+# The boot timings below are worked out from the code; the measured ones
+# are marked ("Measured"). Each step's tick depends on load and memory-card latency,
 # so the script does not try to hit each screen at a known tick. It repeats
 # a cycle in which every press either advances the screen that is up or does
 # nothing there (checked for each screen below). Every press lasts 3 ticks;
 # the game acts on the press edge only (pad[0].flags is iosPadRead's trg,
-# fumi/ios/pad.c:385, sugipon/src/keyInput.c:46), so holding never repeats.
+# fumi/ios/pad.c iosPadRead, sugipon/src/keyInput.c:46), so holding never repeats.
 #
 # frame_count: exec_layout_texture clears pad[0].flags whenever frame_count -
 # selectFrame is 0 or 1 (common/src/layout_texture.c:619-621), and it runs

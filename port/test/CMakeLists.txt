@@ -77,11 +77,11 @@ if(Python3_FOUND AND CMAKE_EXPORT_COMPILE_COMMANDS AND NOT CMAKE_CROSSCOMPILING)
     set_tests_properties(template_audit PROPERTIES TIMEOUT 900)
 endif()
 
-# const_write_audit (issue 19): no game unit writes an object
+# const_write_audit: no game unit writes an object
 # it declares const. The PS2 build keeps tables the game writes in .rodata
 # (no page protection on the EE); gcc keeps those stores, clang deletes them
-# (motionLimitDef's rows stayed unsorted on Android and the held hands' arms
-# went straight up). It compiles the game units of this build's
+# (on Android motionLimitDef's rows would stay unsorted and the held hands'
+# arms go straight up). It compiles the game units of this build's
 # compile_commands.json to unoptimised LLVM IR with the build's own
 # compiler, so it runs on native clang builds (CI's linux-x64-clang;
 # tools/check_android_flags.sh runs it for the Android build).

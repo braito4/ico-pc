@@ -1,7 +1,9 @@
 /*
  * port/input/pad_script.h
  *
- * A scripted controller for the headless build (--pad-script FILE). The
+ * A scripted controller (--pad-script FILE or [dev] pad_script, in every
+ * build; the headless build also takes pad-script.txt beside the
+ * executable when present: main_host.c). The
  * null pad (port/input/pad_host.c) reports a DualShock in port 0 when a
  * script is loaded and hands libpad's scePadRead the script's values; with
  * no script it stays "no controller in either port".

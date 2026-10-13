@@ -1,9 +1,9 @@
 /*
  * port/game/test/hand_ik_test.c
  *
- * Issue 19: on a phone Ico and Yorda walked hand in hand
- * with both arms raised straight up.  A NaN reaching GetTableArcCos gives
- * exactly 90 degrees on arm64 (the index conversion saturates to 0) where
+ * Ico and Yorda's arms while they hold hands.  A NaN reaching
+ * GetTableArcCos gives exactly 90 degrees on arm64 (the index conversion
+ * saturates to 0; on a phone both raise their arms straight up) where
  * x86-64 reads 4 GB below the table.  This test runs the hand records the
  * way ACTGame_ConnectHand sets them (Ico's hand 1 in mode 5 reaching for
  * Yorda, Yorda's hand 0 in mode 6 following Ico's hand), through the real
@@ -244,8 +244,8 @@ static void testCases(void)
         CHECK(fabsf(d - sa) < 0.05f * sa, "out of reach: %g from Yorda, expected %g", (double)d,
               (double)sa);
     }
-    /* hands at one point (len 0): before the issue 19 fix (ll + ss - tt) / (l2 * sa)
-       was 0 / 0, a NaN into GetTableArcCos (the fault count above) */
+    /* hands at one point (len 0): without the guard (ll + ss - tt) / (l2 * sa)
+       is 0 / 0, a NaN into GetTableArcCos (the fault count above) */
     testGrip("same point", 1.0f, 1.0f, a, a);
     /* a zero bone scale, apart and at one point (0 / 0 again) */
     testGrip("zero scale", 0.0f, 0.0f, a, near);

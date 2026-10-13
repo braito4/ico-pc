@@ -1,8 +1,9 @@
 /*
  * port/config/config.h
  *
- * The port's settings: config.toml in the per-user
- * folder, with the ico-pc.ini beside the executable as an override layer.
+ * The port's settings: config.toml in the per-user folder, with ico-pc.ini
+ * as an override layer (beside the executable; in the per-user folder on
+ * macOS: host_config.c ico_host_ini_path).
  * Paths are "section.key" ("audio.volume", "game.language").
  *
  * Reading: ini key (for the keys the ini has always had, see
@@ -46,7 +47,7 @@ const char *ico_config_toml_path(void);
 const char *ico_config_ini_path(void);
 
 /* Tests: forget what was read and use these files (NULL: the defaults, the
-   per-user folder's config.toml and the ico-pc.ini beside the executable);
+   per-user folder's config.toml and ico_host_ini_path's ico-pc.ini);
    they are read on next use. */
 void ico_config_reset(const char *toml_path, const char *ini_path);
 

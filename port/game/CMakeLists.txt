@@ -39,7 +39,7 @@ endif()
 
 # IsPointIsInScreen's x bound (ico2/omori/src/poly-flat.c, compiled into the
 # test) at gsFrame.w = 512 and wider: the PS2's 4:3 window at every width
-# (its callers are camera decisions, VIS-RULES item 19).  Stubs for the
+# (its callers are camera decisions, and the camera is the original's).  Stubs for the
 # projection and the packet writers.
 add_executable(poly_flat_test test/poly_flat_test.c)
 target_include_directories(poly_flat_test PRIVATE ${_ico_options_incs})
@@ -51,7 +51,7 @@ if(ICO_RUN_TESTS)
     add_test(NAME poly_flat COMMAND poly_flat_test)
 endif()
 
-# The doorway fix (issue 53): the arm and the grace with the option off and
+# The doorway fix: the arm and the grace with the option off and
 # on, holding hands or not, the stage it leads to, the frame count, and a copy
 # of the exit check's guard driven through an arrival frame by frame. CPU
 # only, no game sources.
@@ -66,7 +66,7 @@ endif()
 
 # Photo mode's state and camera: the orbit, the clamps, the
 # zoom, the keys, the capture's name; the basis kept from the game camera at
-# enter, the field of view now and the step limit (issue 14). CPU only.
+# enter, the field of view now and the step limit. CPU only.
 add_executable(photo_test test/photo_test.c ../platform/host_config.c)
 target_include_directories(photo_test PRIVATE "${CMAKE_SOURCE_DIR}/port/platform")
 target_compile_options(photo_test PRIVATE ${ICO_SEMANTIC_OPTIONS} ${ICO_PORT_WARNINGS})
@@ -133,7 +133,7 @@ if(ICO_RUN_TESTS)
     add_test(NAME kanban_boot COMMAND kanban_boot_test "${CMAKE_CURRENT_BINARY_DIR}")
 endif()
 
-# The hand records Ico and Yorda hold hands with (issue 19)
+# The hand records Ico and Yorda hold hands with
 # (ico2/sugipon/src/handManager.c, compiled into the test) and the arc-cosine
 # table's NaN guard (tableSin.c, quaternion.c and matrixDrive.c as the game
 # has them; ico_platform for the fault log). CPU only.
@@ -260,7 +260,7 @@ if(TARGET ico_pc)
                            -iquote "${CMAKE_SOURCE_DIR}/port/ui")
     target_sources(ico_pc PRIVATE $<TARGET_OBJECTS:ico_model_viewer_live>)
 endif()
-# photo_view.c (issue 14): photo mode's camera in the game's matrices, called
+# photo_view.c: photo mode's camera in the game's matrices, called
 # by main.c each tick; built as the model viewer is (the game's include path
 # and record layout), in the headless build too.  photo_mode.h names rd.h's
 # RdCamera (the struct only), so port/render is on its include path in both

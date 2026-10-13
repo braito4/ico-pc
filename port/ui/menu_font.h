@@ -7,7 +7,7 @@
  * rasterised on the sheets' own texel grid and drawn with rd's sheet
  * shader (rd.h rd_create_texture_sheet: a rim around the letters,
  * the antialiasing quantised to a few levels against a fixed Bayer
- * threshold), so it reads like the sheets did in every preset and scale.
+ * threshold), so it reads like the sheets in every preset and scale.
  *
  * The recipe.  A sheet texel is one x unit wide and one field line (two y
  * units) tall (font.h's grid); the menu rows' em is 13.5 texels, 27 y units
@@ -15,13 +15,15 @@
  * stb's vertical scale for an em of size / 2 texel rows and a horizontal
  * scale 2 * UI_X_PER_Y * UI_SHEET_WIDTH times that (font.c
  * ui__sheet_raster_line; the sheets' lettering is 0.8 as wide as the
- * typeface, ui_internal.h), made a little heavier (UI_MENU_BOLD_X / Y),
- * whatever the output's resolution: the strip is the same 1x coverage in
- * the scene list (scaled by the replay as the sheets were) and on the
- * presentation overlay (magnified onto the output).
+ * typeface, ui_internal.h), made a little heavier (UI_MENU_BOLD_X / Y).
+ * The strip is rasterised at s strip texels a sheet texel, s the scene's
+ * scale (or the output's on the presentation overlay), 1 to
+ * ICO_SHEET_SCALE_MAX, so the letters are as crisp as the picture; the
+ * layout is in sheet texels at every scale (menu_font.c mfScale).
  *
- * Strips.  A drawn text is one coverage strip in a cache of 1024 x 1024
- * pages (four per style, 1 MB each, 12 MB for the three styles), shelf
+ * Strips.  A drawn text is one coverage strip in a cache of pages of one
+ * scale each (1024 x 1024 at 1x, larger above it: menu_font.c MF_PAGE;
+ * four per style, three styles), shelf
  * packed with each strip's corner on a multiple of 4 texels (the dither
  * cell) and 7 texels across, 5 down, between strips (the rim's reach and
  * the bilinear texel, so no strip's rim reaches its neighbour), 8 from the

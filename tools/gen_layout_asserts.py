@@ -18,8 +18,8 @@ class is `runtime` (natural host layout, real pointers), `overlay` (read
 directly from disc or ELF bytes: frozen) or `save` (serialised into the save
 image or the card files: frozen). On the host (x64) only overlay and save
 structs are asserted. The runtime structs' asserts are documentation of the
-EE layout, compiled only with -DICO_LAYOUT_EE=1 (on an EE-layout build; the
-32-bit host build that ran them was retired, commit 36a1d73e).
+EE layout, compiled only with -DICO_LAYOUT_EE=1 (on an EE-layout build; no
+build in the tree defines it).
 `pending=<package>` holds a frozen struct's 64-bit asserts back
 until that package has converted its pointer fields (define
 ICO_LAYOUT_PENDING to compile them anyway). `nosize` drops a size taken from
@@ -628,8 +628,7 @@ def render(structs, others, classes, order):
     w(" * still pending a conversion (ICO_LAYOUT_PENDING compiles those too). The")
     w(" * runtime structs' asserts are documentation of the EE layout: they hold on a")
     w(" * build with the EE's ILP32 layout and compile only with -DICO_LAYOUT_EE=1.")
-    w(" * The 32-bit host build that checked them every build was retired at Phase 2")
-    w(" * exit (commit 36a1d73e). */")
+    w(" * No build in the tree defines it. */")
     w("")
     w("#include <stddef.h>")
     w("")
@@ -690,7 +689,7 @@ def render(structs, others, classes, order):
         counts[cls][2] += 1 if size is not None else 0
     w("/* Host sizes the game's code depends on.  The EE ClipWork is 0xC0 bytes; the host one")
     w(" * is wider (WallCfg holds pointers), so a buffer sized from the EE record and cast to it")
-    w(" * is overrun (issue 71: item.c's avoidInsideOfWall; tools/struct_cast_audit.py looks for")
+    w(" * is overrun (item.c's avoidInsideOfWall; tools/struct_cast_audit.py looks for")
     w(" * the rest).  item.c keeps its clip in a ClipWork itself and sets the radius by member. */")
     for line in HOST_ASSERTS:
         w(line)

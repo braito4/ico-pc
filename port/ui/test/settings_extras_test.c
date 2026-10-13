@@ -196,7 +196,7 @@ static void testExtras(void)
             char line[64];
             snprintf(line, sizeof(line), "extras: %s not available", want[k]);
             /* Models: "not available"; the locked Credits: "credits: locked"
-               alone (review nit: no false "not available") */
+               alone (no false "not available") */
             CHECK((k == 2 ? strstr(log, line) == NULL : strstr(log, line) != NULL) &&
                       current_layout_id == exL,
                   "Cross on %s logs and stays (\"%s\")", want[k], log);
@@ -1077,7 +1077,7 @@ static void testCharacters(void)
         press(0x10);
         CHECK(settle(13, 60), "Triangle: the title");
 
-        /* the pause menu with the host set: the Options page as before */
+        /* the pause menu with the host set: the Characters page, not the viewer */
         const int enters = s_hostEnters;
         const int pl = openCharacters(0);
         ui_settings_page_rows(UI_PAGE_CHARACTERS, lb, lo, lv, 16);

@@ -1,7 +1,7 @@
 /*
  * port/game/test/door_grace_test.c
  *
- * The doorway fix (port/game/door_grace.h, issue 53) on the CPU: the arm
+ * The doorway fix (port/game/door_grace.h) on the CPU: the arm
  * and the grace with the option off and on, holding hands or not, a stage
  * start elsewhere, no arm, the frame count, the other way through the door,
  * and a copy of the exit check's guard (ico2/fumi/src/boyact.c,
@@ -199,7 +199,7 @@ static void test_scenario(void)
     }
     CHECK(guard_frame(3) == 3);
 
-    /* option on: another exit during the grace works as before */
+    /* option on: another exit during the grace works as in the game */
     fresh(1);
     arrive();
     CHECK(guard_frame(0) == 0);

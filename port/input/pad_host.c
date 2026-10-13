@@ -13,9 +13,9 @@
  * with no pad plugged in (the headless default).
  *
  * The pad powers up in digital mode, as the real one did, and walks
- * pad.c's state machine (controler_stable_check, pad.c:80-270) once per
- * Main tick while the port is in error. The answers are those the scripted
- * pad has always given, so the headless traces do not change:
+ * pad.c's state machine (controler_stable_check) once per
+ * Main tick while the port is in error. The answers are fixed, so the
+ * headless traces are the same from run to run:
  *
  *   tick 0  phase 0/1: state 6 (stable); InfoMode(CURID) 4 (digital),
  *           InfoMode(CUREXID) 0, so mode 4 = orig: phase 40, flag 0x40000
@@ -26,9 +26,9 @@
  *   tick 4  phase 70: InfoPressMode 0: phase 75
  *   tick 5  phase 75: InfoAct(-1) 2 motors; SetActAlign accepted: phase 76
  *   tick 6  phase 76: state 6, not 5 (executing): phase 99
- *   tick 7  iosPadDevReadFunc clears the error at phase 99 (pad.c:317-319)
+ *   tick 7  iosPadDevReadFunc clears the error at phase 99
  *           and reads: id 0x73 (analog, (word >> 12) & 0xF == 7, so the
- *           sticks are kept, pad.c:335-339)
+ *           sticks are kept, iosPadDevReadFunc)
  *
  * The first buttons reach the game on Main tick 7; there pad.c compares
  * against the other, never-filled buffer (all zero, which reads as every

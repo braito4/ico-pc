@@ -162,7 +162,7 @@ typedef struct IcoVideoOptions {
     int texturePackPrecache; /* config only: the pack read into memory at start */
     int texturePackCacheMb;  /* config only: the RAM that read-ahead may use (0: half the
                                 computer's memory) */
-    /* the game's own picture effects (issue 11), 1 = on (the PS2 picture),
+    /* the game's own picture effects, 1 = on (the PS2 picture),
        applied whatever the preset; the game reads them through the
        ico_video_effect_* getters below */
     int effectGlow;          /* the flare and bloom passes and the sun (staticBlur.c) */
@@ -170,7 +170,7 @@ typedef struct IcoVideoOptions {
     int effectSoftening;     /* the edge softening (GsBase.c gsb_antiAlias) */
     int effectMotionBlur;    /* the motion blur (staticBlur.c MotionBlur) */
     int effectFog;           /* the depth fog (ZFog.c fog_DrawFog) */
-    int effectCinematicBars; /* the cutscene bars (GsBase.c, issue 27); 1 = on */
+    int effectCinematicBars; /* the cutscene bars (GsBase.c); 1 = on */
     /* an output-size depth buffer in the presentation for an
        effects program (rd.h RdSettings.effectsDepth); 1 = on */
     int effectsDepth;
@@ -262,7 +262,7 @@ void ico_video_frame_force_aspect(float aspect);
 /* 1 while ico_video_frame_force_aspect holds an aspect (the aspect sweep,
    window_host.c), else 0 */
 int ico_video_frame_forced(void);
-/* The effect switches in force (issue 11), 1 or 0: plain functions the
+/* The effect switches in force, 1 or 0: plain functions the
    game's files declare extern (staticBlur.c, GsBase.c, ZFog.c), read at
    most once a frame. */
 int ico_video_effect_glow(void);
@@ -276,7 +276,7 @@ int ico_video_effects_depth(void);
 /* The anti-aliasing in force, ICO_AA_*: the anti_aliasing option, except
    ICO_AA_OFF whenever the preset is Original (ico_video_preset) */
 int ico_video_anti_alias(void);
-/* VIS-WINDOW: whether the options in force are the Original preset (the
+/* Whether the options in force are the Original preset (the
    PS2's picture out of the box: 1x, 4:3, the original filter, half
    height); GsBase.c's frame latch hands the opposite to GifPacket.c
    (gif_HostSetExtended), as rd's preset is the same test (window_host.c) */

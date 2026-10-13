@@ -91,7 +91,7 @@ extern unsigned int ico_host_main_ticks(void);
 #define LAYOUT_PAUSE 57
 #define LAYOUT_TITLE_CONTINUE 12
 #define LAYOUT_TITLE_NEW 13
-/* the game's Options screen (no longer reached) and its button
+/* the game's Options screen (not reached) and its button
    configuration screen (Settings > Controls opens it) */
 #define LAYOUT_GAME_OPTIONS 58
 #define LAYOUT_KEY_CONFIG 59
@@ -1599,7 +1599,7 @@ void ui_settings_step(UiSettingsOpt opt, int dir)
         applyOutputMode(1);
         if (m != ICO_OUTPUT_AUTO) {
             /* the rest of what the Options screen's Sound row (308)
-               did (applyOutputMode set the mode): the game's own mode, the
+               does (applyOutputMode set the mode): the game's own mode, the
                one its saves write and Auto shows, is this one too.  The
                key is saved with the page's others on leaving, not at each
                step (ico_opt_output_toggled's save) */
@@ -3217,7 +3217,7 @@ static void placeTitle(void)
    (End Game, 296, is further down in the PAL data); otherwise masked and
    stepped over through the item links (layout_texture.c's visibility skip
    does not look at masks), Back in its own place: Options -> Back and Back
-   -> Options as before the row existed.  The row's letters start where the
+   -> Options directly, as without the row.  The row's letters start where the
    pause rows' do. */
 static void placePause(void)
 {
@@ -3270,7 +3270,7 @@ static void repoint(void)
     }
     placeTitle();
     /* the pause menu's Options opens Settings (the game's Options
-       screen, 58, is no longer reached: its settings are on the pages) */
+       screen, 58, is not reached: its settings are on the pages) */
     texProperty[ROW_PAUSE_OPTIONS].right = s_pages[UI_PAGE_MAIN].layout;
     placePause();
     static const int gameRow[ENTRY_COUNT] = {0, 50, 51};

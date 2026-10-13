@@ -191,7 +191,7 @@ typedef struct IcoBindings {
     float mouse_sens;  /* multiplier on the built-in per-count gain */
     float mouse_decay; /* the touch look pad's per vsync decay, 0..0.99 (touch.h) */
     int mouse_invert_y;
-    /* the mouse camera, issue 17 ([input] mouse_camera, default on;
+    /* the mouse camera ([input] mouse_camera, default on;
        mouse_hold, seconds 0..10, default 0.75). The captured motion moves
        a held look offset (1/400 of the unit circle a count at sensitivity
        1); still for mouse_hold seconds, the offset relaxes to centre (time
@@ -208,8 +208,9 @@ typedef struct IcoBindings {
        mouse's stick (10 is at once); full range lets the mouse turn the
        camera past the area's own angle limits; with mouse_return off the
        held look offset stays where it is until the next motion instead of
-       relaxing to centre. At the defaults the camera behaves exactly as
-       before. */
+       relaxing to centre. At the defaults the camera follows the mouse's
+       stick at the game's own speed, inside the area's limits, the look
+       offset relaxing to centre. */
     float mouse_camera_speed;
     int mouse_full_range;
     int mouse_return;

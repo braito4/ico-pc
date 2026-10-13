@@ -158,7 +158,7 @@ ico_settings_test(settings_test test/settings_test.c)
 # settings_extras_test: the Extras and Characters pages and the pages that
 # hide the title's logo
 ico_settings_test(settings_extras_test test/settings_extras_test.c)
-# settings_extra_test: the newer Settings menu tests; each settings test file
+# settings_extra_test: more Settings menu tests; each settings test file
 # stays well under the source size cap (tools/check_no_rom.sh), so new
 # settings tests go in settings_extra_test.c
 ico_settings_test(settings_extra_test test/settings_extra_test.c)

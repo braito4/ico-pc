@@ -76,7 +76,7 @@ int main(void)
     check_eq((long)(ico_audio_play_ratio(1.0, 9999, 0) * 1e6 + 0.5), 1000000, "no block size");
     /* a queue grown to 2.2 vsyncs (a rate measured a little short over
        the blocks), pushed and played a vsync at a time: trimmed back to
-       two vsyncs, then left alone; rc1 kept it queued */
+       two vsyncs, then left alone */
     {
         const double vs = 3200.0;
         double q = 2.2 * vs, ratio = 1.0;

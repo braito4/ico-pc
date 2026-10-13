@@ -7,7 +7,7 @@
  *
  * The five file calls are port/data/sifdev_host.c's:
  * a "host0:" path, the development kit's PC-side device, is a file under
- * <pref>/dev/; every other device fails with -1 as before.  Descriptors are
+ * <pref>/dev/; every other device fails with -1.  Descriptors are
  * small numbers from 0.
  */
 #ifndef ICO_COMPAT_SIFDEV_H

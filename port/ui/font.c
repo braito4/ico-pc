@@ -46,7 +46,7 @@
 extern const unsigned char ui_font_ttf[];
 extern const unsigned int ui_font_ttf_size;
 
-/* T1: a size's pages are PAGE_MIN to PAGE_MAX texels wide, wider for big
+/* A size's pages are PAGE_MIN to PAGE_MAX texels wide, wider for big
    pixel sizes (an Enhanced 4K output rasterises the menu's 27 units at
    about 130 px, which four 512-texel pages could not hold), and PAGE_TRIM
    texels less high: not a power of two, so the Enhanced texture filter
@@ -381,7 +381,7 @@ static SizeSet *sizeSet(int px)
     freeSlot->lastUse = s_font.useClock;
     freeSlot->lastFrame = now;
     freeSlot->scale = stbtt_ScaleForMappingEmToPixels(&s_font.info, (float)px);
-    /* T1: about 32 cells of a px-high glyph a page at least */
+    /* about 32 cells of a px-high glyph a page at least */
     freeSlot->pageW = PAGE_MIN;
     while (freeSlot->pageW < PAGE_MAX && freeSlot->pageW < px * 6) {
         freeSlot->pageW *= 2;
@@ -1123,7 +1123,7 @@ void ui_draw_text_xf(float x, float y, float size, const uint8_t rgba[4], const 
                     continue;
                 }
                 rd_texture((RdTex){tex}, RD_TEXFN_MODULATE, RD_TCC_RGBA);
-                /* T1: continuous quads (no GS-pixel snap on a scaled target) */
+                /* continuous quads (no GS-pixel snap on a scaled target) */
                 rd_screen_prims(RD_PRIM_SPRITES, v, n, RD_SPACE_UI, RD_UV_FIXED_CONTINUOUS,
                                 textKey(utf8, flags, page));
             }

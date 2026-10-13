@@ -18,8 +18,8 @@
  *     when a gain is below 100 %); the game's voice volumes are all fixed
  *     levels.
  *   - The film category scales the PCM mixer's channel volumes
- *     (stream.c pcm_mix), not a slot; no Settings row sets it yet, so films
- *     follow the master volume alone (the category is the hook for one).
+ *     (stream.c pcm_mix), not a slot; no Settings row sets it, so films
+ *     follow the master volume alone.
  *   - A gain change re-issues the cached volumes of the slots it covers,
  *     so it is heard at once.
  *

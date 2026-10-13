@@ -147,7 +147,8 @@ unsigned ico_sndn2_pitch_clamps(void)
 }
 
 /* Command 0x04's pitch.  The arithmetic is the IRX's 32-bit unsigned
-   arithmetic (the 441/480 step by multiply-high); the table index is not
+   arithmetic, p * 441 / 480 (the IRX divides by 480 with a multiply-high,
+   the compiler's form of the same unsigned quotient); the table index is not
    checked by the IRX, which then reads its neighbouring .data/.bss: here it
    is clamped and counted.  Whether the game ever indexes outside the table
    is not known. */

@@ -1,7 +1,7 @@
 /*
  * port/game/door_grace.h
  *
- * The doorway fix ([gameplay] door_fix, options.h; issue 53).
+ * The doorway fix ([gameplay] door_fix, options.h; GAME_FEATURES.md).
  *
  * The original game (on a real PS2 too) has a doorway that sends Ico and
  * Yorda straight back out when they go through it holding hands: the East
@@ -18,7 +18,7 @@
  * the grace's frames any exit floor leading back to the stage left is only
  * remembered, as the game does with the first floor after an arrival.  When
  * the grace ends, a floor he still stands on needs a step off and back on
- * (the game's own rule); every other floor works as before.  Scripted stage
+ * (the game's own rule); every other floor works as in the game.  Scripted stage
  * changes never arm it, and an arm is used up by the next stage start.
  *
  * Pure state: no game headers, game frames only, nothing enters a save.

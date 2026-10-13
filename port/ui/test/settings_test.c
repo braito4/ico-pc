@@ -1439,7 +1439,8 @@ static void testCirclePortScreens(void)
 }
 
 /* the game's own menus through the real layout_texture.c: the Options
- * screen's rows (no longer reached, its links the PAL data's) go back
+ * screen's rows (not reached from the pause menu, its links the PAL
+ * data's) go back
  * to the pause menu (57) through their left link, which
  * default_item_select follows on Triangle, and on Circle while [game]
  * circle_back is on (the default); off, Circle does nothing there and
@@ -3026,7 +3027,7 @@ static void testModelPack(void)
     useConfig("version = 1\n");
 }
 
-/* issue 11: Options > Effects.  The link sits under Display on the main page,
+/* Options > Effects.  The link sits under Display on the main page,
    the six rows read On by default, a step flips one and ui_settings_save
    writes [video] effect_*; the Main page fits in all four entries */
 static void testEffects(void)

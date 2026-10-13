@@ -116,7 +116,7 @@ int main(void)
         CHECK(near(h.panX, MV_PAN_MAX * h.dist), "pan right stops at 0.6 dist (%f)", h.panX);
     }
 
-    /* the right stick still turns: right (large x) lowers yaw, as before */
+    /* the right stick still turns: right (large x) lowers yaw */
     c = fresh();
     unsigned char right[4] = {255, 128, 128, 128};
     mv_cam_step(&c, 0, right);

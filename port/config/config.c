@@ -44,7 +44,7 @@ static void log_retired(void)
 {
     for (size_t i = 0; i < sizeof(retired_keys) / sizeof(retired_keys[0]); i++) {
         if (ico_toml_has(toml, retired_keys[i])) {
-            fprintf(stderr, "config: %s is no longer used; ignored\n", retired_keys[i]);
+            fprintf(stderr, "config: %s is not used; ignored\n", retired_keys[i]);
         }
     }
 }

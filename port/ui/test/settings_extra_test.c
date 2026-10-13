@@ -1,4 +1,4 @@
-/* settings_extra_test.c: the newer Settings menu tests, over the shared
+/* settings_extra_test.c: more Settings menu tests, over the shared
  * fixture (settings_fixture.h: fake tables, frame/settle/press, useConfig,
  * labelsAre, enterMain/openPage).  Each settings test file stays well under
  * the source size cap (tools/check_no_rom.sh), so new settings tests go here.
@@ -156,8 +156,8 @@ static void testCinematicBars(void)
 }
 
 /* default_item_select hands the select callback the current
-   item (issue 20: it passed nothing, and la_mc_saved_file_select indexed the
-   card's file table with whatever the argument register held) */
+   item (la_mc_saved_file_select indexes the card's file table with it; with
+   nothing passed it would read whatever the argument register held) */
 static int s_an20Calls, s_an20Arg, s_an20Ret;
 
 static int an20Spy(int item)
@@ -1726,7 +1726,7 @@ static void testResolutionCycle(void)
 }
 
 /* Display > Anti-aliasing ([video] anti_aliasing): a row on Display (the
-   rows that moved to Effects are no longer there), Off by default, stepping
+   effect rows are on Effects), Off by default, stepping
    only through the values the renderer's mask lists, saved as its name,
    greyed and Off under the Original preset, with its note; both pages fit
    with and without the game finished */
@@ -1905,7 +1905,7 @@ static void testAntiAlias(void)
           o.antiAlias);
 
     /* the value from the file: shown when the device offers it; the value
-       actually used (Off) when it does not, the file kept (issue 43) */
+       actually used (Off) when it does not, the file kept */
     useConfig("version = 1\n[video]\npreset = \"enhanced\"\nanti_aliasing = \"msaa2\"\n");
     enterMainKeep(1);
     CHECK(strcmp(ui_settings_value_text(UI_OPT_ANTI_ALIAS), "MSAA 2x (off: not available)") == 0,
@@ -2091,7 +2091,7 @@ static int rowsWithText(UiSettingsPage page, const char *str)
     return n;
 }
 
-/* The version in the Main page's top-right corner (issue 80): the package
+/* The version in the Main page's top-right corner: the package
    label, small, greyed, right-aligned, above the header; on no other page;
    nothing in a development build */
 static void testVersion(void)

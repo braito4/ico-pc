@@ -17,7 +17,7 @@
  * unlock_credits=1 in the ini.  Last, the engine (credits_live.c) over
  * stubs of the game's side: a start whose stage never comes up fails after
  * its bound with the flag kept, requests the title, and puts the game's
- * state back as the title is entered (review finding 4); one that never
+ * state back as the title is entered; one that never
  * left the title is put back at once.
  */
 #include <stdio.h>

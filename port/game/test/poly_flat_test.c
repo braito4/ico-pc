@@ -3,10 +3,9 @@
  *
  * IsPointIsInScreen (ico2/omori/src/poly-flat.c, compiled in below so its
  * statics are in reach): the x bound is the 4:3 picture's half-width, the
- * PS2's +-256 pixels, at every native width (v0.6.1, VIS-RULES item 19: its
- * callers are camera decisions, and the camera is the original's; v0.6.0
- * used half the native width, so at w = 688 a point 300 pixels off the
- * centre was in).  The result is the same number as with ScreenWidth / 2.
+ * PS2's +-256 pixels, at every native width (its callers are camera
+ * decisions, and the camera is the original's; with half the native width,
+ * at w = 688 a point 300 pixels off the centre would be in).  The result is the same number as with ScreenWidth / 2.
  * IsPointIsInScreenWide (Ico's own looks, boyact.c) takes half the native
  * width (gsFrame.w): the PS2's window at 4:3, 344 a side at 688, 1280 at
  * 2560.  The projection is a stub that returns a chosen GS point.

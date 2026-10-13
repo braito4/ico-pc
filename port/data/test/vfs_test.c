@@ -1139,7 +1139,7 @@ static int run_disc(const char *iso)
     CHECK(ico_vfs_stat(vfs, "SYSTEM.CNF", &e) == 0 && !e.is_dir);
     CHECK(ico_vfs_stat(vfs, "cdrom0:\\SCES_507.60;1", &e) == 0 && !e.is_dir);
     CHECK(ico_vfs_stat(vfs, "\\DFDATAS\\DATA.DF;1", &e) == 0 && !e.is_dir);
-    /* the six modules FileManager.c used to load, and the IOP image */
+    /* the six modules FileManager.c loads on the PS2, and the IOP image */
     CHECK(ico_vfs_stat(vfs, "cdrom0:\\IOPRP224.IMG;1", NULL) == 0);
     CHECK(ico_vfs_stat(vfs, "cdrom0:\\SIO2MAN.IRX;1", NULL) == 0);
     CHECK(ico_vfs_stat(vfs, "cdrom0:\\PADMAN.IRX;1", NULL) == 0);
