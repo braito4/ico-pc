@@ -25,6 +25,7 @@ commands and [replays](ARCHITECTURE.md#terms) them on the [RHI](ARCHITECTURE.md#
 | `port/render/rd_water.c` | render-to-texture blocks, target aliases, camera scopes, pool STs |
 | `port/render/rd_fog_path.c` | how the fog reads the scene depth; the fog probe and self-test |
 | `port/render/rd_content_hide.c` | the content table: stage faces the native frame must not show |
+| `port/render/rd_content_extend.c` | the content table's sheets: stage overlays continued to the frame's edges |
 | `port/render/rd_content_chain.c`, `rd_chain.h` | the chains drawn at their links' size |
 | `port/render/rd_join.c` | the region rule's card test joined over a part's packets |
 | `port/render/rd_screen_planes.c` | the attribute planes of screen-prim triangles |
@@ -537,6 +538,28 @@ black corners in `rd__content_hide`, and run `tools/content_table_check.py decid
 `table` for every entry, or `N=verb` for entry N; a bad value logs
 `rd: ICO_RD_CONTENT_HIDE="..." not understood: the table as listed` and keeps the table
 (`port/render/rd_mesh.c` (`rd__content_hide_set`, `rd__content_hide_verb`)).
+
+**Sheets continued to the frame's edges.** A few stage models are sheets of tiles held in front of
+the camera to cover the PS2's 4:3 picture, and stop short of the sides of a wider frame: the deja
+vision's grain veil (mesh `sandstorm`, four quadrant sheets of four 128 x 112 tiles, each drawn in
+two layers). They are listed in `rd__content_extend` by their vertex count, layout and the xxh3 of
+their stream, so a model pack's replacement never matches. When a listed mesh is made,
+`extendSheet` appends whole tiles in its one batch: the outer column repeated `cols` times outward
+across, then the outer row `rows` times outward down, each tile's UV continued from the tile it
+repeats so the texture runs on without a seam under REPEAT (`rd__sheet_tiles`). The mesh's own
+vertices and triangles come first and are unchanged; the tiles are drawn with the draw's state,
+matrices and UV offset, and take the region test as the sheet does. A morph
+(`rd_update_vu_mesh`) writes the sheet's own vertices and lays the tiles again (`retileSheet`).
+The veil's sheets reach GS X 2048 -+ 702 and Y 2048 -+ 717; three tiles across (351 GS pixels
+each) and one down reach 2048 -+ 1755 and -+ 1075, past the widest frame (60:9, -+ 1280) and still
+inside the GS window. An entry is listed only when the appended tiles lie wholly beside the 4:3
+picture: `tools/content_table_check.py decide` replays every dump that draws the mesh with the
+entries off and on and requires the 4:3 picture and every target's 4:3 band byte-identical
+(Original 1x and Enhanced 2x), and on a dump wider than 4:3 the sides changed by the sheet as its
+middle is (`port/render/rd_content_extend.c`; `port/render/rd_mesh.c` (`extendSheet`,
+`rd__sheet_tiles`, `retileSheet`)). `ICO_RD_CONTENT_EXTEND` overrides the verbs as
+`ICO_RD_CONTENT_HIDE` does, with `off`, `tiles` or `table` (`port/render/rd_mesh.c`
+(`rd__content_extend_set`, `rd__content_extend_verb`)).
 
 **Natural chains.** Two stage animations let a chain down by scaling a Null's Y, which squashes
 the links. With the option on the Null takes no scale along the chain, its children move along

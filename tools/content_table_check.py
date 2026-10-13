@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""tools/content_table_check.py: the content table (port/render/rd_content_hide.c)
-against saved frames.
+"""tools/content_table_check.py: the content table (port/render/rd_content_hide.c,
+rd_content_extend.c) against saved frames.
 
 The renderer draws one camera on the native frame (vu_common.hlsli
 vu_region_rule): a triangle that fails a VU program's region test is drawn,
@@ -15,9 +15,13 @@ shows none).
 The stage geometry made
 for the PS2's 4:3 picture that passes the region test beside it (closing
 planes) is listed in the content table with the verb HIDE (drawn
-nowhere).  This tool drives port/render/rd_replay_tool over dumps; the
-table's verbs are overridden per run through ICO_RD_CONTENT_HIDE (rd_mesh.c
-rd__content_hide_set: "N=off", "N=hide").
+nowhere).  The stage overlays made to cover the PS2's 4:3 picture (a sheet
+of tiles in front of the camera) are listed in rd_content_extend.c with the
+verb TILES (tiles appended outward, so the sheet covers a wider frame).
+This tool drives port/render/rd_replay_tool over dumps; the table's verbs
+are overridden per run through ICO_RD_CONTENT_HIDE (rd_mesh.c
+rd__content_hide_set: "N=off", "N=hide") and ICO_RD_CONTENT_EXTEND
+(rd__content_extend_set: "N=off", "N=tiles").
 
   decide  for every entry of the table, on every 4:3 dump whose list draws
           the entry's mesh: the frame at 4:3 (every target and the present,
@@ -27,6 +31,16 @@ rd__content_hide_set: "N=off", "N=hide").
           the 4:3 picture and the entry must go: the mesh stays unlisted,
           drawn as geometry.  Exit 1 when an entry is listed HIDE and a
           dump shows its faces at 4:3.
+          Then the sheets, the entries of one mesh together, on every dump
+          whose list draws the mesh: with the entries off and TILES, the
+          present cut to 4:3 (Original 1x and Enhanced 2x) is the same byte
+          for byte and so is every target's 4:3 band (the centre 512 GS
+          columns; on a 4:3 dump the whole target); on a dump wider than
+          4:3, SCENE at 1x without the mesh's draws (--nop) is the
+          reference: the columns the sheet leaves untouched with the
+          entries off (the sides) must, with TILES, be changed in at least
+          90 % of their pixels and by a mean within 1.5 levels of what the
+          sheet does to the 4:3 band.  Exit 1 when one fails.
   report  the meshes that are NOT listed and are expected not to need an
           entry (the region rule covers them): by default st26a_p1 and
           st26a_near (the opening's cliff and tree card) on the opening
@@ -80,6 +94,7 @@ import zlib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TABLE = os.path.join(ROOT, "port", "render", "rd_content_hide.c")
+EXTEND_TABLE = os.path.join(ROOT, "port", "render", "rd_content_extend.c")
 DEFAULT_LIST = os.path.join(ROOT, "tools", "native_frame_dumps.txt")
 DEFAULT_TOOL = os.path.join(ROOT, "build-host", "linux-x64", "port", "render", "rd_replay_tool")
 DECIDE_SETTINGS = {
@@ -108,6 +123,17 @@ def read_table(path=TABLE):
     body = src[src.index("rd__content_hide[] = {"):]
     out = []
     for m in re.finditer(r'\{\s*"([^"]*)"\s*,\s*RD_(HIDE)\s*,', body):
+        note = m.group(1)
+        out.append((len(out), note.split(":", 1)[0].strip(), note, m.group(2)))
+    return out
+
+
+def read_extend_table(path=EXTEND_TABLE):
+    """[(index, mesh, note, verb)] of the sheets, in the table's order."""
+    src = open(path, encoding="utf-8").read()
+    body = src[src.index("rd__content_extend[] = {"):]
+    out = []
+    for m in re.finditer(r'\{\s*"([^"]*)"\s*,\s*RD_EXTEND_(TILES)\s*,', body):
         note = m.group(1)
         out.append((len(out), note.split(":", 1)[0].strip(), note, m.group(2)))
     return out
@@ -203,11 +229,14 @@ class Lock:
             self.f.close()
 
 
-def run_tool(tool, args, hide=None):
+def run_tool(tool, args, hide=None, extend=None):
     env = dict(os.environ)
     env.pop("ICO_RD_CONTENT_HIDE", None)
+    env.pop("ICO_RD_CONTENT_EXTEND", None)
     if hide:
         env["ICO_RD_CONTENT_HIDE"] = hide
+    if extend:
+        env["ICO_RD_CONTENT_EXTEND"] = extend
     r = subprocess.run([tool] + args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                        env=env)
     return r.returncode, r.stdout
@@ -271,7 +300,7 @@ def cmd_decide(args, dumps):
     table = read_table()
     if not table:
         say("the table is empty: nothing to decide")
-        return 0
+        return decide_sheets(args, dumps)
     os.makedirs(args.out, exist_ok=True)
     tmp = tempfile.mkdtemp(dir=args.out)
     evidence = {i: [] for i, _, _, _ in table}  # (dump, setting, same hide/off)
@@ -320,6 +349,119 @@ def cmd_decide(args, dumps):
             fails += 1
         else:
             say("entry %d (%s): HIDE (never in the 4:3 picture)" % (i, mesh))
+    return 1 if (fails or decide_sheets(args, dumps)) else 0
+
+
+def band_rows(img, x0, x1):
+    """the rows of an RGB image cut to columns x0..x1 - 1"""
+    return [row[x0 * 3:x1 * 3] for row in img[2]]
+
+
+def sheet_effect(nov, img, cols):
+    """(fraction of pixels changed, mean change per channel) of img against
+    nov over the given columns"""
+    changed = total = 0
+    acc = 0
+    for rn, ri in zip(nov[2], img[2]):
+        for x in cols:
+            a, b = rn[x * 3:x * 3 + 3], ri[x * 3:x * 3 + 3]
+            total += 1
+            if a != b:
+                changed += 1
+                acc += (b[0] - a[0]) + (b[1] - a[1]) + (b[2] - a[2])
+    return (changed / total if total else 0.0), (acc / (3.0 * total) if total else 0.0)
+
+
+def decide_sheets(args, dumps):
+    """the sheets (rd_content_extend.c): see the module comment's decide"""
+    table = read_extend_table()
+    groups = {}
+    for i, mesh, _, _ in table:
+        groups.setdefault(mesh, []).append(i)
+    tmp = tempfile.mkdtemp(dir=args.out)
+    fails = 0
+    seen = {mesh: 0 for mesh in groups}
+    for src in dumps:
+        for tok, path in sweep_members(src, tmp):
+            info = dump_info(args.tool, path)
+            if not info:
+                fails += 1
+                continue
+            for mesh, idx in groups.items():
+                nops = info.draws_of(mesh)
+                if not nops:
+                    continue
+                seen[mesh] += 1
+                spec = {v: ",".join("%d=%s" % (i, v) for i in idx) for v in ("off", "tiles")}
+                wide = aspect_token(info.aspect) != "4x3"
+                for setting, sargs in DECIDE_SETTINGS.items():
+                    dirs = {}
+                    for verb in ("off", "tiles"):
+                        d = os.path.join(tmp, "x-%s-%s-%s" % (os.path.basename(path), setting, verb))
+                        os.makedirs(d, exist_ok=True)
+                        rc, out = run_tool(args.tool, [path, "-", "--pass-dump", d] + sargs,
+                                           extend=spec[verb])
+                        if rc != 0:
+                            say("%s %s %s: replay failed:\n%s" % (path, setting, verb, out[-2000:]))
+                            fails += 1
+                        dirs[verb] = d
+                    diff = []
+                    for f in sorted(f for f in os.listdir(dirs["off"]) if f.endswith(".png")):
+                        a, b = os.path.join(dirs["off"], f), os.path.join(dirs["tiles"], f)
+                        if same_png(a, b):
+                            continue
+                        if f == "PRESENT.png" or not wide:
+                            diff.append(f)
+                            continue
+                        ia, ib = load_png(a), load_png(b)
+                        s = ia[0] / info.gs_w  # the target's width over the GS width
+                        x0 = int((info.gs_w // 2 - 256) * s)
+                        x1 = int((info.gs_w // 2 + 256) * s)
+                        if ia[0] != ib[0] or band_rows(ia, x0, x1) != band_rows(ib, x0, x1):
+                            diff.append(f)
+                    say("sheets %s %s %s: TILES %s at 4:3" %
+                        (mesh, os.path.basename(path), setting,
+                         "the same picture" if not diff else "changes " + " ".join(diff)))
+                    if diff:
+                        fails += 1
+                if not wide:
+                    continue
+                pics = {}
+                for name, nop, verb in (("none", nops, "off"), ("off", [], "off"),
+                                        ("tiles", [], "tiles")):
+                    out = os.path.join(tmp, "s-%s-%s.png" % (os.path.basename(path), name))
+                    a = [path, out, "--target", "SCENE", "--resolution", "1x"]
+                    for n in nop:
+                        a += ["--nop", n]
+                    rc, text = run_tool(args.tool, a, extend=spec[verb])
+                    if rc != 0 or not os.path.exists(out):
+                        say("%s: replay failed (%s):\n%s" % (path, " ".join(a[2:]), text[-2000:]))
+                        fails += 1
+                        break
+                    pics[name] = load_png(out)
+                if len(pics) != 3:
+                    continue
+                w = pics["none"][0]
+                band = list(range(w // 2 - 256, w // 2 + 256))
+                touched = [x for x in range(w)
+                           if any(rn[x * 3:x * 3 + 3] != ro[x * 3:x * 3 + 3]
+                                  for rn, ro in zip(pics["none"][2], pics["off"][2]))]
+                touched = set(touched)
+                sides = [x for x in range(w) if x not in touched]
+                fb, mb = sheet_effect(pics["none"], pics["tiles"], band)
+                fs, ms = sheet_effect(pics["none"], pics["tiles"], sides)
+                say("sheets %s %s at %s: the 4:3 band %.1f %% changed, mean %+.2f; the %d side "
+                    "columns %.1f %% changed, mean %+.2f" %
+                    (mesh, os.path.basename(path), aspect_token(info.aspect), 100 * fb, mb,
+                     len(sides), 100 * fs, ms))
+                if sides and (fs < 0.9 or abs(ms - mb) > 1.5):
+                    say("sheets %s %s: FAIL: the sides do not show the sheet as the middle does" %
+                        (mesh, os.path.basename(path)))
+                    fails += 1
+    shutil.rmtree(tmp, ignore_errors=True)
+    for mesh, n in seen.items():
+        if not n:
+            say("sheets %s: no dump draws it; no evidence" % mesh)
     return 1 if fails else 0
 
 

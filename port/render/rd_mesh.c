@@ -668,6 +668,326 @@ static void markContentHidden(RdMeshRec *m)
     }
 }
 
+/* ---------------------------------------------- the content table's sheets
+ *
+ * rd_content_extend.c lists the stage overlays made to cover the PS2's 4:3
+ * picture (a sheet of tiles in front of the camera) by the bits of their
+ * stream; a listed mesh gets whole tiles appended around it when it is made
+ * (extendSheet), in its one batch, so that every draw of it covers the
+ * native frame.  The mesh's own vertices and triangles come first and stay
+ * as they are: the marks of the original triangles (markLaterOverlaps looks
+ * only at earlier triangles; the tiles share edges, not area, with the
+ * sheet) do not change. */
+
+static RdExtendVerb s_extVerb[RD_CONTENT_EXTEND_MAX];
+static int s_extVerbSet;
+
+static int parseExtendVerb(const char *t, size_t n, RdExtendVerb *v)
+{
+    if (n == 3 && strncmp(t, "off", 3) == 0) {
+        *v = RD_EXTEND_OFF;
+        return 1;
+    }
+    if (n == 5 && strncmp(t, "tiles", 5) == 0) {
+        *v = RD_EXTEND_TILES;
+        return 1;
+    }
+    return 0;
+}
+
+bool rd__content_extend_set(const char *spec)
+{
+    const int n = rd__content_extend_count < RD_CONTENT_EXTEND_MAX ? rd__content_extend_count
+                                                                   : RD_CONTENT_EXTEND_MAX;
+    RdExtendVerb v[RD_CONTENT_EXTEND_MAX];
+    for (int i = 0; i < n; i++) {
+        v[i] = rd__content_extend[i].verb;
+    }
+    for (const char *t = spec; t && *t;) {
+        const char *end = strchr(t, ',');
+        const size_t len = end ? (size_t)(end - t) : strlen(t);
+        const char *eq = memchr(t, '=', len);
+        RdExtendVerb verb;
+        if (eq) {
+            char *stop = NULL;
+            const long e = strtol(t, &stop, 10);
+            if (stop != eq || e < 0 || e >= n ||
+                !parseExtendVerb(eq + 1, len - (size_t)(eq + 1 - t), &verb)) {
+                return false;
+            }
+            v[e] = verb;
+        } else if (len == 5 && strncmp(t, "table", 5) == 0) {
+            for (int i = 0; i < n; i++) {
+                v[i] = rd__content_extend[i].verb;
+            }
+        } else if (parseExtendVerb(t, len, &verb)) {
+            for (int i = 0; i < n; i++) {
+                v[i] = verb;
+            }
+        } else {
+            return false;
+        }
+        t = end ? end + 1 : t + len;
+    }
+    memcpy(s_extVerb, v, (size_t)n * sizeof(v[0]));
+    s_extVerbSet = 1;
+    return true;
+}
+
+RdExtendVerb rd__content_extend_verb(int i)
+{
+    if (!s_extVerbSet) {
+        const char *e = getenv("ICO_RD_CONTENT_EXTEND");
+        if (!rd__content_extend_set(e)) {
+            fprintf(stderr,
+                    "rd: ICO_RD_CONTENT_EXTEND=\"%s\" not understood: the table as listed\n", e);
+            rd__content_extend_set(NULL);
+        }
+    }
+    return i >= 0 && i < rd__content_extend_count && i < RD_CONTENT_EXTEND_MAX ? s_extVerb[i]
+                                                                               : RD_EXTEND_OFF;
+}
+
+/* One tile of a sheet: its first vertex, its rectangle and the U at its
+   left and right edges, the V at its top and bottom ones */
+typedef struct SheetTile {
+    uint32_t first;
+    float x0, x1, y0, y1, u0, u1, v0, v1;
+} SheetTile;
+
+/* a sheet's tiles at most, and the tiles appended across or down a side at
+   most (the appended tiles then number at most
+   2 cols nt + 2 rows (nt + 2 cols nt)) */
+#define SHEET_TILES_MAX 16u
+#define SHEET_REPEAT_MAX 4u
+#define SHEET_ADDS_MAX                                                                             \
+    (2u * SHEET_REPEAT_MAX * SHEET_TILES_MAX +                                                     \
+     2u * SHEET_REPEAT_MAX * (SHEET_TILES_MAX + 2u * SHEET_REPEAT_MAX * SHEET_TILES_MAX))
+
+/* tile t of the stream (vertices 4t..4t+3) as a SheetTile: false when the
+   strip is not an axis-aligned rectangle in one plane with its U a
+   function of x alone and its V of y alone */
+static bool sheetTile(const float (*stream)[4], uint32_t qpv, uint32_t t, SheetTile *o)
+{
+    const uint32_t stAt = qpv - 2u;
+    const float *p0 = stream[(size_t)t * 4u * qpv];
+    o->first = t * 4u;
+    o->x0 = o->x1 = p0[0];
+    o->y0 = o->y1 = p0[1];
+    for (uint32_t k = 0; k < 4; k++) {
+        const float *p = stream[(size_t)(t * 4u + k) * qpv];
+        const float *st = stream[(size_t)(t * 4u + k) * qpv + stAt];
+        if ((k == 0) != (st[3] < 1.0f) || p[2] != p0[2] || p[3] != p0[3]) {
+            return false; /* not one 4-vertex strip in one plane */
+        }
+        o->x0 = p[0] < o->x0 ? p[0] : o->x0;
+        o->x1 = p[0] > o->x1 ? p[0] : o->x1;
+        o->y0 = p[1] < o->y0 ? p[1] : o->y0;
+        o->y1 = p[1] > o->y1 ? p[1] : o->y1;
+    }
+    if (!(o->x0 < o->x1) || !(o->y0 < o->y1)) {
+        return false;
+    }
+    unsigned corners = 0, seenU = 0, seenV = 0;
+    for (uint32_t k = 0; k < 4; k++) {
+        const float *p = stream[(size_t)(t * 4u + k) * qpv];
+        const float *st = stream[(size_t)(t * 4u + k) * qpv + stAt];
+        const int right = p[0] == o->x1, bottom = p[1] == o->y1;
+        if ((!right && p[0] != o->x0) || (!bottom && p[1] != o->y0)) {
+            return false;
+        }
+        corners |= 1u << (right + 2 * bottom);
+        float *u = right ? &o->u1 : &o->u0, *v = bottom ? &o->v1 : &o->v0;
+        if ((seenU & (1u << right)) && *u != st[0]) {
+            return false;
+        }
+        if ((seenV & (1u << bottom)) && *v != st[1]) {
+            return false;
+        }
+        *u = st[0];
+        *v = st[1];
+        seenU |= 1u << right;
+        seenV |= 1u << bottom;
+    }
+    return corners == 15u;
+}
+
+uint32_t rd__sheet_tiles(const float (*stream)[4], uint32_t vertexCount, uint32_t qwPerVertex,
+                         uint32_t cols, uint32_t rows, float (*out)[4], uint32_t cap)
+{
+    const uint32_t qpv = qwPerVertex, nt = vertexCount / 4u;
+    if (!stream || (qpv != RD_VU_QW_PRELIT && qpv != RD_VU_QW_LIT) || vertexCount == 0 ||
+        vertexCount % 4u != 0 || nt > SHEET_TILES_MAX || cols > SHEET_REPEAT_MAX ||
+        rows > SHEET_REPEAT_MAX) {
+        return 0;
+    }
+    SheetTile tile[SHEET_TILES_MAX];
+    float bx0 = 0.0f, bx1 = 0.0f, by0 = 0.0f, by1 = 0.0f;
+    for (uint32_t t = 0; t < nt; t++) {
+        if (!sheetTile(stream, qpv, t, &tile[t])) {
+            return 0;
+        }
+        const SheetTile *a = &tile[t];
+        if (t > 0 && (a->x1 - a->x0 != tile[0].x1 - tile[0].x0 ||
+                      a->y1 - a->y0 != tile[0].y1 - tile[0].y0)) {
+            return 0; /* tiles of one size */
+        }
+        bx0 = t == 0 || a->x0 < bx0 ? a->x0 : bx0;
+        bx1 = t == 0 || a->x1 > bx1 ? a->x1 : bx1;
+        by0 = t == 0 || a->y0 < by0 ? a->y0 : by0;
+        by1 = t == 0 || a->y1 > by1 ? a->y1 : by1;
+    }
+    /* outward: away from the model's origin (a quadrant sheet), both ways
+       on an axis the sheet is centred on */
+    const float cx = bx0 + bx1, cy = by0 + by1;
+    const int dirX[2] = {cx <= 0.0f ? -1 : 0, cx >= 0.0f ? 1 : 0};
+    const int dirY[2] = {cy <= 0.0f ? -1 : 0, cy >= 0.0f ? 1 : 0};
+
+    /* the tiles to append: a source tile and its shift in whole tiles;
+       first the columns, then the rows below and above everything */
+    typedef struct {
+        uint32_t src;
+        int sx, sy;
+    } Add;
+
+    Add add[SHEET_ADDS_MAX];
+    uint32_t na = 0;
+    for (int a = 0; a < 2; a++) {
+        const int d = dirX[a];
+        for (uint32_t t = 0; d != 0 && t < nt; t++) {
+            if ((d < 0 && tile[t].x0 != bx0) || (d > 0 && tile[t].x1 != bx1)) {
+                continue;
+            }
+            for (uint32_t k = 1; k <= cols; k++) {
+                add[na++] = (Add){t, d * (int)k, 0};
+            }
+        }
+    }
+    const uint32_t colAdds = na;
+    for (int a = 0; a < 2; a++) {
+        const int d = dirY[a];
+        for (uint32_t i = 0; d != 0 && i < nt + colAdds; i++) {
+            const Add base = i < nt ? (Add){i, 0, 0} : add[i - nt];
+            const SheetTile *s = &tile[base.src];
+            if ((d < 0 && s->y0 != by0) || (d > 0 && s->y1 != by1)) {
+                continue;
+            }
+            for (uint32_t k = 1; k <= rows; k++) {
+                add[na++] = (Add){base.src, base.sx, d * (int)k};
+            }
+        }
+    }
+    const uint32_t nv = na * 4u;
+    if (!out) {
+        return nv;
+    }
+    if (nv > cap) {
+        return 0;
+    }
+    const uint32_t stAt = qpv - 2u;
+    for (uint32_t i = 0; i < na; i++) {
+        const SheetTile *s = &tile[add[i].src];
+        const float dx = (float)add[i].sx * (s->x1 - s->x0),
+                    dy = (float)add[i].sy * (s->y1 - s->y0);
+        const float du = (float)add[i].sx * (s->u1 - s->u0),
+                    dv = (float)add[i].sy * (s->v1 - s->v0);
+        for (uint32_t k = 0; k < 4; k++) {
+            float (*o)[4] = out + (size_t)(i * 4u + k) * qpv;
+            memcpy(o, stream[(size_t)(s->first + k) * qpv], (size_t)qpv * 16);
+            o[0][0] += dx;
+            o[0][1] += dy;
+            o[stAt][0] += du;
+            o[stAt][1] += dv;
+        }
+    }
+    return nv;
+}
+
+/* the entry m's creation stream is listed as (-1: none) */
+static int contentSheetOf(const RdMeshRec *m)
+{
+    uint64_t h = 0;
+    int hashed = 0;
+    for (int e = 0; e < rd__content_extend_count; e++) {
+        const RdContentExtend *x = &rd__content_extend[e];
+        if (x->vertexCount != m->vertexCount || x->qwPerVertex != m->qwPerVertex) {
+            continue;
+        }
+        if (!hashed) {
+            h = xxh3_64(m->stream, (size_t)m->vertexCount * m->qwPerVertex * 16);
+            hashed = 1;
+        }
+        if (h == x->streamHash) {
+            return e;
+        }
+    }
+    return -1;
+}
+
+static uint32_t batchIndices(const float (*stream)[4], uint32_t qpv, uint32_t v, uint32_t n,
+                             uint32_t *index);
+
+/* The tiles of a listed sheet appended to m (one batch, its index list the
+ * static kicks of the stream): the stream, the index list and the batch
+ * grow; m->tiledFrom keeps the stream's own vertex count. */
+static void extendSheet(RdMeshRec *m)
+{
+    if (!m->vu || m->batchCount != 1 || m->batches[0].firstVertex != 0 ||
+        m->batches[0].vertexCount != m->vertexCount || m->batches[0].firstIndex != 0 ||
+        m->batches[0].indexCount != m->indexCount) {
+        return;
+    }
+    const int e = contentSheetOf(m);
+    if (e < 0 || rd__content_extend_verb(e) != RD_EXTEND_TILES) {
+        return;
+    }
+    const RdContentExtend *x = &rd__content_extend[e];
+    const uint32_t nv = m->vertexCount, qpv = m->qwPerVertex;
+    const uint32_t add =
+        rd__sheet_tiles((const float (*)[4])m->stream, nv, qpv, x->cols, x->rows, NULL, 0);
+    if (add == 0 || (uint64_t)nv + add >= ICO_VU_INDEX_KICK_LIMIT) {
+        rd__log("content table: %s matches entry %d but is not a sheet of tiles", m->name, e);
+        return;
+    }
+    float (*stream)[4] = realloc(m->stream, (size_t)(nv + add) * qpv * 16);
+    if (!stream) {
+        return;
+    }
+    m->stream = stream;
+    /* two triangles a 4-vertex strip */
+    uint32_t *index = realloc(m->index, ((size_t)m->indexCount + add / 4u * 6u) * 4);
+    if (!index) {
+        return;
+    }
+    m->index = index;
+    rd__sheet_tiles((const float (*)[4])stream, nv, qpv, x->cols, x->rows,
+                    stream + (size_t)nv * qpv, add);
+    const uint32_t ni =
+        batchIndices((const float (*)[4])stream, qpv, nv, add, index + m->indexCount);
+    m->vertexCount = nv + add;
+    m->indexCount += ni;
+    m->batches[0].vertexCount = m->vertexCount;
+    m->batches[0].indexCount = m->indexCount;
+    m->tiledFrom = nv;
+    m->tileCols = x->cols;
+    m->tileRows = x->rows;
+}
+
+/* rd_update_vu_mesh wrote the sheet's own vertices: its tiles laid again
+ * from them (an unchanged layout gives the same count; any other leaves
+ * them on one point, drawn nowhere) */
+static void retileSheet(RdMeshRec *m)
+{
+    const uint32_t qpv = m->qwPerVertex, nv = m->tiledFrom, add = m->vertexCount - nv;
+    float (*tiles)[4] = m->stream + (size_t)nv * qpv;
+    if (rd__sheet_tiles((const float (*)[4])m->stream, nv, qpv, m->tileCols, m->tileRows, tiles,
+                        add) != add) {
+        for (uint32_t v = 0; v < add; v++) {
+            memcpy(tiles[(size_t)v * qpv], m->stream[0], (size_t)qpv * 16);
+        }
+    }
+}
+
 /* ------------------------------------------------ joined strips
  *
  * The region rule's card test (RENDER.md "Strip joining"; vu_common.hlsli
@@ -958,6 +1278,7 @@ uint32_t rd__vu_mesh_create_raw(const float (*stream)[4], uint32_t vertexCount,
         memcpy(m->batches, batches, (size_t)batchCount * sizeof(RdVuBatchRec));
     }
     snprintf(m->name, sizeof(m->name), "%s", name ? name : "vu mesh");
+    extendSheet(m);
     markLaterOverlaps(m);
     markContentHidden(m);
     markJoinedStrips(m);
@@ -1251,8 +1572,13 @@ bool rd_update_vu_mesh(RdMesh mesh, const float (*qw)[4])
     keepVersion(m);
     for (uint32_t b = 0; b < m->batchCount; b++) {
         const RdVuBatchRec *br = &m->batches[b];
+        /* a sheet's batch: the packet holds its own vertices, not the tiles */
+        const uint32_t n = m->tiledFrom ? m->tiledFrom - br->firstVertex : br->vertexCount;
         memcpy(m->stream[(size_t)br->firstVertex * m->qwPerVertex], qw[br->srcQw + 1],
-               (size_t)br->vertexCount * m->qwPerVertex * 16);
+               (size_t)n * m->qwPerVertex * 16);
+    }
+    if (m->tiledFrom) {
+        retileSheet(m);
     }
     m->replaySeen = 0; /* upload again at the next replay */
     m->gpuDirty = 1;   /* the device copy too */
