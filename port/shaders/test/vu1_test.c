@@ -950,7 +950,7 @@ typedef struct Case {
  * not drawn. DEPART_EYE_FREE: the same input drawn with
  * ICO_VU_BEHIND_EYE (photo mode's free camera): drawn clipped in either
  * preset. DEPART_EYE_TICKS: the same input drawn with ICO_VU_TICKS (a
- * picture between two ticks, issue 76), the tick before's camera the drawn
+ * picture between two ticks), the tick before's camera the drawn
  * one and this tick's moved back 2 units: vertex 7 is in front of that
  * tick's eye and its triangles inside the window there, so they are drawn
  * clipped in either preset (vu1ref_region_between); DEPART_EYE_TICKS_BOTH:
@@ -961,9 +961,9 @@ typedef struct Case {
  * (model (-744, y, 2), X -3904), all in front of the eye: its triangles
  * cross the target and reach the picture, not drawn out of the box; in
  * any other state the strip (vertices 5..11) has passing triangles (10,
- * 11), so they are drawn clipped (a wall, issue 72). DEPART_CARD_STRIP:
+ * 11), so they are drawn clipped (a wall). DEPART_CARD_STRIP:
  * vertices 7 and 9 past the window far left: no triangle of the strip
- * 5..11 passes, a card as the opening's tree card (issue 59, st26a_near's
+ * 5..11 passes, a card as the opening's tree card (st26a_near's
  * 2-triangle strip): not drawn in any state. DEPART_GRID_ROW (the grid):
  * the last batch's odd vertices past the window far left (X -3904), the
  * others at GS X 2088..2128: none of that batch's triangles passes; with
@@ -972,7 +972,7 @@ typedef struct Case {
  * state; a grid of one batch is a card. DEPART_BESIDE: the target placed right of the
  * picture (GS X 2320..2384), the strip at GS X 2330..2378 and vertex 7 at
  * X 8000: its failing triangles lie wholly beside the picture, drawn
- * clipped in both presets (the walls and the sea of issue 29).
+ * clipped in both presets (walls and the sea beside a wide picture).
  * DEPART_ABOVE: the target right of the picture as DEPART_BESIDE, vertex 7
  * at GS (2000, -60000), far above the picture, in front of the eye: within
  * the picture's columns its triangles lie wholly above the picture (only
@@ -1022,14 +1022,14 @@ enum {
  * markJoinedStrips: its strip is joined to another, not a card). */
 enum { MARK_NONE, MARK_HIDE, MARK_JOINED };
 
-/* issue 76: DEPART_EYE's input seen through a camera blended between two
+/* DEPART_EYE's input seen through a camera blended between two
  * ticks' (ICO_VU_TICKS), each tick's camera the blended one with the model
  * moved by tickMove (makeVuCB's T): DEPART_EYE_TICKS, the tick before's
  * the blended one, this tick's moved back 2 along z: vertex 7 (model z -1)
  * lies in front of that tick's eye, every triangle of it inside the window
  * and on the target there (shown); DEPART_EYE_TICKS_BOTH, this tick's
  * moved back 0.5: behind the eye at both ticks.  DEPART_EYE_TICKS_BESIDE
- * and DEPART_EYE_TICKS_BAND (S1): this tick's model moved 0.5 along z,
+ * and DEPART_EYE_TICKS_BAND: this tick's model moved 0.5 along z,
  * vertex 7 behind the eye there and its triangles reaching the picture
  * (dropped); the tick before's model moved so that they lie wholly beside
  * the picture, vertex 7 at z 0.5, behind the near plane (clipped).
@@ -2076,7 +2076,7 @@ static const Case kCases[] = {
      1.0f, DEPART_EYE, VU1REF_ENHANCED, MARK_NONE, 0, 0},
     {"lit eye wide enh", "vu_lit_vs", P_NORMALL, 32, ICO_VU_CLIP_REGION, 4, 1, 1, 12, 0, 0, 0,
      0.375f, DEPART_EYE, VU1REF_ENHANCED, MARK_NONE, 0, 0},
-    /* issue 76: a vertex behind the blended camera's eye, in front of this
+    /* a vertex behind the blended camera's eye, in front of this
      * tick's (every triangle inside the window there): drawn, GPU-clipped,
      * in either preset; behind the eye at both ticks: not drawn */
     {"prelit eye ticks", "vu_prelit_vs", P_NORMALC, 32, ICO_VU_CLIP_REGION, 3, 1, 2, 12, 0, 0, 0,
@@ -2087,7 +2087,7 @@ static const Case kCases[] = {
      1.0f, DEPART_EYE_TICKS_BOTH, VU1REF_ENHANCED, MARK_NONE, 0, 0},
     {"lit eye both", "vu_lit_vs", P_NORMALL, 32, ICO_VU_CLIP_REGION, 4, 1, 1, 12, 0, 0, 0, 1.0f,
      DEPART_EYE_TICKS_BOTH, VU1REF_ORIGINAL, MARK_NONE, 0, 0},
-    /* S1: wholly beside the picture at the tick before, behind the eye at
+    /* wholly beside the picture at the tick before, behind the eye at
      * this tick: off the frame at 4:3 (never seen), not drawn between the
      * ticks; on the band beside the picture of a wider frame, drawn */
     {"prelit eye beside", "vu_prelit_vs", P_NORMALC, 32, ICO_VU_CLIP_REGION, 3, 1, 2, 12, 0, 0, 0,
@@ -2108,11 +2108,11 @@ static const Case kCases[] = {
     {"lit wide free", "vu_lit_vs", P_NORMALL, 32, ICO_VU_CLIP_REGION, 4, 1, 1, 12, 0, 0, 0, 0.375f,
      DEPART_EYE_FREE, VU1REF_ENHANCED, MARK_NONE, 0, 0},
     /* past the window below the picture; a strip across the picture with
-     * one vertex past the window far left (a wall, issue 72): they reach
+     * one vertex past the window far left (a wall): they reach
      * the picture, not drawn out of the box (Original at 4:3), drawn
      * clipped in every other state (Enhanced, or Original on a wide
      * frame), their strips having passing triangles; a strip none of
-     * whose triangles pass (the opening's tree card, issue 59): not drawn
+     * whose triangles pass (the opening's tree card): not drawn
      * in any state, at 4:3 and wide */
     {"prelit band enh", "vu_prelit_vs", P_NORMALC, 32, ICO_VU_CLIP_REGION, 3, 1, 2, 12, 0, 0, 0,
      0.375f, DEPART_BAND_IN, VU1REF_ENHANCED, MARK_NONE, 0, 1},
@@ -2152,7 +2152,7 @@ static const Case kCases[] = {
      DEPART_GRID_ROW, VU1REF_ENHANCED, MARK_NONE, 0, 0},
     /* a strip wholly right of the camera's picture with a vertex past the
      * window: its failing triangles are drawn clipped beside the picture
-     * in both presets (issue 29's walls and sea) */
+     * in both presets (walls and the sea beside a wide picture) */
     {"prelit beside", "vu_prelit_vs", P_NORMALC, 32, ICO_VU_CLIP_REGION, 3, 1, 2, 12, 0, 0, 0,
      0.375f, DEPART_BESIDE, VU1REF_ORIGINAL, MARK_NONE, 0, 0},
     {"prelit beside enh", "vu_prelit_vs", P_NORMALC, 32, ICO_VU_CLIP_REGION, 3, 1, 2, 12, 0, 0, 0,
@@ -2160,7 +2160,7 @@ static const Case kCases[] = {
     {"lit beside enh", "vu_lit_vs", P_NORMALL, 32, ICO_VU_CLIP_REGION, 4, 1, 1, 12, 0, 0, 0, 0.375f,
      DEPART_BESIDE, VU1REF_ENHANCED, MARK_NONE, 0, 0},
     /* a particle past the window: across the camera's picture out of the
-     * box not drawn, in any other state drawn whole (VIS-WINDOW); wholly
+     * box not drawn, in any other state drawn whole; wholly
      * beside it both draw its whole quad, which the GPU clips; the free
      * camera draws it */
     {"particle past", "vu_particle_vs", P_PARTICLE, 18, 0, 2, 6, 1, 12, 0, 0, 0, 1.0f,
@@ -2695,8 +2695,8 @@ static int gpuTests(void)
         /* the particles the VU skips: out of the box not drawn when they
          * reach the camera's picture (DEPART_SPRITE's), drawn whole when
          * wholly beside it (the other cases' particle 0 at X 3248), under
-         * the free camera and in any other state (VIS-WINDOW; in the
-         * reference image too) */
+         * the free camera and in any other state (in the reference image
+         * too) */
         if (c->prog == P_PARTICLE) {
             const int adds = freeCamera(c) || extendedState(c) || c->depart != DEPART_SPRITE ||
                              c->depart == DEPART_SPRITE_TICKS;

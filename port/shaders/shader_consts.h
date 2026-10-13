@@ -49,7 +49,8 @@ typedef struct IcoFrameCB {
                     * viewport (common.hlsli fullscreen_triangle; 0: all of it) */
     /* xy: the exact viewport's centre lies this far (0 or 0.5 texel) before
      * the target's: its origin is kept on a whole texel for an odd-sized
-     * target (common.hlsli g_vpo); zw reserved (0) */
+     * target (common.hlsli g_vpo); z the texels of the GS frame a Full
+     * pixel target leaves out at its left, else 0; w reserved (0) */
     float vpo[4];
 } IcoFrameCB;
 
@@ -63,13 +64,15 @@ typedef struct IcoDrawCB {
     float tex[4];      /* w, h of t1 in texels, 1/w, 1/h */
     float param[4];    /* kind specific */
     float scale[4];    /* xy t1 texels per GS texel (1, or a scaled target's
-                        * scale); zw reserved (0) */
+                        * scale); z with t1 a Full pixel crop of the frame,
+                        * its left-out texels (common.hlsli g_scale), else 0;
+                        * w reserved (0) */
 } IcoDrawCB;
 
 /* crt.hlsl's CrtCB, group 1, slot 1 (register b1, space1),
- * bound in DrawCB's place through the draw layout, whose dynamic group is
- * cached per block size (rd_replay.c dynamicGroup), so the two sizes need
- * not match (port/render/rd_crt.c).
+ * bound in DrawCB's place through the draw layout (rd_replay.c
+ * dynamicGroup, port/render/rd_crt.c); the two are the same size (the
+ * static assert below).
  * All in pixels of the box or of the virtual source (the PS2 picture's
  * grid, 512 wide at 4:3) unless said. */
 typedef struct IcoCrtCB {
@@ -216,7 +219,7 @@ typedef struct IcoSpriteStqVertex {
 } IcoSpriteStqVertex;
 
 /* The vertex of sprite_plane_*_vs and sprite_stq_plane_*_vs, 120 bytes
- * (EXACT-RASTER, v0.6.1): a screen-prim triangle's vertex (q 1 for a prim
+ * (docs/port/RENDER.md, "Screen planes"): a screen-prim triangle's vertex (q 1 for a prim
  * without STQ) and its triangle's planes, the same on its three vertices
  * (rd_screen_planes.c): the colour at the triangle's first corner and its
  * change per GS pixel across and down (loc 5..7), S, T and Q there (S and
@@ -366,7 +369,7 @@ enum {
 /* The index value of an indexed VU draw: kick * 4 + corner (corner 0..2 =
  * vertex kick - 2 + corner); vertexOffset must be 0. */
 #define ICO_VU_INDEX(kick, corner) ((uint32_t)(kick) * 4u + (uint32_t)(corner))
-/* Issue 25: set on the three indices of a triangle that overlaps an earlier
+/* Set on the three indices of a triangle that overlaps an earlier
  * triangle of its mesh in the same plane (RdMeshRec.drawIndex; static
  * prelit and lit meshes only), which vu_later_out draws in front of it;
  * vu_common.hlsli's VU_INDEX_LATER and VU_INDEX_MASK.  The kick stays
@@ -377,7 +380,7 @@ enum {
  * markContentHidden), set on the three indices of a triangle of a listed
  * artist trick: HIDE, drawn nowhere.  vu_common.hlsli's VU_INDEX_HIDE */
 #define ICO_VU_INDEX_HIDE 0x20000000u
-/* VIS-WINDOW: set on the three indices of a triangle of a joined strip (one
+/* Set on the three indices of a triangle of a joined strip (one
  * that shares a vertex position with another strip of its mesh, not its
  * double-sided copy; rd_mesh.c markJoinedStrips; prelit, lit and skinned
  * meshes): not a card, so the region rule draws its failing triangles

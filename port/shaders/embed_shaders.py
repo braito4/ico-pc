@@ -36,7 +36,7 @@ extern "C" {
 #define ICO_SHADER_STAGE_FRAGMENT 1
 
 typedef struct IcoShaderBlob {
-    const char *name; /* lookup key, "<file>_<stage>" */
+    const char *name; /* lookup key: ico_add_shader's name plus its SUFFIX */
     int stage;        /* ICO_SHADER_STAGE_* */
     const uint8_t *spirv;
     size_t spirv_len;

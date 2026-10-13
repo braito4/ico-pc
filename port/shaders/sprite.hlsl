@@ -29,13 +29,13 @@ struct SpriteVSIn {
     VK_LOC(3) float2 uv : TEXCOORD0;
 };
 
-// The planes of a screen-prim triangle (EXACT-RASTER, v0.6.1;
-// sprite_plane_*_vs, rd_screen_planes.c), flat: p0 the colour at the
+// The planes of a screen-prim triangle (docs/port/RENDER.md, "Screen
+// planes"; sprite_plane_*_vs, rd_screen_planes.c), flat: p0 the colour at the
 // triangle's first corner, p1 and p2 its change per texel across and down;
 // p3.xyz S, T, Q there (S and T normalised), p4.xyz and p5.xyz their
 // changes; p3.w and p4.w the corner in texels from the target's centre,
 // p5.w 1 when the planes hold (else the GPU's interpolation).  The GPU
-// interpolates from the pixel's place in the target, which moved the
+// interpolates from the pixel's place in the target, which moves the
 // Gouraud colours of the 4:3 columns by a step with the frame width; the
 // planes are evaluated at the pixel's offset from the corner, the same
 // numbers at every width.

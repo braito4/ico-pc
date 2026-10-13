@@ -24,7 +24,7 @@ static const char *const expected[] = {
 };
 
 /* the screen-prim triangles with their colour and STQ planes
- * (EXACT-RASTER, v0.6.1: rd_screen_planes.c, sprite.hlsl) */
+ * (rd_screen_planes.c, sprite.hlsl) */
 static const char *const expectedPlanes[] = {"sprite_plane_ui_vs", "sprite_plane_world_vs",
                                              "sprite_stq_plane_ui_vs", "sprite_stq_plane_world_vs"};
 

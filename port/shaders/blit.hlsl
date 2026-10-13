@@ -143,9 +143,9 @@ float4 aa_reduce_ps(BlitVSOut i) : SV_Target0
 // depth-only pass over the whole target, test ALWAYS with writes.  The
 // sample patterns are centred on the pixel centre, so on a plane the
 // smallest sample is at or below the centre's depth: a surface drawn again
-// after the epoch single-sampled (the glow's GEQUAL re-draws, issue 43)
-// passes where it passed at 1x; the largest sample lies above the centre
-// on any slope and failed them.
+// after the epoch single-sampled (the glow's GEQUAL re-draws) passes where
+// it passed at 1x; the largest sample lies above the centre on any slope
+// and would fail them.
 // depth_upsample_ps: the other way, the single-sampled depth (t1) into
 // every sample of the multisampled one, when an epoch starts on a scene
 // that already holds a picture.

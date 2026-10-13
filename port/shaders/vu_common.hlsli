@@ -94,7 +94,7 @@ StructuredBuffer<float4> vu_stream : register(t0, space1);
 // camera is drawn, clipped, when either tick showed it on the frame
 // (vu_region_rule)
 #define VU_F_TICKS 512u
-// Issue 25: the index bit of a triangle that overlaps an earlier triangle of
+// The index bit of a triangle that overlaps an earlier triangle of
 // its mesh in the same plane (shader_consts.h ICO_VU_INDEX_LATER; static
 // prelit and lit meshes, rd_mesh.c markLaterOverlaps); vu_later_out
 #define VU_INDEX_LATER 0x40000000u
@@ -103,7 +103,7 @@ StructuredBuffer<float4> vu_stream : register(t0, space1);
 // for the 4:3 picture, drawn nowhere (HIDE). Static prelit and lit meshes
 // only; shader_consts.h ICO_VU_INDEX_HIDE
 #define VU_INDEX_HIDE 0x20000000u
-// VIS-WINDOW: the index bit of a triangle of a joined strip (rd_mesh.c
+// The index bit of a triangle of a joined strip (rd_mesh.c
 // markJoinedStrips; shader_consts.h ICO_VU_INDEX_JOINED): not a card
 // (vu_region_rule)
 #define VU_INDEX_JOINED 0x10000000u
@@ -319,8 +319,8 @@ float4 vu_homogeneous_position(float4 h)
 // The vertex the GS gets, from a loop's vertex: the ftoi4 value, on the
 // 12.4 grid at every scale, so a VU vertex lands where the
 // GIF and CPU paths put the same point (sprite.hlsl) and two meshes'
-// shared vertices the GS merges stay merged (issue 26: a crack between
-// them showed the clear, which the fog pass paints at full fog).  g_z.w set
+// shared vertices the GS merges stay merged (a crack between them would
+// show the clear, which the fog pass paints at full fog).  g_z.w set
 // (rd: only the developer switch ICO_RD_VU_OFFGRID, Enhanced on a target
 // finer than the GS grid) keeps X and Y the divided position unquantised:
 // smoother slow motion (the grid is 1/16 GS pixel, a quarter output pixel
@@ -333,7 +333,7 @@ float4 vu_vtx_position(VuVtx v)
     return vu_gs_position(v.gs, false);
 }
 
-// Issue 25: whether the GS position of a vertex is the one the GS would
+// Whether the GS position of a vertex is the one the GS would
 // draw it at: in front of the eye (w > 0), GS Z not negative (no -z clip)
 // and none of X, Y, Z saturated by ftoi4 (the values vu_ftoi writes).
 bool vu_has_gs_position(VuVtx v)
@@ -350,10 +350,10 @@ bool vu_has_gs_position(VuVtx v)
 // corners without one take the homogeneous form.  Mixing the two is sound:
 // a clip-space position is homogeneous of degree 1, so the GPU's clip
 // points and the screen-space (noperspective) varyings are those of either
-// form.  The homogeneous depth, Z * g_z.x linear, differed from gs_depth's
-// value enough that a coplanar pass (the specular pass, 34/38) won or lost
-// GEQUAL per pixel.  (Made for issue 25, but the near railing's shimmer the
-// user's dumps showed is a code-32 draw: vu_later_out.)
+// form.  The homogeneous depth, Z * g_z.x linear, differs from gs_depth's
+// value enough that a coplanar pass (the specular pass, 34/38) would win or
+// lose GEQUAL per pixel.  (The near railing's coplanar triangles are a
+// code-32 draw: vu_later_out.)
 float4 vu_cut_position(VuVtx v)
 {
     return vu_has_gs_position(v) ? vu_vtx_position(v) : vu_homogeneous_position(v.h);
@@ -502,13 +502,13 @@ VuVSOut vu_out_init()
 }
 
 // ------------------------------------------------- the attribute planes
-// EXACT-RASTER (v0.6.1).  The GPU interpolates a varying from the pixel's
-// place in the target: its float rounding depends on how far the triangle
-// sits from the target's corner, so at a frame width other than 512 the
-// 4:3 columns' Gouraud colours and STs came out one step apart on some
-// pixels (rd_native_test: up to 2000 pixels at 2x, though the coverage
-// was the same).  A triangle drawn at its GS positions carries its own
-// planes instead, made from its three corners in texels from the target's
+// The GPU interpolates a varying from the pixel's place in the target: its
+// float rounding depends on how far the triangle sits from the target's
+// corner, so at a frame width other than 512 the 4:3 columns' Gouraud
+// colours and STs come out one step apart on some pixels (rd_native_test:
+// up to 2000 pixels at 2x with the GPU's interpolation, the coverage the
+// same).  A triangle drawn at its GS positions carries its own planes
+// instead, made from its three corners in texels from the target's
 // centre (the same numbers at every width: a frame-wide target's centre is
 // GS 2048), and the pixel shader evaluates them at the pixel's offset from
 // the first corner (exact: pixel centres are k + 0.5, corners on the 1/16
@@ -580,15 +580,14 @@ VuVSOut vu_attr_planes_at(VuVSOut o, float2 pa, float2 pb, float2 pc, float4 ca,
 // values a0 and a1 are): 0, 1 or 2 corners on from the first.  The first
 // when it has a GS position (vu_has_gs_position); else the other corner
 // with one nearer the target's centre (the first again when neither has
-// one).  Issue 76 (v0.7.0, the rc6 captures at the courtyard): the pixel's
-// values are a + x d.x + y d.y at its offset d from the anchor, and
-// anchored at a corner without a GS position (a wall triangle of st18a_p1
-// above the courtyard's doorways whose top corner stood 60,000 GS pixels
-// up with its Z saturated by ftoi4, code 36's x/y-only cut: kicked as it
-// is, vu_triangle_out_pos) the terms were thousands of times their sum,
-// which float32 kept to a couple of texels of the 128-texel brick,
-// changing with the camera: the triangle's texture slid against its
-// neighbours' (the "scrolling" on the wall triangles above the doorways).
+// one).  The pixel's values are a + x d.x + y d.y at its offset d from
+// the anchor.  Anchored at a corner without a GS position (a wall triangle
+// of st18a_p1 above the courtyard's doorways whose top corner stands
+// 60,000 GS pixels up with its Z saturated by ftoi4, code 36's x/y-only
+// cut: kicked as it is, vu_triangle_out_pos) the terms would be thousands
+// of times their sum, which float32 keeps to a couple of texels of the
+// 128-texel brick, changing with the camera: the triangle's texture would
+// slide against its neighbours' as the camera moves.
 // Nearer the centre the terms are the triangle's own size.  The GS never
 // had such a corner (the VU's scissor cut it into a fan, or ftoi4
 // saturated it); a triangle whose first corner has a GS position keeps it,
@@ -728,7 +727,7 @@ VuVSOut vu_plane_out(VuVSOut o, VuVtx a, VuVtx b, VuVtx c, uint kick, uint me)
 // triangles passes the region test (vu_*_strip_passes), else VU_RULE_CLIP
 #define VU_RULE_STRIP 3u
 
-// The region rule (VIS-RULES items 11 and 12, VIS-WINDOW, v0.6.1).
+// The region rule (docs/port/VU1_PROGRAMS.md, "The region rule").
 // On the PS2 any vertex outside the region sets ADC on itself and the next
 // two, and the triangle is not drawn. That test is the camera's own: the
 // program's, on the position as computed (VuVtx.inside, the tests' probe
@@ -737,13 +736,14 @@ VuVSOut vu_plane_out(VuVSOut o, VuVtx a, VuVtx b, VuVtx c, uint kick, uint me)
 // - all three vertices inside: drawn exactly (vu_vtx_position, on the
 //   ftoi4 grid);
 // - photo mode's free camera (VU_F_BEHIND_EYE): drawn, clipped by the GPU
-//   at the native frustum (a walkway low under the camera left a hole);
+//   at the native frustum (else a walkway low under the camera leaves a
+//   hole);
 // - a triangle whose GPU-clipped extent (0 <= z <= w, a vertex behind the
 //   eye or not) lies wholly beside the camera's picture (GS 2048 -+ 256
 //   across by the native height, the drawing camera's,
 //   vu_cut_reaches_picture; seen only on a frame wider than 4:3): drawn,
-//   clipped (there the PS2 showed nothing, and dropped triangles left
-//   holes: a wall with one vertex past the window, issue 29; at 48:9 a
+//   clipped (there the PS2 showed nothing, and dropped triangles would
+//   leave holes: a wall with one vertex past the window; at 48:9 a
 //   patch of the sea at the far left of the old bridge whose only
 //   triangles there have a vertex behind the eye);
 // - one that reaches into the picture, out of the box (the Original preset
@@ -752,11 +752,10 @@ VuVSOut vu_plane_out(VuVSOut o, VuVtx a, VuVtx b, VuVtx c, uint kick, uint me)
 //   that could show reaches it, and the picture is the PS2's;
 // - one that reaches into the picture in any other state (VU_F_EXTENDED:
 //   Enhanced, wider than 4:3, or scaled up), every vertex in front of the
-//   eye: the user's ruling (2026-10-12), "these expanded aspect ratios and
-//   resolutions need to be rendering everything in the camera that it
-//   would expect ... like what the game would still look like if they had
-//   larger resolutions and aspect ratios in mind". A game made for that
-//   picture clips such a triangle, so it is drawn, clipped, unless it
+//   eye: such a picture shows everything in the camera, as the game would
+//   look had it been made for that aspect ratio and resolution. A game
+//   made for that picture clips such a triangle, so it is drawn, clipped,
+//   unless it
 //   belongs to an artist's card parked at the picture's edge: a
 //   free-standing strip (the run of triangles the strip flag ties together,
 //   vu_strip_of: one strip of the model, pac_makeNormalStrip; sharing no
@@ -764,18 +763,17 @@ VuVSOut vu_plane_out(VuVSOut o, VuVtx a, VuVtx b, VuVtx c, uint kick, uint me)
 //   copy, no VU_INDEX_JOINED, rd_mesh.c markJoinedStrips) none of whose
 //   triangles pass the test. The opening's tree card (st26a_near, a
 //   free-standing 2-triangle strip of a 12-card draw, every vertex 160 to
-//   540 units in front of the eye) and the waterfall's mist cards (issue
-//   57) stay out of the picture, as out of the box. A wall is drawn: its
-//   strip passes (issue 72: the water tower's lift wall, st20a_p2 part 28,
+//   540 units in front of the eye) and the waterfall's mist cards stay out
+//   of the picture, as out of the box. A wall is drawn: its
+//   strip passes (the water tower's lift wall, st20a_p2 part 28,
 //   packet 4, strip 14, two of its six triangles pass) or is joined to the
-//   rest of the surface (the old bridge's plank faces at 48:9, st08a_p4,
-//   issue 29). The unit is not the draw: the tree card's draw has 7
+//   rest of the surface (the old bridge's plank faces at 48:9,
+//   st08a_p4). The unit is not the draw: the tree card's draw has 7
 //   passing triangles in its other cards;
 // - one with a vertex behind the eye that reaches into the picture: not
 //   drawn in any state (the opening's cliff st26a_p1, filmed from inside):
 //   a game made for a wide picture would not draw geometry behind the eye
-//   either. None is cut at the picture's edge (the waterfall's mist,
-//   issue 57).
+//   either. None is cut at the picture's edge (the waterfall's mist).
 // A drawn triangle with a vertex outside takes code 36's corner rule
 // (vu_cut_position: the GS position where the vertex has one, the
 // homogeneous form of h where it is behind the eye, saturated or below GS
@@ -831,15 +829,15 @@ VuVtx vu_tick_vertex(VuVtx v, uint k, float4 lo, float4 hi)
 }
 
 // The region rule of the triangle a, b, c (vu_region_rule_at), whose
-// program's region test has the bounds lo, hi.  Issue 76 (v0.6.2): the PS2
+// program's region test has the bounds lo, hi.  The PS2
 // drew only the ticks' pictures, each with the rule at its own camera; the
 // port also draws pictures between two ticks, through a camera blended
 // between theirs (rd_interp.c camSetup: the eye on the straight line
 // between the two eyes, the turn slerped).  A triangle beside the camera,
 // close to it, in front of the eye at both ticks, can have a vertex behind
-// the blended camera's eye: the rule dropped it there (the vertex behind
-// the eye) and the wall it belonged to opened for the pictures between the
-// ticks and closed at the tick (st18a about the issue 76 camera,
+// the blended camera's eye: the rule at that camera drops it (the vertex
+// behind the eye), and the wall it belongs to would open for the pictures
+// between the ticks and close at the tick (st18a,
 // gsb_cull_test --stage DISC --eye: on a yaw orbit 500 units out, 200 a
 // tick, holes of 15636 of the 688 x 448 native pixels at 16:9, 35786 of
 // 2048 x 448 at 48:9; the same rule drops some triangles that are beside
@@ -977,8 +975,8 @@ VuVSOut vu_triangle_out_pos(VuVtx a, VuVtx b, VuVtx c, VuVtx me, uint mode, uint
         }
         return o;
     }
-    // VU_CLIP_SCISSOR (VIS-RULES item 13, v0.6.1, kept: parity; RegistPacket.c
-    // also gives it the packets whose own box fails, item 4)
+    // VU_CLIP_SCISSOR, the PS2's (RegistPacket.c also gives it the packets
+    // whose own box fails)
     uint fa = vu_clipw(a.clip), fb = vu_clipw(b.clip), fc = vu_clipw(c.clip);
     bool cut = (fa | fb | fc) != 0u;
     if ((cut && (vu_draw.z & VU_F_KICK_ONLY) != 0u) ||
@@ -1016,15 +1014,15 @@ VuVSOut vu_triangle_out(VuVtx a, VuVtx b, VuVtx c, VuVtx me, uint mode, uint rul
     return vu_attr_planes(o, a, b, c, exact);
 }
 
-// Issue 25: a triangle marked VU_INDEX_LATER and the earlier one it
+// A triangle marked VU_INDEX_LATER and the earlier one it
 // overlaps are one plane in the model (the two faces of the railing's
 // lattice, split along other diagonals), where an exact GS's GEQUAL would
 // let the later pass over the earlier at every pixel.  ftoi4 rounds each
 // vertex's X, Y and Z on its own, so two triangulations of a plane differ
 // in depth by up to (|dZ/dX| + |dZ/dY|) / 8 + 2 GS units, either way, and
-// which one won flipped region by region with sub-pixel camera motion (the
-// near railing's shimmer).  The later triangle's depth rises by twice that
-// bound (the gradient from its own GS vertices) plus 512 GS units (two
+// which one wins would flip region by region with sub-pixel camera motion
+// (a shimmer on the near railing).  The later triangle's depth rises by
+// twice that bound (the gradient from its own GS vertices) plus 512 GS units (two
 // steps of a 24-bit depth buffer) and Z / 2^20 (float steps), at most Z /
 // 256 (or 1024 units), the same in every program and pass that draws it.
 // Only when all three vertices have their GS position (not a triangle the

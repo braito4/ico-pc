@@ -42,15 +42,17 @@ VuSprite vu_particle(uint i)
     bool alphaZero = (asuint(b.w) & 0x7F800000u) == 0u;
     o.drawn = !alphaZero && vu_inside(float4(p0, h.w), clipMin, clipMax) &&
               vu_inside(float4(p1, h.w), clipMin, clipMax);
-    // VIS-RULES item 10 (v0.6.1): parity out of the box, drawn beside it
-    // and outside the out-of-the-box state (VIS-WINDOW, vu_particle_vs).
+    // Out of the box the PS2's test; beside the picture and outside the
+    // out-of-the-box state drawn (vu_particle_vs; docs/port/VU1_PROGRAMS.md,
+    // "The region rule").
     // The port keeps the alpha test and the w window (the particle in
     // front of the eye and before the far limit); a sprite outside the x/y
     // window (1024..3071, prim_InitParticleByPartition) is dropped when its
     // quad reaches the camera's picture, as the triangles' region test is,
     // and drawn whole beside it (vu_particle_vs). That window is fixed in
     // GS pixels, so on a wide frame it ends at the frame's edge at 48:9 and
-    // inside it at 60:9, where a sprite with a corner past it vanished whole.
+    // inside it at 60:9, where a sprite with a corner past it would vanish
+    // whole.
     o.shown = !alphaZero && clipMin.w < h.w && h.w < clipMax.w;
     o.c0 = int3(vu_ftoi4(p0.x), vu_ftoi4(p0.y), vu_ftoi4(p0.z));
     o.c1 = int3(vu_ftoi4(p1.x), vu_ftoi4(p1.y), vu_ftoi4(p1.z));
@@ -95,7 +97,7 @@ uint vu_particle_probe(VuSprite s, uint field)
     return r;
 }
 
-// Issue 76's rule for the x/y window (vu_common.hlsli vu_region_rule):
+// The between-ticks rule for the x/y window (vu_common.hlsli vu_region_rule):
 // whether a tick showed sprite i, seen through a camera blended between
 // two ticks' (VU_F_TICKS): at tick k's camera (h_k = R_k h, vu_ticks; the
 // half extent e is the screen matrix's, the same at every camera) the VU
@@ -151,7 +153,7 @@ VuVSOut vu_particle_vs(uint vid : SV_VertexID)
     // reaches into the camera's picture (its columns and its rows:
     // vu_rect_reaches_picture), drawn whole (the GPU clips the quad) when
     // wholly beside it, under photo mode's free camera, and in any other
-    // state (VU_F_EXTENDED, VIS-WINDOW: a sprite is an effect, never a card
+    // state (VU_F_EXTENDED: a sprite is an effect, never a card
     // parked at the picture's edge; the shown test keeps it in front of the
     // eye). Out of the box between two ticks (VU_F_TICKS): drawn whole
     // when a tick showed it (vu_particle_tick_shown), as a triangle the

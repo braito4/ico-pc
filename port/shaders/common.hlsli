@@ -27,7 +27,8 @@
 #endif
 
 // ---------------------------------------------------------------- FrameCB
-// Group 0, slot 0. 320 bytes. Matrices are column-major float[16] (element
+// Group 0, slot 0. 336 bytes (shader_consts.h IcoFrameCB, asserted there).
+// Matrices are column-major float[16] (element
 // [column * 4 + row]) used as mul(M, v) with column vectors; rd's RdCamera
 // carries them in that order.
 cbuffer FrameCB : register(b0, space0)
