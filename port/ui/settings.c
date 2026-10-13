@@ -181,6 +181,7 @@ typedef struct Page {
     /* the scrolling lists (achievements, remap; ui_list.h) */
     int isList;
     UiList list;
+    int version; /* the Main page's version row, -1: none (ui_settings_set_version) */
 } Page;
 
 static Page s_pages[UI_PAGE_COUNT];
@@ -684,6 +685,7 @@ static int texturePackInstalled(void)
 }
 
 static int (*s_modelPackCount)(void); /* replacement models installed, when known */
+static char s_version[32];            /* the package label, "": a development build */
 
 /* a model pack was found at start (modelpack_count through the
    host's hook; none without one) */
@@ -2139,6 +2141,29 @@ static int rowY(int page, int i)
     return y0 + pitch * i;
 }
 
+/* The version in the Main page's top-right corner, small and greyed: the
+   package label (ui_settings_set_version), right-aligned to the header's
+   right edge (x 620) above the header (its box starts at field line
+   HEADER_Y 12): the box is field lines 3..12, the capitals' middle at y 13
+   (y units; the capitals of size 17 about 7..19). Not selectable, no
+   strings-table entry; nothing in a development build. */
+#define VERSION_X 420
+#define VERSION_Y 3
+#define VERSION_W 200
+#define VERSION_H 18
+#define VERSION_SIZE 17.0f
+
+static void addVersion(Page *pg)
+{
+    pg->version = -1;
+    if (s_version[0] == '\0') {
+        return;
+    }
+    pg->version = ui_settings_add_row(VERSION_X, VERSION_Y, VERSION_W, VERSION_H, 0, -1, 0,
+                                      s_version, VERSION_SIZE, UI_ALIGN_RIGHT);
+    lt_ext_set_dim(pg->version, 1);
+}
+
 static void addHeader(Page *pg, int strId)
 {
     pg->header = ui_settings_add_row(20, HEADER_Y, 600, 40, 0, -1, strId, NULL, HEADER_SIZE,
@@ -2219,6 +2244,7 @@ static void buildOptionPage(int id, int header, const int *opts, const int *strs
     Page *pg = &s_pages[id];
     memset(pg, 0, sizeof(*pg));
     pg->parent = parent;
+    pg->version = -1;
     int first = lt_ext_prop_count() + LT_GAME_PROPERTY_COUNT;
     addHeader(pg, header);
     for (int i = 0; i < n && pg->count < MAX_ROWS; i++) { /* the tables are asserted to fit */
@@ -2226,6 +2252,7 @@ static void buildOptionPage(int id, int header, const int *opts, const int *strs
     }
     switch (id) {
     case UI_PAGE_MAIN:
+        addVersion(pg);
         addNote(pg, UI_OPT_LANGUAGE, UI_STR_LANGUAGE_NOTE);
         addNote(pg, UI_OPT_DEVELOPER, UI_STR_DEVELOPER_NOTE);
         addNote(pg, UI_OPT_DUMP_TEXTURES, UI_STR_DUMP_TEXTURES_NOTE);
@@ -3062,6 +3089,16 @@ void ui_settings_set_aa_blocked_query(int (*fn)(void))
 void ui_settings_set_model_pack_count(int (*fn)(void))
 {
     s_modelPackCount = fn;
+}
+
+void ui_settings_set_version(const char *label)
+{
+    snprintf(s_version, sizeof(s_version), "%s", label != NULL ? label : "");
+}
+
+int ui_settings_version_row(void)
+{
+    return s_built ? s_pages[UI_PAGE_MAIN].version : -1;
 }
 
 void ui_settings_set_texture_pack_count(int (*fn)(void))

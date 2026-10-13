@@ -101,6 +101,7 @@
 #include "host_fs.h"
 #include "host_loop.h"
 #include "ico_build_commit.h" /* ICO_BUILD_COMMIT, generated (port/platform/CMakeLists.txt) */
+#include "ico_version.h" /* ICO_VERSION_LABEL, generated (CMakeLists.txt; "" in a development build) */
 #include "input_record.h"
 #include "pad_script.h"
 #include "tables.h"
@@ -1599,6 +1600,15 @@ static int host_main(int argc, char **argv)
 #endif
     timestamp(stamp, sizeof(stamp), "%Y-%m-%d %H:%M:%S");
     fprintf(stderr, "ico_pc: started %s in %s\n", stamp, exe_dir);
+    if (ICO_VERSION_LABEL[0] != '\0') {
+        fprintf(stderr, "ico_pc: version %s (commit %s)\n", ICO_VERSION_LABEL, ICO_BUILD_COMMIT);
+    } else {
+        fprintf(stderr, "ico_pc: development build (commit %s)\n", ICO_BUILD_COMMIT);
+    }
+#ifndef ICO_HEADLESS
+    /* the corner of the Options menu's main page (nothing when "") */
+    ui_settings_set_version(ICO_VERSION_LABEL);
+#endif
 #ifdef __ANDROID__
     ico_android_log_version();
 #endif

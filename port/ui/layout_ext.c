@@ -203,6 +203,12 @@ const char *lt_ext_row_text(int index)
     return r->hasLiteral ? r->literal : ui_str((UiStrId)r->text.strId);
 }
 
+int lt_ext_row_align(int index)
+{
+    ExtRow *r = rowOf(index);
+    return r ? r->text.align : -1;
+}
+
 float lt_ext_row_size(int index)
 {
     ExtRow *r = rowOf(index);

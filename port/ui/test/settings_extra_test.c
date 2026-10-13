@@ -2080,6 +2080,76 @@ static void testNaturalChains(void)
     gFlagGameClear = 0;
 }
 
+/* the rows of layout page whose text is str */
+static int rowsWithText(UiSettingsPage page, const char *str)
+{
+    const LtProp *l = lt_ext_layout(ui_settings_page_layout(page));
+    int n = 0;
+    for (int j = l->first; j < l->last; j++) {
+        n += strcmp(lt_ext_row_text(j), str) == 0;
+    }
+    return n;
+}
+
+/* The version in the Main page's top-right corner (issue 80): the package
+   label, small, greyed, right-aligned, above the header; on no other page;
+   nothing in a development build */
+static void testVersion(void)
+{
+    static const char kLabel[] = "v0.7.1-rc1";
+
+    ui_settings_set_version(kLabel);
+    enterMain(0);
+    const int v = ui_settings_version_row();
+    CHECK(v >= 0 && rowWithText(UI_PAGE_MAIN, kLabel) == v, "Main: the version row (%d)", v);
+    CHECK(rowsWithText(UI_PAGE_MAIN, kLabel) == 1, "Main: one version row (%d)",
+          rowsWithText(UI_PAGE_MAIN, kLabel));
+    for (int p = 0; p < UI_PAGE_COUNT; p++) {
+        if (p != UI_PAGE_MAIN) {
+            CHECK(rowsWithText((UiSettingsPage)p, kLabel) == 0, "page %d: no version row", p);
+        }
+    }
+    if (v >= 0) {
+        const LtProperty *r = lt_ext_prop(v);
+        /* the header: the page's first row */
+        const int header = lt_ext_layout(ui_settings_page_layout(UI_PAGE_MAIN))->first;
+        CHECK(!r->selectable && r->ownerItem < 0, "the version row is not selectable");
+        CHECK(lt_ext_row_dim(v) == 1, "the version row is greyed");
+        CHECK(lt_ext_row_align(v) == UI_ALIGN_RIGHT, "the version row is right-aligned (%d)",
+              lt_ext_row_align(v));
+        CHECK(lt_ext_row_size(v) == 17.0f, "the version row's size (%.1f)",
+              (double)lt_ext_row_size(v));
+        CHECK(r->dispX + r->dispW == 620, "the version row ends at x 620 (%d)",
+              r->dispX + r->dispW);
+        CHECK(r->dispY >= 2 && r->dispY + r->dispH / 2 <= 12, "above the header (y %d, h %d)",
+              r->dispY, r->dispH);
+        CHECK(header != v && r->dispY * 2 + r->dispH <= lt_ext_prop(header)->dispY * 2,
+              "the version box ends where the header's starts (header y %d)",
+              lt_ext_prop(header)->dispY);
+        /* the page's own re-layout (a step, a refresh) leaves it in place */
+        const int x = r->dispX, y = r->dispY;
+        ui_settings_step(UI_OPT_LANGUAGE, 1);
+        ui_settings_step(UI_OPT_LANGUAGE, -1);
+        CHECK(r->dispX == x && r->dispY == y && lt_ext_row_dim(v) == 1,
+              "the version row is not moved");
+        CHECK(strcmp(lt_ext_row_text(v), kLabel) == 0, "the version row keeps its text");
+    }
+
+    /* a development build (no label, or ""): nothing */
+    for (int k = 0; k < 2; k++) {
+        ui_settings_set_version(k == 0 ? NULL : "");
+        enterMain(0);
+        CHECK(ui_settings_version_row() == -1, "no label %d: no version row", k);
+        const LtProp *l = lt_ext_layout(ui_settings_page_layout(UI_PAGE_MAIN));
+        for (int j = l->first; j < l->last; j++) {
+            const char *t = lt_ext_row_text(j);
+            CHECK(!(t[0] == 'v' && t[1] >= '0' && t[1] <= '9'), "no label %d: row %d reads %s", k,
+                  j, t);
+        }
+    }
+    ui_settings_set_version(NULL);
+}
+
 int main(int argc, char **argv)
 {
     snprintf(s_dir, sizeof(s_dir), "%s", argc > 1 ? argv[1] : ".");
@@ -2118,6 +2188,8 @@ int main(int argc, char **argv)
     /* Gameplay > East Reflector door fix */
     testDoorFix();
     testNaturalChains();
+    /* the version in the Options menu */
+    testVersion();
     if (failures) {
         printf("settings_extra_test: %d failure(s)\n", failures);
         return 1;

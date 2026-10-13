@@ -78,6 +78,9 @@ const char *lt_ext_row_text(int index);
 /* the label's size before any shrink to fit (UI_MENU_TEXT_SIZE for 0), 0
    if index is not a port row (tests) */
 float lt_ext_row_size(int index);
+/* the label's alignment in its box (UI_ALIGN_*), -1 if index is not a port
+   row (tests) */
+int lt_ext_row_align(int index);
 
 /* The game's button glyphs on a port row.  A glyph row draws one of the
    game's own sprites, the texture path of display_texture unchanged: the

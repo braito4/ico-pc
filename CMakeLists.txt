@@ -190,11 +190,12 @@ if(ICO_LINK_EXE)
     # directory, ico-pc.ini, the ISO check, the log and the Windows dialogs.
     set(_ico_pc_sources port/platform/main_host.c port/platform/trace_host.c
                         port/platform/host_config.c)
-    # The package label (tools/package_win.sh, package_macos.sh and
-    # package_ios.sh pass -DICO_VERSION_LABEL=<label>): the version numbers
-    # x.y.z of a label that starts with [v]x.y.z, 0.0.0 otherwise (a
-    # development build). The Windows version information and the Apple
-    # bundles' Info.plist carry them.
+    # The package label (tools/package_win.sh, package_linux.sh,
+    # package_macos.sh, package_ios.sh and android/app/build.gradle pass
+    # -DICO_VERSION_LABEL=<label>): the version numbers x.y.z of a label that
+    # starts with [v]x.y.z, 0.0.0 otherwise (a development build). The
+    # Windows version information and the Apple bundles' Info.plist carry
+    # them; the log and the Options menu show the label itself.
     set(ICO_VERSION_LABEL "" CACHE STRING "Package label for the program's version information")
     # x.y.z.N: N is the release candidate's number (v0.7.0-rc2 -> 0.7.0.2), 0
     # for the final; 0.0.0.0 for a development build (cmake/IcoVersion.cmake)
@@ -205,6 +206,16 @@ if(ICO_LINK_EXE)
     else()
         set(ICO_VER_XYZ "0.0.0")
     endif()
+    # The label as given (v0.7.1-rc1) for the log and the Options menu, only
+    # when it parses as a version: "" otherwise (a development build; CI's
+    # "ci" artifacts too), and the menu then shows nothing.
+    if(ICO_VER_TEXT STREQUAL "0.0.0.0")
+        set(ICO_VERSION_LABEL_C "")
+    else()
+        string(REGEX REPLACE "[\"\\\\]" "" ICO_VERSION_LABEL_C "${ICO_VERSION_LABEL}")
+    endif()
+    configure_file(port/platform/ico_version.h.in "${CMAKE_BINARY_DIR}/generated/ico_version.h"
+                   @ONLY)
     if(ANDROID)
         # Android: the program is libmain.so, which SDL's Java side
         # (SDLActivity, android/) loads after libSDL3.so; it calls SDL_main
@@ -244,6 +255,8 @@ if(ICO_LINK_EXE)
     else()
         add_executable(ico_pc ${_ico_pc_sources})
     endif()
+    # ico_version.h (above): ICO_VERSION_LABEL for main_host.c
+    target_include_directories(ico_pc PRIVATE "${CMAKE_BINARY_DIR}/generated")
     # The hardware floor: libgraph's vsync
     # wait, libdma, and libgcc's fptodp. Both builds: the window build draws
     # through rd above it. In the program itself rather than a library, since
@@ -272,10 +285,8 @@ if(ICO_LINK_EXE)
         # compiled by the toolchain's windres.
         enable_language(RC)
         # The version information (port/platform/win/ico_pc.rc): the package
-        # label above, as text and as the numbers x.y.z.N (0.0.0.0 and "dev"
-        # for a development build).
-        configure_file(port/platform/win/ico_version.h.in
-                       "${CMAKE_BINARY_DIR}/generated/ico_version.h" @ONLY)
+        # label above as the numbers x.y.z.N and the text "x.y.z.N" (0.0.0.0
+        # for a development build), from the generated ico_version.h.
         target_sources(ico_pc PRIVATE port/platform/win/ico_pc.rc)
         set_property(SOURCE port/platform/win/ico_pc.rc APPEND PROPERTY COMPILE_OPTIONS
                      "-I${CMAKE_BINARY_DIR}/generated")

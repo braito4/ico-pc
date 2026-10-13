@@ -260,7 +260,9 @@ static void testBudget(void)
     lt_ext_reset();
     ui_settings_reset();
     ui_set_language(UI_LANG_EN);
+    ui_settings_set_version("v0.7.1-rc1"); /* the Main page's version row counts */
     ui_settings_install();
+    ui_settings_set_version(NULL);
     const int settingsRows = lt_ext_prop_count(), settingsLayouts = lt_ext_layout_count();
     for (int p = 0; p < UI_PAGE_COUNT; p++) {
         int rows[64];

@@ -1,0 +1,7 @@
+/* generated from port/platform/ico_version.h.in by CMake (ICO_VERSION_LABEL):
+   the version numbers and text ico_pc.rc puts in the Windows program's
+   Details tab, and the package label main_host.c logs and the Options menu
+   shows ("" for a development build). */
+#define ICO_VER_NUMERIC @ICO_VER_NUMERIC@
+#define ICO_VER_TEXT "@ICO_VER_TEXT@"
+#define ICO_VERSION_LABEL "@ICO_VERSION_LABEL_C@"

@@ -1,4 +1,0 @@
-/* generated from port/platform/win/ico_version.h.in by CMake: the version
-   numbers and text ico_pc.rc puts in the program's Details tab. */
-#define ICO_VER_NUMERIC @ICO_VER_NUMERIC@
-#define ICO_VER_TEXT "@ICO_VER_TEXT@"

@@ -48,6 +48,10 @@ def gitOut = { List<String> args ->
     }
 }
 def icoLabel = (project.findProperty('icoLabel') ?: gitOut(['describe', '--always', '--dirty', '--abbrev=10']) ?: 'unknown').toString()
+// The native build's ICO_VERSION_LABEL (the log and the Options menu): only
+// a label given with -PicoLabel; "" otherwise, a development build (and CMake
+// shows only a label that parses as a version, so CI's "ci" shows nothing)
+def icoNativeLabel = (project.findProperty('icoLabel') ?: '').toString()
 def icoCommit = gitOut(['rev-parse', 'HEAD']) ?: 'unknown'
 def icoVersionCode = (gitOut(['rev-list', '--count', 'HEAD']) ?: '1') as Integer
 def nativeJobs = (project.findProperty('icoNativeJobs') ?: '2').toString()
@@ -107,6 +111,7 @@ android {
                         '-DANDROID_STL=c++_static',
                         '-DICO_HEADLESS=OFF',
                         '-DICO_LINK_EXE=ON',
+                        "-DICO_VERSION_LABEL=${icoNativeLabel}",
                         '-DICO_RHI_D3D12=OFF',
                         '-DICO_SHADERS_DXIL=OFF',
                         "-DCMAKE_JOB_POOLS=compile=${nativeJobs};link=1",

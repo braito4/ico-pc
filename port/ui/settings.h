@@ -116,6 +116,13 @@ void ui_settings_set_texture_pack_count(int (*fn)(void));
    Model pack row reads "None installed" and does not step while it is 0 or
    no hook is set. */
 void ui_settings_set_model_pack_count(int (*fn)(void));
+/* The package label (v0.7.1, v0.7.1-rc1), shown small in the top-right
+   corner of the Options menu's main page; NULL or "" (a development build)
+   shows nothing.  Copied (31 bytes at most); read when the pages are built
+   (ui_settings_install), so it is set before. */
+void ui_settings_set_version(const char *label);
+/* the Main page's version row, -1 when none (tests) */
+int ui_settings_version_row(void);
 
 /* Settings > Controls shows the touch overlay's rows (Touch
    controls, Touch size, Touch opacity) only while fn reports a touch screen

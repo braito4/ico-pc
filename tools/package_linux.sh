@@ -70,7 +70,8 @@ export PATH="$wt/.venv/bin:$PATH"
 cd "$wt"
 # $ORIGIN run path: libSDL3.so.0 is found beside the program. The build-tree
 # run path (the toolchain's absolute lib dir) is left out of the binary.
-run "$cmake" --preset "$preset" -DICO_HEADLESS=OFF -DICO_LINK_EXE=ON \
+# ICO_VERSION_LABEL: the version the log and the Options menu show.
+run "$cmake" --preset "$preset" -DICO_HEADLESS=OFF -DICO_LINK_EXE=ON "-DICO_VERSION_LABEL=$label" \
     -DCMAKE_SKIP_BUILD_RPATH=ON "-DCMAKE_EXE_LINKER_FLAGS=-Wl,-rpath,'\$ORIGIN'"
 run "$cmake" --build "build-host/$preset" --target ico_pc mc_import
 b="$wt/build-host/$preset"
