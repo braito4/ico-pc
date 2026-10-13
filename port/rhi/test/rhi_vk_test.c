@@ -30,7 +30,7 @@ static uint64_t passBarriers(RhiCommandList cl, RhiTexture target)
     return b.barriers - a.barriers;
 }
 
-/* Package PB's tracked path: a second pass on the same target adds one
+/* The hazard tracking (vk_cmd.c "Hazards"): a second pass on the same target adds one
  * hazard barrier (write after write), a pass on another target none.
  * ICO_VK_GLOBAL_BARRIERS=1 emits a global barrier before every pass, so the
  * exact counts do not apply and only the run itself is checked. */

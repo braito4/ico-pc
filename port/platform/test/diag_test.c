@@ -22,7 +22,7 @@
  *               no fire; then both stop and the watchdog fires naming the
  *               movie, and the heartbeat printed the count;
  *   - stall:    the tick stands still and nothing else moves: the later
- *               limit fires as before;
+ *               limit fires;
  *   - present:  with an effects program set, a fake present of 4 s inside a
  *               2 s later limit (the tick stands still) does not fire (only
  *               the part above 1 s is excused); the stall after it does,
@@ -362,7 +362,7 @@ int main(int argc, char **argv)
         printf("--- progress log ---\n%s\n", s);
     }
 
-    /* without progress the tick alone counts, as before: it fires during
+    /* without progress the tick alone counts: it fires during
        the 2.5 s the progress case survived */
     r = run(argv[0], "stall", log);
     s = read_file(log);

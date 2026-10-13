@@ -173,7 +173,7 @@ typedef enum RhiTextureUsage {
 
 typedef struct RhiTextureDesc {
     uint32_t width, height;
-    uint32_t mipLevels; /* 1 for the Original preset; generated mips only in Enhanced */
+    uint32_t mipLevels; /* levels in the chain (0 or 1: one); the caller uploads each */
     RhiFormat format;
     uint32_t usage; /* RhiTextureUsage bits */
     const char *debugName;
@@ -837,8 +837,8 @@ void rhi_get_stats(RhiStats *out);
  * completed, so reading never waits: ns[i] in nanoseconds from an arbitrary
  * origin, 0 for an index that frame did not write; returns 1 + the highest
  * index written (0 = none, or timestamps unsupported).
- * Vulkan: query pools.  D3D12: not implemented yet (unsupported: the calls
- * do nothing and read 0).
+ * Vulkan: query pools.  D3D12: unsupported (rhi_timestamps_supported is
+ * false; the calls do nothing and read 0).
  *
  * RHI_TIMESTAMP_KEEP_BARRIERS or-ed into the index: the image barriers the
  * backend holds back to send with the next command (vk_cmd.c
@@ -870,9 +870,8 @@ const char *rhi_present_mode_name(void);
  * VK_KHR_present_wait): a thread of the backend's waits on each present and
  * notes when the display showed it, on SDL_GetTicksNS's clock (the window's
  * vsync lock keeps its grid on it, port/platform/pace_policy.h).  Off
- * unless asked for with ICO_VK_PRESENT_WAIT=1 (the v0.7.0 rc4 build had it
- * on, and an RTX 3090 on Windows showed nothing usable with presents in
- * mailbox mode).  rhi_present_timing: available (asked for, both
+ * unless asked for with ICO_VK_PRESENT_WAIT=1 (an RTX 3090 on Windows gave
+ * nothing usable with presents in mailbox mode).  rhi_present_timing: available (asked for, both
  * extensions on a window, SDL, no wait failed).  rhi_present_timing_use:
  * presents carry ids only while on (the window: under its vsync lock), so
  * every other present is made as without the timing.

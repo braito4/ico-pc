@@ -58,7 +58,7 @@ void dx_swapchain_destroy(void)
 
 /* The frame latency the waitable swap chain is made with:
  * ICO_D3D12_FRAME_LATENCY "0" = no waitable object (Present blocks on a
- * full queue, as before), "1".."3" that latency (1 serialises the CPU and
+ * full queue), "1".."3" that latency (1 serialises the CPU and
  * the GPU), anything else 2.  With the object, rhi_acquire_backbuffer
  * waits for the display before the replay instead of Present after it. */
 static uint32_t dx_frame_latency_wanted(void)
@@ -87,7 +87,7 @@ static UINT dx_swap_flags(void)
 /* After creation: the latency and the waitable object.  IDXGISwapChain3
  * derives from IDXGISwapChain2, so its methods are called on the
  * swapchain itself (no second interface to hold).  No event = one log
- * line and Present blocks as before. */
+ * line and Present blocks on a full queue. */
 static void dx_frame_latency_open(void)
 {
     dx_frame_latency_close();
@@ -147,7 +147,7 @@ bool dx_swapchain_create(uint32_t w, uint32_t h, bool vsync)
         return false;
     }
     g_dx.swapchains++;
-    /* SDL owns fullscreen (F11); no DXGI Alt+Enter */
+    /* SDL owns fullscreen (the window's own Alt+Enter); no DXGI Alt+Enter */
     IDXGIFactory4_MakeWindowAssociation(g_dx.factory, g_dx.hwnd, DXGI_MWA_NO_ALT_ENTER);
     g_dx.vsync = vsync;
     dx_frame_latency_open();

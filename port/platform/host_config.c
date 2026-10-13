@@ -1890,7 +1890,7 @@ int ico_host_ini_path(char *out, size_t size)
     char dir[ICO_PATH_MAX];
 
     /* a folder lookup that fails leaves "." (the working folder), which
-       main_host.c uses as before: only a path that does not fit fails */
+       main_host.c then uses: only a path that does not fit fails */
 #if defined(__APPLE__) && !defined(ICO_IOS) && defined(ICO_HOST_SDL_PREFPATH)
     ico_host_pref_dir(dir, sizeof(dir));
 #else

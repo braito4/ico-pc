@@ -1,7 +1,7 @@
 /*
  * port/platform/gpu_driver.h
  *
- * Graphics driver packages for the Android build (issue 22): the
+ * Graphics driver packages for the Android build: the
  * community driver packages for Adreno GPUs (Turnip, the patched Qualcomm
  * drivers) that libadrenotools loads, as zip files the player adds from the
  * Settings page.  A package is flat: meta.json, the

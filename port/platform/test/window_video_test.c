@@ -125,7 +125,7 @@ int main(void)
               "windowed still frameless or fullscreen");
         CHECK(pw == 960 && ph == 720, "windowed size %dx%d, want 960x720", pw, ph);
 
-        /* fullscreen as before, then fullscreen -> borderless leaves it */
+        /* fullscreen again, then fullscreen -> borderless leaves it */
         r = ico_window_video_mode(w, ICO_WINDOWVIDEO_FULLSCREEN, NULL, NULL);
         CHECK(r == ICO_WINDOWVIDEO_FULLSCREEN, "mode fullscreen returned %d", r);
         CHECK((SDL_GetWindowFlags(w) & SDL_WINDOW_FULLSCREEN) != 0, "mode fullscreen: no flag");

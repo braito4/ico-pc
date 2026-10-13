@@ -5,8 +5,8 @@
  * own: no device, no surface, no Vulkan call.  The rules: with vsync,
  * MAILBOX when preferred and offered, else FIFO; without, IMMEDIATE when
  * offered, else MAILBOX, else FIFO.  Mesa's X11 WSI (the Deck's RADV, also
- * under XWayland) offers all four of the common modes, which is where vsync
- * off used to pick MAILBOX and look the same as vsync on. */
+ * under XWayland) offers all four of the common modes, where vsync off
+ * must pick IMMEDIATE: MAILBOX would look the same as vsync on. */
 #include "vk/vk_internal.h"
 #include <stdio.h>
 #include <string.h>
@@ -138,8 +138,8 @@ int main(void)
 
     /* the display's timing of presents (vkr_present_wait_wanted): off
        unless ICO_VK_PRESENT_WAIT asks for it, even where the driver offers
-       it (the v0.7.0 rc4 build used it whenever offered, and an RTX 3090 on
-       Windows showed nothing usable in mailbox mode); and only with the
+       it (used whenever offered, an RTX 3090 on Windows showed nothing
+       usable in mailbox mode); and only with the
        extensions and a thread */
     static const struct {
         bool offered;

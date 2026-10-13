@@ -169,7 +169,7 @@ static int lifecycle(SDL_Window *win, RhiFormat fmt)
     }
     rhi_release_surface(); /* twice: nothing */
 
-    /* the foreground: a surface and one swapchain, and frames as before */
+    /* the foreground: a surface and one swapchain, and frames again */
     n0 = vkr_test_swapchain_creations();
     if (!rhi_recreate_surface(win)) {
         printf("FAIL rhi_recreate_surface\n");
@@ -634,7 +634,7 @@ static int presentTiming(SDL_Window *win)
 /* A wait on a present that does not keep its timeout (a driver's, here the
    stand-in's: 2 s whatever the timeout): a swapchain made again and
    rhi_shutdown go on after 100 ms, the timing stopped, and frames are
-   presented meanwhile (the v0.7.0 rc4 build waited for the wait to end) */
+   presented meanwhile, not held until the wait ends */
 static int presentWaitHang(SDL_Window *win)
 {
     RhiDeviceDesc dd = {win, true, true, "rhi_vk_swapchain_test"};

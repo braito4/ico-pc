@@ -3,9 +3,12 @@
  *
  * The window build's diagnostic keys, kept free of SDL so a unit test checks them:
  *
- *   F12   the frame shown: an rd dump of the last closed frame and a PNG of
- *         the picture, <pref>/dumps/frame-<time>-v<vsync>.rddump and .png,
- *         both paths logged (window_host.c, rd_dump_on_demand)
+ *   F12   the frame shown, in <pref>/dumps: an rd dump of the last closed
+ *         frame zipped with the log, frame-<time>-v<vsync>.zip (dump_zip.h;
+ *         the loose .rddump is kept only when the zip fails), a PNG of the
+ *         whole DISPLAY frame, frame-<time>-v<vsync>.png, and the picture
+ *         as presented, frame-<time>-present.png, both PNGs loose beside
+ *         the zip (window_host.c frame_dump, rd_dump_on_demand)
  *   Shift+F12  in photo mode, the aspect sweep: the paused frame re-rendered
  *         at 4:3, 16:9, 32:9, 48:9 and 60:9 into one zip,
  *         <pref>/dumps/sweep-<time>.zip holding <aspect>.rddump and
@@ -14,7 +17,7 @@
  *   F11   the window: stats lines every second for 30 s instead of every
  *         10 s; again turns it off
  *
- * Neither key is bindable (port/input/keys.def has F1 to F4 only), and a held
+ * None of these keys is bindable (port/input/keys.def has F1 to F4 only), and a held
  * key's repeats do nothing.
  */
 #ifndef ICO_PLATFORM_HOTKEYS_H

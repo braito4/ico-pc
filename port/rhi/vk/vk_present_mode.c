@@ -37,8 +37,8 @@ VkPresentModeKHR vkr_choose_present_mode(const VkPresentModeKHR *modes, uint32_t
     }
     /* vsync off is IMMEDIATE wherever the surface has it: a present never
      * waits, and the picture tears where the compositor lets it (the Deck's
-     * "Allow Tearing", KWin).  Mailbox before it made vsync off look like on
-     * under Mesa, which offers both.  Then mailbox, then FIFO. */
+     * "Allow Tearing", KWin).  Mailbox first would make vsync off look like
+     * on under Mesa, which offers both.  Then mailbox, then FIFO. */
     if (vkr_offered(modes, n, VK_PRESENT_MODE_IMMEDIATE_KHR)) {
         return VK_PRESENT_MODE_IMMEDIATE_KHR;
     }
