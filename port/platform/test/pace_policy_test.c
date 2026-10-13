@@ -186,7 +186,7 @@ static void testPresentGap(void)
     }
 }
 
-/* The mode a numeric cap takes with vsync on (issue 74): a cap equal to the
+/* The mode a numeric cap takes with vsync on: a cap equal to the
    refresh within 0.5 Hz takes FIFO with no timer gap; above or below it,
    mailbox (above) with the cap's own gap */
 static void testCapEqualsRefresh(void)
@@ -256,7 +256,7 @@ static void testCapEqualsRefresh(void)
             }
         }
     }
-    /* issue 74: Windows reports 143.9 Hz as 143.0 and 239.8 as 239.0;
+    /* Windows reports 143.9 Hz as 143.0 and 239.8 as 239.0;
        within 1.0 Hz above a whole number, 0.5 Hz otherwise */
     CHECK(pace_cap_equals_refresh(144, (uint64_t)(1e9 / 143.0)));
     CHECK(!pace_cap_equals_refresh(144, (uint64_t)(1e9 / 142.0)));
@@ -581,7 +581,7 @@ static void testFirstPresentPause(void)
     CHECK(pace_first_present_pause(1, &seen, 5000000ull, r60) == 0 && seen == 1);
     /* the same swapchain: a slow present is the game's, not a pause */
     CHECK(pace_first_present_pause(1, &seen, 153400000ull, r60) == 0);
-    /* a rebuild (rc7's 153.4 ms first present): the excess over a refresh,
+    /* a rebuild (a logged 153.4 ms first present): the excess over a refresh,
        once */
     CHECK(pace_first_present_pause(2, &seen, 153400000ull, r60) == 153400000ull - r60);
     CHECK(seen == 2);

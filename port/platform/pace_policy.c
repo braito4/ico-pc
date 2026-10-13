@@ -23,10 +23,9 @@ uint64_t pace_present_gap(int cap, bool uncappedVsync, bool mailbox, uint64_t re
     if (uncappedVsync) {
         /* one present a refresh, but never fewer than sixty a second: a
            display can report a refresh it is not running at (a 4K screen
-           the user plays at 60 Hz reported 30.0 Hz, and one present per
-           reported refresh halved what the screen showed), and sixty a
-           second on a true 30 Hz screen only costs what v0.5.1 spent on
-           every screen. A sixteenth of a refresh early: the sleep's
+           running at 60 Hz can report 30.0 Hz, and one present per
+           reported refresh would halve what the screen shows), and sixty
+           a second on a true 30 Hz screen costs little. A sixteenth of a refresh early: the sleep's
            overshoot and a game step that a due present lands in only make
            a present later, and the gap counts from the last present's
            start, so a gap of exactly one refresh averaged more than one */
@@ -653,10 +652,10 @@ uint64_t pace_lock_vsync(PaceLock *L, const PaceLockIo *io, bool newFrame)
             L->skipped++;
             continue;
         }
-        /* FIFO: no hold (pace_fifo_hold) under the lock. The hold judged
+        /* FIFO: no hold (pace_fifo_hold) under the lock. The hold judges
            the next vblank from the last present's return, and on NVIDIA's
            Vulkan a return is not a vblank (and present_once's time holds
-           the replay's fence waits): rc8 held 9-10 presents a 10 s at cap
+           the replay's fence waits): it would hold back presents at cap
            60, each a repeated picture. A present that returns past the
            next step makes that step late by less than a slot, and its
            pictures keep their exact grid alphas, so nothing is seen. */

@@ -62,10 +62,12 @@ uint64_t pace_present_gap(int cap, bool uncappedVsync, bool mailbox, uint64_t re
  * whole 59 is a true 59.00 Hz mode, and a cap of 60 locked to it would run
  * the game 1.7 % slow.
  * With vsync on such a limit takes the vsync lock below when it is a whole
- * multiple of the simulation's rate (60 and 120 on 59.94: the grid, mailbox),
- * else the FIFO present mode and no timer gap (144 on 59.94: the blocking
- * present holds each present to a vblank, pace_fifo_hold).  A limit above
- * the refresh keeps mailbox and its own gap, one below keeps its own gap. */
+ * multiple of the simulation's rate (60 and 120 on 59.94: the grid, FIFO
+ * unless the present-wait clock is on, then mailbox), else the FIFO present
+ * mode and no timer gap (144 on 59.94: the blocking present holds each
+ * present to a vblank, and pace_fifo_hold holds back one that would return
+ * past the deadline).  A limit that does not equal the refresh prefers
+ * mailbox and keeps its own gap.  docs/port/DISPLAY.md "Pacing". */
 bool pace_cap_equals_refresh(int cap, uint64_t refreshNs);
 
 /* The display's intervals: the times of the display clock's vblanks, or
@@ -89,7 +91,8 @@ typedef struct PaceIntervals {
 } PaceIntervals;
 
 /* ------------------------------------------------------------------------
- * The vsync lock (issue 74): the simulation on a grid of the wall clock.
+ * The vsync lock: the simulation on a grid of the wall clock
+ * (docs/port/DISPLAY.md "The vsync lock").
  *
  * With vsync on and the cap equal to the display's rate, when the cap is a
  * whole multiple n of the simulation's rate (1 % at most off: 60 or 120 on
@@ -161,16 +164,15 @@ typedef struct PaceIntervals {
  * Without a clock (PACE_CLOCK_KIND_NONE: Linux, macOS, Android, a clock
  * that did not start) the grid stays on the report.  The presents go
  * through mailbox (PaceLock.mailbox: a present never waits for the
- * display, which shows the newest finished picture at each refresh), as
- * "uncapped" does, only with the present-wait clock: under mailbox the
- * grid's phase against the refreshes is left where it starts, and where
- * the presents' ends straddle a refresh pictures repeat and drop for the
- * whole session, while FIFO shows them in order whatever the phase
+ * display, which shows the newest finished picture at each refresh) only
+ * with the present-wait clock; otherwise FIFO.  Under mailbox without a
+ * clock the grid's phase against the refreshes is left where it starts,
+ * and where the presents' ends straddle a refresh pictures repeat and drop
+ * for the whole session, while FIFO shows them in order whatever the phase
  * (pace_loop_test testNoClockMode: 61 of 64 runs against 30 with one slip
- * each).  The v0.6.1 to v0.7.0 rc3 locks stepped on FIFO returns, taken
- * for vblanks: on NVIDIA (rc3: RTX 3090, three images) two presents return
- * about 9 ms apart and the next one about 32 ms later, so the steps ran
- * 9/32/9 ms apart (ghosts in motion); nothing waits on a present's return.
+ * each).  The steps never wait on a present's return: a FIFO return is not
+ * a vblank (on NVIDIA with three images two presents return about 9 ms
+ * apart and the next one about 32 ms later).
  *
  * FIFO: on the display's rate a present returns at once while the queue
  * has room.  Nothing is held back (pace_fifo_hold is not used under the
@@ -233,7 +235,7 @@ typedef struct PaceLock {
     unsigned n;         /* presents a step (pace_lock_presents) */
     uint64_t refreshNs; /* the display's refresh as reported */
     uint64_t periodNs;  /* the simulation's own period (the audio's nominal rate) */
-    bool mailbox;       /* presents never wait (else FIFO: pace_fifo_hold) */
+    bool mailbox;       /* presents never wait (else FIFO; no pace_fifo_hold under the lock) */
     /* the grid */
     uint64_t due;   /* when the last step was due */
     double dueFrac; /* and the fraction of a ns */
@@ -244,7 +246,7 @@ typedef struct PaceLock {
     unsigned vsyncsSinceClose;
     bool closeSeen;      /* a frame closed since the reset (perFrame is measured from the next) */
     bool framePresented; /* the last frame that closed was presented */
-    bool frameHeld;      /* and was held back once (pace_fifo_hold) */
+    bool frameHeld;      /* cleared at each close; not read (no pace_fifo_hold under the lock) */
     bool lastBlocked;    /* the last present waited a quarter of a slot or more (.waited) */
     /* the display clock */
     int clockKind; /* PACE_CLOCK_KIND_* offered */
@@ -391,13 +393,13 @@ double pace_lock_nominal_ratio(const PaceLock *L);
  * caller keeps its ratio). */
 double pace_lock_rate_ratio(PaceLock *L);
 
-/* Under FIFO with a refresh shorter than the simulation's period (no lock:
- * a cap of 144 on 59.94, 60 on PAL's 50), and under the lock on a FIFO-only
- * swapchain: whether the window holds this present back and sleeps to the
- * deadline because it would return on a vblank past it (a FIFO present
- * returns on the first vblank after it is made, on the last return's grid
- * of refreshes; one started just before the deadline ran the step a
- * refresh late, issue 74).  Never a frame that is not shown yet once the
+/* Under FIFO with a refresh shorter than the simulation's period and no
+ * lock (a cap of 144 on 59.94, 60 on PAL's 50; never under the lock):
+ * whether the window holds this present back and sleeps to the deadline
+ * because it would return on a vblank past it (a FIFO present returns on
+ * the first vblank after it is made, on the last return's grid of
+ * refreshes; one started just before the deadline would run the step a
+ * refresh late).  Never a frame that is not shown yet once the
  * deadline has passed (the game behind: one present per new frame), and a
  * new frame is held back at most once (frameHeld: this frame was held
  * before), so a game whose step is about a period long still shows its

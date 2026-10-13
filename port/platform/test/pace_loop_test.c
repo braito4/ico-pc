@@ -1,7 +1,8 @@
 /*
  * port/platform/test/pace_loop_test.c
  *
- * The vsync lock's loop (pace_policy.h pace_lock_vsync, issue 74): the
+ * The vsync lock's loop (pace_policy.h pace_lock_vsync; docs/port/DISPLAY.md
+ * "The vsync lock"): the
  * simulation on a grid of the wall clock, n presents a step, under a fake
  * clock and a fake swapchain.  Each simulated vsync the test calls the loop
  * as window_host.c's pace() does, then runs the game's step (its own cost);
@@ -19,8 +20,8 @@
  *     due time and the due times are a period apart; one present a step;
  *     the alphas exactly 1/2, 1; no picture repeated or dropped in 60 s; the
  *     audio's ratio 60 / 59.94.  At 59.94 Hz the ratio is 1;
- *   the v0.7.0 rc3 log (RTX 3090, FIFO): present returns 8.85, 31.71, 9.43
- *     ms apart, and the old lock stepped on each.  Presents of 0.9, 1.2 and
+ *   NVIDIA's FIFO return pattern (RTX 3090): present returns 8.85, 31.71,
+ *     9.43 ms apart, which a lock stepping on returns would follow.  Presents of 0.9, 1.2 and
  *     13 ms in turn (the same two quick returns and a slow one) leave every
  *     step on the grid; one of 25 ms ends past the next step's due time,
  *     which then starts late, and the grid does not move;
@@ -660,11 +661,11 @@ static void test5994(void)
     CHECK(r.ratio > 0.99995 && r.ratio < 1.00005);
 }
 
-/* the rc3 return pattern: two quick presents, then a slow one */
+/* NVIDIA's FIFO return pattern: two quick presents, then a slow one */
 static void testRc3Pattern(void)
 {
-    /* the log's returns (ms since the one before) under the old lock, which
-       stepped on each: the steps were as far apart */
+    /* the logged returns (ms since the one before): a lock stepping on
+       each would put its steps as far apart */
     static const double trace[] = {8.85, 31.71, 9.43, 8.88, 31.92, 9.27, 8.85};
     double lo = 1e9, hi = 0;
 
@@ -744,8 +745,8 @@ static void test120(void)
    Without the clock the grid stays where it starts, and where that puts
    the presents' ends around a vblank pictures repeat and drop for as long
    as it runs; with it the grid moves away from the vblank.  16 starting
-   phases, two loads: a 2 ms present and 8 ms of GPU; and 4K's (the rc3
-   log: a 6 ms replay and 11 ms of GPU, a picture ready more than a refresh
+   phases, two loads: a 2 ms present and 8 ms of GPU; and 4K's (a logged
+   RTX 3090 run: a 6 ms replay and 11 ms of GPU, a picture ready more than a refresh
    after its step). */
 static void testPhase(void)
 {
@@ -882,7 +883,7 @@ static const char *rule_name(int kind)
 }
 
 /* The FIFO queue against a display whose true refresh is not the report
-   (issue 74: Windows reports 59.951 Hz for a 59.940 Hz scan-out, +165 ppm
+   (Windows reports 59.951 Hz for a 59.940 Hz scan-out, +165 ppm
    against 16.6806 ms).  A grid shorter than the scan-out fills the queue:
    every present then waits for a vblank, the steps start later and later,
    and a present is skipped (a picture never made: a jump in motion); a
@@ -1001,7 +1002,7 @@ static void testFifoRatchet(void)
 }
 
 /* D3D12's model: a queue the display drains one a vblank, full from the
-   start (the reporter's logs: Present blocking 10-11 ms on average), the
+   start (Present blocking 10-11 ms on average in Windows logs), the
    display 163 ppm slower than the report, 10 minutes.  Without the clock
    every present waits and the steps fall behind until one skips (both
    rules: the rate differs); with it the slot is the display's, the steps
@@ -1328,7 +1329,7 @@ static void testFifoModels(void)
                onTime, waited);
         CHECK(onTime >= 5);
     }
-    /* NVIDIA's FIFO with the fence waits (the rc2 model) and the work rising
+    /* NVIDIA's FIFO with the fence waits (F_NV) and the work rising
        by 5.8 ms over 12 vsyncs (a menu closing): on the grid */
     {
         Fake f = fake(D60);
@@ -1444,9 +1445,9 @@ static void testPause(void)
     }
 }
 
-/* Four frame rate changes within 10 s (rc7's log: 240 -> original ->
-   uncapped -> 60 -> 120 -> 60 gave 3 resyncs dropping 404 ms, the screen
-   black at those).  Each change, on the lock's side: the swapchain rebuilt
+/* Four frame rate changes within 10 s (a logged run, 240 -> original ->
+   uncapped -> 60 -> 120 -> 60, would give 3 resyncs dropping 404 ms
+   without the pauses, the screen black at those).  Each change, on the lock's side: the swapchain rebuilt
    between vsyncs (140 ms, the host's pause: pace_lock_pause), the lock
    started again from the moved due time (pace_locked resets it when the
    present mode flips), and the first present on the new chain taking 150
@@ -1575,7 +1576,8 @@ static void testLatestReady(void)
 
 /* Without the lock under FIFO at 144 Hz: the window's present loop for one
    simulated vsync, as window_host.c's pace() (the rule pace_fifo_hold; rc1
-   is the same call with frameShown always true).  Returns the new frames
+   makes the same call with frameShown always true, a rule that ignores
+   whether the frame was shown).  Returns the new frames
    presented over `vsyncs`, the step stepNs long. */
 static unsigned fifoNewFramesShown(uint64_t stepNs, unsigned vsyncs, int rc1)
 {
@@ -1631,14 +1633,14 @@ static void testFifoHold(void)
     CHECK(!pace_fifo_hold(d + 1 * MS, 0, r, d, true, false));
 
     /* the game behind, a 20 ms step against the 16.68 ms period: every new
-       frame shown; the rc1 rule showed none of them */
+       frame shown; with frameShown always true (rc1) none of them */
     const unsigned now = fifoNewFramesShown(20 * MS, 600, 0);
     const unsigned rc1 = fifoNewFramesShown(20 * MS, 600, 1);
 
     printf("fifo at 144, the game behind: %u of 300 new frames shown (rc1 %u)\n", now, rc1);
     CHECK(now == 300);
     CHECK(rc1 < 10);
-    /* a 3 ms step: all shown, as before */
+    /* a 3 ms step: all shown */
     CHECK(fifoNewFramesShown(3 * MS, 600, 0) == 300);
 }
 
