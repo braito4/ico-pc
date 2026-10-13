@@ -385,7 +385,7 @@ renderer's [pass ring](RENDER.md#the-pass-ring) after it, before the message box
   the value the GPU reached. A Vulkan wait that fails first logs how long it waited, the value it
   waited for, the last one submitted and the one the GPU reached; once the device is lost no wait is
   made again (`port/rhi/vk/vk_cmd.c` (`vkr_wait_value`, `vkr_note_submit`); `port/rhi/vk/vk_device.c`
-  (`vkr_report_submits`); `port/rhi/d3d12/d3d12_device.c` (`dx_lost_report`)).
+  (`vkr_lost_report`, `vkr_report_submits`); `port/rhi/d3d12/d3d12_device.c` (`dx_lost_report`)).
 - **The driver's fault report** (Vulkan). `VK_EXT_device_fault` is enabled whenever the driver offers
   it; `vkGetDeviceFaultInfoEXT` gives a description, the faulting addresses (each with its kind:
   invalid read, write or execute, instruction pointer; and its precision) and the vendor's entries.

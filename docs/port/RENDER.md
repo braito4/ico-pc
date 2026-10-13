@@ -435,7 +435,7 @@ LERPs, mode 3, the Ad forms, mode 11, PABE on the premultiplied forms, COLCLAMP 
 targets. What stays on the fixed-function blend: the premultiplied forms (already exact), the MSAA
 epoch's passes, targets other than RGBA8, the port's presentation overlay. The staticBlur sprites
 and `blend_int` keep their own exact paths (`port/render/rd_dst_read.c`; `port/render/rd_replay.c`
-(`dstPassMode`, `passWantsReadable`)).
+(`dstPassMode`, `rd__pass_wants_readable`)).
 
 `ICO_RD_BLEND` names the path instead: `fixed` (also `off`, `0`), `storage` (also `interlock`,
 `rov`) or `attachment`; a value that is none of these or a path the device lacks logs

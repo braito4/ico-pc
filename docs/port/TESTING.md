@@ -153,7 +153,9 @@ program under an environment switch ([Environment switches](#environment-switche
   the first model, an animation and back (`model_viewer_headless`).
 - `options_test.c`: the gameplay options' defaults and setters, and `eBrainGetTarget` with Yorda
   safe off and on (`options`).
-- `photo_test.c`: photo mode's state and both cameras, identity, moves, limits (`photo`).
+- `photo_test.c`: photo mode's state and both cameras, identity, moves, limits; the Film effect's
+  cycle off, 1 to 4, Deja vu (5), off, `film_effect = 5` read back as Deja vu and a value past it
+  as off (`photo`).
 - `poly_flat_test.c`: `IsPointIsInScreen`'s x bound is the 4:3 half width at every native width
   (`poly_flat`).
 - `shadow_spawn_test.c`: the depth a shadow rises from, read at the generator kind's word as the
@@ -195,7 +197,7 @@ program under an environment switch ([Environment switches](#environment-switche
   here, the trial marker (`gpu_driver`).
 - `host_config_test.c`: `ico-pc.ini` parsing and rewriting, SHA-1 vectors, path joining, the
   card folders read from the ini the game reads (`ico_host_ini_path`), portable mode, the `[dev]`
-  keys exported as environment switches (`ico_dev_env_value`); built again
+  keys exported as environment switches (`ico_dev_env_value`, `test_dev_env`); built again
   as `host_config_portable_test` (`host_config`, `host_config_portable`).
 - `host_fs_test.c`: the file helpers on a UTF-8 path outside ASCII (`host_fs`).
 - `hotkeys_test.c`: F12, Shift+F12 and F11, repeats ignored, no other key taken (`hotkeys`).
@@ -250,11 +252,18 @@ program under an environment switch ([Environment switches](#environment-switche
   (`rd_fog`, `rd_fog_*`); at 2x a depth ramp's fog alpha equals the above-1x formula (the table
   interpolated, the ordered dither) texel for texel, and the 1x cases count no above-1x draw
   (`checkRamp`).
-- `rd_gsbase_test.c`: `GsBase.c`'s host path driving a synthetic scene (`rd_gsbase`).
+- `rd_gsbase_test.c`: `GsBase.c`'s host path driving a synthetic scene (`rd_gsbase`); photo mode's
+  Deja vu draws the stage's sandstorm object once a frame with the vision's two nodes, gives back
+  what it borrowed, adds no film grain, and draws nothing in stage 40, with the effect off or with
+  photo mode closed (`checkDejaVeil`).
 - `rd_interp_test.c`: presentation between [ticks](ARCHITECTURE.md#terms) on two synthetic frames
   (`rd_interp`).
 - `rd_layout_test.c`: the layout frame from the game's layout calls (`rd_layout`).
-- `rd_mesh_test.c`: the mesh path from `Packet.c` to the VU shaders (`rd_mesh`, sharded).
+- `rd_mesh_test.c`: the mesh path from `Packet.c` to the VU shaders (`rd_mesh`, sharded); the
+  content table's four sandstorm sheets and the tiles appended to them (`sheetTableChecks`), one
+  sheet on the device at 4:3 byte for byte the same with and without the tiles and at 16:9 the
+  columns beside it drawn (`sheetPixels`), and the `photo_veil` shard: the veil's two layers at
+  60:9 drawing every pixel with the tiles (`photoVeilPixels`).
 - `rd_mip_test.c`: the Enhanced mip chain's size and its builder staying inside it (`rd_mip`).
 - `rd_mirror_test.c`: mirror mode's flag and the flipped presenter output (`rd_mirror`).
 - `rd_passring_test.c`: the pass ring the device-loss report prints: order, wrap, the replay table,
@@ -280,7 +289,9 @@ program under an environment switch ([Environment switches](#environment-switche
 - `rd_state_test.c`: the recording half of rd without a GPU: list order, defaults, state leakage
   (`rd_state`).
 - `rd_tex_test.c`: the texture cache and `Texture.c` on synthetic TIM2 files, and the menu text's
-  halo against its CPU reference (`rd_tex`).
+  halo against its CPU reference at scales 1 to 4 (`testSheetRim`), and a text texture that could
+  not be uploaded named once in the log, the game's own textures never (`textUploadLogChecks`)
+  (`rd_tex`).
 - `rd_water_test.c`: the surfaces that render to and sample from textures (`rd_water`).
 - `texpack_disc_test.c`: the PCSX2 names of every texture on the disc, and how many of a pack's
   files they reach (`texpack_disc`).
@@ -295,7 +306,8 @@ program under an environment switch ([Environment switches](#environment-switche
 
 ### port/rhi/test
 
-- `rhi_vk_test.c`: the exact-texel RHI checks on Vulkan, a hazard cell, the render-area check, the
+- `rhi_vk_test.c`: the exact-texel RHI checks on Vulkan, a hazard cell, the render-area check (a
+  pass larger than its attachments clamped with no validation error, `passAreaCell`), the
   pipeline cache file (`rhi_vk`, `rhi_vk_nodual`, `rhi_vk_d24s8`, `rhi_vk_mali`).
 - `rhi_d3d12_test.c`: the same checks on D3D12, a Windows GUI program that writes a log and shows
   a message box (`rhi_d3d12`).
@@ -345,14 +357,19 @@ program under an environment switch ([Environment switches](#environment-switche
   (`menu_look`); `menu_sheets.c`/`.h` decode the sheets. Development modes: `ICO_MENU_LOOK_FIT`,
   `ICO_MENU_LOOK_GEOFIT`, `ICO_MENU_LOOK_HALOFIT` (the halo's gain, levels and per-language gains)
   and `ICO_MENU_LOOK_DUMP` (each row's sheet rectangle and strip at scales 1, 2 and 4 as PNGs).
+  The survey (`testSurvey`) pins `kSheetInk`, the halo's reach and falloff, the levels and the
+  grain against the sheets, each language's halo mass, and the first field line below a letter in
+  a band of its own.
 - `menu_text_test.c`: the game's menu words and the port's rows drawn in the sheets' look
   (`menu_text`).
 - `settings_test.c`, `settings_extra_test.c`, `settings_extras_test.c`: the Settings menu over
-  fake tables, CPU only (`settings`, `settings_extra`, `settings_extras`).
+  fake tables, CPU only (`settings`, `settings_extra`, `settings_extras`); `settings_test.c` also
+  presses Right in photo mode through Deja vu and checks the popup's words (`ui__photo_film_word`).
 - `settings_photo_test.c`: the Settings screens through rd on a device, written as PNGs
   (`settings_render`).
 - `ui_mouse_test.c`: the pointer's arithmetic in the menus (`ui_mouse`).
-- `ui_test.c`: the embedded font, UTF-8, the runtime text (`ui`).
+- `ui_test.c`: the embedded font, UTF-8, the runtime text; each language's own Deja vu string
+  (`UI_STR_PHOTO_FILM_DEJA`) (`ui`).
 - Helpers: `settings_fixture.c`/`.h`, `headless_common.py`.
 
 ## Render gates

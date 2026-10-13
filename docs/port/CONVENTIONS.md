@@ -37,6 +37,10 @@ that fails, in this order:
 6. `tools/check_call_types.py`: calls and declarations agree with the definitions.
 7. `tools/struct_cast_audit.py`: no buffer cast to a struct wider on the host.
 
+One more generator has a check the hook does not run: `tools/gen_sheet_noise.py --check`
+(`port/shaders/sheet_noise.hlsli`, the menu text's grain tile; [SHADERS.md](SHADERS.md)). Run it
+after changing the script, and the script without `--check` to write the file again.
+
 Steps 4 to 7 are described in [GAME_CODE.md](GAME_CODE.md#audits). CI runs the same checks
 ([BUILDING.md](../BUILDING.md#continuous-integration)). Rerun `tools/install_hooks.sh` after its
 hook text changes.

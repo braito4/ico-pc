@@ -135,9 +135,9 @@ image.
 
 **"The graphics card stopped responding ..."** The graphics driver was
 reset, updated or crashed while you played, and the game has to close.
-Your last save is kept, and the log says why. Start the game again. This
-is usually a driver reset: if it keeps happening, update the graphics
-driver and send the log. If the graphics card is overclocked (its speed or
+Your last save is kept, and the log says why. The message stays until you
+close it. Start the game again. This is usually a driver reset: if it
+keeps happening, update the graphics driver and send the log. If the graphics card is overclocked (its speed or
 memory raised above the maker's settings, in a tool such as MSI
 Afterburner), set it back to its stock clocks first and try again: a card
 pushed past what it can do steadily makes the driver reset, even in a game
