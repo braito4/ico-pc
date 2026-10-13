@@ -414,7 +414,10 @@ pump and the start-up screens' pump end the session through the normal quit path
 [pass ring](RENDER.md#the-pass-ring) (the last replays and the last passes recorded, with the
 sequence numbers the checkpoint markers carry and each effect's name from `rd_perf_post_name`), a
 flush of the log, and one message box: the card stopped responding, the game has to close, the save
-is kept, and "If the graphics card is overclocked, try its stock clocks first."
+is kept, and "If the graphics card is overclocked, try its stock clocks first." The box is modal:
+the watchdog is paused before it (`ico_diag_watchdog_pause`, so the time the player takes to read
+it is not reported as a hang), the heartbeat stops, and after it one line
+`window: the message was closed after N s` before the session ends
 (`port/platform/window_host.c` (`device_lost_quit`)). The backend's own loss report comes before
 it, at the first failing call ([RHI.md](RHI.md#device-loss)).
 
