@@ -5987,6 +5987,7 @@ static bool replayFrame(const RdFrame *f, int keep, bool present)
     /* no shadow window from another replay (clearNewTargets reads it) */
     memset(&s_stencil, 0, sizeof(s_stencil));
     uploadTextures();
+    rd__join_parts(f, keep); /* issue 76: the card test over a part's packets (rd_join.c) */
     uploadMeshes(f, keep);
     clearNewTargets();
     rd__perf_stamp(s_cl, RD_PERF_TS_LISTS);

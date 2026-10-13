@@ -2614,6 +2614,60 @@ static void joinedStripChecks(void)
     CHECK(c3 && joinedAt(c3, 2) == 1 && joinedAt(c3, 7) == 1 && joinedAt(c3, 10) == 1,
           "joined strips: a double-sided card touching a third strip is joined");
     rd_destroy_vu_mesh(card3);
+
+    /* issue 76 (v0.7.0), rd__mesh_join_part: the strips of a part's meshes
+     * joined over all of them.  st18a_p1 part 9's wall triangle above the
+     * doorway (a strip of one triangle, its own material: a packet, a mesh
+     * of its own) shares its diagonal with part 6's wall and its top edge
+     * with part 9's top face, another material: alone in its mesh it is
+     * free-standing, a card the region rule left out of the picture while
+     * a corner was above the GS window.  The y axis here is the wall's Z,
+     * x its Y (-775 the top, 80 the lintel), as on the disc. */
+    static const float kSlit[3][2] = {{-775, -3000}, {80, -2800}, {-775, -2800}};
+    static const uint8_t kSlitStart[3] = {1, 0, 0};
+    static const float kTop[4][2] = {{-775, -3000}, {-775, -3100}, {-775, -2800}, {-775, -2700}};
+    static const uint8_t kTopStart[4] = {1, 0, 0, 0};
+    static const float kFar[3][2] = {{500, 500}, {600, 500}, {500, 600}};
+    static const uint8_t kFarStart[3] = {1, 0, 0};
+    const RdMesh slit = joinMesh(kSlit, kSlitStart, 3);
+    const RdMesh top = joinMesh(kTop, kTopStart, 4);
+    const RdMesh farOff = joinMesh(kFar, kFarStart, 3);
+    const RdMesh copy = joinMesh(kSlit, kSlitStart, 3);
+    RdMeshRec *ms = rd__mesh_rec(slit.id), *mt = rd__mesh_rec(top.id),
+              *mf = rd__mesh_rec(farOff.id);
+    RdMeshRec *mc = rd__mesh_rec(copy.id);
+    CHECK(ms && mt && mf && mc && joinedAt(ms, 2) == 0 && joinedAt(mf, 2) == 0,
+          "joined strips: the wall triangle alone in its mesh is free-standing");
+    if (ms && mt && mf && mc) {
+        /* its own double-sided copy in another mesh joins nothing */
+        RdMeshRec *pair[2] = {ms, mc};
+        CHECK(rd__mesh_join_part(pair, 2, 11) == 0 && joinedAt(ms, 2) == 0 && joinedAt(mc, 2) == 0,
+              "joined strips: a strip and its copy in another mesh of the part are not joined");
+        /* another part's mesh far off: still a card */
+        RdMeshRec *apart[2] = {ms, mf};
+        CHECK(rd__mesh_join_part(apart, 2, 12) == 0 && joinedAt(ms, 2) == 0 && joinedAt(mf, 2) == 0,
+              "joined strips: a strip sharing nothing with the part's other mesh stays free");
+        /* the part's top face: both joined, the device copy refreshed */
+        ms->gpuChunk = 1; /* as if uploaded (no device here: the mark only) */
+        ms->gpuDirty = 0;
+        RdMeshRec *part[3] = {ms, mt, mf};
+        CHECK(rd__mesh_join_part(part, 3, 13) == 1 && joinedAt(ms, 2) == 1 &&
+                  joinedAt(mt, 2) == 1 && joinedAt(mt, 3) == 1 && joinedAt(mf, 2) == 0 &&
+                  ms->gpuDirty == 1,
+              "joined strips: the wall triangle and the top face sharing an edge across the "
+              "part's meshes are joined, the part's far strip is not (%d %d %d, dirty %d)",
+              joinedAt(ms, 2), joinedAt(mt, 2), joinedAt(mf, 2), ms->gpuDirty);
+        ms->gpuChunk = 0;
+        ms->gpuDirty = 0;
+        /* the same meshes again: nothing to do */
+        CHECK(rd__mesh_join_part(part, 3, 13) == 0 && ms->partJoinSig == 13 &&
+                  mf->partJoinSig == 13,
+              "joined strips: a part joined under the same meshes is not joined again");
+    }
+    rd_destroy_vu_mesh(slit);
+    rd_destroy_vu_mesh(top);
+    rd_destroy_vu_mesh(farOff);
+    rd_destroy_vu_mesh(copy);
 }
 
 static void recordingChecks(void)

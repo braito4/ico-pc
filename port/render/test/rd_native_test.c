@@ -68,7 +68,10 @@
  *      strip both of whose triangles fail, the opening's tree card) and a
  *      strip whose failing triangle has a vertex behind the eye add nothing
  *      in any state; the same card's strip joined to a passing strip (a
- *      plank's face, rd_mesh.c markJoinedStrips) is drawn as the wall is.
+ *      plank's face, rd_mesh.c markJoinedStrips) is drawn as the wall is,
+ *      and so is the card joined through another packet of its part (the
+ *      keys' object and part; issue 76, rd_replay.c joinParts), not through
+ *      another part's draw.
  *   t  the nearest filter at exact texel boundaries (checkGrainTexels: the
  *      film grain at W 512 to 2560; checkNearestTies: every path that
  *      takes a nearest texel, at W 512 and 688) reads the GS's texel at
@@ -799,6 +802,17 @@ static const StripMesh kJoined = {"joined card",
                                    {1820, 2000, 1000000, 1},
                                    {1900, 2000, 1000000, 1}},
                                   {60, 200, 200}};
+/* the passing triangle under the card alone (kJoined's first strip): drawn
+ * as another packet of the card's part, it joins the card through the
+ * part (issue 76, rd_replay.c joinParts: st18a_p1 part 9's wall triangles
+ * above the doorways, whose wall is the part's other packets) */
+static const StripMesh kBelow = {
+    "below the card",
+    3,
+    0,
+    0,
+    {{1820, 2000, 1000000, 1}, {1900, 2000, 1000000, 1}, {1860, 2100, 1000000, 1}},
+    {60, 200, 200}};
 /* triangle 2 passes, triangle 3 has a vertex behind the eye (h.w -1) and
  * reaches the picture: what of it lies in front of the eye runs from the
  * edge 1-2, inside the picture, away from the vertex's image */
@@ -913,6 +927,71 @@ static int renderStrip(const Cfg *cfg, int W, const StripMesh *m, int n, Img *sc
     return ok ? R_OK : R_FAIL;
 }
 
+/* SCENE of a frame at native width W under cfg holding kCard as one draw
+ * and kBelow as another, keyed as object kKey, part partB, packet 1 (the
+ * card is part 0, packet 0); kBelow alone with partB < 0 */
+static int renderCardPair(const Cfg *cfg, int W, int partB, int withCard, Img *scene)
+{
+    memset(scene, 0, sizeof(*scene));
+    RdSettings st;
+    memset(&st, 0, sizeof(st));
+    st.preset = cfg->preset;
+    st.outputWidth = 640;
+    st.outputHeight = 480;
+    st.aspect = W == BAND ? 4.0f / 3.0f : (float)W / 384.0f;
+    st.sceneScale = cfg->scale;
+    if (!rd_init(BAND, GS_H, &st, NULL)) {
+        return R_NO_DEVICE;
+    }
+    if (W != BAND) {
+        rd_reset_scene((uint32_t)W, GS_H);
+    }
+    const RdMesh card = withCard ? stripMesh(&kCard, 4) : (RdMesh){0};
+    const RdMesh below = stripMesh(&kBelow, 3);
+    rd_begin_frame();
+    RdFrameHead h;
+    memset(&h, 0, sizeof(h));
+    memcpy(h.rgba, kBg, 4);
+    h.gsW = (uint32_t)W;
+    h.gsH = GS_H;
+    h.clear = 1;
+    rd_frame_head(&h);
+    rd_select_list(0);
+    rd_set_target(rd_target(RD_TARGET_SCENE), rd_target(RD_TARGET_SCENE), (uint32_t)W, GS_H, 1);
+    rd_test_gs(RD_TEST_Z_GEQUAL);
+    rd_z_write(1);
+    rd_blend(RD_BLEND_LERP_AS, 0x80, 0);
+    rd_abe(0);
+    rd_pabe(0);
+    rd_fba(0);
+    rd_gouraud(1);
+    rd_texture_off();
+    RdVuDraw d;
+    memset(&d, 0, sizeof(d));
+    d.prog = RD_PROG_PRELIT;
+    d.code = 32;
+    d.clip = RD_VU_CLIP_REGION;
+    for (int c = 0; c < 4; c++) {
+        d.vu.mem[16 + c][c] = 1.0f;
+    }
+    d.vu.mem[23][3] = 1.0f;
+    d.vu.mem[22][2] = 1.0f / 1020000.0f;
+    if (card.id) {
+        rd_draw_vu_mesh(card, &d, RD_KEY(&kKey, 0, 0));
+    }
+    rd_draw_vu_mesh(below, &d, RD_KEY(&kKey, partB, 1));
+    rd_end_frame(0);
+    const bool ok = readImg(RD_TARGET_SCENE, scene);
+    if (card.id) {
+        rd_destroy_vu_mesh(card);
+    }
+    rd_destroy_vu_mesh(below);
+    const uint32_t verr = rhi_vk_validation_error_count();
+    CHECK(verr == 0, "strip rule, %s, W %d: %u validation errors", cfg->name, W, verr);
+    rd_shutdown();
+    return ok ? R_OK : R_FAIL;
+}
+
 static bool sameImg(const Img *a, const Img *b)
 {
     return a->px && b->px && a->w == b->w && a->h == b->h &&
@@ -998,6 +1077,36 @@ static void checkStripRule(void)
                   "strip rule, %s, W %d: the triangle with a vertex behind the eye is not drawn",
                   cfg->name, W);
         }
+        /* issue 76: the card joined through another packet of its part
+         * (one object and part in the keys, rd_replay.c joinParts) is drawn
+         * as the joined card is; through another part's draw it stays a
+         * card */
+        Img below = {0}, samePart = {0}, otherPart = {0};
+        if (renderCardPair(cfg, W, 0, 0, &below) != R_OK ||
+            renderCardPair(cfg, W, 0, 1, &samePart) != R_OK ||
+            renderCardPair(cfg, W, 7, 1, &otherPart) != R_OK) {
+            CHECK(0, "strip rule, %s, W %d: a part's frame could not be rendered", cfg->name, W);
+        } else {
+            CHECK(drawnAt(&below, W, 1860, 2050) && !drawnAt(&below, W, 1860, 1950),
+                  "strip rule, %s, W %d: the triangle below the card is drawn", cfg->name, W);
+            CHECK(sameImg(&otherPart, &below),
+                  "strip rule, %s, W %d: the card beside another part's draw is not drawn",
+                  cfg->name, W);
+            if (kStates[i].extended) {
+                CHECK(drawnAt(&samePart, W, 1860, 1950) && drawnAt(&samePart, W, 1860, 1830),
+                      "strip rule, %s, W %d: the card joined through its part's other packet is "
+                      "drawn, clipped",
+                      cfg->name, W);
+            } else {
+                CHECK(sameImg(&samePart, &below),
+                      "strip rule, %s, W %d: out of the box the card joined through its part is "
+                      "not drawn (the PS2's)",
+                      cfg->name, W);
+            }
+        }
+        free(below.px);
+        free(samePart.px);
+        free(otherPart.px);
         free(none.px);
         free(wall3.px);
         free(wall4.px);

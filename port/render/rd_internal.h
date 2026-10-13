@@ -696,6 +696,9 @@ typedef struct RdMeshRec {
     /* rd_mesh.h's mesh identity (rd_vu_mesh_desc_hash); for a
      * replaced mesh the original's; 0 for one built from a raw stream */
     uint64_t hash;
+    /* issue 76: the meshes of the part its strips were last joined over
+     * (rd__mesh_join_part's sig; 0: its own strips only) */
+    uint64_t partJoinSig;
 } RdMeshRec;
 
 /* The stream mesh m had when frame `frame` was recorded, NULL when no
@@ -726,6 +729,19 @@ void rd__mesh_gpu_shutdown(void);
 uint32_t rd__vu_mesh_create_raw(const float (*stream)[4], uint32_t vertexCount,
                                 uint32_t qwPerVertex, const uint32_t *index, uint32_t indexCount,
                                 const RdVuBatchRec *batches, uint32_t batchCount, const char *name);
+
+/* Issue 76 (v0.7.0): the card test's joined strips over the n meshes of
+ * one part of a model (rd_replay.c joinParts: the VU draws of a frame with
+ * one object and part in their keys), a strip of one mesh joined by a strip
+ * of another shape in any of them (rd_mesh.c joinStrips); the marks are
+ * added to the meshes' drawIndex (gpuDirty when a device copy holds the
+ * old list).  sig names the set of meshes: nothing is done when every one
+ * was last joined under it.  1 when a mark was added. */
+uint64_t rd__mesh_join_part(RdMeshRec *const *ms, uint32_t n, uint64_t sig);
+
+/* rd_join.c: the frame's VU draws grouped by object and part (the key
+ * without the packet's ordinal) and joined with rd__mesh_join_part */
+void rd__join_parts(const RdFrame *f, int keep);
 
 /* Issue 25: the index list a draw of m uploads (RdMeshRec.drawIndex) */
 static inline const uint32_t *rd__mesh_draw_index(const RdMeshRec *m)

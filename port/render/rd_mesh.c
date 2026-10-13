@@ -699,15 +699,33 @@ static int joinPosCmp(const void *a, const void *b)
     return memcmp(a, b, sizeof(JoinPos));
 }
 
-static void markJoinedStrips(RdMeshRec *m)
+/* Whether m's layout has the strip marks: the prelit, lit and skinned
+ * streams, a strip flag per vertex */
+static bool joinLayout(const RdMeshRec *m)
 {
-    const uint32_t nv = m->vertexCount, nt = m->indexCount / 3, qpv = m->qwPerVertex;
-    if (nt == 0 || nv < 3 || nv >= ICO_VU_INDEX_KICK_LIMIT ||
-        (qpv != RD_VU_QW_PRELIT && qpv != RD_VU_QW_LIT && qpv != RD_VU_QW_SKIN)) {
-        return;
+    const uint32_t qpv = m->qwPerVertex;
+    return m->vu && m->indexCount >= 3 && m->vertexCount >= 3 &&
+           m->vertexCount < ICO_VU_INDEX_KICK_LIMIT &&
+           (qpv == RD_VU_QW_PRELIT || qpv == RD_VU_QW_LIT || qpv == RD_VU_QW_SKIN);
+}
+
+/* The strips of the n meshes ms joined over all of them: a strip of one
+ * mesh is joined by a strip of another shape in any of them (issue 76,
+ * rd__mesh_join_part).  The marks are added; true when one was. */
+static bool joinStrips(RdMeshRec *const *ms, uint32_t n)
+{
+    uint64_t total = 0;
+    for (uint32_t k = 0; k < n; k++) {
+        if (joinLayout(ms[k])) {
+            total += ms[k]->vertexCount;
+        }
     }
+    if (total < 3 || total >= (1u << 28)) {
+        return false;
+    }
+    const uint32_t nv = (uint32_t)total;
     uint32_t cap = 16;
-    while (cap < nv * 2u && cap < (1u << 28)) {
+    while (cap < nv * 2u && cap < (1u << 29)) {
         cap <<= 1;
     }
 
@@ -720,29 +738,60 @@ static void markJoinedStrips(RdMeshRec *m)
     uint32_t *stripOf = calloc(nv, sizeof(uint32_t));
     uint32_t *stripAt = malloc(((size_t)nv + 1) * sizeof(uint32_t)); /* first vertex */
     JoinPos *sorted = malloc((size_t)nv * sizeof(JoinPos)); /* each strip's positions, sorted */
+    const float **posOf = malloc((size_t)nv * sizeof(*posOf));
+    uint32_t *base = malloc(((size_t)n + 1) * sizeof(uint32_t)); /* mesh k's first vertex */
     Slot *slot = malloc((size_t)cap * sizeof(Slot));
     uint8_t *joined = NULL;
-    if (!stripOf || !stripAt || !sorted || !slot) {
+    bool changed = false;
+    if (!stripOf || !stripAt || !sorted || !posOf || !base || !slot) {
         goto done;
     }
-    /* the strips: runs of consecutive vertices, in stream order */
-    uint32_t strips = 0, covered = 0;
-    for (uint32_t b = 0; b < m->batchCount; b++) {
-        const uint32_t first = m->batches[b].firstVertex;
-        const uint32_t end = first + m->batches[b].vertexCount;
-        if (first != covered || end > nv) {
-            goto done; /* not one run of the stream: no marks */
+    /* the strips: runs of consecutive vertices, in stream order, mesh after
+     * mesh (vertex g of the whole is vertex g - base[k] of mesh k) */
+    uint32_t strips = 0, at = 0;
+    for (uint32_t k = 0; k < n; k++) {
+        RdMeshRec *m = ms[k];
+        base[k] = at;
+        if (!joinLayout(m)) {
+            continue;
         }
-        for (uint32_t v = first; v < end; v++) {
-            if (v == first || m->stream[(size_t)v * qpv + qpv - 2u][3] < 1.0f) {
-                stripAt[strips++] = v;
+        const uint32_t qpv = m->qwPerVertex, mv = m->vertexCount;
+        uint32_t covered = 0;
+        for (uint32_t b = 0; b < m->batchCount; b++) {
+            const uint32_t first = m->batches[b].firstVertex;
+            if (first != covered || first + m->batches[b].vertexCount > mv) {
+                break;
             }
-            stripOf[v] = strips - 1u;
-            memcpy(sorted[v].bits, m->stream[(size_t)v * qpv], sizeof(sorted[v].bits));
+            covered = first + m->batches[b].vertexCount;
         }
-        covered = end;
+        if (covered != mv) {
+            /* not one run of the stream: no marks for this mesh, its
+             * vertices one strip that stands for nothing */
+            stripAt[strips++] = at;
+            for (uint32_t v = 0; v < mv; v++) {
+                stripOf[at + v] = strips - 1u;
+                posOf[at + v] = NULL;
+                memset(sorted[at + v].bits, 0, sizeof(sorted[0].bits));
+            }
+            at += mv;
+            continue;
+        }
+        for (uint32_t b = 0; b < m->batchCount; b++) {
+            const uint32_t first = m->batches[b].firstVertex;
+            const uint32_t end = first + m->batches[b].vertexCount;
+            for (uint32_t v = first; v < end; v++) {
+                if (v == first || m->stream[(size_t)v * qpv + qpv - 2u][3] < 1.0f) {
+                    stripAt[strips++] = at + v;
+                }
+                stripOf[at + v] = strips - 1u;
+                posOf[at + v] = m->stream[(size_t)v * qpv];
+                memcpy(sorted[at + v].bits, posOf[at + v], sizeof(sorted[0].bits));
+            }
+        }
+        at += mv;
     }
-    if (covered != nv || strips == 0) {
+    base[n] = at;
+    if (strips == 0) {
         goto done;
     }
     stripAt[strips] = nv;
@@ -762,7 +811,10 @@ static void markJoinedStrips(RdMeshRec *m)
                            (size_t)(stripAt[(a) + 1] - stripAt[a]) * sizeof(JoinPos)) == 0))
     /* pass 1: per position, the first strip and the first of another shape */
     for (uint32_t v = 0; v < nv; v++) {
-        const float *pos = m->stream[(size_t)v * qpv];
+        const float *pos = posOf[v];
+        if (!pos) {
+            continue;
+        }
         uint32_t h = ovlHash(pos) & (cap - 1);
         while (slot[h].first != UINT32_MAX && memcmp(slot[h].key, pos, sizeof(slot[h].key)) != 0) {
             h = (h + 1) & (cap - 1);
@@ -779,7 +831,10 @@ static void markJoinedStrips(RdMeshRec *m)
      * of its positions */
     bool any = false;
     for (uint32_t v = 0; v < nv; v++) {
-        const float *pos = m->stream[(size_t)v * qpv];
+        const float *pos = posOf[v];
+        if (!pos) {
+            continue;
+        }
         uint32_t h = ovlHash(pos) & (cap - 1);
         while (memcmp(slot[h].key, pos, sizeof(slot[h].key)) != 0) {
             h = (h + 1) & (cap - 1);
@@ -795,28 +850,65 @@ static void markJoinedStrips(RdMeshRec *m)
     if (!any) {
         goto done;
     }
-    for (uint32_t t = 0; t < nt; t++) {
-        const uint32_t kick = (m->index[t * 3] & ICO_VU_INDEX_MASK) / 4u;
-        if (kick < 2 || kick >= nv || !joined[stripOf[kick]]) {
+    for (uint32_t k = 0; k < n; k++) {
+        RdMeshRec *m = ms[k];
+        if (!joinLayout(m)) {
             continue;
         }
-        if (!m->drawIndex) {
-            m->drawIndex = malloc((size_t)m->indexCount * 4);
-            if (!m->drawIndex) {
-                goto done;
+        const uint32_t mv = m->vertexCount, nt = m->indexCount / 3;
+        for (uint32_t t = 0; t < nt; t++) {
+            const uint32_t kick = (m->index[t * 3] & ICO_VU_INDEX_MASK) / 4u;
+            if (kick < 2 || kick >= mv || !posOf[base[k] + kick] ||
+                !joined[stripOf[base[k] + kick]]) {
+                continue;
             }
-            memcpy(m->drawIndex, m->index, (size_t)m->indexCount * 4);
-        }
-        for (int c = 0; c < 3; c++) {
-            m->drawIndex[t * 3 + (uint32_t)c] |= ICO_VU_INDEX_JOINED;
+            if (m->drawIndex && (m->drawIndex[t * 3] & ICO_VU_INDEX_JOINED) != 0) {
+                continue;
+            }
+            if (!m->drawIndex) {
+                m->drawIndex = malloc((size_t)m->indexCount * 4);
+                if (!m->drawIndex) {
+                    break;
+                }
+                memcpy(m->drawIndex, m->index, (size_t)m->indexCount * 4);
+            }
+            for (int c = 0; c < 3; c++) {
+                m->drawIndex[t * 3 + (uint32_t)c] |= ICO_VU_INDEX_JOINED;
+            }
+            m->gpuDirty = m->gpuChunk != 0 ? 1 : m->gpuDirty;
+            changed = true;
         }
     }
 done:
     free(stripOf);
     free(stripAt);
     free(sorted);
+    free(posOf);
+    free(base);
     free(slot);
     free(joined);
+    return changed;
+}
+
+static void markJoinedStrips(RdMeshRec *m)
+{
+    joinStrips(&m, 1);
+}
+
+uint64_t rd__mesh_join_part(RdMeshRec *const *ms, uint32_t n, uint64_t sig)
+{
+    bool fresh = false;
+    for (uint32_t k = 0; k < n; k++) {
+        fresh |= ms[k]->partJoinSig != sig;
+    }
+    if (!fresh) {
+        return 0;
+    }
+    const bool changed = joinStrips(ms, n);
+    for (uint32_t k = 0; k < n; k++) {
+        ms[k]->partJoinSig = sig;
+    }
+    return changed ? 1u : 0u;
 }
 
 bool rd__vu_mesh_copy_draw_index(RdMeshRec *dst, const RdMeshRec *src)

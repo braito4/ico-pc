@@ -100,8 +100,18 @@
  *            The owner's v0.7.0 capture at the place (frame 22117, 16:9,
  *            framerate 60, the camera standing still): one camera, the
  *            log's drops, and no frame pixel whose nearest st18a surface
- *            is a dropped part's (checkStageCapture).
- *            --stage DISC --eye (not a ctest, some 40 minutes) also
+ *            is a dropped part's (checkStageCapture).  The owner's two
+ *            v0.7.0-rc3 captures there while the camera turned (frames
+ *            4219 and 4481; the camera stands at one eye and only turns):
+ *            at each tick and at the picture between the ticks the second
+ *            F12's PNG shows, every pixel's nearest surface is a drawn
+ *            part's and nothing is dropped behind the eye; over the turn
+ *            between the two views every part a picture shows is
+ *            registered (checkStageSlit).  The parts' strips end at a
+ *            count under 3, as the game reads them (checkStageLoader:
+ *            14,382 triangles in frame 4219's drawn st18a_p1 parts, as
+ *            its meshes).
+ *            --stage DISC --eye (not a ctest, about a minute) also
  *            rasterises every picture between the ticks with and without
  *            the triangles the rule drops for a vertex behind the
  *            in-between eye, and prints the holes (VIS-RULES item 12,
@@ -1552,8 +1562,17 @@ static void boxCorners(float (*out)[4], const float *mn, const float *mx)
 
 /* a p2o's parts: the vertex table (rec + 0x90) and the strips (rec +
    0x100: head records, a count then that many 16-byte vertex records whose
-   position index is at +4; a count of -1 ends them; rd_mesh_test.c
-   findStrip); 0 when the file is not one */
+   position index is at +4; a count under 3 ends them, as the game reads
+   them: Packet.c pac_makeStrip's while (n >= 3), the list's own end a
+   count of 0, pac_makeShapeTable's while (n != 0)); 0 when the file is
+   not one.
+   Walking on to a count of -1 read past the list's zero record into the
+   strip table and the next part's header: st18a had 144,253 triangles
+   instead of its 28,843 (with an area 100,948 instead of 28,842), the
+   extra ones of no model, among them long slivers across the courtyard
+   that no draw has (the v0.7.0 capture frame 4219's drawn st18a_p1 parts
+   hold 14,382 triangles, its VU meshes' 43,146 indices;
+   checkStageLoader) */
 static int loadModel(StageModel *m, const unsigned char *f, uint32_t size)
 {
     if (size < 0x18 || memcmp(f, "PS2O", 4) != 0) {
@@ -1601,7 +1620,7 @@ static int loadModel(StageModel *m, const unsigned char *f, uint32_t size)
             int t = 0;
             for (uint32_t s = 0; s < sc && strips + s * 4 + 4 <= size; s++) {
                 uint32_t at = le32(f, strips + s * 4);
-                while (at + 16 <= size && le16s(f, at) != -1) {
+                while (at + 16 <= size && le16s(f, at) >= 3) {
                     const int k = le16s(f, at);
                     for (int i = 2; i < k && at + 16 + (uint32_t)i * 16 + 16 <= size; i++) {
                         const int ix[3] = {le16s(f, at + 16 + (uint32_t)(i - 2) * 16 + 4),
@@ -1887,7 +1906,7 @@ static int stagePartCount(void)
  * (holes of the in-between rule it draws over), and the pixels the
  * either-tick rule (v0.6.2 before the review) added of triangles neither
  * tick showed (a flash of what the PS2 hid at both ticks).  --stage DISC
- * --eye (not a ctest: about an hour; with --eye the sweep also runs at
+ * --eye (not a ctest: about a minute; with --eye the sweep also runs at
  * 4:3, where the frame is the picture). */
 
 typedef struct EyeWorst {
@@ -2762,6 +2781,246 @@ static void checkStageCapture(void)
           holes);
 }
 
+/* The loader against the game's own meshes: the v0.7.0-rc3 capture frame
+   4219 (frame-20261012-170845-v8447) drew st18a_p1 parts 0, 1, 2, 4 to 7, 9
+   to 13, whose VU meshes (rd_replay_tool --mesh st18a_p1) hold 43,146
+   indices, 14,382 triangles: the triangles with an area of those parts.
+   Walking the strips to a count of -1 gave 52,145 there (loadModel) */
+static void checkStageLoader(void)
+{
+    static const unsigned char kDrawn[] = {0, 1, 2, 4, 5, 6, 7, 9, 10, 11, 12, 13};
+    int n = 0;
+    for (int i = 0; i < s_triCount; i++) {
+        if (s_triOf[i][0] != 0) {
+            continue;
+        }
+        for (size_t k = 0; k < sizeof(kDrawn); k++) {
+            n += s_triOf[i][1] == kDrawn[k];
+        }
+    }
+    printf("gsb_cull_test: stage loader: %d triangles with an area, %d of them in the parts of "
+           "st18a_p1 frame 4219 drew\n",
+           s_triCount, n);
+    CHECK(strcmp(s_stage[0].name, "st18a_p1") == 0 && n == 14382,
+          "stage loader: %s's drawn parts hold %d triangles, the frame's meshes 14382",
+          s_stage[0].name, n);
+}
+
+/* v0.7.0-rc3, the owner's two captures at the slit place while the camera
+   moved (frames 4219 and 4481: frame-20261012-170845-v8447 and -170855-
+   v8971, 3840 x 2160 at 16:9, Full pixel, half height, framerate uncapped,
+   mirror mode): their views from the dumps' headers, and the camera of the
+   picture on the screen at the second F12 (its PNG is the DISPLAY of the
+   last present, rd_dump_on_demand's rd_read_display: a picture between the
+   ticks), fitted to that picture from the tick's replay (2,101 matched
+   points, 0.2 GS pixel rms): the tick's view turned 3.0 degrees about the
+   same eye.  The camera at this place stands at one eye (1859.4, -65.0,
+   -2560.0: every st18a dump there, i76 frame 5553 and the frames 6856,
+   22117, 4219 and 4481) and only turns.  Checked: at each tick the parts
+   the log names dropped are dropped by this tick's camera alone (the
+   three cameras keep more), and every frame pixel's nearest st18a surface
+   is a part the frame drew, none behind the eye; at the picture between
+   the ticks, every pixel's nearest surface is a part the tick drew; the
+   cull over the turn between the two capture views (10.6 degrees, one
+   tick each way, three cameras) registers every part a picture between
+   shows; and no triangle has a vertex behind the blended eye that is in
+   front of both ticks' eyes (a turn about one eye blends no eye: rule 12
+   cannot drop a triangle between the ticks here).  The slits in these
+   pictures are the stage's own faces, drawn at every tick and between. */
+static const float kSlitView[3][16] = {
+    {-0.140554786f, 0.477280736f, -0.867376029f, 0.0f, 0.0f, 0.876084864f, 0.48207283f, 0.0f,
+     0.990059435f, 0.0677576363f, -0.123137914f, 0.0f, 2795.9397f, -657.116272f, 1329.01965f, 1.0f},
+    {0.0344097987f, 0.532462537f, -0.845698893f, 0.0f, 0.0f, 0.846202791f, 0.532779813f, 0.0f,
+     0.99940455f, -0.0183328446f, 0.0291176662f, 0.0f, 2494.50977f, -982.064819f, 1681.78357f,
+     1.0f},
+    {-0.015146943f, 0.540823402f, -0.840944483f, 0.0f, 0.000223666723f, 0.84104551f, 0.540884361f,
+     0.0f, 0.999881891f, 0.00800695662f, -0.012863849f, 0.0f, 2588.2667f, -930.657541f, 1565.90775f,
+     1.0f}};
+
+/* the parts each capture's log names dropped (st18a_p1, p2, p3) */
+static const char *const kSlitDrops[2][3] = {
+    {"3 8 14 15 16 17 18 19 20", "2 3 5 6", "2 3 7 10 11 12 14 16 17 18 19 20 21"},
+    {"3 8 10 13 14 15 16 17 18 19 20", "1 2 3 5 6", "0 1 2 3 5 6 7 10 11 12 13 17 18 19 20 21"}};
+
+/* the camera v standing still (one camera) at the dump's zoom */
+static void slitCamera(const float *v)
+{
+    for (int k = 0; k < 2; k++) {
+        gsb_SetVSMatrix(ScreenWidth, ScreenHeight, distanceFor(CAPTURE_ZOOM));
+        memcpy(matrixptr + 0x80, v, 16 * sizeof(float));
+        gsb_MakeCommonMatrix();
+        if (k == 0) {
+            tick();
+        }
+    }
+}
+
+/* drawn[part] from a capture's drop lists: 1 for a part the frame drew */
+static void slitDrawn(int cap, unsigned char *drawn, const int *partAt)
+{
+    for (int m = 0; m < s_stageCount; m++) {
+        for (int j = 0; j < s_stage[m].parts; j++) {
+            drawn[partAt[m] + j] = 1;
+        }
+        if (m >= 3) {
+            continue;
+        }
+        const char *p = kSlitDrops[cap][m];
+        while (*p) {
+            char *end;
+            const long j = strtol(p, &end, 10);
+            if (end == p) {
+                break;
+            }
+            if (j >= 0 && j < s_stage[m].parts) {
+                drawn[partAt[m] + j] = 0;
+            }
+            p = end;
+        }
+    }
+}
+
+/* st18a at view v at the native frame's pixels: every triangle's nearest
+   surface against the drawn parts' less the triangles the region rule drops
+   there for a vertex behind the eye (eyeDrops); the pixels without a
+   surface, those whose nearest surface the drawn set lacks, the drops */
+static void slitPicture(const float *v, const unsigned char *drawn, const int *partAt, int *empty,
+                        int *holes, int *eyeDropped)
+{
+    double vd[16], pr[16], sv[16];
+    for (int i = 0; i < 16; i++) {
+        vd[i] = v[i];
+        pr[i] = ((const float *)(matrixptr + 0xC0))[i];
+    }
+    rdcb_mul4d(pr, vd, sv);
+    const int fw = gsFrame.w, fh = ScreenHeight;
+    const double fx = 2048.0 - fw / 2, fy = 2048.0 - fh / 2;
+    for (int i = 0; i < fw * fh; i++) {
+        s_dAll[i] = s_dNow[i] = 0.0f;
+    }
+    *empty = *holes = *eyeDropped = 0;
+    for (int i = 0; i < s_triCount; i++) {
+        double h[12][4];
+        triClip(sv, (const float (*)[3])s_tri[i], h);
+        const int dropped = eyeDrops((const double (*)[4])h);
+        *eyeDropped += dropped;
+        const int n = cutDepth(h, 3);
+        if (n >= 3) {
+            const int reg = drawn[partAt[s_triOf[i][0]] + s_triOf[i][1]] && !dropped;
+            rasterPoly(h, n, fx, fy, fw, 0, 0, fw - 1, fh - 1, reg ? 1 | 4 : 1, i);
+        }
+    }
+    for (int i = 0; i < fw * fh; i++) {
+        *empty += !(s_dAll[i] > 0.0f);
+        *holes += farther(s_dAll[i], s_dNow[i]);
+    }
+}
+
+static void checkStageSlit(void)
+{
+    unsigned char kept[512], drawn[512];
+    int partAt[STAGE_MODELS + 1];
+    setOptions(ICO_FRAMERATE_UNCAPPED, 3840, 2160);
+    CHECK(gsFrame.w == 688, "slit: the native width %d, want 688", gsFrame.w);
+    partAt[0] = 0;
+    for (int m = 0; m < s_stageCount; m++) {
+        partAt[m + 1] = partAt[m] + s_stage[m].parts;
+    }
+    if (partAt[s_stageCount] > 512) {
+        CHECK(0, "slit: %d parts", partAt[s_stageCount]);
+        return;
+    }
+    Cam cams[3];
+    for (int c = 0; c < 3; c++) {
+        cams[c] = camOfView(kSlitView[c]);
+        CHECK(fabs(cams[c].e[0] - 1859.4) < 1.0 && fabs(cams[c].e[1] + 65.0) < 1.0 &&
+                  fabs(cams[c].e[2] + 2560.0) < 1.0,
+              "slit: camera %d's eye (%g, %g, %g), want the place's (1859.4, -65, -2560)", c,
+              cams[c].e[0], cams[c].e[1], cams[c].e[2]);
+    }
+    for (int cap = 0; cap < 2; cap++) {
+        slitCamera(kSlitView[cap]);
+        registerStage(kept, 0);
+        slitDrawn(cap, drawn, partAt);
+        int extra = 0;
+        for (int i = 0; i < partAt[s_stageCount]; i++) {
+            CHECK(drawn[i] || !kept[i],
+                  "slit %d: part %d the log dropped is kept by this tick's "
+                  "camera alone",
+                  cap, i);
+            extra += drawn[i] && !kept[i];
+        }
+        int empty, holes, eyeDropped;
+        slitPicture(kSlitView[cap], drawn, partAt, &empty, &holes, &eyeDropped);
+        printf("gsb_cull_test: slit capture %d (frame %s): this tick's camera alone drops %d parts "
+               "more than the three cameras did; %d of %d frame pixels without a st18a surface, "
+               "%d whose nearest surface the frame did not draw; %d triangles dropped behind the "
+               "eye\n",
+               cap, cap ? "4481" : "4219", extra, empty, gsFrame.w * ScreenHeight, holes,
+               eyeDropped);
+        CHECK(holes == 0 && eyeDropped == 0,
+              "slit %d: %d pixels whose nearest surface the frame did not draw, %d triangles "
+              "dropped behind the eye",
+              cap, holes, eyeDropped);
+    }
+    /* the picture on the screen at the second F12, between the ticks:
+       every pixel's nearest surface is one of the tick's parts */
+    {
+        int empty, holes, eyeDropped;
+        slitDrawn(1, drawn, partAt);
+        slitCamera(kSlitView[2]);
+        slitPicture(kSlitView[2], drawn, partAt, &empty, &holes, &eyeDropped);
+        printf("gsb_cull_test: slit, the picture between the ticks (frame 4481's DISPLAY): %d "
+               "pixels without a st18a surface, %d whose nearest surface the tick did not draw, "
+               "%d triangles dropped behind the eye\n",
+               empty, holes, eyeDropped);
+        CHECK(holes == 0 && eyeDropped == 0,
+              "slit, between the ticks: %d pixels the tick's parts leave, %d triangles dropped "
+              "behind the eye",
+              holes, eyeDropped);
+    }
+    /* the turn between the two capture views as one tick, each way: the
+       three cameras' cull holds every picture between, and no triangle in
+       front of both ticks' eyes is behind the blended one */
+    SweepStats st;
+    memset(&st, 0, sizeof(st));
+    sweepPair("slit 4219 to 4481", &cams[0], &cams[0], &cams[1], CAPTURE_ZOOM, CAPTURE_ZOOM, 0,
+              &st);
+    sweepPair("slit 4481 to 4219", &cams[1], &cams[1], &cams[0], CAPTURE_ZOOM, CAPTURE_ZOOM, 0,
+              &st);
+    long behindBetween = 0;
+    double v0[16], v1[16];
+    for (int i = 0; i < 16; i++) {
+        v0[i] = kSlitView[0][i];
+        v1[i] = kSlitView[1][i];
+    }
+    for (int k = 1; k < 16; k++) {
+        double vt[16];
+        if (!rdcb_blend_view(v0, v1, k / 16.0, vt)) {
+            CHECK(0, "slit: no blended view at t %g", k / 16.0);
+            continue;
+        }
+        for (int i = 0; i < s_triCount; i++) {
+            for (int c = 0; c < 3; c++) {
+                double p[3] = {s_tri[i][c][0], s_tri[i][c][1], s_tri[i][c][2]}, a[4], b[4], o[4];
+                xform(v0, p, a);
+                xform(v1, p, b);
+                xform(vt, p, o);
+                behindBetween += a[2] > 0.0 && b[2] > 0.0 && o[2] <= 0.0;
+            }
+        }
+    }
+    printf("gsb_cull_test: slit, the turn between the captures (%d pairs, %d on three cameras, "
+           "%d pictures): parts a picture shows drawn as the tick before's %d, not drawn %d; "
+           "vertices behind the blended eye in front of both ticks' %ld\n",
+           st.pairs, st.threeCams, st.pictures, st.hidden, st.gaps, behindBetween);
+    CHECK(st.pictures == 30 && st.threeCams == 2 && st.gaps == 0 && st.hidden == 0 &&
+              behindBetween == 0,
+          "slit: the turn between the captures (%d pictures, %d on three cameras): %d parts a "
+          "picture shows not registered, %ld vertices behind the blended eye only",
+          st.pictures, st.threeCams, st.gaps + st.hidden, behindBetween);
+}
+
 static int checkStage(const char *disc)
 {
     if (!loadStage(disc)) {
@@ -2780,8 +3039,10 @@ static int checkStage(const char *disc)
            tris);
     CHECK(s_stageCount >= 3 && tris > 1000, "stage: st18a from the disc");
     CHECK(flattenStage() > 1000, "stage: st18a's triangles");
+    checkStageLoader();
     checkStageDump();
     checkStageCapture();
+    checkStageSlit();
     if (s_eyeWanted) {
         /* the frame is the picture (S1): the eye sweep only */
         checkStageSweep("4:3", 640, 480, 512);

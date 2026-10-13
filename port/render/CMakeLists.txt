@@ -102,6 +102,7 @@ add_library(ico_render STATIC
     rd_fog_path.c # how the fog reads the depth: the paths, the probe, the self-test
     rd_frame.c
     rd_interp.c # interpolation between the retained frames
+    rd_join.c
     rd_mesh.c
     rd_content_hide.c # the content table: stage geometry made for the 4:3 picture
     rd_content_chain.c # Natural chains: the chains a stage animation lets down
