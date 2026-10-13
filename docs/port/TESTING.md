@@ -268,7 +268,8 @@ program under an environment switch ([Environment switches](#environment-switche
 - `rd_shadow_test.c`: the shadow count on the stencil (`rd_shadow`).
 - `rd_state_test.c`: the recording half of rd without a GPU: list order, defaults, state leakage
   (`rd_state`).
-- `rd_tex_test.c`: the texture cache and `Texture.c` on synthetic TIM2 files (`rd_tex`).
+- `rd_tex_test.c`: the texture cache and `Texture.c` on synthetic TIM2 files, and the menu text's
+  halo against its CPU reference (`rd_tex`).
 - `rd_water_test.c`: the surfaces that render to and sample from textures (`rd_water`).
 - `texpack_disc_test.c`: the PCSX2 names of every texture on the disc, and how many of a pack's
   files they reach (`texpack_disc`).
@@ -278,7 +279,7 @@ program under an environment switch ([Environment switches](#environment-switche
 - `texpack_name_test.c`: XXH3, the swizzle and the names against PCSX2's rules (`texpack_name`).
 - `texpack_test.c`: the pack's index and loader on fake files (`texpack`).
 - Helpers: `mesh_env.h` (the mesh tests' game stubs), `vu_models.h` (synthetic models),
-  `sheet_ref.c`/`.h` (the sheet-text shader on the CPU).
+  `sheet_ref.c`/`.h` (the sheet-text shader and the halo on the CPU).
 
 ### port/rhi/test
 
@@ -327,7 +328,9 @@ program under an environment switch ([Environment switches](#environment-switche
   (`gallery_sweep`).
 - `gallery_test.c`: the music gallery's list from the base ELF's tables (`gallery`).
 - `menu_look_test.c`: the menus' Arimo text against the game's menu sheets from the disc
-  (`menu_look`); `menu_sheets.c`/`.h` decode the sheets.
+  (`menu_look`); `menu_sheets.c`/`.h` decode the sheets. Development modes: `ICO_MENU_LOOK_FIT`,
+  `ICO_MENU_LOOK_GEOFIT`, `ICO_MENU_LOOK_HALOFIT` (the halo's gain, levels and per-language gains)
+  and `ICO_MENU_LOOK_DUMP` (each row's sheet rectangle and strip at scales 1, 2 and 4 as PNGs).
 - `menu_text_test.c`: the game's menu words and the port's rows drawn in the sheets' look
   (`menu_text`).
 - `settings_test.c`, `settings_extra_test.c`, `settings_extras_test.c`: the Settings menu over

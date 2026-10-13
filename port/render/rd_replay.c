@@ -2798,20 +2798,19 @@ static uint32_t gsLodWord(const Replay *r, const DrawSetup *ds)
     return (p & ~(7u << 3)) | (mxl << 3);
 }
 
-/* font_sheet_ps's style in DrawCB.param (the rim's weight, rimLevel,
- * fillLevel, dither), the sheet texture's at replay time, and the strip's
- * scale above the dither bit (dither | (scale - 1) << 1, shader_consts.h
- * ICO_SHEET_SCALE_MAX), so a 1x sheet's param[3] is the dither alone. */
+/* font_sheet_ps's style in DrawCB.param, the sheet texture's at replay
+ * time: the halo's weight (rd.h rd_create_texture_sheet W: the rim weight
+ * 1..64 times the gain in 64ths, rounded; 0 without the rim), rimLevel,
+ * fillLevel, dither. */
 static void sheetParam(const RdTexRec *t, float param[4])
 {
     if (!t || t->kind != RD_TEXKIND_IMAGE || t->format != RD_TEXEL_SHEET) {
         return;
     }
-    for (int k = 0; k < 4; k++) {
+    const uint32_t gain = t->sheetGain ? t->sheetGain : 64u;
+    param[0] = t->sheet[0] ? (float)(((uint32_t)t->sheet[0] * gain + 32u) / 64u) : 0.0f;
+    for (int k = 1; k < 4; k++) {
         param[k] = (float)t->sheet[k];
-    }
-    if (t->sheetScale > 1) {
-        param[3] += (float)((t->sheetScale - 1) << 1);
     }
 }
 
