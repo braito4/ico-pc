@@ -1550,7 +1550,7 @@ RdTex gif_HostPlaceholder(unsigned int tbp)
     }
     slot = gs.phCount++;
     gs.ph[slot].tbp = tbp;
-    gs.ph[slot].tex = rd_create_texture(16, 16, px, RD_TEXA_80_80, "R2a placeholder");
+    gs.ph[slot].tex = rd_create_texture(16, 16, px, RD_TEXA_80_80, "placeholder texture");
     return gs.ph[slot].tex;
 }
 
