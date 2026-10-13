@@ -545,7 +545,7 @@ is flushed after each drain, every vsync (`perf_drain`).
 The ctest names are the file names without `_test`: `pace_loop`, `pace_policy`, `perf_block`,
 `window_video`, `hotkeys` (`port/platform/CMakeLists.txt`), `rd_present`, `rd_interp`, `rd_crt`,
 `rd_boot_present` (`port/render/CMakeLists.txt`), `rhi_vk_present_mode` (`port/rhi/CMakeLists.txt`).
-A pacing change runs ([BUILDING.md](../BUILDING.md#building-one-package)):
+A pacing change runs ([BUILDING.md](../BUILDING.md#building-a-few-targets)):
 
 ```sh
 tools/dev_build.sh . pace_policy_test pace_loop_test perf_block_test \
