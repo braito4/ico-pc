@@ -4102,6 +4102,49 @@ static void blankCallback(const RdOverlayCtx *ctx, void *user)
     ovRect(ctx->box.x + OV_RX0, ctx->box.y + OV_RY0, ctx->box.x + OV_RX1, ctx->box.y + OV_RY1, red);
 }
 
+/* issue 87: a ring that cannot grow (a full upload heap) keeps the old
+   one, so the next frame that fits still draws; the frame that needed more
+   is refused; a growth to the doubled size that is refused tries the size
+   the frame needs */
+static void checkRingGrowth(void)
+{
+    RdSettings s = originalSettings();
+    if (!rd_init(512, 512, &s, NULL)) {
+        CHECK(0, "ring: rd_init");
+        return;
+    }
+    for (int i = 0; i < RHI_FRAMES_IN_FLIGHT; i++) {
+        CHECK(rd__begin_own_frame(1u << 20), "ring: a 1 MB frame on slot %d", i);
+    }
+    const uint32_t slot = g_rd.replayCounter % RHI_FRAMES_IN_FLIGHT;
+    const RhiBuffer old = g_rd.ring[slot];
+    const uint64_t c = g_rd.ringCap[slot];
+    CHECK(old.id && c >= (1u << 20) && c % (1u << 20) == 0, "ring: slot %u has %llu bytes", slot,
+          (unsigned long long)c);
+    g_rdRingFailOver = c;
+    CHECK(!rd__begin_own_frame(c + 1), "ring: a frame needing more than a full heap allows");
+    CHECK(g_rd.ring[slot].id == old.id && g_rd.ringCap[slot] == c && g_rd.ringMap[slot] != NULL,
+          "ring: slot %u kept its %llu bytes after a refused growth (now %llu)", slot,
+          (unsigned long long)c, (unsigned long long)g_rd.ringCap[slot]);
+    CHECK(rd__begin_own_frame(1u << 20), "ring: the other slot");
+    CHECK(rd__begin_own_frame(c), "ring: a frame that fits the kept ring draws");
+    CHECK(g_rd.ring[slot].id == old.id, "ring: the kept ring is the one in use");
+    /* doubling twice (4c) refused, the frame's own size (2c + 1 MB) made */
+    g_rdRingFailOver = 3 * c;
+    CHECK(rd__begin_own_frame(1u << 20), "ring: the other slot again");
+    CHECK(rd__begin_own_frame(2 * c + (1u << 20)), "ring: the frame's own size");
+    CHECK(g_rd.ringCap[slot] == 2 * c + (1u << 20) && g_rd.ring[slot].id != old.id,
+          "ring: slot %u grew to %llu bytes (want %llu)", slot,
+          (unsigned long long)g_rd.ringCap[slot], (unsigned long long)(2 * c + (1u << 20)));
+    g_rdRingFailOver = 0;
+    CHECK(rd__begin_own_frame(1u << 20), "ring: the other slot, last");
+    CHECK(rd__begin_own_frame(4 * c), "ring: growth with nothing refused");
+    CHECK(g_rd.ringCap[slot] >= 4 * c, "ring: slot %u grew to %llu bytes", slot,
+          (unsigned long long)g_rd.ringCap[slot]);
+    rhi_wait_idle();
+    rd_shutdown();
+}
+
 static void checkBlank(void)
 {
     const uint32_t w = 800, h = 600;
@@ -4228,6 +4271,7 @@ int main(int argc, char **argv)
     checkPresentPasses(dir);
     checkEffectsDepth();
     checkBlank();
+    checkRingGrowth();
     if (failures) {
         printf("rd_present_test: %d failures\n", failures);
         return 1;

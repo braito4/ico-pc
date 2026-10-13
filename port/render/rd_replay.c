@@ -5504,6 +5504,36 @@ uint64_t rd__texture_ring_bytes(void)
     return total;
 }
 
+uint64_t g_rdRingFailOver; /* rd_internal.h: a test's refusal of larger rings */
+
+static bool newRing(uint64_t cap)
+{
+    if (g_rdRingFailOver && cap > g_rdRingFailOver) {
+        return false;
+    }
+    const RhiBuffer b = rhi_create_buffer(&(RhiBufferDesc){
+        cap,
+        RHI_BUF_VERTEX | RHI_BUF_INDEX | RHI_BUF_UNIFORM | RHI_BUF_STORAGE_READ | RHI_BUF_COPY_SRC,
+        RHI_MEM_UPLOAD, "rd ring"});
+    uint8_t *map = b.id ? rhi_map_buffer(b) : NULL;
+    if (!map) {
+        if (b.id) {
+            rhi_destroy_buffer(b);
+        }
+        return false;
+    }
+    if (g_rd.ring[s_slot].id) {
+        rhi_destroy_buffer(g_rd.ring[s_slot]); /* deferred: this slot's last use may be in flight */
+    }
+    g_rd.ring[s_slot] = b;
+    g_rd.ringMap[s_slot] = map;
+    g_rd.ringCap[s_slot] = cap;
+    return true;
+}
+
+/* The slot's ring of at least `need` bytes: a new one is made before the
+   old one goes, so when it cannot be had (issue 87: a full PCIe BAR
+   window) the old ring stays and the next frame that fits draws */
 static bool ensureRing(uint64_t need)
 {
     if (g_rd.ringCap[s_slot] >= need) {
@@ -5513,27 +5543,23 @@ static bool ensureRing(uint64_t need)
     while (cap < need) {
         cap *= 2;
     }
-    if (g_rd.ring[s_slot].id) {
-        rhi_destroy_buffer(g_rd.ring[s_slot]);
-    }
-    g_rd.ring[s_slot] = rhi_create_buffer(&(RhiBufferDesc){
-        cap,
-        RHI_BUF_VERTEX | RHI_BUF_INDEX | RHI_BUF_UNIFORM | RHI_BUF_STORAGE_READ | RHI_BUF_COPY_SRC,
-        RHI_MEM_UPLOAD, "rd ring"});
-    g_rd.ringMap[s_slot] = g_rd.ring[s_slot].id ? rhi_map_buffer(g_rd.ring[s_slot]) : NULL;
-    g_rd.ringCap[s_slot] = g_rd.ringMap[s_slot] ? cap : 0;
     /* a frame that uploads many pack replacements at once (a
        stage change) can need a ring of hundreds of MB; the ring never
        shrinks, so its large sizes are named in the log */
-    if (!g_rd.ringMap[s_slot]) {
+    const uint64_t exact = (need + (1u << 20) - 1) & ~(uint64_t)((1u << 20) - 1);
+    if (!newRing(cap) && !(exact < cap && newRing(exact))) {
         rd__log("the upload ring of frame slot %d could not grow to %llu MB (this frame needs "
-                "%llu MB)",
-                (int)s_slot, (unsigned long long)(cap >> 20), (unsigned long long)(need >> 20));
-    } else if (cap >= (64ull << 20)) {
-        rd__log("the upload ring of frame slot %d grows to %llu MB (this frame needs %llu MB)",
-                (int)s_slot, (unsigned long long)(cap >> 20), (unsigned long long)(need >> 20));
+                "%llu MB; it keeps %llu MB)",
+                (int)s_slot, (unsigned long long)(cap >> 20), (unsigned long long)(need >> 20),
+                (unsigned long long)(g_rd.ringCap[s_slot] >> 20));
+        return false;
     }
-    return g_rd.ringMap[s_slot] != NULL;
+    if (g_rd.ringCap[s_slot] >= (64ull << 20)) {
+        rd__log("the upload ring of frame slot %d grows to %llu MB (this frame needs %llu MB)",
+                (int)s_slot, (unsigned long long)(g_rd.ringCap[s_slot] >> 20),
+                (unsigned long long)(need >> 20));
+    }
+    return true;
 }
 
 bool rd__begin_own_frame(uint64_t ringBytes)

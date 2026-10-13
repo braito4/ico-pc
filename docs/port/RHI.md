@@ -265,7 +265,12 @@ with). Each frame slot owns a command pool, descriptor pools and the objects des
 recorded; every submit signals the next value of one timeline semaphore that `rhi_wait_frame` waits
 on; the first submit after an acquire waits on its semaphore and the present on the image's
 `renderDone` (`port/rhi/vk/vk_pipeline.c`; `port/rhi/vk/vk_cmd.c`, header comment). Every buffer and
-texture has its own `VkDeviceMemory` (`port/rhi/vk/vk_resource.c`, header comment).
+texture has its own `VkDeviceMemory` (`port/rhi/vk/vk_resource.c`, header comment). Each memory kind
+tries an ordered list of memory types, and a type the driver refuses (a full heap) passes the
+allocation to the next: uploads go to a device-local, host-visible type first, but one whose heap is
+under 1 GB (the PCIe BAR window without resizable BAR) takes uploads of up to 16 MB only, and once it
+refused an allocation it is tried last, so uploads go through system memory
+(`port/rhi/vk/vk_memory.c`, `vkr_memory_candidates`).
 
 **Android surface.** With a driver the app loaded itself the instance belongs to another loader, so
 `vk_surface_android.c` makes the surface through the `vkGetInstanceProcAddr` given to volk instead

@@ -666,7 +666,9 @@ static bool vkr_pick_device(void)
     /* the heaps, and the one uploads (the renderer's ring, texture
        pack uploads) come from: a device-local, host-visible type first
        (vkr_allocate), which without resizable BAR is a window of about
-       256 MB that every upload buffer shares */
+       256 MB that every upload buffer shares: under 1 GB it takes uploads
+       of up to 16 MB only, and a full window sends them to system memory
+       (vk_memory.c) */
     for (uint32_t i = 0; i < g_vkr.memProps.memoryHeapCount; i++) {
         const VkMemoryHeap *mh = &g_vkr.memProps.memoryHeaps[i];
         VKR_LOG("memory heap %u: %llu MB%s", i, (unsigned long long)(mh->size >> 20),
@@ -682,8 +684,15 @@ static bool vkr_pick_device(void)
             i++;
         }
         if (i < g_vkr.memProps.memoryTypeCount) {
-            VKR_LOG("uploads prefer memory heap %u (device-local and host-visible)",
-                    g_vkr.memProps.memoryTypes[i].heapIndex);
+            const uint32_t heap = g_vkr.memProps.memoryTypes[i].heapIndex;
+            if (vkr_memory_small_window(&g_vkr.memProps, i)) {
+                VKR_LOG("uploads prefer memory heap %u (device-local and host-visible; a %llu MB "
+                        "window: uploads over %llu MB go through system memory)",
+                        heap, (unsigned long long)(g_vkr.memProps.memoryHeaps[heap].size >> 20),
+                        (unsigned long long)(VKR_SMALL_WINDOW_MAX_BYTES >> 20));
+            } else {
+                VKR_LOG("uploads prefer memory heap %u (device-local and host-visible)", heap);
+            }
         } else {
             VKR_LOG("uploads use host memory (no device-local, host-visible type)");
         }

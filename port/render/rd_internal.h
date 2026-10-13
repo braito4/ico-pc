@@ -1956,6 +1956,9 @@ void rd__wait_frame(void);
  * with the RHI's frames and rd__frame_group, rd__crt_group and the like
  * work.  False when the ring cannot be had. */
 bool rd__begin_own_frame(uint64_t ringBytes);
+/* Tests only: a ring larger than this many bytes (0: none) cannot be made,
+ * as on a device whose upload memory is full (rd_replay.c ensureRing). */
+extern uint64_t g_rdRingFailOver;
 /* Ring allocation for the frame being replayed. */
 uint64_t rd__ring_alloc(uint64_t size, uint64_t align);
 /* Binds u at group index `group` with its offset (rhi_cmd_set_bind_group_offsets). */

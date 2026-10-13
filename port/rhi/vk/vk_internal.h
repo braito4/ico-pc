@@ -318,6 +318,12 @@ typedef struct VkrState {
     uint64_t memLiveBytes, memPeakBytes;
     uint32_t memNextLog; /* the live count whose crossing logs next */
     bool memLimitLogged, samplerLimitLogged;
+    /* vkr_allocate's fallback: the small device-local, host-visible
+     * windows (vkr_memory_small_window) that refused an allocation, a bit
+     * per memory type, tried last from then on; the kinds (RhiMemory) whose
+     * first fallback was logged */
+    uint32_t memTypeFull;
+    bool memFallbackLogged[3];
     /* ICO_VK_FAKE_LIMITS (vk_device.c vkr_fake_limits): props.limits were
      * clamped to a named device's (mali); fakeMinLimits: =min, the
      * RhiLimits the renderer reads are lowered to the spec's required
@@ -353,9 +359,6 @@ static inline VkrFrame *vkr_cur_frame(void)
 }
 
 /* vk_resource.c */
-bool vkr_find_memory_type(uint32_t typeBits, VkMemoryPropertyFlags want,
-                          VkMemoryPropertyFlags avoid, uint32_t *out);
-
 void vkr_defer(VkrGarbageKind kind, uint64_t handle);
 /* a device memory object's deferred free, with its size for the counts */
 void vkr_defer_memory(VkDeviceMemory memory, VkDeviceSize size);
@@ -405,6 +408,28 @@ const char *vkr_present_mode_name(VkPresentModeKHR m);
  * offered, an RTX 3090 on Windows showed nothing usable in mailbox mode at
  * 120/144/240 and under the vsync lock. */
 bool vkr_present_wait_wanted(bool offered, const char *asked, bool canThread);
+
+/* vk_memory.c: the memory types an allocation of `kind` tries, in order,
+ * into out[] (the count returned; distinct type indices of typeBits):
+ *   RHI_MEM_DEVICE: device-local, then any;
+ *   RHI_MEM_UPLOAD: device-local + host-visible + coherent, then
+ *     host-visible + coherent and not device-local (system memory), then
+ *     any host-visible + coherent;
+ *   RHI_MEM_READBACK: host-visible + coherent + cached, then host-visible +
+ *     cached, then host-visible + coherent.
+ * An upload over VKR_SMALL_WINDOW_MAX_BYTES skips a small window (a
+ * device-local, host-visible type whose heap is under
+ * VKR_SMALL_WINDOW_HEAP_BYTES: the PCIe BAR without resizable BAR), and the
+ * types in `full` (a bit per type index; vkr_allocate sets a window's bit
+ * when it refused an allocation) are skipped too; either comes back at the
+ * end of the list as a last resort.  vkr_memory_small_window: whether
+ * `type` is such a window. */
+#define VKR_SMALL_WINDOW_HEAP_BYTES (1024ull << 20)
+#define VKR_SMALL_WINDOW_MAX_BYTES (16ull << 20)
+uint32_t vkr_memory_candidates(RhiMemory kind, uint32_t typeBits, VkDeviceSize size,
+                               const VkPhysicalDeviceMemoryProperties *props, uint32_t full,
+                               uint32_t out[VK_MAX_MEMORY_TYPES]);
+bool vkr_memory_small_window(const VkPhysicalDeviceMemoryProperties *props, uint32_t type);
 
 /* vk_swapchain.c */
 #ifdef __ANDROID__

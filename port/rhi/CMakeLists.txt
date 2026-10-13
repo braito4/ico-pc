@@ -163,8 +163,8 @@ endif()
 
 # --- ico_rhi_vulkan -------------------------------------------------------------
 if(_ico_have_vk)
-    set(_ico_vk_sources rhi_driver_version.c vk/vk_cmd.c vk/vk_device.c vk/vk_pipeline.c
-                        vk/vk_present_mode.c vk/vk_resource.c vk/vk_swapchain.c)
+    set(_ico_vk_sources rhi_driver_version.c vk/vk_cmd.c vk/vk_device.c vk/vk_memory.c
+                        vk/vk_pipeline.c vk/vk_present_mode.c vk/vk_resource.c vk/vk_swapchain.c)
     if(ANDROID)
         # the window's surface through the loader in use (a
         # driver the program loaded, or the system's)
@@ -265,6 +265,19 @@ if(_ico_have_vk)
     target_compile_options(rhi_vk_present_mode_test PRIVATE ${ICO_SEMANTIC_OPTIONS}
                            ${ICO_PORT_WARNINGS})
 
+    # The memory types each allocation kind tries (vk/vk_memory.c) over
+    # hand-built heap tables: the order, the small BAR window rule, the
+    # fallback past a full type; no device.
+    add_executable(rhi_vk_memory_test test/rhi_vk_memory_test.c vk/vk_memory.c)
+    target_include_directories(rhi_vk_memory_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}"
+                               "${ICO_VOLK_DIR}" "${ICO_VULKAN_INCLUDE_DIR}")
+    if(ICO_RHI_MOLTENVK)
+        target_compile_definitions(rhi_vk_memory_test PRIVATE ICO_RHI_MOLTENVK=1)
+    else()
+        target_compile_definitions(rhi_vk_memory_test PRIVATE VK_NO_PROTOTYPES)
+    endif()
+    target_compile_options(rhi_vk_memory_test PRIVATE ${ICO_SEMANTIC_OPTIONS} ${ICO_PORT_WARNINGS})
+
     # Headless rendering on whatever device is present (lavapipe in the
     # container); exits 77 (skipped) when there is no Vulkan device.
     add_executable(rhi_vk_test test/rhi_vk_test.c ${_ico_rhi_test_common})
@@ -289,6 +302,7 @@ if(_ico_have_vk)
     if(ICO_RUN_TESTS)
         add_test(NAME rhi_vk_enum COMMAND rhi_vk_enum_test)
         add_test(NAME rhi_vk_present_mode COMMAND rhi_vk_present_mode_test)
+        add_test(NAME rhi_vk_memory COMMAND rhi_vk_memory_test)
         add_test(NAME rhi_vk COMMAND rhi_vk_test)
         set_tests_properties(rhi_vk PROPERTIES SKIP_RETURN_CODE 77)
         # The validation layer tools/fetch_deps.sh unpacks, with

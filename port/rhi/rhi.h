@@ -825,6 +825,9 @@ typedef struct RhiStats {
      * the most ever, their bytes, and the device's limit on their number
      * (Vulkan; 0 elsewhere) */
     uint64_t memoryLive, memoryPeak, memoryLiveBytes, memoryPeakBytes, memoryLimit;
+    /* allocations a memory type of their kind refused that another took
+     * (Vulkan: a full PCIe BAR window, uploads then in system memory) */
+    uint64_t memoryFallbacks;
 } RhiStats;
 
 void rhi_get_stats(RhiStats *out);

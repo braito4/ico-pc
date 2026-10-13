@@ -5,20 +5,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* ------------------------------------------------------------ memory types */
-bool vkr_find_memory_type(uint32_t typeBits, VkMemoryPropertyFlags want,
-                          VkMemoryPropertyFlags avoid, uint32_t *out)
-{
-    for (uint32_t i = 0; i < g_vkr.memProps.memoryTypeCount; i++) {
-        VkMemoryPropertyFlags f = g_vkr.memProps.memoryTypes[i].propertyFlags;
-        if ((typeBits & (1u << i)) && (f & want) == want && (f & avoid) == 0) {
-            *out = i;
-            return true;
-        }
-    }
-    return false;
-}
-
 /* every vkFreeMemory, so the live counts stay right */
 void vkr_free_memory(VkDeviceMemory memory, VkDeviceSize size)
 {
@@ -80,57 +66,77 @@ static void vkr_memory_counted(VkDeviceSize size)
     }
 }
 
+/* One VkDeviceMemory of a kind: the memory types vkr_memory_candidates
+   lists (vk_memory.c), each tried in turn while the driver refuses
+   (VK_ERROR_OUT_OF_DEVICE_MEMORY: a full heap), so a full PCIe BAR window
+   sends uploads to system memory instead of failing them.  A window that
+   refused is tried last from then on (memTypeFull); the first fallback of
+   each kind is logged.  *coherent: whether the type taken is
+   host-coherent. */
 static bool vkr_allocate(const VkMemoryRequirements *req, RhiMemory kind, VkDeviceMemory *out,
                          bool *coherent)
 {
-    uint32_t type = 0;
+    *out = VK_NULL_HANDLE;
     if (!vkr_memory_room(req->size)) {
         return false;
     }
-    const VkMemoryPropertyFlags hv = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
-    const VkMemoryPropertyFlags hc = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-    bool ok = false;
-    switch (kind) {
-    case RHI_MEM_DEVICE:
-        ok = vkr_find_memory_type(req->memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0,
-                                  &type) ||
-             vkr_find_memory_type(req->memoryTypeBits, 0, 0, &type);
-        break;
-    case RHI_MEM_UPLOAD:
-        /* device-local and host-visible (resizable BAR / UMA) first, then
-         * plain host memory; always coherent so writes need no flush */
-        ok = vkr_find_memory_type(req->memoryTypeBits,
-                                  hv | hc | VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0, &type) ||
-             vkr_find_memory_type(req->memoryTypeBits, hv | hc, 0, &type);
-        break;
-    case RHI_MEM_READBACK:
-        ok = vkr_find_memory_type(req->memoryTypeBits, hv | hc | VK_MEMORY_PROPERTY_HOST_CACHED_BIT,
-                                  0, &type) ||
-             vkr_find_memory_type(req->memoryTypeBits, hv | VK_MEMORY_PROPERTY_HOST_CACHED_BIT, 0,
-                                  &type) ||
-             vkr_find_memory_type(req->memoryTypeBits, hv | hc, 0, &type);
-        break;
-    }
-    if (!ok) {
+    uint32_t cand[VK_MAX_MEMORY_TYPES];
+    const uint32_t n = vkr_memory_candidates(kind, req->memoryTypeBits, req->size, &g_vkr.memProps,
+                                             g_vkr.memTypeFull, cand);
+    if (n == 0) {
         VKR_LOG("no memory type for kind %d (bits 0x%x)", (int)kind, req->memoryTypeBits);
         return false;
     }
-    if (coherent) {
-        *coherent = (g_vkr.memProps.memoryTypes[type].propertyFlags & hc) != 0;
-    }
-    VkMemoryAllocateInfo ai = {
-        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-        .allocationSize = req->size,
-        .memoryTypeIndex = type,
-    };
-    if (!VKR_CHECK(vkAllocateMemory(g_vkr.device, &ai, NULL, out))) {
-        VKR_LOG("a %.0f KB device memory allocation failed with %u alive (%.0f MB)",
-                (double)req->size / 1024.0, g_vkr.memLive, (double)g_vkr.memLiveBytes / 1048576.0);
+    VkResult r = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+    for (uint32_t c = 0; c < n; c++) {
+        const uint32_t type = cand[c];
+        VkMemoryAllocateInfo ai = {
+            .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+            .allocationSize = req->size,
+            .memoryTypeIndex = type,
+        };
+        r = vkAllocateMemory(g_vkr.device, &ai, NULL, out);
+        if (r == VK_SUCCESS) {
+            if (c > 0 && (unsigned)kind < 3u && !g_vkr.memFallbackLogged[kind]) {
+                const uint32_t refused = cand[0];
+                const uint32_t heap = g_vkr.memProps.memoryTypes[refused].heapIndex;
+                const unsigned mb = (unsigned)(g_vkr.memProps.memoryHeaps[heap].size >> 20);
+                g_vkr.memFallbackLogged[kind] = true;
+                if (kind == RHI_MEM_UPLOAD && vkr_memory_small_window(&g_vkr.memProps, refused)) {
+                    VKR_LOG("the device-local host-visible heap is full (%u MB): uploads go "
+                            "through system memory from now on",
+                            mb);
+                } else {
+                    VKR_LOG("memory type %u (heap %u, %u MB) refused a %.0f KB allocation "
+                            "(VkResult %d): memory type %u (heap %u) took it",
+                            refused, heap, mb, (double)req->size / 1024.0, (int)r, type,
+                            g_vkr.memProps.memoryTypes[type].heapIndex);
+                }
+            }
+            if (c > 0) {
+                g_vkr.stats.memoryFallbacks++;
+            }
+            if (coherent) {
+                *coherent = (g_vkr.memProps.memoryTypes[type].propertyFlags &
+                             VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0;
+            }
+            vkr_memory_counted(req->size);
+            return true;
+        }
         *out = VK_NULL_HANDLE;
-        return false;
+        if (r == VK_ERROR_DEVICE_LOST) {
+            break;
+        }
+        if (vkr_memory_small_window(&g_vkr.memProps, type)) {
+            g_vkr.memTypeFull |= 1u << type;
+        }
     }
-    vkr_memory_counted(req->size);
-    return true;
+    vkr_check(r, "vkAllocateMemory", __FILE__, __LINE__); /* the log line, device lost */
+    VKR_LOG("a %.0f KB device memory allocation failed in %u memory type%s with %u alive "
+            "(%.0f MB)",
+            (double)req->size / 1024.0, n, n == 1 ? "" : "s", g_vkr.memLive,
+            (double)g_vkr.memLiveBytes / 1048576.0);
+    return false;
 }
 
 static void vkr_set_name(VkObjectType type, uint64_t handle, const char *name)
