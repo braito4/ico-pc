@@ -49,7 +49,7 @@ on.
 | Linux handheld or board, 64-bit ARM: Debian 13, Ubuntu 24.04 or newer | `-linux-arm64.tar.gz` | Tested on one handheld so far. |
 | Android phone or tablet, 64-bit, Android 10 or newer (usually 2022 or newer) | `-android.apk` | Supported. It can be slower than on a PC. [The Android guide](docs/ANDROID.md). |
 | iPhone, iOS 15 or newer, through [LiveContainer](https://github.com/LiveContainer/LiveContainer) | `-ios-unsigned.ipa` | Contributed by katsifolis. The maintainer has no Apple device, so these builds are not tested here; problem reports are welcome. |
-| Apple-silicon Mac, macOS 12 or newer | No download yet: build it yourself with `tools/package_macos.sh` ([Building](docs/BUILDING.md#macos-application)) | Contributed by katsifolis and braito4, untested by the maintainer. |
+| Apple-silicon Mac, macOS 12 or newer | No download yet: build it yourself with `tools/package_macos.sh` ([Building](docs/BUILDING.md#macos-application)) | Contributed by braito4, untested by the maintainer. |
 
 Not supported: 32-bit systems, Windows 7 and 8, Intel Macs, and any disc
 other than the PAL release (SCES-50760).
@@ -173,9 +173,8 @@ You do not need the disc image to build it.
 - Sad Origami, for the ICO PAL HD texture pack, and for the support and
   blessing to test the port with it
   ([GBAtemp thread](https://gbatemp.net/threads/ps2-ico-pal-sces-50760-in-progress.671638/)).
-- katsifolis, for the iOS (through LiveContainer) and Apple-silicon macOS
-  support.
-- braito4, for the native macOS app.
+- katsifolis, for the iOS support (through LiveContainer).
+- braito4, for the Apple-silicon macOS app.
 
 ## Legal and licence
 

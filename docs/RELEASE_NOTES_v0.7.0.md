@@ -3,7 +3,7 @@
 - Full pixel now draws the picture at your screen's exact pixels when Resolution is set to your window's size, and it is on by default with the Enhanced preset. If you played an earlier version, turn it on under Options > Effects, or pick the Enhanced preset again.
 - The Analogue stick fix is also on the Controls page, and Achievement pop-ups are also under Extras.
 - The Anti-aliasing row goes Off, MSAA 2x, 4x, 8x, then 2x and 4x supersampling, and shows when a saved choice is not available on your graphics card.
-- iOS (through LiveContainer) and Apple-silicon macOS builds, contributed by katsifolis, with the macOS app by braito4.
+- iOS (through LiveContainer) builds, contributed by katsifolis, and an Apple-silicon macOS app, contributed by braito4.
 - The README now has a [supported platforms table](https://github.com/nathanialf/ico-pc#supported-platforms): what to download for each device and how well each one is tested.
 
 ## Fixed
