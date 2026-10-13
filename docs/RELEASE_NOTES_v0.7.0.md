@@ -20,4 +20,4 @@
 ## Known issues
 
 - Some ghosting while the camera moves (a faint trailing image) remains in every area. You can try other Frame rate settings, or the Direct3D 12 renderer on Windows, see [Choosing the renderer on Windows](https://github.com/nathanialf/ico-pc/blob/main/docs/OPTIONS.md#choosing-the-renderer-on-windows).
-- A few wall pieces still jitter briefly as the camera turns in the chandelier room and at the main gate; the courtyard with the sunbeams is mostly cured.
+- Seams between wall pieces can flicker briefly as the camera turns in a few places, the chandelier room and the main gate most; the courtyard with the sunbeams is mostly cured.
