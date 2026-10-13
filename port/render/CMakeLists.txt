@@ -477,10 +477,12 @@ target_compile_options(fog_lut_test PRIVATE ${ICO_SEMANTIC_OPTIONS} ${ICO_GAME_L
 # staticBlur.c with the 2D layer and Matrix.c, as the window build has
 # them, the rest of the game stubbed: the commands each entry point records,
 # then on a device every effect against a CPU model of the same GS
-# arithmetic, and 600 frames of the motion blur and aura feedback (77
-# without a device, after the recording checks).
+# arithmetic, and 600 frames of the motion blur and aura feedback, and
+# the aura at Enhanced 4x against the model at scale with the above-1x
+# kernels (test/above1x_ref.c) (77 without a device, after the recording
+# checks).
 ico_include_dirs(sugipon _ico_sugipon_incs)
-add_executable(rd_blur_test test/rd_blur_test.c
+add_executable(rd_blur_test test/rd_blur_test.c test/above1x_ref.c
     "${CMAKE_SOURCE_DIR}/ico2/sugipon/src/staticBlur.c"
     "${CMAKE_SOURCE_DIR}/ico2/seki/src/Matrix.c"
     "${CMAKE_SOURCE_DIR}/ico2/seki/src/GifPacket.c"

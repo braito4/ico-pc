@@ -1439,8 +1439,21 @@ enum {
     RD_FXF_FBA = 512,
     RD_FXF_DATE = 1024,
     RD_FXF_DATM = 2048,
-    RD_FXF_DST = 4096 /* t2 holds the destination as it was before the sprite */
+    RD_FXF_DST = 4096, /* t2 holds the destination as it was before the sprite */
+    /* above 1x: the resampling kernels, the steps in DrawCB.scale[3]
+     * (rd_replay.c doBlurSpriteDraw); never set when every target involved
+     * is at scale 1 */
+    RD_FXF_ABOVE1X = 8192
 };
+
+/* The steps at which fx_sprite_ps leaves the GS's own filter above 1x, in
+ * 1/32 t1 texel per bound texel (common.hlsli GS_RS_BOX_MIN32 and
+ * GS_RS_BSPLINE_MAX32): the box above 2 texels, the B-spline (bilinear
+ * only) below half a texel; the packed steps (DrawCB.scale[3]) hold up to
+ * RD_FX_STEP_MAX each */
+#define RD_FX_BOX_MIN32 64
+#define RD_FX_BSPLINE_MAX32 16
+#define RD_FX_STEP_MAX 4095
 
 /* ------------------------------------------------------------- context */
 #define RD_SAMPLER_COUNT 16 /* mag x min x wrapS x wrapT */
@@ -1476,6 +1489,9 @@ typedef struct RdContext {
     RdTexRec *textures; /* RD_MAX_TEXTURES */
     RdMeshRec *meshes;  /* RD_MAX_MESHES */
     RdStats stats;
+    /* staticBlur sprites drawn with RD_FXF_ABOVE1X since rd_init (rd_replay.c
+     * doBlurSpriteDraw): 0 while every target is at scale 1 */
+    uint32_t above1xDraws;
     uint32_t onceFlags;
 
     /* GPU objects (rd_replay.c / rd_pipeline.c) */

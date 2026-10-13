@@ -483,6 +483,58 @@ integer arithmetic of every pass, feedback or not (`port/render/rd_blur.c`). Wit
 reduction's textured sprite is drawn with the whole target as scissor and both axes clamped, so
 the border shows the picture SCENE holds (`port/render/rd_replay.c` (`doBlurSprite`)).
 
+## Above 1x
+
+At scale 1 every pass samples as the GS does. On a scaled target a pass that steps over many
+texels a pixel (a decimation) or spreads one texel over many pixels (a magnification) would show
+the GS's few taps as a grid at the finer resolution, so those passes resample instead. The rule is
+one separable kernel per axis, chosen by the step (source texels per destination texel) and
+centred on the GS's own sample point, so the picture's columns land where they do at 1x and the
+4:3 columns are the same at every aspect (`port/shaders/common.hlsli`, the "Above 1x" block):
+
+| step | kernel | weights |
+| --- | --- | --- |
+| above 2 texels | area box of the step's width | each texel's overlap in 1/32 texel (`gs_box_w`), summing to the step |
+| below half a texel, bilinear | cubic B-spline (B = 1, C = 0: no overshoot on alpha masks), four taps | from the GS's 4-bit fraction in 1/24576 (`gs_bspline_w`) |
+| otherwise | the GS's own taps on that axis | bilinear 16 - f and f, or nearest |
+
+The kernels are integers throughout, and the block is valid C as well as HLSL, so a CPU model gives
+the GPU's bytes (`port/render/test/above1x_ref.c`, `port/shaders/test/shaders_pixel_test.c`
+(`checkAbove1xKernels`)). Two entry points:
+
+- Load-based: `gs_resample_axis` gives an axis's taps (`GsAxis`, with `gs_resample_weight` and
+  `gs_resample_div`); the caller fetches each tap with its own addressing and combines the rows
+  with four extra bits, `R' = (16 sum(wx t) + Dx / 2) / Dx`, then
+  `(sum(wy R') + 8 Dy) / (16 Dy)`, within 32 bits (`port/shaders/common.hlsli`).
+- Sampler-based: `gs_bspline_bilinear4` folds each axis's four B-spline weights into two hardware
+  bilinear taps, four taps in all, for a sampler that addresses as the draw does; the filter's own
+  weight precision makes it inexact (`port/shaders/common.hlsli` (`gs_bspline_bilinear4`)).
+
+`gs_bayer8` is the 8x8 ordered-dither threshold, computed in the shader from the texel's
+coordinates (`port/shaders/common.hlsli` (`gs_bayer8`)).
+
+**The staticBlur sprites.** `doBlurSpriteDraw` sets `RD_FXF_ABOVE1X` on a sprite that samples a
+target when the bound target or the source has a scale other than 1 (the predicate
+`rd__blur_screen_fallback` takes) and an axis leaves the GS's filter: its steps, computed on the
+CPU from the rectangle and UV extents and the two scales, rounded to 1/32 texel, go to the shader in
+`DrawCB.scale[3]` as `step32x * 4096 + step32y` (`port/render/rd_replay.c` (`blurAbove1xSteps`,
+`doBlurSpriteDraw`), `port/render/rd_internal.h` (`RD_FX_BOX_MIN32`, `RD_FX_BSPLINE_MAX32`)).
+`fx_sprite_ps` then resamples about the GS's U and V in the source's 12.4 texels, each tap fetched
+as `fx_texel` fetches (CLAMP or REPEAT on the TEX0 size, the backing texture's clamp, TEXA before
+filtering), and TFX, the tests and the blend follow in integers as before
+(`port/shaders/fx_sprite.hlsl` (`fx_sprite_ps`)). The pipelines are the same; only the per-draw
+constants differ. The gate is the scale, never the step: at scale 1 the chains' own 4:1 and 3.5:1
+steps stay the GS's point samples, so the out-of-the-box picture is the GS's arithmetic as before.
+Images are never resampled. `g_rd.above1xDraws` counts the flagged sprites since `rd_init`
+(`port/render/rd_internal.h` (`RdContext`)).
+
+At Enhanced 4x (NTSC: SCENE 4x, the work buffers 2x) the aura's chain takes the box for SCENE and
+AURA_WORK into FEED128 (8 texels across, 8 or 7 down) and AURA_WORK into WORK0 (4 across, 8 down),
+and the B-spline for FEED128 and AURA_TAP back over the frame (1/8 to 5/32 texel a pixel);
+`rd_blur_test`'s `above1x` case compares every target with a CPU model at scale to the bit, and
+every comparison at scale 1 finds no sprite flagged (`port/render/test/rd_blur_test.c`
+(`checkAbove1x`, `compareAll`)).
+
 ## Shadows
 
 The PS2 adds each shadow-volume face into a scene-sized buffer (FBP 0x142) with ALPHA 0x68 FIX

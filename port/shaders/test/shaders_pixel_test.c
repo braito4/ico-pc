@@ -14,6 +14,13 @@
  *           lerp with As 0x40 blends by 0x40 and stores alpha 0xC0
  *   pass 2  blit_ps: identity tint copy of pass 1 (exact), then tinted
  *   pass 3  blend_int_ps: three GS blends on RGBA8_UINT textures (exact)
+ *   above1x (CPU, before the device) common.hlsli's above-1x kernels
+ *           compiled as C against port/render/test/above1x_ref.c:
+ *           gs_bayer8 the Bayer matrix's recursion (each value once a
+ *           block), gs_bspline_w the B-spline's distance form (each fraction's weights summing to
+ *           24576, mirror-symmetric), gs_box_w the counted overlap, the
+ *           axes' kinds and taps, and fx_sprite_ps's separable combine over
+ *           a noise texture, every step from 0 to past the box's widest
  *
  * --nodual (ctest shaders_pixel_nodual): sprite_ps_nodual,
  * and the draws that read the second output (the lerps, Cd*FIX + Cs, the
@@ -26,6 +33,8 @@
  * Exit 0 on success, 1 on a mismatch, 77 (skipped) without a Vulkan device. */
 #include "hlsl_shim.h"
 #include "gs_math.hlsli"
+#include "common.hlsli"
+#include "above1x_ref.h"
 #include "rhi.h"
 #include "shader_consts.h"
 #include "shaders_gen.h"
@@ -169,9 +178,158 @@ static void setTex(IcoDrawCB *cb, float w, float h)
     cb->tex[3] = 1.0f / h;
 }
 
+/* ------------------------------------------------------------ above 1x */
+
+_Static_assert(GS_RS_BOX_MIN32 == A1X_BOX_MIN32 && GS_RS_BSPLINE_MAX32 == A1X_BSPLINE_MAX32 &&
+                   GS_RS_BOX_MAX32 == A1X_BOX_MAX32 && GS_RS_BSPLINE_DIV == A1X_BSPLINE_DIV,
+               "common.hlsli's above-1x constants are above1x_ref.h's");
+
+static uint32_t a1xNoise(int x, int y, int ch)
+{
+    uint32_t h = (uint32_t)x * 0x9E3779B1u ^ (uint32_t)y * 0x85EBCA77u ^ (uint32_t)ch * 0xC2B2AE3Du;
+    h ^= h >> 15;
+    h *= 0x2C1B3C6Du;
+    h ^= h >> 12;
+    return h & 255u;
+}
+
+static void a1xFetch(void *user, int x, int y, uint32_t out[4])
+{
+    (void)user;
+    for (int ch = 0; ch < 4; ch++) {
+        out[ch] = a1xNoise(x, y, ch);
+    }
+}
+
+/* fx_sprite_ps's FXF_ABOVE1X combine with the hlsli's axis functions */
+static void a1xShader(int c16x, int c16y, int sx, int sy, uint linear, uint32_t out[4])
+{
+    const int kx = gs_rs_kind(sx, linear), ky = gs_rs_kind(sy, linear);
+    const int fx = gs_rs_first(kx, c16x, sx, linear), nx = gs_rs_count(kx, c16x, sx, linear);
+    const int fy = gs_rs_first(ky, c16y, sy, linear), ny = gs_rs_count(ky, c16y, sy, linear);
+    const uint dx = (uint)gs_rs_div(kx, sx, linear), dy = (uint)gs_rs_div(ky, sy, linear);
+    uint32_t sum[4] = {0, 0, 0, 0};
+    for (int j = 0; j < ny; j++) {
+        uint32_t row[4] = {0, 0, 0, 0};
+        for (int i = 0; i < nx; i++) {
+            const uint w = (uint)gs_rs_weight(kx, c16x, sx, linear, i);
+            for (int ch = 0; ch < 4; ch++) {
+                row[ch] += a1xNoise(fx + i, fy + j, ch) * w;
+            }
+        }
+        const uint wy = (uint)gs_rs_weight(ky, c16y, sy, linear, j);
+        for (int ch = 0; ch < 4; ch++) {
+            sum[ch] += ((row[ch] * 16u + dx / 2u) / dx) * wy;
+        }
+    }
+    for (int ch = 0; ch < 4; ch++) {
+        out[ch] = (sum[ch] + 8u * dy) / (16u * dy);
+    }
+}
+
+static void checkAbove1xKernels(void)
+{
+    const int f0 = failures;
+    /* the Bayer matrix: its recursion, each value once in a block */
+    int seen[64] = {0};
+    for (uint y = 0; y < 8; y++) {
+        for (uint x = 0; x < 8; x++) {
+            const uint b = gs_bayer8(x, y);
+            if (b > 63 || b != a1x_bayer8(x, y) || gs_bayer8(x + 8, y + 16) != b) {
+                printf("FAIL above1x: gs_bayer8(%u, %u) = %u, the recursion %u\n", x, y, b,
+                       a1x_bayer8(x, y));
+                failures++;
+            } else {
+                seen[b]++;
+            }
+        }
+    }
+    for (int v = 0; v < 64; v++) {
+        if (seen[v] != 1) {
+            printf("FAIL above1x: Bayer value %d appears %d times\n", v, seen[v]);
+            failures++;
+        }
+    }
+    /* the B-spline: the distance form, sums, mirror symmetry, no negative
+     * weight */
+    for (uint f = 0; f < 16; f++) {
+        int sum = 0;
+        for (uint k = 0; k < 4; k++) {
+            const int w = gs_bspline_w(f, k);
+            sum += w;
+            if (w != a1x_bspline_w(f, k) || w < 0 ||
+                (f > 0 && w != gs_bspline_w(16u - f, 3u - k))) {
+                printf("FAIL above1x: gs_bspline_w(%u, %u) = %d, the B-spline %d\n", f, k, w,
+                       a1x_bspline_w(f, k));
+                failures++;
+            }
+        }
+        if (sum != GS_RS_BSPLINE_DIV) {
+            printf("FAIL above1x: the B-spline's weights at %u/16 sum to %d\n", f, sum);
+            failures++;
+        }
+    }
+    /* the box: the overlap counted in 1/32 */
+    for (int lo = -100; lo < 100; lo += 7) {
+        for (int len = 1; len < 140; len += 3) {
+            for (int i = -5; i < 8; i++) {
+                int n = 0;
+                for (int q = lo; q < lo + len; q++) {
+                    n += q >= 32 * i && q < 32 * i + 32;
+                }
+                if (gs_box_w(lo, lo + len, i) != n || a1x_box_w(lo, lo + len, i) != n) {
+                    printf("FAIL above1x: box [%d, %d) texel %d: %d / %d, counted %d\n", lo,
+                           lo + len, i, gs_box_w(lo, lo + len, i), a1x_box_w(lo, lo + len, i), n);
+                    failures++;
+                }
+            }
+        }
+    }
+    /* the axes and the combine against the reference */
+    int kinds[3] = {0, 0, 0};
+    for (uint linear = 0; linear < 2; linear++) {
+        for (int step = 0; step <= GS_RS_BOX_MAX32 + 64; step += (step < 80 ? 1 : 29)) {
+            const int k = gs_rs_kind(step, linear);
+            kinds[k]++;
+            if (k != a1x_kind((uint32_t)step, (int)linear)) {
+                printf("FAIL above1x: step %d linear %u: kind %d, the reference %d\n", step, linear,
+                       k, a1x_kind((uint32_t)step, (int)linear));
+                failures++;
+            }
+            int wsum = 0;
+            for (int i = 0; i < gs_rs_count(k, 37, step, linear); i++) {
+                wsum += gs_rs_weight(k, 37, step, linear, i);
+            }
+            if (wsum != gs_rs_div(k, step, linear)) {
+                printf("FAIL above1x: step %d linear %u: the weights sum to %d, not %d\n", step,
+                       linear, wsum, gs_rs_div(k, step, linear));
+                failures++;
+            }
+            for (int c = -70; c < 90; c += 13) {
+                uint32_t a[4], b[4];
+                a1xShader(c, 3 * c + 5, step, (step * 7) % (GS_RS_BOX_MAX32 + 40), linear, a);
+                a1x_resample(a1xFetch, NULL, c, 3 * c + 5, (uint32_t)step,
+                             (uint32_t)((step * 7) % (GS_RS_BOX_MAX32 + 40)), (int)linear, b);
+                if (memcmp(a, b, sizeof(a)) != 0 && failures < f0 + 20) {
+                    printf("FAIL above1x: c16 %d step %d linear %u: %u %u %u %u, the reference "
+                           "%u %u %u %u\n",
+                           c, step, linear, a[0], a[1], a[2], a[3], b[0], b[1], b[2], b[3]);
+                    failures++;
+                }
+            }
+        }
+    }
+    printf("  above1x kernels (CPU): %s (GS %d, box %d, B-spline %d steps)\n",
+           failures == f0 ? "ok" : "FAILED", kinds[0], kinds[1], kinds[2]);
+}
+
 int main(int argc, char **argv)
 {
     const int nodual = argc > 1 && strcmp(argv[1], "--nodual") == 0;
+    checkAbove1xKernels();
+    if (failures) {
+        return 1;
+    }
     RhiDeviceDesc dd = {NULL, false, true, "shaders_pixel_test"};
     if (!rhi_init(&dd)) {
         printf("SKIP shaders_pixel_test: no usable Vulkan device\n");
