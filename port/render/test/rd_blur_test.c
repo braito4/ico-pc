@@ -41,11 +41,11 @@
  *      without ABE and without its snapshot: each frame replayed with the
  *      skip on and off, SCENE the model's both ways, one copy fewer only
  *      where the skip applies (not under DATE or AFAIL RGB_ONLY, nor FIX 127).
- *   n  (issue 28) the motion blur with the aura's glow and a tint
+ *   n  the motion blur with the aura's glow and a tint
  *      of 0x98 over a still picture, each tick presented 1, 2, 4 and 10
  *      times (30 Hz ticks at 30, 60, 120, 300 presents a second): every
  *      tick's DISPLAY is the bytes of one replay a tick (Original), and the
- *      presents as drawn before the fix for issue 28 (each feeding back
+ *      presents as drawn without the held DISPLAY copy (each feeding back
  *      the present before, FIX 128 (FIX / 128)^(1 / N)) run brighter, to
  *      white at 10; then on
  *      the GPU at Enhanced 2x with the full-height scene, DISPLAY_HELD is
@@ -63,7 +63,7 @@
  *      alpha 0.5 and a later one at 1, the shine moving between ticks): the
  *      face band's interior (mask 0) is untouched and FEED128's alpha as the
  *      paste reads it is the mask, not SCENE's alpha, in every present.
- *   w  (W4, issue 61) the native frame: CPU only, every effect recorded at
+ *   w  the native frame: CPU only, every effect recorded at
  *      W = 2048 (48:9) draws each buffer at its own GS width (the work
  *      buffers W / 2, W / 4 across, the frame-sized ones W), reads each
  *      with TEX0's TW of the source's width, keeps every rect and UV on
@@ -129,7 +129,7 @@ void *dmaVif;
 char *matrixptr;
 int debug_font_flag;
 int debug_fullscreen_effect = 1;
-/* video_options.c's effect switches (issue 11), set by the cases below:
+/* video_options.c's effect switches, set by the cases below:
    glow, depth of field, softening, motion blur, fog */
 static int s_fx[5] = {1, 1, 1, 1, 1};
 
@@ -163,7 +163,7 @@ int ico_video_effect_cinematic_bars(void)
     return 1;
 }
 
-/* photo_mode.c's state (issue 14): off, the aura's feedback as in play */
+/* photo_mode.c's state: off, the aura's feedback as in play */
 int ico_photo_active(void)
 {
     return 0;
@@ -579,7 +579,7 @@ static void recordSwitched(int post, int feed, int kinds[RD_POST_COUNT])
     }
 }
 
-/* issue 11: Glow off drops the flare (or bloom) half of every post mode,
+/* Options > Effects: Glow off drops the flare (or bloom) half of every post mode,
    Depth of field off the depth half, each leaving the other as it was; the
    aura is neither */
 static void checkRecordingSwitches(void)
@@ -639,7 +639,7 @@ static void checkRecordingSwitches(void)
     s_fx[0] = s_fx[1] = s_fx[2] = s_fx[3] = s_fx[4] = 1;
 }
 
-/* issue 11: Motion blur off draws nothing, whatever the stage's alpha, and
+/* Options > Effects: Motion blur off draws nothing, whatever the stage's alpha, and
    leaves nothing for the presenter to scale */
 static void checkRecordingMotionBlurOff(void)
 {
@@ -2029,7 +2029,7 @@ static void checkFix128Skip(void)
     rd__set_blur_fix128_skip(true);
 }
 
-/* ========== (n) the motion blur presented many times a tick (issue 28)
+/* ========== (n) the motion blur presented many times a tick
  *
  * The motion blur at FIX 32 (the old frame keeps a quarter a tick)
  * with the aura of mode 1 (its glow added onto SCENE in list 8, after the
@@ -2041,8 +2041,8 @@ static void checkFix128Skip(void)
  * its DISPLAY must be the bytes the same frames give replayed once a tick
  * without interpolation (the Original frame rate, the PS2's arithmetic):
  * the old frame keeps FIX / 128 a tick and the loop through the aura and
- * the tint runs once a tick, whatever N.  The presents as drawn before the
- * fix for issue 28 are replayed too (the frames recorded with FIX' = 128
+ * the tint runs once a tick, whatever N.  The presents as drawn without the
+ * held DISPLAY copy are replayed too (the frames recorded with FIX' = 128
  * (32 / 128)^(1 / N) and every present reading the DISPLAY the present
  * before left): there
  * the tint and the aura went round N times a tick, 1.1875 x 111 / 128 > 1
@@ -2086,8 +2086,9 @@ static double nMean(const uint8_t *d, int *sat)
     return sum / n;
 }
 
-/* N_TICKS ticks presented n times each; legacy: as presented before the fix
- * for issue 28.
+/* N_TICKS ticks presented n times each; legacy: as presented without the
+ * held DISPLAY copy (each present reading the DISPLAY the present before
+ * left).
  * Returns the bytes of the ticks' DISPLAYs that differ from s_nRef's; the
  * last tick's mean and saturated channels in *mean, *sat. */
 static int nRun(int n, int legacy, double *mean, int *sat)
@@ -2503,7 +2504,7 @@ static void checkQueenMirage(void)
 
 /* ============================= (p) the mirage in the presenter's presents
  *
- * The model viewer's rc2 dumps: the GS model of their own commands leaves
+ * The model viewer's dumps: the GS model of their own commands leaves
  * the Queen's face outside the mirage's mask in every frame, yet the
  * presented picture blackens it in some.  Here the mirage frame of (q) with
  * the shine material a keyed world draw (as her list-8 meshes are) behind
@@ -2746,7 +2747,7 @@ static void checkMotionBlurPresentsScaled(void)
     rd_shutdown();
 }
 
-/* ================== (w) the aura's feedback chain on a wide frame (issue 61)
+/* ================== (w) the aura's feedback chain on a wide frame
  *
  * The Queen's mirage (feedback mode 2: AURA_WORK's alpha reduced into
  * WORK0, copied into FEED128's alpha, FEED128 pasted over SCENE through
@@ -3224,7 +3225,7 @@ int main(int argc, char **argv)
         checkCutPresents();
     }
     if (ico_shard_take("motion_blur_presents")) {
-        checkMotionBlurPresents(); /* issue 28 */
+        checkMotionBlurPresents();
     }
     if (ico_shard_take("fix128_skip")) {
         checkFix128Skip();
@@ -3243,10 +3244,10 @@ int main(int argc, char **argv)
         checkQueenPresents();
     }
     if (ico_shard_take("motion_blur_presents_scaled")) {
-        checkMotionBlurPresentsScaled(); /* issue 28: re-initialises rd (2x) */
+        checkMotionBlurPresentsScaled(); /* re-initialises rd (2x) */
     }
     if (ico_shard_take("feedback_wide")) {
-        checkFeedbackWide(); /* W4, issue 61: re-initialises rd (W 512, 2048) */
+        checkFeedbackWide(); /* re-initialises rd (W 512, 2048) */
     }
     if (ico_shard_take("shrinks_wide_device")) {
         checkShrinksWideDevice(); /* the shrink anchor: re-initialises rd (W 512, 1536) */

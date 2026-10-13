@@ -94,7 +94,7 @@ void *dmaVif;
 char *matrixptr;
 int debug_font_flag;
 int debug_fullscreen_effect = 1;
-/* video_options.c's Fog switch (issue 11) */
+/* video_options.c's Fog switch */
 static int s_fogSwitch = 1;
 
 int ico_video_effect_fog(void)
@@ -607,7 +607,7 @@ static void checkRecording(int k)
               rd__rec_frame()->lists[4].count == b4 && dl_GetPri() == 3,
           "fogOn 0 records nothing");
     dl_Swap();
-    /* issue 11: Options > Effects > Fog off records nothing either, and no
+    /* Options > Effects > Fog off records nothing either, and no
        RD_POST_FOG */
     setFog(k);
     s_fogSwitch = 0;

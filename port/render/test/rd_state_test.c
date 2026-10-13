@@ -706,7 +706,7 @@ static void testDump(const char *dir)
         remove(path3);
     }
     testDumpOldTemps(f, path, dir, 5u, RD_TARGET_FEED_HELD);
-    testDumpOldTemps(f, path, dir, 7u, RD_TARGET_DISPLAY_HELD); /* issue 28 */
+    testDumpOldTemps(f, path, dir, 7u, RD_TARGET_DISPLAY_HELD);
     remove(path);
 }
 
@@ -886,7 +886,7 @@ static void testEnumeration(void)
     CHECK(ns > 0 && ns < 400, "reachable screen and post pipelines %u must stay under 400", ns);
     CHECK(n < RD_PIPELINE_REACHABLE_MAX, "reachable pipeline count %u must stay under %d", n,
           RD_PIPELINE_REACHABLE_MAX);
-    /* the whole set (683 keys since EXACT-RASTER's plane keys, v0.6.1) */
+    /* the whole set (683 keys with the triangle passes' plane keys) */
     for (uint32_t i = 0; i < n && i < RD_PIPELINE_REACHABLE_MAX; i++) {
         for (uint32_t j = i + 1; j < n && j < RD_PIPELINE_REACHABLE_MAX; j++) {
             CHECK(!rd__pipe_key_equal(&keys[i], &keys[j]), "duplicate key %u/%u", i, j);
@@ -912,7 +912,7 @@ static void testEnumeration(void)
 /* The native frame's region scale (rd__region_scale, FrameCB g_frame.x):
  * exactly 1 at 4:3 on every target (the region path untouched), 512 / W on a
  * target of a W-wide frame's size and 1 on the others; no scissor or
- * position is scaled (the old wide scissor is gone with the squeeze). */
+ * position is scaled. */
 static void testRegionScale(void)
 {
     const uint32_t keepW = g_rd.gsW, keepH = g_rd.gsH;
@@ -1141,9 +1141,9 @@ static void testPassOps(void)
  * as its own pass before the next one (endPass), the reset opening the
  * window and the end of the resolve's pass closing it.  Outside the window
  * the stencil is not stored and loads DONT_CARE, a CLEAR staying CLEAR;
- * inside it loads and stores as before.  The reset is no pass of its own:
+ * inside it loads and stores.  The reset is no pass of its own:
  * the volumes' pass clears the stencil as its load op, one pass fewer than
- * with the reset recorded alone (fold 0, what doShadowReset did before). */
+ * with the reset recorded alone (fold 0). */
 #define SW_MAX 16
 
 typedef struct StencilWalk {

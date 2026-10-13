@@ -1310,7 +1310,7 @@ static void r8Pixels(void)
     rd_destroy_texture(t);
 }
 
-/* Photo mode (issue 75): the game is paused (systemStatus[5]) and every
+/* Photo mode: the game is paused (systemStatus[5]) and every
  * texture scroll with it, but the film grain's texture (sandstorm_spr)
  * keeps scrolling so a capture holds a fresh pattern */
 static void photoGrainChecks(void)

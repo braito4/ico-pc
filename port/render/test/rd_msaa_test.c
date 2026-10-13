@@ -22,7 +22,7 @@
  *            anti-aliasing (drawn with the fixed-function blend, which the
  *            fog of an MSAA frame keeps) on every pixel inside a cell (its
  *            3x3 one colour);
- *   redraw   issue 43: a triangle slanted in depth (and a nearer one over
+ *   redraw   a triangle slanted in depth (and a nearer one over
  *            part of it) drawn in the epoch, then the epoch closed by a
  *            pass on SCENE's depth with WORK2 as its colour (the flare
  *            mask's pass) where the slanted triangle is drawn again with

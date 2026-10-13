@@ -16,7 +16,7 @@
  *     texture-seam placeholder bound, TEX1 96 (linear/linear), FST UVs;
  *   - the glow sprite's gif_SetAlpha(1, 5, 0) is ALPHA 0x48;
  *   - nothing was written to a register the decoder does not decode;
- *   - the full-frame decision (v0.6.0): the primary sprite and an item whose
+ *   - the full-frame decision: the primary sprite and an item whose
  *     grid rect spans 0 .. 640 (lt_rect_spans_grid: the pause and End Game
  *     bars) are drawn inside gif_FullFrameBegin / End, RD_SPACE_FULLFRAME,
  *     x scaled by the native frame's width / 640 (688 at 16:9: the item
@@ -630,7 +630,7 @@ static void checkKanbanBackdrop(int fw)
 
 /* ------------------------------------------ the title exit's cover */
 
-/* kanbanTitleCover (common/src/kanban.c, PC port v0.6.2) records one frame
+/* kanbanTitleCover (common/src/kanban.c, PC port) records one frame
    at a native width fw; its sprites (every screen batch's vertex pairs) go
    to s_cover, their count returned (-1: no frame) */
 typedef struct CoverSprite {

@@ -39,8 +39,8 @@
  *   cloth     DispClothMesh: a lit, textured grid in list 2 (ALPHA 0x44
  *             with ABE, CLAMP 0)
  *   frame W   the puddle, the pool and the barrier on a native frame 1376
- *             wide (32:9), and 2048 (48:9) and 2560 (the widest;
- *             VIS-RULES item 18: no water work target narrower than the
+ *             wide (32:9), and 2048 (48:9) and 2560 (the widest:
+ *             no water work target narrower than the
  *             frame's share of it): SCENE at the frame's width, the copies across the
  *             whole frame (UVs past the GS's 14 bits), the grid ST scale and
  *             the refraction STs per pixel of the frame
@@ -2030,7 +2030,7 @@ static void checkDotsWindow(void)
  * 22024, past the GS's 14 bits: the decoder's 16 on a wide frame) and its
  * grid's ST scale 1 / 1376; the barrier's scene copy likewise, its frame
  * at 1376 and its refraction STs over the frame's width (the double
- * reference with W = 1376).  The blocks are sized with the frame (W4): the
+ * reference with W = 1376).  The blocks are sized with the frame: the
  * puddle's and the pool's W / 2 = 688 x 256 (the PS2's 256 per 512
  * columns), the barrier's W x 256 = 1376 x 256, each with every TEX0 of its
  * list sampling it; the puddle's copy UV spans 230.375 x 1376 / 512 texels
@@ -2458,8 +2458,8 @@ static void poolPixels(void)
 /* ============================================================ 16:9
  * Reflections on the native frame: the aspect alone changes nothing in the
  * renderer.  The frame is as wide as the game builds it (here the test's
- * game side, ScreenWidth 512, the 4:3 frame: W3 makes the game build wider
- * frames and blocks), a block is drawn at its own GS size at every aspect
+ * game side, ScreenWidth 512, the 4:3 frame: the window build makes the game
+ * build wider frames and blocks), a block is drawn at its own GS size at every aspect
  * (no widening, no x addressing of the draws that sample it), so with the
  * Enhanced preset at 16:9 and the scene at 1x the puddle's block is 256 x 256
  * texels holding the 4:3 run's picture byte for byte, the copy registers
@@ -2805,7 +2805,7 @@ static void recordingChecks(void)
     checkDotsRecording();
     checkDotsWindow();
     checkFrameExtentsAtW(1376);
-    /* VIS-RULES item 18 (v0.6.1): the reflection and copy blocks are the
+    /* the reflection and copy blocks are the
        frame's at 48:9 and at the widest too, never narrower than what the
        frame's copy maps back over it */
     checkFrameExtentsAtW(2048);

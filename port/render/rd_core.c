@@ -391,7 +391,7 @@ static void namedTargetDesc(int id, uint32_t gsW, uint32_t gsH, uint32_t *w, uin
         *depth = 1;
         break;
     case RD_TARGET_DISPLAY:
-    case RD_TARGET_DISPLAY_HELD: /* issue 28: DISPLAY's copy */
+    case RD_TARGET_DISPLAY_HELD: /* DISPLAY's copy (the motion blur) */
         *w = gsW;
         *h = gsH / 2;
         break;
@@ -470,7 +470,7 @@ static int sceneClass(int id)
            id == RD_TARGET_DISPLAY_HELD;
 }
 
-/* DISPLAY and its held copy (issue 28), of one size and scale */
+/* DISPLAY and its held copy (the motion blur), of one size and scale */
 static int displayClass(int id)
 {
     return id == RD_TARGET_DISPLAY || id == RD_TARGET_DISPLAY_HELD;

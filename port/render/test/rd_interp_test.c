@@ -45,7 +45,7 @@
  *             older from the kept version), alpha 1 the current tick's
  *             shape, not the newer one; a mesh rewritten every frame the
  *             same; the replays use the kept streams
- *   feedback  (issue 28) a frame whose motion blur sprite reads
+ *   feedback  a frame whose motion blur sprite reads
  *             DISPLAY copies DISPLAY into DISPLAY_HELD at the head of a
  *             tick's first present and back at the later ones', and its
  *             motion blur sprite is the recorded one in every present (the
@@ -53,7 +53,7 @@
  *             sprite in every present, and its head copies FEED128 into
  *             FEED_HELD in a tick's first present and back in the later
  *             ones; neither copy without the read or the write
- *   native    (W5) the record-only context at the native widths 688,
+ *   native    the record-only context at the native widths 688,
  *             1376, 2560: a draw left behind beside the 4:3 columns but
  *             inside the native frame is not of prev alone
  *             (mayBeCulledAtCur at W / 2 x 1.12), one past the cull's edge
@@ -105,7 +105,7 @@
  *             times 1 + RD_CULL_MARGIN) is drawn at alpha 0.25, 0.5 and 0.75
  *             where the blended camera sees it, one still in the picture is
  *             not, nor one whose object and part the current tick draws; a
- *             ball across the picture's edge is (VIS-RULES item 15), a
+ *             ball across the picture's edge is (the cull margin), a
  *             point inside the cull's margin is not; with a still camera
  *             such a draw leaves the frame byte for byte as it was
  *   grid STs  a grid sampling a target blends its STs half way; a grid
@@ -139,7 +139,7 @@
  *             the same locked part of the tick alone recorded as a world
  *             object (the re-base before node flags reached it) is carried
  *             behind the eye or off the screen
- *   eye ticks (on a device, issue 76) the camera orbits 28 degrees in the
+ *   eye ticks (on a device) the camera orbits 28 degrees in the
  *             tick: a wall strip's triangle with a vertex in front of both
  *             ticks' eyes and behind the blended camera's is drawn half way
  *             (Enhanced; the frame carries the ticks' cameras, the draw
@@ -780,7 +780,7 @@ static void testPrisms(void)
     const RdKey key = RD_KEY(&kObjE, 9, 0);
     /* (1) the same two prisms, moved 8 pixels down, with extrusions turned
      * so that side faces change sides in both: the counts stay 8 and 8 but
-     * the triangles sorted into increments no longer pair up */
+     * the triangles sorted into increments do not pair up */
     static const int xs[2] = {10, 60};
     static const int dPrev[2][2] = {{-30, -30}, {-30, -30}}, dCur[2][2] = {{-30, 10}, {-30, 10}};
     int incP, incC;
@@ -924,7 +924,7 @@ static void recordFeedback(int display, int feed)
     rd_end_frame(0);
 }
 
-/* issue 28: the copies at the head of a present's first list:
+/* the motion blur: the copies at the head of a present's first list:
  * DISPLAY <-> DISPLAY_HELD and FEED128 <-> FEED_HELD found (1 each at
  * most), and the number of RDC_COPYs in the frame */
 static int headCopies(const RdFrame *f, int first, int *display, int *feed)
@@ -3531,7 +3531,7 @@ static void testInstances(void)
 
 /* ------------------------------------------- wading in shallow water */
 
-/* The wading splash of an issue report's F12 dump (shallow water, v0.4.5:
+/* The wading splash of a player's F12 dump (shallow water,
  * frame-20261009-210725-v10576), list 5, prog 0 code 34: the common block
  * (qw 4..15) and each draw's model matrices (qw 16..27).  Each step enters
  * a stage animation (frameDependSequence.c, EntryStageMultiBgaManager) of
@@ -4232,8 +4232,8 @@ static void poolFrame(int k, int still)
     rd_end_frame(0);
 }
 
-/* The camera backs away 60 units and turns 8 degrees in the tick (issue
- * 35's known shimmer): at alpha 0.25, 0.5 and 0.75 the grids with pool.c's
+/* The camera backs away 60 units and turns 8 degrees in the tick (the
+ * water grids' known shimmer): at alpha 0.25, 0.5 and 0.75 the grids with pool.c's
  * formula have the STs the formula gives through the blended camera (its
  * eye at lockCamera(t)'s, the block's blended world to screen, the
  * blended vertices and heights), which at 0.5 differ from the blend of the
@@ -4822,11 +4822,11 @@ static void testPairedOrKept(void)
           "B of the tick before is not drawn beside its object and part (kept %u, drawn %d)",
           st.prevKept, f ? drawsOf(f, 0, kb, RDC_MESH) : -1);
 
-    /* (f) VIS-RULES item 15: B a ball of radius 40 (C) centred on the
+    /* (f) the cull margin: B a ball of radius 40 (C) centred on the
      * picture's edge at depth 300 (GS x 2304, 40 units = 66.7 pixels): it
      * reaches past the cull's edge (2334.72), so the game may have culled
-     * it and it is drawn through the interval; before v0.6.1 (outsideCur:
-     * wholly outside the picture, no margin) it vanished at t 0 */
+     * it and it is drawn through the interval; a test of "wholly outside
+     * the picture" without the margin would make it vanish at t 0 */
     {
         RdMesh ball = makeMeshR(40.0f);
         double bEdge[3];
@@ -5437,7 +5437,7 @@ static void testReprojectOneTick(void)
           screen3);
 }
 
-/* ------------------------------------------- the native frame (W5)
+/* ------------------------------------------------------ the native frame
  *
  * The record-only context at a native width W (688, 1376, 2560: 16:9, 32:9,
  * 60:9; GsBase.c's gsFrame.w), the frames' gsW:
@@ -5578,8 +5578,8 @@ static void nativeReproject(uint32_t W)
  * past 0xFFFF), across the camera's picture, its x 1300 vertices past the
  * GS's 16 bits at both ticks.  At every width it stays whole as its tick
  * drew it: through the blended camera it reaches the picture with a
- * vertex past the window, which the PS2 drops (before the fix the window
- * scaled by W / 512 took it at 2560).  At 512 the window and the outcome
+ * vertex past the window, which the PS2 drops (a window
+ * scaled by W / 512 would take it at 2560).  At 512 the window and the outcome
  * are the 4:3 ones, byte for byte (the exception is off there). */
 static void nativeReprojectReach(uint32_t W)
 {
@@ -5727,19 +5727,19 @@ static void runCpu(void)
     testReprojectOneTick();
 }
 
-/* ------------------------------------------- issue 76: the ticks' eyes
+/* ------------------------------------------------------ the ticks' eyes
  *
  * The camera orbits 28 degrees about the origin in a tick (s6OrbitEye: the
  * eye on a circle of 500 units, looking at its centre); the picture half
  * way has its eye half way along the chord, 14.9 units inside the circle.
  * A wall strip A B C D: A, B, C in front of every camera, D on the circle
  * half way round the arc (121, 0, -485): 14.8 units in front of both ticks'
- * eyes, 14.8 behind the blended one's (the orbit of the issue 76 sweep,
+ * eyes, 14.8 behind the blended one's (the orbit of the sweep in
  * gsb_cull_test --stage).  Triangle B C D reaches the picture; its strip
  * has a passing triangle (A B C).  At either tick D lies far beside the
  * window, in front: drawn clipped (the strip rule, Enhanced); at the
- * blended camera D is behind the eye, and the rule dropped it, a hole
- * between the ticks.  Now drawn clipped through the interval
+ * blended camera D is behind the eye, and the rule alone would drop it, a
+ * hole between the ticks.  It is drawn clipped through the interval
  * (vu_region_rule, ICO_VU_TICKS); with D at (121, 0, -600), behind every
  * camera, still dropped; the ticks' own pictures carry no ticks' cameras. */
 

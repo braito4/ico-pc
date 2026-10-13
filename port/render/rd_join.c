@@ -1,7 +1,7 @@
 /*
  * port/render/rd_join.c
  *
- * Issue 76 (v0.7.0): the region rule's card test joined over a part's
+ * The region rule's card test joined over a part's
  * packets (rd_replay.c calls rd__join_parts once per replayed frame, before
  * the meshes are uploaded).  Split from rd_replay.c for the tracked-file cap.
  */
@@ -9,13 +9,14 @@
 #include <stdint.h>
 #include "rd_internal.h"
 
-/* Issue 76 (v0.7.0): the card test's joined strips over a part's meshes.
+/* The card test's joined strips over a part's meshes (RENDER.md "Strip
+ * joining").
  * The region rule leaves out of the picture a failing triangle of a card
  * (vu_common.hlsli vu_region_rule, VU_RULE_STRIP: a free-standing strip
  * none of whose triangles passes the region test), and a strip is free-
  * standing when it shares no vertex with a strip of another shape
- * (rd_mesh.c markJoinedStrips).  That was asked of the strip's mesh alone,
- * one packet of a part: Packet.c pac_makePacket makes a packet per
+ * (rd_mesh.c markJoinedStrips).  Asked of the strip's mesh alone, one
+ * packet of a part, that is not enough: Packet.c pac_makePacket makes a packet per
  * material and texture of the part, so a wall's strip whose material is
  * its own shares its edges with the rest of the wall only through the
  * part's other packets.  st18a_p1 part 9 has eight such strips, one
@@ -23,9 +24,9 @@
  * Y 80, to the wall's top, Y -775; part 6 holds the rest of the wall, part
  * 9 the top face along the same edge): at the courtyard's camera (eye
  * 1859.4, -65, -2560) the top corners lie above the GS window (GS y -56 to
- * -189 in the v0.7.0-rc3 capture frame 4219), the triangles were taken for
- * cards and left out, and the wall showed the far side of the courtyard
- * through them, opening and closing as the camera turned.  So the strips
+ * -189), so with the mesh alone the triangles would be taken for cards and
+ * left out, and the wall would show the far side of the courtyard through
+ * them, opening and closing as the camera turned.  So the strips
  * are joined over the part: the VU draws of the frame whose keys name one
  * object and part (RD_KEY: the key without its last byte, the packet's
  * ordinal) are one group, and rd__mesh_join_part marks across their

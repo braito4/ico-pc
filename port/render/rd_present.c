@@ -577,9 +577,9 @@ void rd__present_blit(RhiCommandList cl, RhiTexture src, uint32_t sw, uint32_t s
  * box-averaged into a texture of the box's own size (aa_reduce_ps: the mean
  * over each pixel's footprint on a 1/16-texel grid, rounded half up; exact
  * for the integer ratios), and step 2 then draws that texture into the box
- * one texel a pixel, nearest, mirrored as before.  The crop (sourceCrop) is
+ * one texel a pixel, nearest, mirrored as the box blit is.  The crop (sourceCrop) is
  * taken in the reduce.  Off, or at 1 texel a pixel or fewer, nothing here
- * runs and the box blit samples DISPLAY as before. */
+ * runs and the box blit samples DISPLAY itself. */
 static struct {
     RhiTexture tex;
     RhiState state;
@@ -610,7 +610,7 @@ static bool reduceRecord(RhiCommandList cl, RhiTexture *src, uint32_t *sw, uint3
         return false; /* a texel a pixel: the box blit's whole-texel window */
     }
     if (!(ew > (float)box->w && (float)*sh > (float)box->h)) {
-        return false; /* one texel a pixel or fewer: the box blit as before */
+        return false; /* one texel a pixel or fewer: the plain box blit */
     }
     if (!s_reduce.tex.id || s_reduce.w != box->w || s_reduce.h != box->h) {
         if (s_reduce.tex.id) {

@@ -29,7 +29,7 @@
  * one under the other, yuv_field_ps deinterlaces and converts the field
  * into an RGBA8 target of the picture's size, and the box pass scales
  * that target instead of the planes (yuv.hlsl's header).  Pictures given
- * to rd_video_frame take the single pass as before.
+ * to rd_video_frame take the single pass.
  *
  * GPU objects: its own two shaders and pipeline (one per output format)
  * over rd's bind group layouts (group 0 FrameCB, group 1 DrawCB, group 2

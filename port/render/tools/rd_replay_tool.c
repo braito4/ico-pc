@@ -86,7 +86,7 @@
  *                         (stream quadwords; '*' where the static index list
  *                         draws the triangle ending at the vertex, '^' where
  *                         that triangle overlaps an earlier one in its plane
- *                         and is drawn in front of it: issue 25; then 'j'
+ *                         and is drawn in front of it; then 'j'
  *                         where its strip is joined to another strip of
  *                         the mesh, ICO_VU_INDEX_JOINED: not a card)
  *   --dump-textures DIR   writes every image texture of the dump to
@@ -117,9 +117,9 @@
  *                         pixel (RD_TARGET_HALF_Y): the frame as the flip
  *                         of the other field draws it
  *   --no-aa1              replays with PRIM.AA1 off: every RDC_AA1 a NOP and
- *                         the start state's bit clear, the frame as the
- *                         renderer drew it before AA1 was decoded (a
- *                         before/after pair from one dump)
+ *                         the start state's bit clear, the frame without
+ *                         the GS's edge antialiasing (an on/off pair from
+ *                         one dump)
  *
  * Interpolation:
  *   --interp T PREV       replays the frame the presenter builds between the

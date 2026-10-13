@@ -1,140 +1,54 @@
 /* rd_dst_read.c: the exact GS blend, computed in the fragment shader from
  * the destination.
  *
- * Design (package GS-BLEND)
- * -------------------------
- * The goal: at Original 4:3 the frame chain matches PCSX2 pass by pass
- * within GS integer rounding.  The GS blends in integers,
+ * The GS blends in integers,
  *     out = ((A - B) * C >> 7) + D,   A, B, D in {Cs, Cd, 0}, C in {As, Ad, FIX}
  * (arithmetic shift: toward minus infinity), 0x80 = 1.0 with no clamp of C,
  * then COLCLAMP (clamp to 0..255, or wrap to 8 bits), PABE (an As with its
  * MSB clear writes Cs unblended), FBA (the stored alpha's MSB set); the
  * alpha channel is never blended (As is stored); FBMSK masks channels.
  * The GPU's fixed-function blender computes Cs * F + Cd * (1 - F) in float
- * and rounds to nearest when it stores UNORM8.  For every LERP (ALPHA 0x44,
- * 0x64, 0x68 with As or FIX: the materials, the full-screen tint sprite
- * after the fog, fades, bars) that is one level above the GS on about half
- * the channels.  Measured on the forest's tint sprite (PCSX2 2.8.2 software
- * renderer, godrays oracle state 552, GS draw 480: RGBA 223 219 205 4, ALPHA
- * 0x44): the floor formula gives every one of PCSX2's 262144 pixels (its
- * rt0 and rt1 dumps); round to nearest on the same rt0 is one level up on
- * 50.0 % of the channels (pass mean +5.51 +5.22 +5.19 against PCSX2's
- * +4.98 +4.77 +4.68), the port measured +5.50 +5.36 +4.74 (its blender is
- * not exactly round-to-nearest either), and over a frame the error only
- * ever adds: the port ended 0.4 to 6.4 % brighter than PCSX2,
- * worst in dark scenes (build-host/tmp/pcsx2cmp/godrays/STATUS.md,
- * "Open (not fixed): LERP blend rounding").
+ * and rounds to nearest, one level above the GS on about half the channels
+ * of a LERP (the forest's full-screen tint sprite, ALPHA 0x44: 50.0 % of
+ * the channels one level up against PCSX2's software renderer, whose
+ * pixels all match the floor formula; over a frame the error only adds).
+ * The difference depends on Cd, so no change of Cs or F alone fixes it.
  *
- * Options:
- *  (C) a bias before the blend (Cs - 0.5 level, or a factor nudged down):
- *      cannot be exact.  The blender's result is round(Cs*F + Cd*(1-F)),
- *      the GS's floor((Cs - Cd) * F) + Cd: the two differ by whether the
- *      fraction of (Cs - Cd) * F is at least one half, which depends on
- *      Cd, so no per-fragment change of Cs or F made without Cd fixes
- *      every destination; a negative bias source is also clamped to 0 by
- *      the UNORM output, and llvmpipe's own blend is not exact
- *      round-to-nearest either (STATUS.md).
- *  (B) the existing exact path, a copy of the destination per blended draw
- *      (blend_int's RGBA8_UINT ping-pong, fx_sprite_ps's snapshot): exact
- *      only while the primitives of one draw do not overlap (they read the
- *      copy, not each other), and every blended draw needs its own copy
- *      and its own pass.  The forest and title dumps (godrays lists
- *      p2-*.txt, rd_replay_tool --list) have 70 to 136 LERP-path draws a
- *      frame, most of them VU meshes whose triangles overlap (foliage,
- *      hair, the shadow-creature smoke): a copy of the target per draw is
- *      70 to 136 copies of SCENE a frame (at Enhanced 4K about 33 MB each)
- *      and still wrong where a mesh overlaps itself.  Kept for the
- *      staticBlur sprites, where it is exact (one sprite per record).
- *  (A) the destination read, chosen: the fragment shader reads its own
- *      pixel in rasterization order, computes gs_dst_channel (gs_math.hlsli)
- *      and stores the result, blending off.  Exact for any overlap, in the
- *      draw's own pass.  Two realisations (rhi.h RhiDstRead):
- *        storage     the target as a rasterizer-ordered view: D3D12 ROV
- *                    (RasterizerOrderedTexture2D, ROVsSupported with typed
- *                    UAV loads of RGBA8), Vulkan storage image under
- *                    VK_EXT_fragment_shader_interlock (DXC compiles the
- *                    same HLSL to PixelInterlockOrderedEXT).  The target is
- *                    no colour attachment then (D3D12 cannot hold one
- *                    resource as RTV and UAV), so a blended draw runs in a
- *                    pass of its own kind ("storage pass": the depth
- *                    attached, no colour; rd_replay.c dstPassMode).  Draws
- *                    group: the dumps switch between blended and other
- *                    draws 5 to 15 times a frame, so 10 to 30 extra passes
- *                    and barrier pairs.  The shader writes, so the depth
- *                    and stencil tests must run before it
- *                    ([earlydepthstencil]); a discard after an early depth
- *                    write would leave the Z the GS never writes, so a
- *                    draw that writes Z and can discard (alpha test, DATE)
- *                    is split: the colour without Z write, then a
- *                    depth-only pass, exact when its Z test is ALWAYS (the
- *                    3 such draws a frame in the dumps: list 3's DATE
- *                    sprites); under GEQUAL/GREATER the colour pass would
- *                    see a different depth than the GS (self-occlusion
- *                    within the draw), so those stay on the fixed-function
- *                    blend (logged once; none in the dumps).
- *        attachment  the colour attachment read as an input attachment in
- *                    rasterization order (Vulkan
- *                    VK_EXT/ARM_rasterization_order_attachment_access over
- *                    VK_KHR_dynamic_rendering_local_read): the tile-based
- *                    path (no pass split, no extra bandwidth on a tiler),
- *                    the depth, stencil, discard and write mask stay
- *                    fixed-function, so it has no restriction.  Every pass
- *                    on an RGBA8 target that can be read is begun
- *                    readable (RENDERING_LOCAL_READ); a pending clear is
- *                    recorded as its own pass before it rather than as the
- *                    readable pass's load op (the load op's ordering
- *                    against input attachment reads in the same pass is
- *                    not relied on).
- *      Preference: attachment, then storage, then the fixed-function blend.
+ * The destination read: the fragment shader reads its own pixel in
+ * rasterization order, computes gs_dst_channel (gs_math.hlsli) and stores
+ * the result with blending off, exact for any overlap within a draw, in the
+ * draw's own pass.  Two realisations (rhi.h RhiDstRead):
+ *   attachment  the colour attachment read as an input attachment in
+ *               rasterization order (Vulkan rasterization-order attachment
+ *               access over dynamic rendering local read).  Depth,
+ *               stencil, discard and write mask stay fixed-function.
+ *               Every pass on a readable RGBA8 target is begun readable; a
+ *               pending clear is recorded as its own pass before it (the
+ *               load op's ordering against input attachment reads in the
+ *               same pass is not relied on).
+ *   storage     the target as a rasterizer-ordered view (D3D12 ROV; Vulkan
+ *               storage image under fragment shader interlock).  The target
+ *               is no colour attachment then, so a blended draw runs in a
+ *               storage pass with the depth attached and no colour
+ *               (rd_replay.c dstPassMode).  The depth and stencil tests run
+ *               before the shader ([earlydepthstencil]), so a draw that
+ *               writes Z and can discard (alpha test, DATE) is split into
+ *               colour without Z write then a depth-only pass when its Z
+ *               test is ALWAYS; under GEQUAL/GREATER it stays on the
+ *               fixed-function blend (logged once).
+ * The preference is attachment, then storage, then the fixed-function
+ * blend (logged "fixed-function (rounds up)").
  *
- * Capability matrix (vulkan.gpuinfo.org coverage, all platforms, read
- * 2026-10-11: interlock 26 %, rasterization-order access EXT 22 %, ARM 21 %,
- * local read 46 %; Mesa docs/features.txt for the Mesa drivers):
- *   Vulkan, desktop Mesa      RADV gfx9+ (the Steam Deck), ANV, lavapipe:
- *                             interlock -> storage.  lavapipe also has the
- *                             attachment read (taken first); Turnip, panvk
- *                             v10+: attachment read.  RADV and ANV have no
- *                             rasterization-order attachment access.
- *   Vulkan, NVIDIA / AMD /    interlock where the driver exposes it
- *   Intel Windows drivers     (storage); not verified per driver here
- *                             (the gpuinfo device tables did not load):
- *                             the start-up log says what was found.
- *   Vulkan, Android           the attachment read on drivers with the
- *                             ARM or EXT extension and local read (Turnip
- *                             per Mesa; Arm's Mali driver where it exposes
- *                             both, not verified here); else
- *                             fixed-function.
- *   D3D12                     ROV (ROVsSupported: required at feature
- *                             level 12_1, which WARP reports; optional
- *                             below it) -> storage.
- *   anything else             fixed-function, as before (logged
- *                             "fixed-function (rounds up)").
- *
- * What goes through it: every pass of rd_replay.c's screen prims (sprites,
- * strips, the full-screen tint, fades, bars, letterbox; sprite_ps,
- * sprite_texa_ps, sprite_aa1_ps, sprite_stq_ps, font_ps, font_sheet_ps), the
- * VU meshes (vu_ps, vu_texa_ps) and the fog sprite (fog_lut_ps,
- * fog_lut_buffer_ps) whose fixed-function blend is not the GS's (dstWant,
- * rd_pipeline.c): the LERPs (modes 2, 4, 7), Cd*FIX + Cs (3, FIX past 0x80
- * too), the Ad forms (8 to 10, which read Ad/255 in hardware), Cd*As + Cd
- * (11, not representable at all), PABE on the premultiplied forms, and
- * COLCLAMP 0, on RGBA8 targets.  The premultiplied adds and subtracts (0,
- * 1, 5, 6: shader (Cs*F)>>7, ONE/ONE) are exact in hardware already and
- * stay there.  Left on the fixed-function blend: the MSAA epoch's passes
- * (Enhanced only, never Original: a multisampled storage image or input
- * attachment is not asked for, and the resolve's mean is no GS arithmetic
- * anyway) and the fog drawn while the epoch is open (per sample, or on the
- * resolved picture standing in for that where sample-rate shading is
- * missing: the two blend alike, rd_msaa_test), targets other than RGBA8, the port's presentation overlay (not
- * the game's GS), the storage path's Z-writing discarding draws under
- * GEQUAL/GREATER (above).  The staticBlur sprites and blend_int keep their
- * own exact paths.  DATE is unchanged: the snapshot is read as before.
- * The Enhanced preset takes the same path: the rounding is not a 4:3 or
- * resolution matter.
- *
- * Expected effect: the forest tint pass +4.98 +4.77 +4.68 exactly (the
- * floor formula matches all of PCSX2's pixels, gs_math_test), and the
- * upward drift of every LERP gone from the whole frame.
+ * What goes through it: the screen prims, the VU meshes and the fog sprite
+ * whose fixed-function blend is not the GS's (dstWant, rd_pipeline.c): the
+ * LERPs (modes 2, 4, 7), Cd*FIX + Cs (3), the Ad forms (8 to 10), Cd*As +
+ * Cd (11), PABE on the premultiplied forms, and COLCLAMP 0, on RGBA8
+ * targets, in every preset.  Left on the fixed-function blend: the
+ * premultiplied adds and subtracts (0, 1, 5, 6: exact in hardware), the
+ * MSAA epoch's passes and the fog drawn while it is open, targets other
+ * than RGBA8, the port's presentation overlay.  The staticBlur sprites and
+ * blend_int keep their own exact paths; DATE reads its snapshot.  See
+ * docs/port/RENDER.md "Destination reads and blend paths".
  */
 #include <stdlib.h>
 #include <string.h>

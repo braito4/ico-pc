@@ -113,7 +113,7 @@ add_library(ico_render STATIC
     rd_post.c
     rd_present.c
     rd_replay.c
-    rd_screen_planes.c # EXACT-RASTER: the screen-prim triangles' planes
+    rd_screen_planes.c # the screen-prim triangles' planes
     rd_shadow.c
     rd_tex.c
     rd_water.c # block targets, aliases, camera scopes
@@ -172,8 +172,8 @@ target_link_libraries(rd_pixel_test PRIVATE ico_render ico_sheet_ref)
 # rd_native_test: one synthetic game frame (VU triangles, UI and full-frame
 # sprites, the DISPLAY reduction) at native widths 512..2560: the centre
 # columns equal the 512 render's, the sides continue exactly (a narrower
-# frame is the widest one's centre) and no step at the old band edges
-# (Gate B); corners on pixel boundaries cover the same pixels at every width.
+# frame is the widest one's centre) and no step where the 4:3 columns end;
+# corners on pixel boundaries cover the same pixels at every width.
 add_executable(rd_native_test test/rd_native_test.c)
 target_include_directories(rd_native_test PRIVATE "${CMAKE_SOURCE_DIR}/port/shaders"
                            "${CMAKE_SOURCE_DIR}/port/rhi")
@@ -223,7 +223,7 @@ target_link_libraries(rd_tex_test PRIVATE ico_render ico_math ico_options)
 # (GifPacket.c, DisplayList.c, DmaPacket.c) as the window build has them,
 # the rest of the game stubbed: frame lifecycle, field parity, camera
 # packing, Z scale and the post passes against CPU references; with
-# port/game/photo_view.c (issue 14), photo mode's camera in the game's
+# port/game/photo_view.c, photo mode's camera in the game's
 # matrices (photo_mode.c from ico_options).
 add_executable(rd_gsbase_test test/rd_gsbase_test.c
     "${CMAKE_SOURCE_DIR}/ico2/seki/src/GsBase.c"
@@ -264,7 +264,7 @@ target_compile_options(rd_present_test PRIVATE ${ICO_SEMANTIC_OPTIONS} ${ICO_GAM
 target_link_libraries(rd_present_test PRIVATE ico_render ico_math ico_options)
 
 # gsb_cull_test: the game's cull against the cameras of the blended
-# pictures (GsBase.c gsb_ClipBox, issue 29) and the windows that scale with
+# pictures (GsBase.c gsb_ClipBox) and the windows that scale with
 # the picture's width (the water dots, the lines, the shadow volumes).
 # GsBase.c as rd_present_test has it, with the display options; synthetic
 # cameras a tick apart (moves to 300 units, turns to 30 degrees) at three
@@ -381,7 +381,7 @@ target_compile_options(rd_mesh_test PRIVATE ${ICO_SEMANTIC_OPTIONS} ${ICO_GAME_L
                        ${ICO_GAME_WARNINGS})
 # the strip order case reads the title logo's models from the disc image
 # (df_pack.h); without it that part is skipped.  PObj.c: the boxes case loads
-# every model on the disc through the game's own loader (VIS-RULES, v0.6.1)
+# every model on the disc through the game's own loader
 target_link_libraries(rd_mesh_test PRIVATE ico_render ico_vu1_ref ico_math ico_port_data)
 
 # modelpack_test: model packs.  The same game files as
@@ -641,8 +641,8 @@ if(ICO_RUN_TESTS)
     add_test(NAME rd_gsbase COMMAND rd_gsbase_test)
     set_tests_properties(rd_gsbase PROPERTIES SKIP_RETURN_CODE 77)
     add_test(NAME gsb_cull COMMAND gsb_cull_test)
-    # st18a's parts from the disc against the cameras about the dump i76's
-    # (issue 76): 77 without the disc image
+    # st18a's parts from the disc against the cameras about the dump i76's:
+    # 77 without the disc image
     add_test(NAME gsb_cull_stage COMMAND gsb_cull_test --stage "${ICO_DISC_IMAGE}")
     set_tests_properties(gsb_cull_stage PROPERTIES SKIP_RETURN_CODE 77)
     # 50 s of it is the disc's models, in four slices: four shards (port/test/ico_shard.h)
@@ -691,11 +691,11 @@ if(ICO_RUN_TESTS)
                      -P "${CMAKE_CURRENT_SOURCE_DIR}/test/rd_replay_tool_pass_dump.cmake")
     set_tests_properties(rd_replay_tool_pass_dump PROPERTIES SKIP_REGULAR_EXPRESSION "SKIP:"
                                                              FIXTURES_REQUIRED rd_dump TIMEOUT 300)
-    # the native frame gates (tools/native_frame_check.py, docs/BUILDING.md "Native frame
-    # gates"): Gate A re-renders the dump list ICO_DUMPS names and compares with
-    # docs/native_frame_baseline.json; Gate B checks the aspect sweeps ICO_SWEEPS names.
+    # the native frame gates (tools/native_frame_check.py, docs/port/TESTING.md): gate-a
+    # re-renders the dump list ICO_DUMPS names and compares with
+    # docs/native_frame_baseline.json; gate-b checks the aspect sweeps ICO_SWEEPS names.
     # Both skip (77) without the variable, the dumps, a device or Pillow; the selftest
-    # of the Gate B logic always runs.
+    # of the gate-b logic always runs.
     if(Python3_FOUND)
         set(ICO_NFC "${CMAKE_SOURCE_DIR}/tools/native_frame_check.py")
         add_test(NAME native_frame_gate_a
@@ -875,7 +875,7 @@ if(ICO_RUN_TESTS)
                      -DFOG_PATH=buffer
                      "-DRESULTS=inplace fail [0-9]+, copy fail [0-9]+, buffer ok [0-2]"
                      -P "${CMAKE_CURRENT_SOURCE_DIR}/test/rd_fog_selftest.cmake")
-    # issue 79: odd texel counts under MSAA (1935x1080 is 645x360 at scale 3;
+    # odd texel counts under MSAA (1935x1080 is 645x360 at scale 3;
     # 2341x1080 at scale 1) and the big scenes: in place passes as at an even
     # width.  Sample counts the device lacks are skipped.  With the buffer path
     # forced (it cannot read multisampled depth) MSAA is off while the mask

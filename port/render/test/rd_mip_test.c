@@ -1,7 +1,7 @@
 /* rd_mip_test: the Enhanced mip chain's size (rdtex_mip_chain_bytes) and
  * rdtex_build_mip_chain staying inside it for non-square power-of-two
- * textures, whose 1-texel-high levels the old w*h*4/3 sizing missed
- * (128x4 needs 764 bytes, got 746).  CPU only.
+ * textures, whose 1-texel-high levels a w*h*4/3 sizing misses
+ * (128x4 needs 764 bytes, not 746).  CPU only.
  *
  * Each chain is built into a buffer of exactly rdtex_mip_chain_bytes bytes
  * followed by guard bytes; a guard that changed is an overflow (ASan builds

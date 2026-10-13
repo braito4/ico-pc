@@ -191,7 +191,7 @@ void texpack_get_stats(TexpackStats *out);
 /* The system low on memory (Android's LOW_MEMORY): the RAM
    cache lets go of every image no copy is being made of at the moment,
    and its limit drops to what it still holds, so the precache reads
-   nothing more ahead and a loaded file is no longer kept (requests still
+   nothing more ahead and a loaded file is not kept (requests still
    load, from the file, and install); a line for the log.  Returns the
    bytes the cache holds.  Any thread; nothing before texpack_init. */
 uint64_t texpack_low_memory(void);

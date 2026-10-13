@@ -23,8 +23,8 @@
  *   vu       gsb_MakeCommonMatrix's VU block and the frame camera
  *   zscale   rd__gs_depth: 0xFFFFFF9B and 0xFFFFFFFF apart under PSMZ32, and
  *            Z 17 apart at 2^24 (the depth grows with Z)
- *   photo    photo mode's camera in the game's matrices (issue 14,
- *            port/game/photo_view.c): gsb_PushView / gsb_PopView put back
+ *   photo    photo mode's camera in the game's matrices
+ *            (port/game/photo_view.c): gsb_PushView / gsb_PopView put back
  *            the eleven matrices, vsParam, the focus distance and the zoom
  *            easing byte for byte (a zoom 2 camera and a reflection pass in
  *            between); entering with the camera unchanged leaves the
@@ -49,7 +49,7 @@
  *            PS2 compares (0 .. 0xFFF0) at every width; a triangle reaching
  *            the camera's picture with a vertex past them dropped at every
  *            width; one wholly beside the picture with a vertex past even
- *            the old scaled window drawn on the wide frames (XYZ2_HI) and
+ *            a window scaled by W / 512 drawn on the wide frames (XYZ2_HI) and
  *            dropped at 512 as the PS2; one with a vertex behind the eye
  *            dropped
  * On a Vulkan device (exit 77 without one, after the recording checks):
@@ -401,7 +401,7 @@ void FullScreenEffectBefore(void) {}
 
 void MotionBlur(void) {}
 
-/* counts the calls: the bars leave the blur alone while they are up (issue 27) */
+/* counts the calls: the bars leave the blur alone while they are up */
 static int s_blurCalls;
 
 void SetMotionBlur(int v)
@@ -697,7 +697,7 @@ static void checkZScale(void)
           "zscale: 24-bit clamps above zmax");
 }
 
-/* ------------------------------------------- photo mode (issue 14, P-A) */
+/* ------------------------------------------------------- photo mode */
 
 /* the eleven matrices gsb_PushView saves (GsBase.c lists their writers) */
 static const int s_slot[11] = {0x80,  0xC0,  0x1C0, 0x240, 0x340, 0x640,
@@ -1759,7 +1759,7 @@ static void checkMask(void)
     }
 }
 
-/* issue 11: Options > Effects > Screen softening off: the stage's levels
+/* Options > Effects > Screen softening off: the stage's levels
    record no anti-alias pass (rd_post.c expands RD_POST_AA_DOWNSAMPLE and
    RD_POST_AA_COMPOSITE into list-10 sprites drawing into or sampling AA0
    and AA1); back on, its four sprites */
@@ -1809,7 +1809,7 @@ static void checkSofteningOff(void)
     }
 }
 
-/* issue 27: Options > Effects > Cinematic bars.  On layout 55 the level ramps
+/* Options > Effects > Cinematic bars.  On layout 55 the level ramps
    up and list 11 records the two bars (two full-screen sprites); with the
    switch off it records two fewer, at once if the switch flips mid-cutscene.
    The motion blur is left alone while the level is above 0 in both states
@@ -1884,7 +1884,7 @@ static void checkCinematicBars(void)
 /* ------------------------------------------------ the GS register decoder
    (GifPacket.c) at the native frame widths.  One packet per width writes a
    draw environment (SCENE), a narrower SCISSOR, a full-frame UV sprite, a
-   vertex with XYZ2_HI, and the work buffers at the widths W4 gives them
+   vertex with XYZ2_HI, and the work buffers at the widths the native frame gives them
    (W/2 x 128, W/4 x 128, W/2 x 256), a sprite after each so rd sees every
    environment.  gsFrame.w is set by hand as the flip would latch it.  At
    512 the expectations are literals (what the decoder gave before the
@@ -2162,7 +2162,7 @@ static void checkStripWindow(void)
     tick();
 }
 
-/* VIS-WINDOW (v0.6.1): outside the out-of-the-box state
+/* Outside the out-of-the-box state
    (gif_HostExtended: a frame wider than 4:3, or 4:3 with the extended
    state set as GsBase.c's latch sets it for any preset but Original) a
    strip triangle with a failing vertex and its Z in range that reaches the

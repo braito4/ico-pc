@@ -1,5 +1,5 @@
 /* rd_screen_planes.c: the planes of the screen-prim triangles
- * (EXACT-RASTER, v0.6.1).
+ * (RENDER.md "Screen planes").
  *
  * The GPU interpolates a vertex's colour and ST from the pixel's place in
  * the target: its float rounding depends on how far the triangle sits from

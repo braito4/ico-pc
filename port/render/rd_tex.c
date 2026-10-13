@@ -590,7 +590,7 @@ static void logAuthored(const char *name, int authored, double worst, uint32_t l
     rd__log("textures: \"%s\" %u mipmap levels, brightness ratio %.2f: %s", name ? name : "?",
             levels, worst,
             authored ? "authored, drawn at the GS's level"
-                     : "reductions of the base, drawn as before");
+                     : "reductions of the base, the base alone kept");
 }
 
 RdTex rdtex_store_levels(uint32_t id, uint32_t gen, int texa, const RdTexImage *ims, uint32_t n,

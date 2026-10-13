@@ -6,8 +6,8 @@
  * <texels w> <texels h> a scene of exactly that many texels (scale 0), as
  * the window's size gives; <aa> an RdAntiAlias value (default 0, off); with an MSAA count the device
  * lacks the test is skipped (77).  A scene of an odd texel count under MSAA
- * (1935x1080 for the PS2's 688x448) puts the probe's centre on a cell edge
- * (issue 79): in place must still pass, and MSAA stays in force; with the
+ * (1935x1080 for the PS2's 688x448) puts the probe's centre on a cell edge:
+ * in place must still pass, and MSAA stays in force; with the
  * in-place and copy reads sabotaged (buffer taken) MSAA is off, and
  * rd_aa_supported_mask still lists it.  <out w> <out h> (texels 0 0): the
  * Enhanced window resolution in that output at 16:9, Full pixel on: SCENE

@@ -36,16 +36,16 @@
  */
 #include "rd_internal.h"
 
-/* VIS-RULES item 14 (v0.6.1), kept: each row authored, decided on 4:3
-   dumps (the 4:3 picture never shows it) */
+/* Each row authored, decided on 4:3 dumps (the 4:3 picture never shows
+   it) */
 const RdContentHide rd__content_hide[] = {
-    /* the long walkway (issue 29's frame v31438 at 16:9): a black box 846
+    /* the long walkway (frame v31438 at 16:9): a black box 846
      * units wide through the arch at the walkway's end showed as a flat
      * grey block (the fog over black) beside the 4:3 picture; its top is a
      * four-vertex mesh of its own, its two sides the last eight vertices
      * of the next one, the textured stonework drawn behind it.  The 4:3
      * picture never shows its faces (content_table_check.py decide on
-     * issue 29's 4:3 dumps v31438 and v9755: hidden, the same picture
+     * the 4:3 dumps v31438 and v9755: hidden, the same picture
      * byte for byte in Original 1x and Enhanced 2x): HIDE */
     {"st08a_p4: the box through the arch at the walkway's end",
      RD_HIDE,

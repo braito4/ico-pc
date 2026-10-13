@@ -61,12 +61,12 @@
  *            cluster one with the object's bone count); the morph path
  *            (pac_HostRefreshFor) declines a replaced mesh and draws the
  *            original again; recording only
- *   VIS-RULES (v0.6.1) a packet whose own box fails in a part that passed
- *            is drawn with the clipping program (code 36), not dropped
- *            (item 4); a part's and an object's dropped boxes are noted on
+ *   culls    a packet whose own box fails in a part that passed
+ *            is drawn with the clipping program (code 36), not dropped;
+ *            a part's and an object's dropped boxes are noted on
  *            the frame for F12's cull line (rules 3 and 2, with the model's
  *            name); an accessory whose box is dropped still registers its
- *            shadow volume (item 7)
+ *            shadow volume
  *   boxes    with the disc image: every *.p2o of every pack through PObj.c's
  *            loader (AllocPObj): each vertex a strip names lies in its
  *            part's box and its object's box (items 2 and 3); one model
@@ -2248,15 +2248,15 @@ static void chainPixels(void)
 
 /* ----------------------------------------------------------- the setup */
 
-/* ---- VIS-RULES (v0.6.1): the box culls' rules in RegistPacket.c
+/* ---- the box culls' rules in RegistPacket.c
  *
- *   packet   (item 4) a packet whose own box gsb_ClipBox drops, in a part
+ *   packet   a packet whose own box gsb_ClipBox drops, in a part
  *            that passed: drawn with the clipping program (code 36), not
  *            dropped (the PS2 dropped it)
  *   notes    (F12's cull line) the object's box dropped (rule 2, part -1)
  *            and a part's box dropped (rule 3, part 0) noted on the frame
  *            with the model's name (rd_note_cull_drop)
- *   shadow   (item 7) an accessory (reg_DispAccessoryWithShadow) whose box
+ *   shadow   an accessory (reg_DispAccessoryWithShadow) whose box
  *            is dropped still registers its shadow volume (the PS2 drew it
  *            only with the accessory) */
 static void visRuleChecks(void)
@@ -2343,7 +2343,7 @@ static void visRuleChecks(void)
           "the object's box dropped noted as rule 2 part -1 (%u notes)", f->cullDropCount);
 }
 
-/* ---- VIS-RULES items 2 and 3, with the disc: every model's boxes hold
+/* ---- the object and part boxes, with the disc: every model's boxes hold
  * the vertices its strips draw.
  *
  * Every *.p2o member of every pack goes through PObj.c's own loader
@@ -2518,7 +2518,7 @@ static void buildModels(void)
 }
 
 /* ------------------------------------------------- joined strips */
-/* rd_mesh.c markJoinedStrips (VIS-WINDOW): a strip that shares a corner
+/* rd_mesh.c markJoinedStrips: a strip that shares a corner
  * position with another strip of its mesh, not its double-sided copy,
  * carries ICO_VU_INDEX_JOINED on every triangle of the draw's list (the
  * region rule draws it as a wall outside the out-of-the-box state, never as
@@ -2593,7 +2593,7 @@ static void joinedStripChecks(void)
 
     /* a double-sided card: the same four corners twice, the second strip
      * turned (its back face): not joined (its back triangles carry
-     * ICO_VU_INDEX_LATER, issue 25) */
+     * ICO_VU_INDEX_LATER) */
     static const float kCard[8][2] = {{0, 0}, {1, 0}, {0, 1}, {1, 1},
                                       {1, 0}, {0, 0}, {1, 1}, {0, 1}};
     static const uint8_t kCardStart[8] = {1, 0, 0, 0, 1, 0, 0, 0};
@@ -2615,7 +2615,7 @@ static void joinedStripChecks(void)
           "joined strips: a double-sided card touching a third strip is joined");
     rd_destroy_vu_mesh(card3);
 
-    /* issue 76 (v0.7.0), rd__mesh_join_part: the strips of a part's meshes
+    /* rd__mesh_join_part: the strips of a part's meshes
      * joined over all of them.  st18a_p1 part 9's wall triangle above the
      * doorway (a strip of one triangle, its own material: a packet, a mesh
      * of its own) shares its diagonal with part 6's wall and its top edge

@@ -49,8 +49,8 @@
  *             the present DISPLAY byte for byte, the frame's 4:3 columns
  *             the 4:3 picture at the box's height byte for byte (SCENE;
  *             DISPLAY but the reduction's edge columns); the Full pixel off
- *             frame's columns against them logged, and where the old frame
- *             is even (a whole-texel crop: 2580 and 3870 wide) byte for
+ *             frame's columns against them logged, and where the 688-rounded
+ *             frame is even (a whole-texel crop: 2580 and 3870 wide) byte for
  *             byte the same (SCENE; DISPLAY but its edge columns)
  *   present info  with interpolation off, rd_last_present_info names the
  *             frame rd_end_frame presented
@@ -793,7 +793,7 @@ static void checkOptions(const char *dir)
           "options: every key read, Custom");
     CHECK(frameW() == 688, "options: 16:9 is 688 wide");
 
-    /* window_mode, and the older fullscreen bool when it is absent */
+    /* window_mode, and the fullscreen bool when it is absent */
     writeFile(toml, "version = 1\n[video]\nwindow_mode = \"borderless\"\n");
     ico_config_reset(toml, ini);
     ico_video_reload();
@@ -2030,7 +2030,7 @@ static void checkWide169(void)
     rd_shutdown();
 }
 
-/* Issue 73: a scene whose texel density is the box's is presented one texel
+/* A scene whose texel density is the box's is presented one texel
  * an output pixel.  A window-sized scene (Enhanced, scale 0) at aspect
  * `aspect` in outW x outH; GS column c of the frame is one flat colour of its
  * own, in rows 160..352 (the centre row's neighbourhood).  The presented
@@ -2132,10 +2132,10 @@ static void checkPresent1to1(void)
     checkOneToOne("1to1 3840x2160 48:9", 48.0f / 9.0f, 3840, 2160, 3840, 0);
 }
 
-/* Full pixel: the window's exact pixels (v0.6.2).  One frame drawn by GS
+/* Full pixel: the window's exact pixels.  One frame drawn by GS
  * X (so the same picture at every frame width): a band of one-column
  * sprites, colour hash(X), a Gouraud triangle wider than any frame (cut by
- * the exact viewport, EXACT-RASTER), and a sprite sampling SCENE itself
+ * the exact viewport), and a sprite sampling SCENE itself
  * (its snapshot through the UV crop, nearest), then the reduction into
  * DISPLAY; full height, so DISPLAY has every row.  The Enhanced window
  * resolution at aspect `aspect` in outW x outH.  Returns SCENE, DISPLAY and
@@ -2258,7 +2258,7 @@ static uint32_t colsDiffer(const uint8_t *a, uint32_t aw, uint32_t x0, const uin
     return bad;
 }
 
-/* The present's edge columns with Full pixel on (review S2): DISPLAY is
+/* The present's edge columns with Full pixel on: DISPLAY is
  * SCENE through the reduction, which samples a whole texel off its pixel
  * (round(s / 4), rd__blur_snap_verts); the shift d is found on the band's
  * inner columns (rows of one colour a column), and every presented column
@@ -2318,7 +2318,7 @@ static void checkExactEdges(const char *name, const ExactRun *a, uint32_t outW, 
  * camera"): SCENE whole, DISPLAY but the reduction's few columns at the
  * 4:3 picture's own edges (it reads past them there).  With it off the
  * scene keeps the 688-rounded frame (1935 at 1080p 16:9); its columns
- * against the Full pixel ones are logged (the old frame's centre is half a
+ * against the Full pixel ones are logged (the 688-rounded frame's centre is half a
  * texel off a whole texel: no byte match is expected). */
 static void checkExactWindow(const char *name, float aspect, uint32_t outW, uint32_t outH)
 {
@@ -2387,7 +2387,7 @@ static void checkExactWindow(const char *name, float aspect, uint32_t outW, uint
                 /* a whole-texel crop (an even old frame: its centre on a
                    texel edge, as Full pixel's): the same picture shifted,
                    SCENE byte for byte, DISPLAY but the reduction's border
-                   columns at the old frame's edges */
+                   columns at the 688-rounded frame's edges */
                 CHECK(bad == 0,
                       "%s: a whole-texel crop: SCENE is the Full pixel off one's columns %u.. "
                       "byte for byte (%u differ, the first %u)",
@@ -2561,7 +2561,7 @@ static bool squareRun(int full, uint32_t *sw, uint32_t *sh)
     return true;
 }
 
-/* full pixel no longer enlarges the picture: at 512 lines the square is the
+/* full pixel does not enlarge the picture: at 512 lines the square is the
  * same size on and off, on both axes */
 static void checkFullPixelSquare(void)
 {
@@ -2689,12 +2689,12 @@ static uint8_t *clampRun(int full, float scale, int fullHeight, int mirror, int 
     return p && *w >= 512 && *h >= 64 ? p : NULL;
 }
 
-/* Reduction snap (issue 73).  SCENE is alternating 0 / 255 GS columns
+/* Reduction snap.  SCENE is alternating 0 / 255 GS columns
  * (symmetric about the frame's centre), the reduction runs at a scale, and
  * every DISPLAY texel inside the crop is exactly 0 or 255: the hardware
  * sprite's sample lands on a texel centre and no neighbouring columns are
- * blended (the old x + s / 4 gave a 30 / 70 mix at 2.8125, 41 / 59 at
- * 5.625).  The mirrored run is the mirror image of the plain one. */
+ * blended (a sample at x + s / 4 gives a 30 / 70 mix at 2.8125, 41 / 59
+ * at 5.625).  The mirrored run is the mirror image of the plain one. */
 static uint8_t *snapRun(float scale, int mirror, uint32_t *w, uint32_t *h)
 {
     static uint8_t keep[2][2880 * 1440 * 4];
@@ -3061,7 +3061,7 @@ static void checkMips(void)
     rd_shutdown();
 }
 
-/* Issue 9's far railings.  A 64 x 64 lattice (wires every 4th
+/* The far railings.  A 64 x 64 lattice (wires every 4th
  * row and column, 7/16 of the texels, colour (200, 200, 200) alpha 0x80;
  * holes black alpha 0) drawn as the railings are, TEST 0x5160D and ALPHA
  * 0x44 with ABE, minified 8:1 under the trilinear filter: level 3 is

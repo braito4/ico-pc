@@ -294,7 +294,7 @@ static RdMeshRec *meshAlloc(uint32_t *id)
     return NULL;
 }
 
-/* ------------------------------------------- coplanar overlaps (issue 25)
+/* ------------------------------------------------- coplanar overlaps
  *
  * The near railing's lattice (st13b_p3, one code-32 draw: ATE GREATER 0x60,
  * AFAIL FB_ONLY, Z GEQUAL with Z write, ABE) is double sided: each panel's
@@ -670,7 +670,7 @@ static void markContentHidden(RdMeshRec *m)
 
 /* ------------------------------------------------ joined strips
  *
- * VIS-WINDOW (v0.6.1), the region rule's card test (vu_common.hlsli
+ * The region rule's card test (RENDER.md "Strip joining"; vu_common.hlsli
  * vu_region_rule): out of the box a triangle the region test drops is not
  * drawn where it reaches the camera's picture, as on the PS2; in any other
  * state (Enhanced, wider than 4:3, scaled up) it is drawn, clipped, unless
@@ -682,7 +682,7 @@ static void markContentHidden(RdMeshRec *m)
  * opening's tree card (st26a_near) is a free-standing strip, one of twelve
  * free-standing quads of its draw; a wall's or a plank's strip shares its
  * edges with the rest of the surface (the old bridge's plank faces at
- * 48:9, st08a_p4, issue 29), and is drawn.  Every triangle of a joined
+ * 48:9, st08a_p4), and is drawn.  Every triangle of a joined
  * strip carries ICO_VU_INDEX_JOINED in the list the device draws.  A strip
  * starts at a vertex whose ST.w is below 1 (the strip flag; ST is the
  * second-last quadword) or at its batch's first vertex, as the static kicks
@@ -710,8 +710,8 @@ static bool joinLayout(const RdMeshRec *m)
 }
 
 /* The strips of the n meshes ms joined over all of them: a strip of one
- * mesh is joined by a strip of another shape in any of them (issue 76,
- * rd__mesh_join_part).  The marks are added; true when one was. */
+ * mesh is joined by a strip of another shape in any of them (the card test over a
+ * part, rd__mesh_join_part).  The marks are added; true when one was. */
 static bool joinStrips(RdMeshRec *const *ms, uint32_t n)
 {
     uint64_t total = 0;
@@ -958,9 +958,9 @@ uint32_t rd__vu_mesh_create_raw(const float (*stream)[4], uint32_t vertexCount,
         memcpy(m->batches, batches, (size_t)batchCount * sizeof(RdVuBatchRec));
     }
     snprintf(m->name, sizeof(m->name), "%s", name ? name : "vu mesh");
-    markLaterOverlaps(m); /* issue 25 */
+    markLaterOverlaps(m);
     markContentHidden(m);
-    markJoinedStrips(m); /* VIS-WINDOW */
+    markJoinedStrips(m);
     return id;
 }
 

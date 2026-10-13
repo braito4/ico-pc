@@ -111,7 +111,7 @@
  * every present of a tick draws the same feedback and FEED128 and DISPLAY
  * advance once per tick as on the PS2.
  *
- * The motion blur (issue 28).  On the PS2 the sprite draws the previous
+ * The motion blur.  On the PS2 the sprite draws the previous
  * DISPLAY as Cs over the new SCENE with ALPHA (Cs - Cd) FIX / 128 + Cd
  * (staticBlur.c MotionBlur, gif_SetAlpha mode 2), once a tick, and the passes
  * after it in lists 8 to 12 (the aura's add, the softening, the brightness
@@ -826,14 +826,14 @@ static void camSetup(const RdFrame *prev, const RdFrame *cur, float t)
     for (int i = 0; i < 16; i++) {
         s_cam.itf[i] = (float)s_cam.it[i];
     }
-    /* issue 76: the ticks' cameras from the blended one's positions
+    /* the ticks' cameras from the blended one's positions
      * (vu_common.hlsli vu_region_rule): R_k = S_k St^-1 moves only the
      * camera back to tick k.  A vertex's position through the blended
      * camera already carries its object's blended pose (a matched draw's
      * model matrix blends with the camera), so the region rule at tick k
      * tests the tick's camera against the object where it is drawn, not
      * against the object's own pose at that tick; for a still object (the
-     * stage, every wall of issue 76) the two are the same. */
+     * stage, every wall) the two are the same. */
     double st[16], ist[16], sk[16], r[16];
     mul4d(s_cam.zoom ? pt : s_cam.pc, s_cam.vt, st);
     if (invert4d(st, ist)) {
@@ -1062,8 +1062,8 @@ static bool camRebase(float (*m)[4], const double *e, int mats, const double *l,
  * one tick is that tick's points through St.  STQ (the tick's own) is
  * scaled by w_tick / w_new: S / Q stays at each vertex and the texture
  * follows the new depth across the prim.  A primitive (a point, a line, a
- * triangle) stays where its tick put it (matched: blended in screen space
- * as before), whole, when one of its vertices has Z 0 or Z saturated by
+ * triangle) stays where its tick put it (matched: blended in screen space),
+ * whole, when one of its vertices has Z 0 or Z saturated by
  * ftoi4, is not in front of its tick's camera, or is not seen by St in
  * front with a GS position: re-projecting the others would distort it
  * (reprojPrim).  In a shadow prism a vertex with no world point (a
@@ -1089,7 +1089,7 @@ static ReprojCam s_rp;
 static bool s_rpAnyX;
 
 /* The camera's picture in 12.4 GS X: 1792 .. 2304 (GifPacket.c
- * GIF_PICTURE_X0, X1).  VIS-RULES item 16 (v0.6.1), kept: a primitive is
+ * GIF_PICTURE_X0, X1).  A primitive is
  * re-projected all or none, the tick's own picture otherwise (parity) */
 #define RP_PICTURE_X0 28672
 #define RP_PICTURE_X1 36864
@@ -3425,7 +3425,7 @@ static RdMeshRec *scratchFor(const RdMeshRec *c, const float (*stream)[4])
             return NULL;
         }
     }
-    rd__vu_mesh_copy_draw_index(m, c); /* issue 25: the source's overlap marks */
+    rd__vu_mesh_copy_draw_index(m, c); /* the source's overlap marks */
     m->materialCount = c->materialCount;
     m->srcQw = c->srcQw;
     s_scratchBytes +=
@@ -4017,8 +4017,8 @@ static bool prevSphere(const RdFrame *prev, const RdCmd *pc, const uint8_t *p, d
     return isfinite(c[0]) && isfinite(c[1]) && isfinite(c[2]) && isfinite(*r);
 }
 
-/* whether the sphere can have been dropped by the game's cull at cur
- * (v0.6.1, VIS-RULES item 15): it is not wholly inside cur's cull frustum,
+/* whether the sphere can have been dropped by the game's cull at cur: it
+ * is not wholly inside cur's cull frustum,
  * the planes of S = Pc Vc (world to GS screen) through GS 2048 (GsBase.c's
  * centre) +- (1 + RD_CULL_MARGIN) times the half width (gsW / 2: the native
  * frame's) and the half height (gsH / 2), and the near plane (w = cur's
@@ -4027,9 +4027,9 @@ static bool prevSphere(const RdFrame *prev, const RdCmd *pc, const uint8_t *p, d
  * cameras only keep more), so a part wholly inside it that cur does not
  * draw went for another reason (hidden, replaced) and is not drawn; any
  * other may have been culled, the blended camera may still show it, and
- * it is drawn for the interval.  Before v0.6.1 the test was "wholly
- * outside the picture" without the margin: a culled part whose sphere (it
- * holds the box loosely) still reached into the picture vanished at the
+ * it is drawn for the interval.  The margin matters: with a test of
+ * "wholly outside the picture" alone, a culled part whose sphere (it holds
+ * the box loosely) still reached into the picture would vanish at the
  * interval's start while the blended camera showed it, at the edges of the
  * picture while the camera turned. */
 static bool mayBeCulledAtCur(const double c[3], double r)
@@ -4713,7 +4713,7 @@ static void headCopy(int l, uint32_t from, uint32_t to, uint32_t sizeOf)
  * PS2.  (Dropping a later present's FEED128 writes instead, while its reads
  * still run, would paste the tick's final FEED128 over the screen: after the
  * black reset of a camera cut, auraInspireAfter's GlobalTimer fill, a black
- * frame.)  For issue 28, the same for DISPLAY when the frame reads it (the
+ * frame.)  For the motion blur, the same for DISPLAY when the frame reads it (the
  * motion blur's old frame, the file header): DISPLAY into DISPLAY_HELD at the
  * first present's head, back at the later ones', so every present draws the
  * tick's FIX over the previous tick's picture. */
@@ -5124,7 +5124,7 @@ bool rd_present(float alpha)
         alpha = 1.0f;
     }
     /* the tick's first present keeps the feedback passes' inputs (FEED128,
-     * and DISPLAY for issue 28), the later ones start from them
+     * and DISPLAY for the motion blur), the later ones start from them
      * again (feedback) */
     const int first = cur->number != s_pres.number;
     s_pres.number = cur->number;

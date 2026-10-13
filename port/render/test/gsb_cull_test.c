@@ -23,7 +23,7 @@
  *            slerped and the eye lerped, as rd_interp.c camSetup, computed
  *            here on their own), many of them at the picture's edges and
  *            corners: none is culled (gsb_ClipBox 0).  A step past half
- *            those limits (v0.6.1, VIS-RULES item 5) culls nothing (0
+ *            those limits culls nothing (0
  *            cameras): every box is kept, those outside every frustum too;
  *            within half of them three cameras cull.  The worst miss (how
  *            far inside the in-between picture the shown point of a culled
@@ -47,7 +47,7 @@
  *            a turn of 14 degrees three cameras, 151 to 299 units or 16 to
  *            29 degrees none (every box kept), 301 units or 31 degrees
  *            one.
- *   margin   (VIS-RULES items 2 and 3) a box every corner of which is past
+ *   margin   a box every corner of which is past
  *            a plane by less than |w| / 65536 + 1 is kept (the PS2 dropped
  *            it), one past it by more is dropped; "every result the PS2's"
  *            above is the PS2's test with this margin.
@@ -78,16 +78,16 @@
  *            (1 + GSB_CULL_MARGIN, the cull's) while pictures are blended;
  *            the same after a reflection's gsb_SetVSMatrix(230, 230) (the
  *            frame's width, not vsWidth).
- *   bank     (review B1) a step past half the limits keeps every box
+ *   bank     a step past half the limits keeps every box
  *            only while the packet bank is at most half of the EE's 512 KB
  *            full (DmaPacket.c dpk_HostFill), else three cameras cull;
  *            dpk_HostRoom refuses an object within 64 KB of the pad's end.
  *   shadows  Shadow.c's edge clip (gsb_HostShadowClipX): W pixels, at most
- *            2046 (GSB_SHADOW_CLIP_MAX, VIS-RULES item 17): a clipped end
+ *            2046 (GSB_SHADOW_CLIP_MAX): a clipped end
  *            at 2048 -+ the clip packs into Shadow.c's range test (0x11 ..
- *            0xFFEF sixteenths); 2047 did not.
- *   stage    (--stage DISC, ctest gsb_cull_stage; 77 without the disc image,
- *            issue 76) st18a's parts from the disc, culled as the game culls
+ *            0xFFEF sixteenths); 2047 does not.
+ *   stage    (--stage DISC, ctest gsb_cull_stage; 77 without the disc image)
+ *            st18a's parts from the disc, culled as the game culls
  *            them, at the camera of the reporter's dump i76 (the parts it
  *            drops are the ones the dump's log names) and over 768 camera
  *            steps about it at 16:9 and 48:9 (orbits, the eye alone, the
@@ -97,11 +97,11 @@
  *            are left to the tick before's draws (the sweep's control).
  *            The triangles the region rule drops for a vertex behind the
  *            eye at the dump's camera are counted (none reach its picture).
- *            The owner's v0.7.0 capture at the place (frame 22117, 16:9,
+ *            A capture at the place (frame 22117, 16:9,
  *            framerate 60, the camera standing still): one camera, the
  *            log's drops, and no frame pixel whose nearest st18a surface
- *            is a dropped part's (checkStageCapture).  The owner's two
- *            v0.7.0-rc3 captures there while the camera turned (frames
+ *            is a dropped part's (checkStageCapture).  Two captures
+ *            there while the camera turned (frames
  *            4219 and 4481; the camera stands at one eye and only turns):
  *            at each tick and at the picture between the ticks the second
  *            F12's PNG shows, every pixel's nearest surface is a drawn
@@ -114,8 +114,7 @@
  *            --stage DISC --eye (not a ctest, about a minute) also
  *            rasterises every picture between the ticks with and without
  *            the triangles the rule drops for a vertex behind the
- *            in-between eye, and prints the holes (VIS-RULES item 12,
- *            issue 76; eyePicture).
+ *            in-between eye, and prints the holes (eyePicture).
  */
 #include <math.h>
 #include <stdio.h>
@@ -742,7 +741,7 @@ static int clipBox(Box *b)
 }
 
 /* the PS2's test (gsb_ClipBox's own code) on the current matrix, with the
-   port's drop margin (v0.6.1, VIS-RULES items 2 and 3: a box is dropped
+   port's drop margin (a box is dropped
    only when every corner is past a plane by |w| GSB_DROP_REL +
    GSB_DROP_ABS, GsBase.h): the reference
    for the cases with one camera */
@@ -1106,7 +1105,7 @@ static void checkCut(void)
     }
     /* the limits: RD_INTERP_CAMERA_MOVE 300 units, RD_INTERP_CAMERA_TURN 30
        degrees (a cut past them: one camera); past half of them nothing is
-       culled (v0.6.1, VIS-RULES item 5: 0 cameras, every box kept) */
+       culled (0 cameras, every box kept) */
     CHECK(viewsAcross(149.0, 0.0) == 3, "cut: a step of 149 units culls against 3 cameras (%d)",
           gsb_HostCullViewsUsed());
     CHECK(viewsAcross(151.0, 0.0) == 0, "cut: a step of 151 units culls nothing (%d)",
@@ -1201,7 +1200,7 @@ static void checkOriginal(void)
     checkOneCamera("Original framerate", &b);
 }
 
-/* v0.7.0 (the owner's capture at the issue 76 place, frame 22117, its cull
+/* A capture at the st18a place (frame 22117, its cull
    line without "/5"): the cameras follow "the pictures are blended between
    ticks" (video_options.c ico_video_interpolate, the window's rule
    window_host.c rs->interpolate: every framerate but Original), never the
@@ -1410,7 +1409,7 @@ static void checkShadows(const char *what, int winW, int winH, float want)
 
 /* ------------------------------------------------------------ bank fill */
 
-/* review B1: a step past half the limits keeps every box only while the
+/* A step past half the limits keeps every box only while the
    packet bank is at most half of the EE's size full; past it the three
    cameras cull again.  And dpk_HostRoom refuses an object (before any
    write) once the bank is within its reserve of the host pad's end */
@@ -1443,7 +1442,7 @@ static void checkBankFill(void)
 
 /* ------------------------------------------------------------- margin */
 
-/* VIS-RULES items 2 and 3: gsb_ClipBox drops a box only when every corner
+/* gsb_ClipBox drops a box only when every corner
    is past a plane by the margin.  The current matrix the identity (a
    corner's clip coordinates are its own, w 1), one camera (locked) */
 static void checkMargin(void)
@@ -1481,7 +1480,7 @@ static void checkMargin(void)
     }
 }
 
-/* VIS-RULES item 5: a step past half the limits, a box behind the eye of
+/* A step past half the limits, a box behind the eye of
    every camera: kept, 2 (a corner closer than the near plane) */
 static void checkSpanNear(void)
 {
@@ -1505,7 +1504,7 @@ static void checkSpanNear(void)
 
 /* ------------------------------------------------- the stage, with the disc
  *
- * Issue 76 (v0.6.2): st18a's parts as the game culls them (the object's box,
+ * st18a's parts as the game culls them (the object's box,
  * then each part's: RegistPacket.c reg_setNMatrixPacket and the part cull,
  * the boxes the vertex extents PObj.c MakeBoundingBox makes at load; the
  * stage is placed at the identity) against the camera of the reporter's
@@ -1570,7 +1569,7 @@ static void boxCorners(float (*out)[4], const float *mn, const float *mx)
    strip table and the next part's header: st18a had 144,253 triangles
    instead of its 28,843 (with an area 100,948 instead of 28,842), the
    extra ones of no model, among them long slivers across the courtyard
-   that no draw has (the v0.7.0 capture frame 4219's drawn st18a_p1 parts
+   that no draw has (the capture frame 4219's drawn st18a_p1 parts
    hold 14,382 triangles, its VU meshes' 43,146 indices;
    checkStageLoader) */
 static int loadModel(StageModel *m, const unsigned char *f, uint32_t size)
@@ -1886,7 +1885,7 @@ static int stagePartCount(void)
 
 /* --------------------------------- behind the eye, between the ticks
  *
- * VIS-RULES item 12 (vu_common.hlsli vu_region_rule): a triangle with a
+ * The region rule (vu_common.hlsli vu_region_rule): a triangle with a
  * vertex behind the eye (clip w <= 0) whose GPU-clipped extent reaches the
  * camera's picture (GS 2048 -+ 256 across, -+ half the height down) is not
  * drawn.  The PS2 tested it at the tick's camera only; the presenter tests
@@ -1899,13 +1898,13 @@ static int stagePartCount(void)
  * for a triangle it drops at both ticks' cameras (vu_region_rule under
  * ICO_VU_TICKS) does not have; of them, the holes of triangles the rule
  * drops at neither tick (no picture the PS2 drew between the two ticks
- * had them).  S1 (v0.6.2 review): a tick showed a triangle only when the
+ * had them).  The shown-tick rule: a tick shows a triangle only when the
  * rule does not drop it at that tick's camera AND what the GPU draws of it
  * there reaches the frame (the native frame's columns and rows; at 4:3
- * the picture), the rule vu_region_rule now has: the pixels it closes
- * (holes of the in-between rule it draws over), and the pixels the
- * either-tick rule (v0.6.2 before the review) added of triangles neither
- * tick showed (a flash of what the PS2 hid at both ticks).  --stage DISC
+ * the picture), the rule vu_region_rule has: the pixels it closes
+ * (holes of the in-between rule it draws over), and the pixels an
+ * either-tick rule would add of triangles neither tick showed (a flash of
+ * what the PS2 hid at both ticks).  --stage DISC
  * --eye (not a ctest: about a minute; with --eye the sweep also runs at
  * 4:3, where the frame is the picture). */
 
@@ -2094,7 +2093,7 @@ static int frameReach(const double (*h)[4], int fw, int fh)
 
 /* the nearest 1 / w: every triangle; the both-ticks rule; the in-between
    rule; the both-ticks rule less the triangles dropped at neither tick;
-   the shown-tick rule (S1) */
+   the shown-tick rule */
 static float s_dAll[EYE_MAX_W * EYE_MAX_H], s_dNew[EYE_MAX_W * EYE_MAX_H],
     s_dNow[EYE_MAX_W * EYE_MAX_H], s_dNei[EYE_MAX_W * EYE_MAX_H], s_dS1[EYE_MAX_W * EYE_MAX_H];
 static int s_idNew[EYE_MAX_W * EYE_MAX_H];
@@ -2104,7 +2103,7 @@ static double (*s_h)[3][4];
 
 /* the polygon's pixels (centres) inside the tile x0..x1, y0..y1 (frame
    pixels, the frame's left top at GS fx, fy): 1 / w into the buffers the
-   mask names (1 all, 2 new, 4 now, 8 nei, 16 S1), the nearest kept */
+   mask names (1 all, 2 new, 4 now, 8 nei, 16 the shown-tick rule), the nearest kept */
 static void rasterPoly(double (*p)[4], int n, double fx, double fy, int fw, int x0, int y0, int x1,
                        int y1, int mask, int id)
 {
@@ -2691,7 +2690,7 @@ static void checkStageDump(void)
     }
 }
 
-/* v0.7.0, the owner's capture at the same place (user-slit-frame-20261012-
+/* A capture at the same place (user-slit-frame-20261012-
    162136: frame 22117, 3840 x 2160 at 16:9, Full pixel, framerate 60, the
    log's cull line without "/5"): its view and zoom from the dump's header.
    The presented picture is the tick's (the camera stood still: the
@@ -2781,7 +2780,7 @@ static void checkStageCapture(void)
           holes);
 }
 
-/* The loader against the game's own meshes: the v0.7.0-rc3 capture frame
+/* The loader against the game's own meshes: the capture frame
    4219 (frame-20261012-170845-v8447) drew st18a_p1 parts 0, 1, 2, 4 to 7, 9
    to 13, whose VU meshes (rd_replay_tool --mesh st18a_p1) hold 43,146
    indices, 14,382 triangles: the triangles with an area of those parts.
@@ -2806,7 +2805,7 @@ static void checkStageLoader(void)
           s_stage[0].name, n);
 }
 
-/* v0.7.0-rc3, the owner's two captures at the slit place while the camera
+/* Two captures at the slit place while the camera
    moved (frames 4219 and 4481: frame-20261012-170845-v8447 and -170855-
    v8971, 3840 x 2160 at 16:9, Full pixel, half height, framerate uncapped,
    mirror mode): their views from the dumps' headers, and the camera of the
@@ -3044,7 +3043,7 @@ static int checkStage(const char *disc)
     checkStageCapture();
     checkStageSlit();
     if (s_eyeWanted) {
-        /* the frame is the picture (S1): the eye sweep only */
+        /* the frame is the picture (the shown-tick rule): the eye sweep only */
         checkStageSweep("4:3", 640, 480, 512);
     }
     checkStageSweep("16:9", 1920, 1080, 688);

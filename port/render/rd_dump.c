@@ -39,7 +39,7 @@
  *   u32      temp target count; per target: u32 id, w, h, withDepth, keep
  *   (version 5: RDC_OVERLAY_TEXT commands, their RdTextItem and
  *   RdTextOp payloads, and RDC_SCREEN's b[3]; no new section.  A version 4
- *   dump has none, so it replays as before in every preset)
+ *   dump has none, so it replays unchanged in every preset)
  *   (version 6: RD_TARGET_FEED_HELD appended, so the temporary targets'
  *   slots start one later; an older dump's temps start at low half 17)
  *   (version 8: RD_TARGET_DISPLAY_HELD appended, the same again; a
@@ -739,10 +739,10 @@ bool rd__load_frame(const char *path, RdFrame *out)
  * when everything asked for was written. */
 bool rd_dump_on_demand(const char *dumpPath, const char *pngPath);
 
-/* PC port (v0.6.1, VIS-RULES): the dumped frame's box cull drops as one
+/* PC port: the dumped frame's box cull drops as one
  * log line (rd_note_cull_drop): each as model:part, the rule (2 the
  * object's box, 3 the part's) and, when the cull tested the blend span's
- * cameras (item 5), "/5" with their count; "none" when nothing was
+ * cameras, "/5" with their count; "none" when nothing was
  * dropped.  A part is -1 for a whole object (rule 2).  Before the list,
  * the drops culled with this tick's camera alone counted by why (the
  * Original frame rate, the camera standing still, a cut, ...), so a drop

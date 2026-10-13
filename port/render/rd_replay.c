@@ -615,7 +615,7 @@ RdUniform rd__frame_group_z(uint32_t targetW, uint32_t targetH, float originX, f
  * texel edges instead of texel centres */
 static bool s_frameNoHalf;
 
-/* The exact viewport (EXACT-RASTER, v0.6.1).  With the viewport the target
+/* The exact viewport (RENDER.md "Screen planes").  With the viewport the target
  * itself, the 4:3 columns of a frame changed with its width (rd_native_test
  * measured up to 160 pixels at 1x, 600 at 2x):
  *  - the GPU clips a triangle at the viewport (the clip volume), and the
@@ -741,7 +741,7 @@ RdUniform rd__frame_group_ex(uint32_t targetW, uint32_t targetH, float originX, 
     cb.z[2] = scaleY;
     /* the meshes' vertices off the 12.4 grid where the target is finer
      * than it, only under the developer switch ICO_RD_VU_OFFGRID (Enhanced
-     * only).  Issue 26: off the grid, a VU vertex no longer lands where the
+     * only).  Off the grid, a VU vertex does not land where the
      * GIF path or another mesh puts the same point, and the crack between
      * them showed the clear as a bright dot through the fog; every preset
      * keeps the GS's quantisation. */
@@ -1053,7 +1053,7 @@ bool rd__stencil_ops(RdStencilWindow *w, uint32_t depth, bool whole, RhiLoadOp d
 }
 
 /* rd__stencil_ops, and with g_rd.depthCopy the stencil loaded with the
- * depth and stored outside the window too, as up to v0.4.4: no pass on a
+ * depth and stored outside the window too: no pass on a
  * packed depth-stencil then asks for its depth and its stencil
  * differently */
 static bool stencilOps(RdStencilWindow *w, uint32_t depth, bool whole, RhiLoadOp depthLoad,
@@ -1260,7 +1260,7 @@ static void beginPass(Replay *r, RdTargetRec *c, RdTargetRec *d, uint32_t cid, u
  *    sample patterns are centred on the pixel centre: on a plane it is at
  *    or below the centre's depth, so a surface the game draws again after
  *    the close with GEQUAL against SCENE's depth (the flare mask's and the
- *    aura's re-draws of the glowing meshes, issue 43) passes on every
+ *    aura's re-draws of the glowing meshes) passes on every
  *    pixel it passed at 1x; the largest sample lies above the centre on
  *    any slope and failed nearly all of them.  The cost is on silhouettes:
  *    a pixel shared by a near and a far surface resolves to the far one,
@@ -3148,7 +3148,7 @@ static void perfPost(Replay *r, int post)
     rd__perf_post(s_cl, post);
 }
 
-/* The field's half pixel on SCENE (issue 29, the old bridge's sea).  The
+/* The field's half pixel on SCENE (the old bridge's sea).  The
  * frame head's draw environment carries the flip's half offset (GsBase.c
  * sceGsSetHalfOffset, RD_TARGET_HALF_Y): XYOFFSET.y + 0.5 pixel for the
  * scenery drawn first.  The shadow pass sets SCENE again with
@@ -3386,7 +3386,7 @@ static void doScreen(Replay *r, const RdFrame *f, const RdCmd *c)
             stride = sizeof(IcoSpriteStqVertex);
         }
     }
-    /* EXACT-RASTER: a triangle command's triangles with their planes
+    /* the exact viewport: a triangle command's triangles with their planes
      * (rd_screen_planes.c); sprites and points keep their axis-aligned path */
     if (!aa1 && s_vpExact && topo == RD_PRIM_TRIANGLES && c->b[0] != RD_PRIM_SPRITES &&
         c->b[0] != RD_PRIM_POINTS && nv % 3 == 0) {
@@ -4143,12 +4143,12 @@ static void vuDraw(Replay *r, const RdStateBlock *s, const DrawSetup *ds, RhiBin
 
 static void doVuDraw(Replay *r, const RdFrame *f, const RdCmd *c);
 
-/* VIS-WINDOW (v0.6.1): whether the picture is not the PS2's out of the box,
- * the Original preset on a 4:3 frame at 1x (ICO_VU_EXTENDED; the region
- * rule, vu_common.hlsli vu_region_rule): the Enhanced preset, a frame
- * wider than 4:3 or a scene scale above 1.  The user's ruling
- * (2026-10-12): out of the box the PS2's behaviour stays; any other state
- * draws what a game made for that picture would draw. */
+/* Whether the picture is not the PS2's out of the box, the Original preset
+ * on a 4:3 frame at 1x (ICO_VU_EXTENDED; the region rule, vu_common.hlsli
+ * vu_region_rule): the Enhanced preset, a frame wider than 4:3 or a scene
+ * scale above 1.  Out of the box the PS2's behaviour stays; any other
+ * state draws what a game made for that picture would draw (RENDER.md
+ * "Strip joining"). */
 static bool vuExtended(void)
 {
     return g_rd.settings.preset != RD_PRESET_ORIGINAL || g_rd.gsW > ICO_SH_FRAME_BASE_W ||
@@ -4257,7 +4257,7 @@ static void doVuDraw(Replay *r, const RdFrame *f, const RdCmd *c)
         vcb.draw[2] |= ICO_VU_EXTENDED;
     }
     if (f->hasTickCams && c->u[3] == RD_VU_TICK_CAMERAS) {
-        /* issue 76: drawn through a camera blended between two ticks'; a
+        /* drawn through a camera blended between two ticks'; a
          * triangle the rule drops there is clipped when the rule draws it
          * at either tick's camera (vu_region_rule) */
         vcb.draw[2] |= ICO_VU_TICKS;
@@ -4282,7 +4282,7 @@ static void doVuDraw(Replay *r, const RdFrame *f, const RdCmd *c)
             return;
         }
         uint32_t *idx = (uint32_t *)(g_rd.ringMap[s_slot] + iOff);
-        /* VIS-WINDOW: strip i is the grid's rows i and i + 1
+        /* strip i is the grid's rows i and i + 1
          * (Primitive.c prim_UpdateMesh3D), so with two strips or more
          * every strip shares a row of positions with a neighbour: joined,
          * never a card (vu_region_rule) */
@@ -5520,7 +5520,7 @@ static bool ensureRing(uint64_t need)
         RHI_MEM_UPLOAD, "rd ring"});
     g_rd.ringMap[s_slot] = g_rd.ring[s_slot].id ? rhi_map_buffer(g_rd.ring[s_slot]) : NULL;
     g_rd.ringCap[s_slot] = g_rd.ringMap[s_slot] ? cap : 0;
-    /* issue 58: a frame that uploads many pack replacements at once (a
+    /* a frame that uploads many pack replacements at once (a
        stage change) can need a ring of hundreds of MB; the ring never
        shrinks, so its large sizes are named in the log */
     if (!g_rd.ringMap[s_slot]) {
@@ -5642,7 +5642,7 @@ static int uploadReplacement(RdTexRec *t)
             if (own.id) {
                 rhi_destroy_buffer(own);
             }
-            /* issue 58: the replacement waits for a later replay; named once */
+            /* the replacement waits for a later replay; named once */
             static int s_ownFailLogged;
             if (!s_ownFailLogged) {
                 s_ownFailLogged = 1;
@@ -5987,7 +5987,7 @@ static bool replayFrame(const RdFrame *f, int keep, bool present)
     /* no shadow window from another replay (clearNewTargets reads it) */
     memset(&s_stencil, 0, sizeof(s_stencil));
     uploadTextures();
-    rd__join_parts(f, keep); /* issue 76: the card test over a part's packets (rd_join.c) */
+    rd__join_parts(f, keep); /* the card test over a part's packets (rd_join.c) */
     uploadMeshes(f, keep);
     clearNewTargets();
     rd__perf_stamp(s_cl, RD_PERF_TS_LISTS);

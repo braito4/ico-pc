@@ -28,7 +28,9 @@
  * 0, 1, 2, 4, 6, 7, 8, 9, 10, 11, 12 only.  Lists 3 and 5 inherit whatever
  * the previous list left.  rd_core reproduces this by applying the same
  * defaults at rd_begin_frame (through the normal rd_* state calls, recorded
- * into those lists) and nothing else.  The defaults, from GsBase.c:638-688:
+ * into those lists) and nothing else.  The defaults, from GsBase.c's
+ * gsb_setNormalReg, gsb_setSemitransReg, gsb_setSpecularReg and
+ * gsb_setParticleReg:
  *   normal   (0, 7-12): TEST 0x50000  ZBUF write on  FBA 0 TEXA 80/80
  *   semitr   (1, 2):    TEST 0x5140D  ZBUF write on  FBA 0 TEXA 7F/81 AEM
  *   specular (4):       TEST 0x5C000  ZBUF write off FBA 0 TEXA 80/80
@@ -37,7 +39,7 @@
  * Replay order and keep
  * ---------------------
  * rd_end_frame(0) replays lists 0..12.  rd_end_frame(1) ("fbKeep", pause and
- * memory card screens, DisplayList.c:128) replays lists 11 and 12 only, on
+ * memory card screens, DisplayList.c dl_Swap) replays lists 11 and 12 only, on
  * top of the retained DISPLAY target.
  *
  * Lists
@@ -61,7 +63,8 @@
  * All rd_* calls are made from the game (simulation) fiber.  rd_end_frame
  * hands the finished RdFrame to the presenter, which renders it once, or
  * several times with interpolation on (rd_present).  The game's post passes
- * are appended from scheduler() on the PS2 (main.c:263-272); on the host
+ * are appended from scheduler() on the PS2 (main.c, through
+ * gsb_UpdateGSSystem); on the host
  * they are appended by the same code running inside ico_vsync before
  * rd_end_frame, so there is one well-defined hand-off point.
  *
@@ -188,7 +191,7 @@ typedef enum RdTargetId {
     RD_TARGET_AA1,           /* 128 x 128 */
     RD_TARGET_FEED128,       /* TBP 0x3F00: 128 x 128 aura feedback, persistent across frames */
     RD_TARGET_DATE_SNAPSHOT, /* R8 copy of SCENE alpha MSB, taken when a DATE consumer begins */
-    /* appended, so the older ids keep their values in dumps */
+    /* appended, so the ids above keep their values in dumps */
     RD_TARGET_AURA_WORK, /* TBP 0x2A00 TBW 8: scene-sized aura buffer (list 8), SCENE's Z */
     RD_TARGET_AURA_TAP,  /* TBP 0x2800 TBW 2: 128 x 128 aura tap buffer */
     RD_TARGET_WORK2_PAD, /* TBP 0x2E00 + W H / 64: fillWork2's 256 x 64 band (never read) */
@@ -196,7 +199,7 @@ typedef enum RdTargetId {
      * put back at the head of the tick's later presents (rd_interp.c
      * feedback) */
     RD_TARGET_FEED_HELD,
-    /* host only (issue 28): DISPLAY as a tick's first present found
+    /* host only: DISPLAY as a tick's first present found
      * it, the previous tick's picture, put back at the head of the tick's
      * later presents when the frame reads DISPLAY (the motion blur; rd_interp.c
      * feedback); DISPLAY's size and scale */
@@ -590,7 +593,7 @@ void rd_camera_cut(void);
  * artists placed: RdCamera.freeCamera.  Outside an open frame it applies to
  * the next one. */
 void rd_free_camera(void);
-/* PC port (v0.6.1, VIS-RULES): the game's box cull dropped a model's whole
+/* PC port: the game's box cull dropped a model's whole
  * object (rule 2, RegistPacket.c's object box) or one of its parts (rule 3,
  * the part's box) in the frame being recorded; views is how many cameras
  * the cull tested (gsb_HostCullViewsUsed: 1 the tick's alone, 2 or 3 the
@@ -772,7 +775,7 @@ typedef struct RdOverlayCtx {
 
 typedef void (*RdOverlayFn)(const RdOverlayCtx *ctx, void *user);
 
-/* The 2D layer's box (v0.6.0): the game's 640 x 448 grid is a centred 4:3
+/* The 2D layer's box: the game's 640 x 448 grid is a centred 4:3
  * box inside the presentation box, in output pixels.  At 4:3 it is the
  * presentation box; on a wider picture it is the pillar of the box that
  * holds the frame's 4:3 columns (GS 2048 -+ 256); a box narrower than 4:3

@@ -139,8 +139,8 @@
  *            through each position path of vu_triangle_out (code 34, 32,
  *            36 uncut, 36 cut by the far plane), drawn with Z write and
  *            again over itself by each path with Z GEQUAL: no interior
- *            pixel fails between any two of 34, 32, 36 and 36 cut (issue
- *            25: the cut path's vertices with a GS position draw at it;
+ *            pixel fails between any two of 34, 32, 36 and 36 cut (the
+ *            cut path's vertices with a GS position draw at it;
  *            the cut triangle with its winding reversed is reported only);
  *            32 over 34 along a diagonal pan in 1/64 GS pixel steps never
  *            fails; panned across, every path's edges move forward by at
@@ -148,7 +148,7 @@
  *            Original 4x, Enhanced 2.25x and Enhanced 4x (where 34 drew on
  *            the 12.4 grid and the others off it: 32 over 34 failed
  *            everywhere in 62 of 65 pan frames)
- *   vu seams (issue 26) in the same four renderers, over a grey clear at
+ *   vu seams in the same four renderers, over a grey clear at
  *            Z 0 with GEQUAL and Z write, the clear's pixels within one
  *            output pixel of a shared edge (parameter 0.1..0.9): none for
  *            S1 a code-32 triangle beside a GIF triangle (rd_screen_prims)
@@ -160,11 +160,11 @@
  *            triangle still covers v0's side; S4 (reported against
  *            Original 1x) 8 x 8 quads of one mesh under a matrix each,
  *            turned 0.002 rad, whose shared corners differ by float noise.
- *            (before issue 26 Enhanced above 1x drew the VU off the 12.4
- *            grid, which opens S1 with the VU on P3's side and S2; before
- *            issue 25 the cut path's unsnapped corners opened S3 in every
+ *            (the VU drawn off the 12.4 grid, as ICO_RD_VU_OFFGRID does
+ *            in Enhanced above 1x, opens S1 with the VU on P3's side and
+ *            S2; a cut path with unsnapped corners opens S3 in every
  *            mode)
- *   vu overlap (issue 25, the near railing's shimmer) in the same four
+ *   vu overlap (the near railing's shimmer) in the same four
  *            renderers: a lattice panel's front strip and then its back
  *            strips in one code-32 mesh (the same corners split along other
  *            diagonals, a corner's UV 2 texels off), under the railing's
@@ -298,7 +298,7 @@ static void testOrder(void)
 
 /* ------------------------------------------------------------ half */
 
-/* The field's half pixel (issue 29, rd_replay.c sceneKeepsHalf): list 0's
+/* The field's half pixel (rd_replay.c sceneKeepsHalf): list 0's
  * SCENE target with the frame head's half offset (RD_TARGET_OFFSET |
  * RD_TARGET_HALF_Y), then SCENE set again with the screen offset alone in
  * list 5 (the shadow pass's gif_SetDrawEnviroment), in list 8 without the
@@ -380,7 +380,7 @@ static void testHalfOffset(void)
 
 /* ---------------------------------------------------------------- railing */
 
-/* Issue 9's lattice.  On the GS a hole texel (alpha 0) fails
+/* The railing's lattice.  On the GS a hole texel (alpha 0) fails
  * the alpha test, FB_ONLY keeps its colour (blended to Cd by As = 0) and
  * drops its Z, so geometry drawn later behind the railing passes the Z
  * test there.  A Z write by the failing pass would leave the clear colour
@@ -1633,7 +1633,7 @@ static void testSheetOverlay(RdTex sheet, RdTex ref)
     CHECK(inked > sw * sh / 4, "sheet overlay: %d pixels inked", inked);
 }
 
-/* Texture packs and the overlay (issue 82): the overlay's UVs address the
+/* Texture packs and the overlay: the overlay's UVs address the
  * original's texels, so a 2x or 4x replacement of a glyph sheet must show
  * the same rectangle as the 1x sheet. */
 #define REPL_W 32
@@ -2788,8 +2788,8 @@ static void testNoDual(void)
 
 /* ------------------------------------------------------------ exact blend */
 
-/* The forest's tint sprite as PCSX2 2.8.2's software renderer draws it (the
- * godrays oracle, build-host/tmp/pcsx2cmp/godrays/gs/552, GS draw 480: an
+/* The forest's tint sprite as PCSX2 2.8.2's software renderer draws it (a
+ * capture of the forest, GS draw 480: an
  * untextured SPRITE over the 512 x 512 SCENE, RGBA 223 219 205 4, ALPHA
  * 0x44 = (Cs - Cd) * As >> 7 + Cd, ABE, COLCLAMP 1, FBA 0, PABE 0, FBMSK 0,
  * Z ALWAYS without write), over eight destination pixels of its rt0 dump,
@@ -3034,9 +3034,8 @@ static void testPipelines(void)
     CHECK(nNd < RD_PIPELINE_REACHABLE_MAX,
           "reachable pipelines with the two-pass fallback %u >= %d", nNd,
           RD_PIPELINE_REACHABLE_MAX);
-    /* 250 before EXACT-RASTER (v0.6.1) added the triangle commands' plane
-     * shaders (rd_screen_planes.c), a second vertex shader for each
-     * triangle pass: 347 */
+    /* 347 with the triangle commands' plane shaders (rd_screen_planes.c),
+     * a second vertex shader for each triangle pass (250 without them) */
     CHECK(ns < 400, "reachable screen and post pipelines %u >= 400", ns);
     /* the keys a frame with the dark volume's FBMSK (colour mask 7 until the
      * next FRAME write) and the lightning's perspective STQ would otherwise
@@ -3058,7 +3057,7 @@ static void testPipelines(void)
                 for (int i = 0; i < np; i++) {
                     int found = 0;
                     /* a triangle command draws with its planes
-                       (EXACT-RASTER, rd_screen_planes.c) */
+                       (the exact viewport, rd_screen_planes.c) */
                     RdDrawPass pl = dp[i];
                     CHECK(prim || rd__plane_pass(&pl), "a UI triangle pass takes the planes");
                     for (uint32_t j = 0; j < ns; j++) {
@@ -3462,8 +3461,8 @@ static void testAuraMaskAt(const char *mode, float scale, int fullHeight)
  * vu_triangle_out: code 34 (RD_VU_CLIP_NONE: vu_gs_position), code 32
  * (REGION: vu_vtx_position), code 36 uncut (SCISSOR: vu_vtx_position) and
  * code 36 with vertex 1 past the clip space's far plane (SCISSOR, cut:
- * vu_cut_position, which is vu_vtx_position for these vertices since issue
- * 25); VP_36R is the cut one with its winding reversed (vertices 0, 2, 1).
+ * vu_cut_position, which is vu_vtx_position for these vertices);
+ * VP_36R is the cut one with its winding reversed (vertices 0, 2, 1).
  * The vertices sit off the 12.4 grid and the triangle slopes in Z
  * (thousands of GS Z units a pixel around 16M, the game's 3D range). */
 enum { VP_34, VP_32, VP_36, VP_36H, VP_36R, VP_COUNT };
@@ -3629,8 +3628,8 @@ static int vpEdges(int path, double tx, int *left, int *right)
  * move forward only, by at most one output pixel a frame, and 34's edges
  * stay within one output pixel of 32's.  check34: whether code 34 is to
  * match the other paths (1x; Enhanced above 1x once fixed); the cut path
- * is checked like the others since issue 25's first fix (vu_cut_position;
- * the shimmer itself was the case of testVuOverlap), its reversed twin
+ * is checked like the others (vu_cut_position snaps its corners;
+ * the railing's shimmer was the case of testVuOverlap), its reversed twin
  * reported, not checked */
 static void testVuPaths(const char *mode, int check34)
 {
@@ -3717,11 +3716,11 @@ static void testVuPaths(const char *mode, int check34)
 }
 
 /* ------------------------------------------------------------ VU seams */
-/* (issue 26) edges two draws share, against the frame's clear: the GS
+/* edges two draws share, against the frame's clear: the GS
  * draws a vertex where ftoi4 put it, so an edge two primitives share is
  * drawn by both from the same 12.4 values and leaves no pixel between
  * them.  A pixel the clear shows along it (grey, Z 0) is a crack, which in
- * the game the fog pass paints at full fog (the bright dots of issue 26).
+ * the game the fog pass paints at full fog (bright dots through the fog).
  * Model space is GS pixels from the 512 target's top-left, as in vpDraw. */
 static const char kSeamKey;
 static const uint8_t kSeamRed[4] = {200, 30, 30, 0x80}, kSeamGreen[4] = {30, 200, 30, 0x80};
@@ -4006,7 +4005,7 @@ static void testVuSeams(const char *mode)
 }
 
 /* ------------------------------------------------- coplanar overlaps */
-/* (issue 25) the near railing's lattice as the game draws it: one code-32
+/* the near railing's lattice as the game draws it: one code-32
  * mesh holding a panel's front strip and then its back strips, the same
  * five corners (the quad and a corner on its right edge whose UV is off the
  * panel's mapping, by 2 texels here as in the dump) split along other
@@ -4262,8 +4261,8 @@ static void testVuPathsAt(const char *mode, RdPreset preset, float scale, int ch
         return;
     }
     testVuPaths(mode, check34);
-    testVuSeams(mode);   /* issue 26 */
-    testVuOverlap(mode); /* issue 25 */
+    testVuSeams(mode);
+    testVuOverlap(mode);
     const uint32_t verr = rhi_vk_validation_error_count();
     CHECK(verr == 0, "%s: %u validation errors", mode, verr);
     rd_shutdown();
@@ -4320,7 +4319,7 @@ int main(int argc, char **argv)
     testSheetTextAt("Enhanced 3x", 3);
     testVuPathsAt("Original 1x", RD_PRESET_ORIGINAL, 1.0f, 1);
     testVuPathsAt("Original 4x", RD_PRESET_ORIGINAL, 4.0f, 1);
-    testVuPathsAt("Enhanced 2.25x", RD_PRESET_ENHANCED, 2.25f, 1); /* issues 25, 26 */
+    testVuPathsAt("Enhanced 2.25x", RD_PRESET_ENHANCED, 2.25f, 1);
     testVuPathsAt("Enhanced 4x", RD_PRESET_ENHANCED, 4.0f, 1);
     if (failures) {
         printf("rd_pixel_test: %d failures\n", failures);

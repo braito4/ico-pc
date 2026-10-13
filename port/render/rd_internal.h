@@ -19,11 +19,21 @@
  *   rd_video.c     the FMV picture on the output
  *   rd_perf.c      the per-replay performance records (rd.h RdPerfRecord)
  *   rd_dump.c      frame dump and load
+ *   rd_fog_path.c  the fog's depth read (in place, copy, buffer) and its device self-test
+ *   rd_dst_read.c  the destination read: the exact GS blend in the fragment shader
+ *   rd_screen_planes.c  the screen-prim triangles' planes for the exact viewport
+ *   rd_content_hide.c   the content table: stage geometry the native frame hides
+ *   rd_content_chain.c  the chains a stage animation lets down, drawn at their size
+ *   rd_join.c      the card test's strips joined over a part's meshes
  *   rd_png.c       a minimal PNG writer for the replay tool and tests
  *   texpack.c      texture packs: folders, index, loader thread, RAM cache, replacement budget
  *   texpack_png.c  texture packs: the PNG reader
  *   texpack_dds.c  texture packs: the DDS reader
+ *   texpack_image.c  texture packs: the loaded image the PNG and DDS readers share
+ *   texpack_name.c texture packs: the names PCSX2 gives textures
  *   modelpack.c    model packs: the folder index, glTF to VU meshes, the replacements, the dump
+ *   gltf.c         glTF 2.0 writer and reader for model packs
+ *   xxh3.c         XXH3-64, the hash of the pack names and the meshes
  *
  * Commands
  * --------
@@ -141,8 +151,8 @@ enum { RD_OTEXT_ITEM = 0, RD_OTEXT_OP = 1 };
 #define RD_SCREEN_FRAME_CAMERA 1
 #define RD_SHADOW_FRAME_CAMERA 1
 
-/* A VU draw's u[3] in a frame rd_interp.c blended between two ticks
- * (issue 76): its block is the frame camera's (rd_interp.c CAM_FULL), placed
+/* A VU draw's u[3] in a frame rd_interp.c blended between two ticks: its
+ * block is the frame camera's (rd_interp.c CAM_FULL), placed
  * through the view (not locked to the camera), re-based onto the blended
  * camera, so RdFrame.tickCams take its positions to the ticks' cameras
  * (rd_replay.c sets ICO_VU_TICKS; vu_common.hlsli vu_region_rule).  0 in
@@ -461,8 +471,8 @@ enum { RD_TEXKIND_IMAGE = 1, RD_TEXKIND_TARGET = 2 };
  * (rd__plan_screen_draw selects RD_FS_FONT for it) and never given mips.
  * SHEET: rd_create_texture_sheet, 1 byte (coverage
  * 0..255) and RdTexRec.sheet, drawn with font_sheet_ps (RD_FS_FONT_SHEET),
- * never given mips; appended, so the older values keep their meaning in
- * dumps. */
+ * never given mips; appended, so the values before it keep their meaning
+ * in dumps. */
 enum {
     RD_TEXEL_RGBA8 = 0,
     RD_TEXEL_R8 = 1,
@@ -597,7 +607,7 @@ typedef struct RdTexRec {
      * textures keep a dark base and brighter small levels on purpose, so the
      * GS's choice of level by distance fades them (the fog puffs, the light
      * shafts, the mists).  Textures whose levels are reductions keep none
-     * and draw as before.  Uploaded
+     * and draw from the base alone.  Uploaded
      * as the texture's mips whatever the filter option (uploadMips) and
      * sampled at the GS's level (DF_GS_LOD) */
     uint8_t gsLevels;
@@ -660,7 +670,7 @@ typedef struct RdMeshRec {
     uint32_t qwPerVertex, batchCount, srcQw;
     float (*stream)[4]; /* vertexCount * qwPerVertex quadwords */
     uint32_t *index;
-    /* issue 25: the index list the device draws, index with
+    /* the index list the device draws, index with
      * ICO_VU_INDEX_LATER on each triangle that overlaps an earlier
      * triangle of the mesh in its plane (rd_mesh.c markLaterOverlaps);
      * NULL when none does (rd__mesh_draw_index); also ICO_VU_INDEX_HIDE
@@ -696,7 +706,7 @@ typedef struct RdMeshRec {
     /* rd_mesh.h's mesh identity (rd_vu_mesh_desc_hash); for a
      * replaced mesh the original's; 0 for one built from a raw stream */
     uint64_t hash;
-    /* issue 76: the meshes of the part its strips were last joined over
+    /* the meshes of the part its strips were last joined over
      * (rd__mesh_join_part's sig; 0: its own strips only) */
     uint64_t partJoinSig;
 } RdMeshRec;
@@ -725,12 +735,12 @@ uint64_t rd__mesh_gpu_buffer_size(uint32_t chunk);
 void rd__mesh_gpu_shutdown(void);
 /* Creates a VU mesh record from a stream and index list already in the
  * tagless layout (dump loading); returns the id, 0 on failure.  Every VU
- * mesh is made here, so its drawIndex (issue 25) is worked out here too. */
+ * mesh is made here, so its drawIndex is worked out here too. */
 uint32_t rd__vu_mesh_create_raw(const float (*stream)[4], uint32_t vertexCount,
                                 uint32_t qwPerVertex, const uint32_t *index, uint32_t indexCount,
                                 const RdVuBatchRec *batches, uint32_t batchCount, const char *name);
 
-/* Issue 76 (v0.7.0): the card test's joined strips over the n meshes of
+/* The card test's joined strips over the n meshes of
  * one part of a model (rd_replay.c joinParts: the VU draws of a frame with
  * one object and part in their keys), a strip of one mesh joined by a strip
  * of another shape in any of them (rd_mesh.c joinStrips); the marks are
@@ -743,7 +753,7 @@ uint64_t rd__mesh_join_part(RdMeshRec *const *ms, uint32_t n, uint64_t sig);
  * without the packet's ordinal) and joined with rd__mesh_join_part */
 void rd__join_parts(const RdFrame *f, int keep);
 
-/* Issue 25: the index list a draw of m uploads (RdMeshRec.drawIndex) */
+/* The index list a draw of m uploads (RdMeshRec.drawIndex) */
 static inline const uint32_t *rd__mesh_draw_index(const RdMeshRec *m)
 {
     return m->drawIndex ? m->drawIndex : m->index;
@@ -977,7 +987,7 @@ const char *rd__blend_exact_name(int mode);
  * into the STQ shaders (IcoSpriteStqVertex); 0 when the pass keeps its own. */
 int rd__stq_pass(RdDrawPass *dp);
 
-/* EXACT-RASTER (v0.6.1), rd_screen_planes.c.  rd__plane_pass: converts a
+/* The exact viewport's planes, rd_screen_planes.c.  rd__plane_pass: converts a
  * planned screen pass of sprite_ps, sprite_texa_ps or sprite_stq_ps to the
  * vertex shader of its kind that reads the triangles' planes; returns
  * whether it did (the other fragment entries keep theirs).
@@ -1218,7 +1228,7 @@ static inline bool rd__is_blur_kind(uint32_t kind)
  * frame cur with every keyed draw's data blended from its match in prev by
  * alpha (0 = prev's data, 1 = cur's), and the feedback passes held at the
  * tick: a frame that writes FEED128 copies it into FEED_HELD at its head
- * when firstOfTick, and back from FEED_HELD otherwise, and (issue 28) a
+ * when firstOfTick, and back from FEED_HELD otherwise, and a
  * frame that reads DISPLAY (the motion blur's old frame) does the same with
  * DISPLAY and DISPLAY_HELD, so every present of a tick starts from the same
  * FEED128 and DISPLAY and draws the recorded FIX.  prev NULL, or a
@@ -1316,9 +1326,9 @@ bool rd__blend_affine(const double *p, const double *c, double t, const double *
  * once) turns off the finer blending: rotation-aware blends, the blended
  * camera, the shadow prisms' alignment and the looser state match (the
  * window also takes alpha from the measured present time).  The VU
- * positions are on the 12.4 grid whatever it says (issue 26). */
+ * positions are on the 12.4 grid whatever it says. */
 bool rd__s2_legacy(void);
-/* Issue 26: ICO_RD_VU_OFFGRID=1 in the environment (a developer switch,
+/* ICO_RD_VU_OFFGRID=1 in the environment (a developer switch,
  * read once) brings back unquantised VU X and Y (FrameCB g_z.w) with
  * the Enhanced preset on a scaled target: smoother slow motion, but the
  * seams between meshes and against the GIF path open. */
@@ -1326,7 +1336,7 @@ bool rd__vu_off_grid(void);
 
 int rd__interp_snap(const RdFrame *prev, const RdFrame *cur);
 /* The CPU-projected draws' re-projection onto the blended camera (on by
- * default; rd_interp.c): off, they blend in screen space as before (the
+ * default; rd_interp.c): off, they blend in screen space (the
  * tests' and the replay tool's before/after switch). */
 void rd__interp_set_reproject(bool on);
 /* One vertex's ST by the RdGridSt formula kind (rd.h; pool.c's statements in
@@ -1435,7 +1445,7 @@ typedef struct RdContext {
     RhiShader fsDstRov[RD_FS_COUNT], fsDstAtt[RD_FS_COUNT];
     RhiBindGroupLayout layoutDstStorage, layoutDstAttach;
     /* The scene depth is read through a copy (rd__sampled_depth) and every
-     * pass keeps its stencil (loaded and stored), as up to v0.4.4: whenever
+     * pass keeps its stencil (loaded and stored) whenever
      * the fog's depth path (fogPath) is not RD_FOG_INPLACE.  Off, the fog
      * and the effects depth sample the depth target itself, and the stencil
      * is kept inside the shadow window only. */
@@ -2029,7 +2039,7 @@ bool rd__read_texture(RdTex t, void *dst, size_t dstSize, uint32_t *w, uint32_t 
  * 5 RDC_OVERLAY_TEXT and RDC_SCREEN's RD_SCREEN_TEXT_QUADS; 6
  * RD_TARGET_FEED_HELD, a 17th fixed target; 7 RD_TEXEL_SHEET images, the
  * style in the view word; 8 RD_TARGET_DISPLAY_HELD, an 18th fixed target
- * (issue 28); 9 RdStateBlock.tex1Lod, RDC_FILTER's u[0] and an image's GS
+ * (the motion blur); 9 RdStateBlock.tex1Lod, RDC_FILTER's u[0] and an image's GS
  * levels (RdTexRec.gsLevels) after its texels; 10 the native frame after
  * gsH: f32 aspect, f32 wExact, u32 cullW (RdFrame.aspect, .wExact, .cullW).
  * rd__dump_frame writes this version; rd__load_frame reads 3 to it, and a

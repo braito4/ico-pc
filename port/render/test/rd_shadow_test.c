@@ -17,7 +17,7 @@
  *      sizes per 512 columns (688 x 256, 344 x 128, 172 x 64: the named
  *      targets and every FRAME, rect and UV of the chain), the composites'
  *      UVs over those widths.
- *   w  (VIS-RULES item 17) on a frame 2048 wide (48:9), a caster's volume
+ *   w  on a frame 2048 wide (48:9), a caster's volume
  *      running past the picture's side: every edge clipped at the edge clip
  *      (GSB_SHADOW_CLIP_MAX), the strip drawn whole (eight triangles), its
  *      clipped ends inside the range emitVolumeStrip keeps.
@@ -960,8 +960,8 @@ static void checkPipelines(void)
     for (uint32_t i = 0; i < rd__pipeline_count(); i++) {
         const RdPipeKeyInt *k = rd__pipeline_key_at(i);
         int found = 0;
-        /* the whole set: since EXACT-RASTER's plane keys (v0.6.1) the
-           shadow family sits past the first 512 */
+        /* the whole set: with the triangle passes' plane keys the shadow
+           family sits past the first 512 */
         for (uint32_t j = 0; j < n && j < RD_PIPELINE_REACHABLE_MAX; j++) {
             found |= rd__pipe_key_equal(&keys[j], k);
         }
@@ -1040,17 +1040,17 @@ static void checkScaledIntegral(void)
     rd_shutdown();
 }
 
-/* --------------------- (w) VIS-RULES item 17: a strip across a 48:9 side
+/* ---------------------------------- (w) a strip across a 48:9 side
  *
  * On a frame 2048 wide (48:9) the edge clip is GSB_SHADOW_CLIP_MAX.  A
  * caster at the picture's right side (GS x 3482 .. 3584) whose volume runs
  * out along view +x (the shadow direction (1, 0, 0.01), 600 long) past
  * GS x 4094: each of its three edges is clipped at the edge clip, and the
  * strip they make is drawn (its eight triangles recorded), the clipped ends
- * at GS x 2048 + GSB_SHADOW_CLIP_MAX.  Before v0.6.1 the clip was 2047: a
- * clipped end at GS x 4095 (65520 sixteenths) failed emitVolumeStrip's
+ * at GS x 2048 + GSB_SHADOW_CLIP_MAX.  A clip of 2047 would not do: a
+ * clipped end at GS x 4095 (65520 sixteenths) fails emitVolumeStrip's
  * range test (at most 0xFFEF) and the strip, the shadow inside the picture
- * with it, was dropped. */
+ * with it, is dropped. */
 static Sub15C *buildWideModel(void)
 {
     static const float caster[3][3] = {

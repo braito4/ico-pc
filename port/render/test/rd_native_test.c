@@ -5,8 +5,9 @@
  * rendered at the native widths W = 512, 688, 1376, 2048 and 2560 (the
  * display aspect W / 384, ico_frame_width_for) through rd_reset_scene(W, 448) and the frame
  * head's gsW = W, the Original preset at 1x and the Enhanced preset at
- * scene scale 1 and 2.  The frame is the plan's Gate B in miniature
- * (v0.6.0, D5): the 4:3 picture must not know how wide the frame is.
+ * scene scale 1 and 2.  The frame is tools/native_frame_check.py gate-b in
+ * miniature: the 4:3 picture must not know how wide the frame is
+ * (docs/port/DISPLAY.md, docs/port/TESTING.md).
  *
  * The geometry (kTris below and the sprites in drawFrame):
  *   - VU triangles of code 32 (the region test), 34 (no test) and 36 (the
@@ -20,27 +21,27 @@
  *   - a full-frame tagged flat sprite (RD_SPACE_FULLFRAME), blended;
  *   - a second flat full-frame sprite standing in for the fog pass (the
  *     real RD_POST_FOG needs the depth LUT of rd_fog_test; the fog's 4:3
- *     rule is that test's and W2-SPACES' business);
+ *     rule is that test's business);
  *   - the DISPLAY reduction (RD_POST_REDUCTION) at the end of list 12.
  *
  * The cases:
  *   c  every W, every preset (Original 1x, Enhanced 1x and 2x): SCENE and
  *      DISPLAY columns [(W/2 - 256) s, +512 s) equal the W = 512 render's
- *      byte for byte (Gate B's centre rule).  DISPLAY leaves out two GS
+ *      byte for byte (gate-b's centre rule).  DISPLAY leaves out two GS
  *      pixels at each end of the 512 columns: the reduction crops its
  *      picture 2 pixels from the frame's edge and its bilinear reads one
  *      pixel past, which at W = 512 is the frame's edge and at a wider W is
- *      picture.  Exact since EXACT-RASTER (v0.6.1): before it the GPU
- *      clipped a triangle reaching past the target at the viewport (the
- *      target, whose edge is the band's at W 512), which moved its edges,
- *      and interpolated the colours from the pixel's place in the target
- *      (rd_replay.c s_vpExact, vu_common.hlsli vu_attr_planes).
+ *      picture.  Exact through the exact viewport and the attribute planes:
+ *      with the viewport the target, the GPU would clip a triangle reaching
+ *      past the target (whose edge is the band's at W 512), which moves its
+ *      edges, and interpolate the colours from the pixel's place in the
+ *      target (rd_replay.c s_vpExact, vu_common.hlsli vu_attr_planes).
  *   n  every W < 2560, every preset: SCENE equals the W = 2560 render's
  *      centre W s columns byte for byte, DISPLAY too but for two GS pixels
  *      at the narrower frame's edges (the reduction's crop): the sides
  *      continue exactly, a wider frame only adds columns.
- *   e  every W > 512, every preset: no step of SCENE across either old
- *      band edge (the column pair at (W/2 -+ 256) s) is larger than the
+ *   e  every W > 512, every preset: no step of SCENE across either edge
+ *      of the 4:3 band (the column pair at (W/2 -+ 256) s) is larger than the
  *      99th percentile (+1 LSB for rounding) of the horizontal gradient of
  *      its row within 16 GS pixels of the edge, nor than the vertical
  *      steps beside it (a triangle's own edge crossing the column there),
@@ -49,18 +50,18 @@
  *   p  corners and edges on pixel boundaries and pixel centres
  *      (checkBoundaryCorners), and a Gouraud screen-prim triangle (the CPU
  *      GIF path): every W, every preset, the 4:3 columns of SCENE equal the
- *      W = 512 render's byte for byte.  Failed before
- *      EXACT-RASTER at every wider W, 2048 included (the two triangles
- *      across the band edges: their pixel-centre ties on the edge the GPU
- *      clipped at the W 512 target's edge went the other way).
+ *      W = 512 render's byte for byte.  Without the exact viewport it fails
+ *      at every wider W, 2048 included (the two triangles across the band
+ *      edges: their pixel-centre ties on the edge the GPU clips at the
+ *      W 512 target's edge go the other way).
  *   h  W = 512, Original 1x: the hash of SCENE and of DISPLAY equal
- *      kExpect (Gate A in miniature: the Original picture at 4:3 does not
+ *      kExpect (gate-a in miniature: the Original picture at 4:3 does not
  *      change).  Runs always; kExpect is zero until the first run's printed
  *      hashes are filled in (then the check is off).
- *   s  the region rule's strip test (VIS-WINDOW, v0.6.1; vu_common.hlsli
+ *   s  the region rule's strip test (vu_common.hlsli
  *      vu_region_rule), runs always, one strip a frame (checkStripRule):
  *      a wall (a 2-triangle strip whose second triangle has a vertex above
- *      the region window and reaches the picture, issue 72) is drawn as
+ *      the region window and reaches the picture) is drawn as
  *      the PS2 draws it out of the box (Original, W 512, 1x: the failing
  *      triangle is not drawn) and with the failing triangle clipped in
  *      every other state (Enhanced at W 512, 688 (16:9) and 2048 (48:9),
@@ -70,9 +71,9 @@
  *      in any state; the same card's strip joined to a passing strip (a
  *      plank's face, rd_mesh.c markJoinedStrips) is drawn as the wall is,
  *      and so is the card joined through another packet of its part (the
- *      keys' object and part; issue 76, rd_replay.c joinParts), not through
+ *      keys' object and part; rd_replay.c joinParts), not through
  *      another part's draw.
- *   a  the attribute planes' anchor (checkPlaneAnchor, issue 76 v0.7.0):
+ *   a  the attribute planes' anchor (checkPlaneAnchor):
  *      a code-36 wall sliver whose first corner stands 60,000 GS pixels
  *      above the picture with its Z saturated reads the texels the exact
  *      plane gives (vu_common.hlsli vu_plane_anchor).  Runs always.
@@ -81,9 +82,8 @@
  *      takes a nearest texel, at W 512 and 688) reads the GS's texel at
  *      every pixel of the 4:3 columns.  Runs always.
  *   The W = 512 renders also have to show the frame (not the clear colour).
- * Every case runs on every run (the ICO_NATIVE_GATE switch is gone: the
- * centre rule holds since EXACT-RASTER; the whole test takes well under a
- * minute on lavapipe).
+ * Every case runs on every run (the whole test takes well under a minute
+ * on lavapipe).
  *
  * Exit 0 all, 1 a mismatch, 77 without a Vulkan device. */
 #include <stdint.h>
@@ -109,12 +109,10 @@ static int failures;
     } while (0)
 
 /* The recorded expectation of the Original preset at W = 512, 1x: FNV-1a 64
- * of SCENE's and of DISPLAY's readback bytes (lavapipe).  It moved from
- * v0.6.0's for two causes:
+ * of SCENE's and of DISPLAY's readback bytes (lavapipe), with:
  *   - the nearest filter's rounding to the GS's texel at texel boundaries
- *     (GRAIN-PHASE, common.hlsli gs_nearest_uv); after it the hash was
- *     ed09df2a0e3e1074 / cd51a5ce8f28f653;
- *   - EXACT-RASTER: the exact viewport (no GPU clip at the 512 target's
+ *     (common.hlsli gs_nearest_uv);
+ *   - the exact viewport (no GPU clip at the 512 target's
  *     edge: 58 pixel-centre ties on the edges of the triangles reaching
  *     past it go to the unclipped triangle's side) and the attribute
  *     planes (23 pixels one colour step apart from the GPU's
@@ -564,7 +562,7 @@ static void checkShows(const char *what, const Img *im, int W, int guard)
           what, differ, total);
 }
 
-/* Gate B's centre rule: the columns [(W/2 - 256) s, +512 s) of a equal r's
+/* gate-b's centre rule: the columns [(W/2 - 256) s, +512 s) of a equal r's
  * (a W = 512 render of the same case); guard GS pixels at each end left out */
 static void compareCentre(const char *what, const Cfg *cfg, int W, const Img *a, const Img *r,
                           int guard)
@@ -601,7 +599,7 @@ static int cmpInt(const void *a, const void *b)
     return *(const int *)a - *(const int *)b;
 }
 
-/* no step across the old band edges larger than the 99th percentile (+1) of
+/* no step across the 4:3 band's edges larger than the 99th percentile (+1) of
  * the row's horizontal gradient within 16 GS pixels of the edge, nor than
  * the largest vertical step of the two columns at the edge between this
  * row and the next or the last (+1): where a triangle's own edge crosses
@@ -689,7 +687,7 @@ static void compareNested(const char *what, const Cfg *cfg, int W, const Img *a,
           cfg->name, what, W, bad, Wide);
 }
 
-/* The film grain spans the native frame (D12, issue 75): the 512 columns of
+/* The film grain spans the native frame: the 512 columns of
  * the 4:3 picture carry the same grain at every width (centre rule), and the
  * columns beside them carry grain too (they differ from the same frame
  * without it) */
@@ -718,7 +716,7 @@ static void checkFilmGrain(void)
         }
         const uint32_t f = texelsPerPixel(&g.scene, W);
         /* The centre columns carry the same grain at every width, byte for
-           byte (the frame under it is the same since EXACT-RASTER) */
+           byte (the frame under it is the same: the exact viewport) */
         {
             size_t bad = 0;
             const size_t x0 = (size_t)(W / 2 - BAND / 2) * f;
@@ -808,7 +806,7 @@ static const StripMesh kJoined = {"joined card",
                                   {60, 200, 200}};
 /* the passing triangle under the card alone (kJoined's first strip): drawn
  * as another packet of the card's part, it joins the card through the
- * part (issue 76, rd_replay.c joinParts: st18a_p1 part 9's wall triangles
+ * part (rd_replay.c joinParts: st18a_p1 part 9's wall triangles
  * above the doorways, whose wall is the part's other packets) */
 static const StripMesh kBelow = {
     "below the card",
@@ -1081,7 +1079,7 @@ static void checkStripRule(void)
                   "strip rule, %s, W %d: the triangle with a vertex behind the eye is not drawn",
                   cfg->name, W);
         }
-        /* issue 76: the card joined through another packet of its part
+        /* the card joined through another packet of its part
          * (one object and part in the keys, rd_replay.c joinParts) is drawn
          * as the joined card is; through another part's draw it stays a
          * card */
@@ -1132,8 +1130,8 @@ static void texelAt(const Img *im, uint32_t x, uint32_t y, int *u, int *v)
 
 /* ------------------------------------------- the planes' anchor (a) */
 
-/* Issue 76 (v0.7.0): a code-36 wall triangle of st18a_p1 (part 6, packet
- * 0x34, the owner's rc6 capture 184315) whose first corner stood 60,000 GS
+/* A code-36 wall triangle of st18a_p1 (part 6, packet 0x34, capture
+ * 184315) whose first corner stood 60,000 GS
  * pixels above the picture with its Z saturated, cut by the VU's x and y
  * flags alone (kicked as it is, vu_common.hlsli vu_triangle_out_pos), 14
  * pixels wide at the lintel: the attribute planes anchored at that corner
@@ -1343,17 +1341,17 @@ static void checkPlaneAnchor(void)
     free(scene.px);
 }
 
-/* The grain's texels are the GS's (issue 75's centre rule at its root): the
+/* The grain's texels are the GS's (the centre rule at its root): the
  * sprite's s and t run 0..4.5 over its 512 GS pixels from GS (1792, 1792),
  * so the GS's pixel (x, y) of the 4:3 columns (sampled at its integer
  * coordinate) reads texel floor(4.5 x), floor(4.5 (y + 32)) mod 512 (the
  * frame's top row is GS y 1824), at every width.  Half the columns and
  * half the rows sit exactly on a texel boundary: there the GS takes the
- * texel the boundary starts.  Before the nearest filter was made the GS's
- * (common.hlsli gs_nearest_uv), the interpolated UV fell on either side
- * of the boundary by float rounding that depends on the pixel's place in
- * the target: about half the boundary pixels took the texel before, and a
- * different half at each width. */
+ * texel the boundary starts (common.hlsli gs_nearest_uv).  Without that
+ * rounding the interpolated UV falls on either side of the boundary by
+ * float rounding that depends on the pixel's place in the target: about
+ * half the boundary pixels take the texel before, and a different half at
+ * each width. */
 static void checkGrainTexels(void)
 {
     static const int widths[] = {512, 688, 1376, 2560};
@@ -1421,7 +1419,7 @@ static void tieDecode(const TieCase *tc, const uint8_t *p, int *u, int *v)
  *     (LCM 1, K 0.25 and 1)         (gs_texa_level), levels 0 and 1
  *   GS levels, both nearest,        gs_sample under DF_GS_LOD
  *     MMIN 2 and 3                  (gs_sample_lod_nearest)
- * Before the GS's rounding each took the texel before the boundary on some
+ * Without the GS's rounding each takes the texel before the boundary on some
  * of the boundary pixels (the interpolated UV's float rounding, which
  * depends on the pixel's place in the target). */
 static void checkNearestTies(void)

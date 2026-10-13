@@ -43,7 +43,7 @@
  *             its ctx the output, its solid quad drawn after the filter
  *             (every pixel its flat colour), the main overlay's quad still
  *             in the filtered picture (its rows vary)
- *   wide crop a 688 frame at 16:9 (W5): the grid 682 columns, the 3 a
+ *   wide crop a 688 frame at 16:9: the grid 682 columns, the 3 a
  *             side past the exact width never in the box (white there, all
  *             black), columns 3 and 684 at its edges; under Trinitron's
  *             grille at strength 1 a row's columns light the channels of the
@@ -1250,7 +1250,7 @@ static void checkTopLayer(void)
           hi);
 }
 
-/* ------------------------------------------------- the native frame (W5)
+/* ------------------------------------------------------ the native frame
  *
  * The grid of a frame wider than 512: the native frame's columns its exact
  * width shows, the (gsW - wExact) / 2 past it at each side rounded to whole

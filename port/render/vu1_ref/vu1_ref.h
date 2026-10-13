@@ -180,7 +180,7 @@ static inline int vu1ref_extended(int preset, int frameW, float scale)
  * drawn). */
 int vu1ref_region_draw(int extended, int freeCamera, int insideA, int insideB, int insideC,
                        int hide, int reaches, int front, int joined, int stripPasses);
-/* The rule at a camera blended between two ticks' (ICO_VU_TICKS, issue 76;
+/* The rule at a camera blended between two ticks' (ICO_VU_TICKS;
  * vu_common.hlsli vu_region_rule): drawT what vu1ref_region_draw gives at
  * the blended camera; cardT 1 when its verdict there was the card test's
  * (a triangle reaching the picture, every vertex in front of the eye, in
