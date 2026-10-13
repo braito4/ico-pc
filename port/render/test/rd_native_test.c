@@ -72,6 +72,10 @@
  *      and so is the card joined through another packet of its part (the
  *      keys' object and part; issue 76, rd_replay.c joinParts), not through
  *      another part's draw.
+ *   a  the attribute planes' anchor (checkPlaneAnchor, issue 76 v0.7.0):
+ *      a code-36 wall sliver whose first corner stands 60,000 GS pixels
+ *      above the picture with its Z saturated reads the texels the exact
+ *      plane gives (vu_common.hlsli vu_plane_anchor).  Runs always.
  *   t  the nearest filter at exact texel boundaries (checkGrainTexels: the
  *      film grain at W 512 to 2560; checkNearestTies: every path that
  *      takes a nearest texel, at W 512 and 688) reads the GS's texel at
@@ -1126,6 +1130,219 @@ static void texelAt(const Img *im, uint32_t x, uint32_t y, int *u, int *v)
     *v = p[1] | ((p[2] >> 1) << 8);
 }
 
+/* ------------------------------------------- the planes' anchor (a) */
+
+/* Issue 76 (v0.7.0): a code-36 wall triangle of st18a_p1 (part 6, packet
+ * 0x34, the owner's rc6 capture 184315) whose first corner stood 60,000 GS
+ * pixels above the picture with its Z saturated, cut by the VU's x and y
+ * flags alone (kicked as it is, vu_common.hlsli vu_triangle_out_pos), 14
+ * pixels wide at the lintel: the attribute planes anchored at that corner
+ * put its texture a couple of texels off its neighbours', moving with the
+ * camera (vu_plane_anchor).  The corners as the VU mirror computed them: x
+ * and y GS pixels, the GS Z, q = 1 / w, and S and T (the texture's
+ * normalised coordinates); the far corner's Z saturates ftoi4. */
+typedef struct FarCorner {
+    double x, y, z, q, s, t;
+} FarCorner;
+
+static const FarCorner kSliver[3] = {
+    {22366.000, -57640.125, 2.0e8 * 16.0, 0.156342, -3.0556, -1.2222},
+    {2174.688, 1892.250, 30990692.0, 0.0018077, -3.4556, 0.6778},
+    {2161.000, 1890.188, 30536746.0, 0.00178127, -3.5, 0.6778},
+};
+
+/* the sliver as a prelit stream: pos (x w, y w, z w, w), ST (s, t, Q 1,
+ * the strip flag), colour 0x80 (MODULATE leaves the texel) */
+static RdMesh sliverMesh(void)
+{
+    float qw[1 + 3 * 3][4];
+    memset(qw, 0, sizeof(qw));
+    const uint32_t tag = 0x8000u | 3u;
+    memcpy(&qw[0][0], &tag, 4);
+    for (int k = 0; k < 3; k++) {
+        const FarCorner *c = &kSliver[k];
+        const double w = 1.0 / c->q;
+        qw[1 + k * 3][0] = (float)(c->x * w);
+        qw[1 + k * 3][1] = (float)(c->y * w);
+        qw[1 + k * 3][2] = (float)(c->z / 16.0 * w);
+        qw[1 + k * 3][3] = (float)w;
+        qw[1 + k * 3 + 1][0] = (float)c->s;
+        qw[1 + k * 3 + 1][1] = (float)c->t;
+        qw[1 + k * 3 + 1][2] = 1.0f;
+        qw[1 + k * 3 + 1][3] = k == 0 ? 0.0f : 1.0f;
+        for (int i = 0; i < 3; i++) {
+            qw[1 + k * 3 + 2][i] = 128.0f;
+        }
+        qw[1 + k * 3 + 2][3] = 128.0f;
+    }
+    const RdVuBatchDesc bd = {0, 0, 0};
+    RdVuMeshDesc md;
+    memset(&md, 0, sizeof(md));
+    md.qw = (const float (*)[4])qw;
+    md.qwCount = 1 + 3 * 3;
+    md.qwPerVertex = RD_VU_QW_PRELIT;
+    md.batchCount = 1;
+    md.batches = &bd;
+    const RdMesh r = rd_create_vu_mesh(&md);
+    CHECK(r.id != 0, "rd_create_vu_mesh (sliver)");
+    return r;
+}
+
+/* SCENE at native width W (Enhanced 1x) holding the sliver as a code-36
+ * draw through the identity matrices, with the clip matrix (mem[20..23])
+ * that flags x and y past 1500 GS pixels of the centre and never z: the
+ * far corner gets +x and -y, the lintel's corners nothing (the x/y-only
+ * cut), textured with the texel-coordinate texture (texelAt) */
+static int renderSliver(int W, Img *scene)
+{
+    memset(scene, 0, sizeof(*scene));
+    RdSettings st;
+    memset(&st, 0, sizeof(st));
+    st.preset = RD_PRESET_ENHANCED;
+    st.outputWidth = 640;
+    st.outputHeight = 480;
+    st.aspect = (float)W / 384.0f;
+    st.sceneScale = 1.0f;
+    if (!rd_init(BAND, GS_H, &st, NULL)) {
+        return R_NO_DEVICE;
+    }
+    rd_reset_scene((uint32_t)W, GS_H);
+    s_grain = 2;
+    const RdTex tex = makeTexture();
+    s_grain = 0;
+    const RdMesh mesh = sliverMesh();
+    rd_begin_frame();
+    RdFrameHead h;
+    memset(&h, 0, sizeof(h));
+    memcpy(h.rgba, kBg, 4);
+    h.gsW = (uint32_t)W;
+    h.gsH = GS_H;
+    h.clear = 1;
+    rd_frame_head(&h);
+    rd_select_list(0);
+    rd_set_target(rd_target(RD_TARGET_SCENE), rd_target(RD_TARGET_SCENE), (uint32_t)W, GS_H, 1);
+    rd_test_gs(RD_TEST_Z_GEQUAL);
+    rd_z_write(1);
+    rd_blend(RD_BLEND_LERP_AS, 0x80, 0);
+    rd_abe(0);
+    rd_pabe(0);
+    rd_fba(0);
+    rd_gouraud(1);
+    rd_tex_a(RD_TEXA_80_80);
+    rd_texture(tex, RD_TEXFN_MODULATE, RD_TCC_RGBA);
+    rd_sampler(RD_FILTER_NEAREST, RD_FILTER_NEAREST, RD_WRAP_REPEAT, RD_WRAP_REPEAT);
+    RdVuDraw d;
+    memset(&d, 0, sizeof(d));
+    d.prog = RD_PROG_PRELIT;
+    d.code = 36;
+    d.clip = RD_VU_CLIP_SCISSOR;
+    for (int c = 0; c < 4; c++) {
+        d.vu.mem[16 + c][c] = 1.0f;
+    }
+    d.vu.mem[20][0] = 1.0f / 1500.0f;
+    d.vu.mem[21][1] = 1.0f / 1500.0f;
+    d.vu.mem[23][0] = -2048.0f / 1500.0f;
+    d.vu.mem[23][1] = -2048.0f / 1500.0f;
+    d.vu.mem[23][3] = 1.0f;
+    rd_draw_vu_mesh(mesh, &d, RD_KEY(&kKey, 6, 0x34));
+    rd_end_frame(0);
+    const bool ok = readImg(RD_TARGET_SCENE, scene);
+    rd_destroy_vu_mesh(mesh);
+    rd_destroy_texture(tex);
+    const uint32_t verr = rhi_vk_validation_error_count();
+    CHECK(verr == 0, "planes' anchor, W %d: %u validation errors", W, verr);
+    rd_shutdown();
+    return ok ? R_OK : R_FAIL;
+}
+
+/* The exact plane's value at GS (x, y) of a quantity linear in screen
+ * space given at the three corners */
+static double planeAt(const double v[3], double x, double y)
+{
+    const double x0 = kSliver[0].x, y0 = kSliver[0].y;
+    const double d1x = kSliver[1].x - x0, d1y = kSliver[1].y - y0;
+    const double d2x = kSliver[2].x - x0, d2y = kSliver[2].y - y0;
+    const double det = d1x * d2y - d1y * d2x;
+    const double px = x - x0, py = y - y0;
+    const double l1 = (px * d2y - py * d2x) / det;
+    const double l2 = (d1x * py - d1y * px) / det;
+    return v[0] + (v[1] - v[0]) * l1 + (v[2] - v[0]) * l2;
+}
+
+static void checkPlaneAnchor(void)
+{
+    const int W = 688;
+    Img scene;
+    const int st = renderSliver(W, &scene);
+    if (st != R_OK) {
+        CHECK(st == R_NO_DEVICE, "planes' anchor: the frame could not be rendered");
+        return;
+    }
+    const uint32_t fx = texelsPerPixel(&scene, W), fy = scene.h / GS_H;
+    if (fx != 1 || fy != 1) {
+        CHECK(0, "planes' anchor: SCENE %ux%u is not 1x at W %d", scene.w, scene.h, W);
+        free(scene.px);
+        return;
+    }
+    double sq[3], tq[3], q[3];
+    for (int k = 0; k < 3; k++) {
+        q[k] = kSliver[k].q;
+        sq[k] = kSliver[k].s * q[k];
+        tq[k] = kSliver[k].t * q[k];
+    }
+    /* the pixels of the sliver's top 60 rows a pixel inside its edges read
+       the texel the exact plane gives at the pixel's centre, to a texel
+       (the texture runs 1.6 texels a pixel across the sliver; the planes
+       anchored at the far corner were 20 off); pixels whose texel the
+       plane puts within a tenth of a boundary are not counted */
+    int checked = 0, wrong = 0, worst = 0;
+    for (int row = 2; row < 60; row++) {
+        for (int col = 440; col < 490; col++) {
+            const double gx = 2048.0 - W / 2 + col, gy = 2048.0 - GS_H / 2 + row;
+            const double cx = gx + 0.5, cy = gy + 0.5;
+            /* inside, a pixel clear of the edges: the three half-planes */
+            int inside = 1;
+            for (int e = 0; e < 3 && inside; e++) {
+                const FarCorner *a = &kSliver[e], *b = &kSliver[(e + 1) % 3];
+                const double ex = b->x - a->x, ey = b->y - a->y;
+                const double len = sqrt(ex * ex + ey * ey);
+                const double dist = (ex * (cy - a->y) - ey * (cx - a->x)) / len;
+                const double ref =
+                    (ex * (kSliver[(e + 2) % 3].y - a->y) - ey * (kSliver[(e + 2) % 3].x - a->x)) /
+                    len;
+                inside = (dist > 0) == (ref > 0) && fabs(dist) > 1.0;
+            }
+            if (!inside) {
+                continue;
+            }
+            const double u = planeAt(sq, cx, cy) / planeAt(q, cx, cy);
+            const double v = planeAt(tq, cx, cy) / planeAt(q, cx, cy);
+            const double fu = (u - floor(u)) * 512.0, fv = (v - floor(v)) * 512.0;
+            if (fabs(fu - floor(fu) - 0.5) > 0.4 || fabs(fv - floor(fv) - 0.5) > 0.4) {
+                continue;
+            }
+            int tu, tv;
+            texelAt(&scene, (uint32_t)col, (uint32_t)row, &tu, &tv);
+            int du = abs(tu - (int)floor(fu)), dv = abs(tv - (int)floor(fv));
+            du = du > 256 ? 512 - du : du;
+            dv = dv > 256 ? 512 - dv : dv;
+            const int off = du > dv ? du : dv;
+            checked++;
+            if (off > 1) {
+                wrong++;
+                if (off > worst) {
+                    worst = off;
+                }
+            }
+        }
+    }
+    CHECK(checked >= 40 && wrong == 0,
+          "planes' anchor, W %d: %d of %d pixels of the sliver read another texel than the "
+          "exact plane's (the worst %d texels off)",
+          W, wrong, checked, worst);
+    free(scene.px);
+}
+
 /* The grain's texels are the GS's (issue 75's centre rule at its root): the
  * sprite's s and t run 0..4.5 over its 512 GS pixels from GS (1792, 1792),
  * so the GS's pixel (x, y) of the 4:3 columns (sampled at its integer
@@ -1445,6 +1662,7 @@ int main(void)
 
     checkFilmGrain();
     checkStripRule();
+    checkPlaneAnchor();
     checkGrainTexels();
     checkNearestTies();
     checkBoundaryCorners();

@@ -150,6 +150,7 @@
 #include "dump_zip.h" /* port/platform: the F12 zip */
 #include "rd_internal.h"
 #include "rd_mesh.h"
+#include "../vu1_ref/vu1_ref.h"          /* --vu-ref: the CPU mirror of the VU programs */
 #include "../../shaders/shader_consts.h" /* ICO_VU_INDEX_*: the marks --mesh shows */
 #include "font.h"                        /* port/ui: the overlay test's text */
 
@@ -822,6 +823,103 @@ static const RdFrame *prepareFrame(const char *dump, RdFrame *pf, RdFrame *f)
     return rf;
 }
 
+/* --vu-ref L:I (a developer's probe): the VU mirror's vertices of the
+ * prelit mesh draw I of list L at this frame's matrices: GS X, Y (12.4 /
+ * 16), Z, the clip w, the scissor loop's clip flags, the region test's
+ * inside bit and ADC; then the fans SCISSOR_COMMON cut. */
+static void vuRefDraw(const RdFrame *f, int l, uint32_t i)
+{
+    if (l < 0 || l >= RD_LIST_COUNT || i >= f->lists[l].count) {
+        printf("vu-ref: no command %d:%u\n", l, i);
+        return;
+    }
+    const RdCmd *c = &f->lists[l].cmds[i];
+    const RdMeshRec *m = c->type == RDC_MESH ? rd__mesh_rec(c->u[0]) : NULL;
+    if (!m || !m->stream || m->qwPerVertex != 3 || c->b[0] != 0 || c->u[1] > f->payloadSize ||
+        sizeof(RdVuPayload) > f->payloadSize - c->u[1]) {
+        printf("vu-ref: %d:%u is not a prelit mesh draw\n", l, i);
+        return;
+    }
+    RdVuPayload p;
+    memcpy(&p, f->payload + c->u[1], sizeof(p));
+    const float *mem = (const float *)(const void *)(f->payload + c->u[1] + sizeof(p));
+    static Vu1Ref r;
+    vu1ref_init(&r);
+    vu1ref_load_common(&r, (const float (*)[4])mem);
+    vu1ref_normal_set_matrix(&r, (const float (*)[4])(mem + 16 * 4));
+    static float in[VU_BATCH_MAX + 1][4];
+    static VuBatchOut out;
+    printf("vu-ref %d:%u mesh %s code %u clip %u batches %u+%u\n", l, i, m->name, p.code, p.clip,
+           p.firstBatch, p.batchCount);
+    for (uint32_t b = p.firstBatch; b < p.firstBatch + p.batchCount && b < m->batchCount; b++) {
+        const uint32_t first = m->batches[b].firstVertex, n = m->batches[b].vertexCount;
+        if (n > VU_BATCH_MAX || first + n > m->vertexCount) {
+            continue;
+        }
+        memset(in, 0, sizeof(in));
+        uint32_t tag[4] = {n | 0x8000u, 0x10000000u, 0x412u,
+                           0}; /* NLOOP n, EOP; the regs as pac packs them */
+        memcpy(in[0], tag, 16);
+        memcpy(in[1], m->stream[(size_t)first * 3], (size_t)n * 3 * 16);
+        vu1ref_normal_c(&r, (int)p.code, (const float (*)[4])in, &out);
+        printf(" batch %u: %u vertices in, %d out, %d fans\n", b, n, out.count, out.fanCount);
+        for (int v = 0; v < out.count; v++) {
+            const VuGsVertex *g = &out.v[v];
+            printf(
+                "  v%-3d x %9.3f y %9.3f z %10d w %10.3f flags 0x%02x inside %d adc %d stq %g %g %g\n",
+                v, g->xyz[0] / 16.0, g->xyz[1] / 16.0, g->xyz[2], (double)g->clipW, g->clipFlags,
+                g->inside, vu_gs_adc(g), (double)g->stq[0], (double)g->stq[1], (double)g->stq[2]);
+        }
+        /* the kicked triangles that contain the GS point ICO_VU_REF_AT=x,y */
+        const char *at = getenv("ICO_VU_REF_AT");
+        double ax = 0, ay = 0;
+        if (at && sscanf(at, "%lf,%lf", &ax, &ay) == 2) {
+            static int kicks[VU_BATCH_MAX + VU_FANS_MAX];
+            int nk = vu1ref_kicks(&out, kicks);
+            for (int q = 0; q < out.fanCount && nk < VU_BATCH_MAX + VU_FANS_MAX; q++) {
+                kicks[nk++] = out.fans[q].beforeVertex; /* the cut triangles, by their kick */
+            }
+            for (int t = 0; t < nk; t++) {
+                const int k = kicks[t];
+                if (k < 2 || k >= out.count) {
+                    continue;
+                }
+                double x[3], y[3];
+                for (int j = 0; j < 3; j++) {
+                    x[j] = out.v[k - 2 + j].xyz[0] / 16.0;
+                    y[j] = out.v[k - 2 + j].xyz[1] / 16.0;
+                }
+                double s0 = (x[1] - x[0]) * (ay - y[0]) - (y[1] - y[0]) * (ax - x[0]);
+                double s1 = (x[2] - x[1]) * (ay - y[1]) - (y[2] - y[1]) * (ax - x[1]);
+                double s2 = (x[0] - x[2]) * (ay - y[2]) - (y[0] - y[2]) * (ax - x[2]);
+                if ((s0 >= 0 && s1 >= 0 && s2 >= 0) || (s0 <= 0 && s1 <= 0 && s2 <= 0)) {
+                    printf(
+                        "  kick v%d (v%d v%d v%d) contains (%g, %g): flags 0x%02x 0x%02x 0x%02x\n",
+                        k, k - 2, k - 1, k, ax, ay, out.v[k - 2].clipFlags, out.v[k - 1].clipFlags,
+                        out.v[k].clipFlags);
+                    for (int j = 0; j < 3; j++) {
+                        const VuGsVertex *g = &out.v[k - 2 + j];
+                        printf(
+                            "     v%-3d x %9.3f y %9.3f z %10d flags 0x%02x stq %g %g %g rgba %d %d %d %d\n",
+                            k - 2 + j, g->xyz[0] / 16.0, g->xyz[1] / 16.0, g->xyz[2], g->clipFlags,
+                            (double)g->stq[0], (double)g->stq[1], (double)g->stq[2],
+                            g->rgba[0] & 255, g->rgba[1] & 255, g->rgba[2] & 255, g->rgba[3] & 255);
+                    }
+                }
+            }
+        }
+        for (int k = 0; k < out.fanCount; k++) {
+            const VuGsFan *fan = &out.fans[k];
+            printf("  fan %d (before v%d): %d corners\n", k, fan->beforeVertex, fan->n);
+            for (int v = 0; v < fan->n; v++) {
+                printf("   f%-2d x %9.3f y %9.3f z %10d stq %g %g %g\n", v, fan->v[v].xyz[0] / 16.0,
+                       fan->v[v].xyz[1] / 16.0, fan->v[v].xyz[2], (double)fan->v[v].stq[0],
+                       (double)fan->v[v].stq[1], (double)fan->v[v].stq[2]);
+            }
+        }
+    }
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 3) {
@@ -844,6 +942,8 @@ int main(int argc, char **argv)
     RdSettings s;
     bool list = false, overlay = false, stats = false;
     bool noDevice = false, aspectGiven = false;
+    int vuRefL[8], vuRefCount = 0;
+    uint32_t vuRefI[8];
     const char *passDir = NULL;
     const char *texDir = NULL, *meshName = NULL;
     memset(&s, 0, sizeof(s));
@@ -998,6 +1098,12 @@ int main(int argc, char **argv)
                 fprintf(stderr, "bad --present size\n");
                 return 1;
             }
+        } else if (strcmp(argv[i], "--vu-ref") == 0 && i + 1 < argc && vuRefCount < 8) {
+            if (sscanf(argv[++i], "%d:%u", &vuRefL[vuRefCount], &vuRefI[vuRefCount]) != 2) {
+                fprintf(stderr, "bad --vu-ref\n");
+                return 1;
+            }
+            vuRefCount++;
         } else {
             fprintf(stderr, "unknown argument %s\n", argv[i]);
             return 1;
@@ -1064,7 +1170,7 @@ int main(int argc, char **argv)
     s.outputHeight = passDir ? 0 : oh;
     /* --no-device (or --list without a device) loads the dump into a
        record-only renderer, lists it and renders nothing */
-    if (noDevice && !list && !texDir && !meshName) {
+    if (noDevice && !list && !texDir && !meshName && !vuRefCount) {
         fprintf(stderr, "--no-device renders nothing: give --list, --mesh or --dump-textures\n");
         return 1;
     }
@@ -1102,6 +1208,9 @@ int main(int argc, char **argv)
                aspectName(info.aspect, (char[16]){0}), (double)info.wExact, info.cullW);
         printf("listed %u commands of frame %u (%ux%u, fba/pabe/texa/date per action)\n", s_listed,
                rf->number, rf->gsW, rf->gsH);
+    }
+    for (int k = 0; k < vuRefCount; k++) {
+        vuRefDraw(rf, vuRefL[k], vuRefI[k]);
     }
     if (texDir) {
         dumpTextures(texDir);

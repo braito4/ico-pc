@@ -576,13 +576,56 @@ VuVSOut vu_attr_planes_at(VuVSOut o, float2 pa, float2 pb, float2 pc, float4 ca,
     return o;
 }
 
+// The corner the planes are anchored at (vu_attr_planes_at's pa, whose
+// values a0 and a1 are): 0, 1 or 2 corners on from the first.  The first
+// when it has a GS position (vu_has_gs_position); else the other corner
+// with one nearer the target's centre (the first again when neither has
+// one).  Issue 76 (v0.7.0, the rc6 captures at the courtyard): the pixel's
+// values are a + x d.x + y d.y at its offset d from the anchor, and
+// anchored at a corner without a GS position (a wall triangle of st18a_p1
+// above the courtyard's doorways whose top corner stood 60,000 GS pixels
+// up with its Z saturated by ftoi4, code 36's x/y-only cut: kicked as it
+// is, vu_triangle_out_pos) the terms were thousands of times their sum,
+// which float32 kept to a couple of texels of the 128-texel brick,
+// changing with the camera: the triangle's texture slid against its
+// neighbours' (the "scrolling" on the wall triangles above the doorways).
+// Nearer the centre the terms are the triangle's own size.  The GS never
+// had such a corner (the VU's scissor cut it into a fan, or ftoi4
+// saturated it); a triangle whose first corner has a GS position keeps it,
+// and its planes are unchanged.
+uint vu_plane_anchor(VuVtx a, VuVtx b, VuVtx c)
+{
+    if (vu_has_gs_position(a)) {
+        return 0u;
+    }
+    precise float2 cc = g_origin.xy + g_target.xy * 0.5;
+    float db = vu_has_gs_position(b) ? length(float2(b.gs.xy) * (1.0 / 16.0) - cc) : 1e30;
+    float dc = vu_has_gs_position(c) ? length(float2(c.gs.xy) * (1.0 / 16.0) - cc) : 1e30;
+    if (db >= 1e30 && dc >= 1e30) {
+        return 0u;
+    }
+    return db <= dc ? 1u : 2u;
+}
+
 // the planes of a triangle every corner of which is drawn at its GS
-// position (exact); the plane distance's are vu_plane_out's
-// (vu_plane_planes)
+// position (exact), anchored at vu_plane_anchor's corner; the plane
+// distance's are vu_plane_out's (vu_plane_planes)
 VuVSOut vu_attr_planes(VuVSOut o, VuVtx a, VuVtx b, VuVtx c, bool exact)
 {
     if (!exact) {
         return o;
+    }
+    uint k = vu_plane_anchor(a, b, c);
+    if (k == 1u) {
+        VuVtx t = a;
+        a = b;
+        b = c;
+        c = t;
+    } else if (k == 2u) {
+        VuVtx t = c;
+        c = b;
+        b = a;
+        a = t;
     }
     return vu_attr_planes_at(o, vu_texel_offset(a), vu_texel_offset(b), vu_texel_offset(c),
                              float4(a.rgba), float4(b.rgba), float4(c.rgba), a.stq, b.stq, c.stq);
@@ -593,6 +636,26 @@ VuVSOut vu_plane_planes(VuVSOut o, VuVtx a, VuVtx b, VuVtx c, float da, float db
 {
     if (o.r.z == 0.0) {
         return o;
+    }
+    uint k = vu_plane_anchor(a, b, c);
+    if (k == 1u) {
+        VuVtx t = a;
+        a = b;
+        b = c;
+        c = t;
+        float td = da;
+        da = db;
+        db = dc;
+        dc = td;
+    } else if (k == 2u) {
+        VuVtx t = c;
+        c = b;
+        b = a;
+        a = t;
+        float td = dc;
+        dc = db;
+        db = da;
+        da = td;
     }
     float4 g = vu_grad_basis(vu_texel_offset(a), vu_texel_offset(b), vu_texel_offset(c));
     precise float x = (db - da) * g.x + (dc - da) * g.y;

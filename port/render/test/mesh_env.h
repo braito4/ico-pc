@@ -213,6 +213,8 @@ int gsb_ClipBox(float *p)
     return s_clipRet;
 }
 
+#include "GsBase.h" /* GSB_CULL_ONE_STILL (modelpack_test.c includes it after this file) */
+
 /* GsBase.c: the cameras the last gsb_ClipBox tested (F12's cull line) */
 int gsb_HostCullViewsUsed(void)
 {
