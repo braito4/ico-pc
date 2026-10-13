@@ -1,10 +1,11 @@
 # Building
 
-How to build, test and package the PC port. The build is CMake with Ninja.
-It compiles the game's C under `ico2/` for the host, with `port/` standing in
-for the PS2 hardware and Sony's libraries. The PS2 ELF build belongs to the
-decompilation (<https://github.com/nathanialf/ico>); this repository has
-none (["The game code"](#the-game-code)).
+How to build, test and package the PC port. The build is CMake with Ninja. It compiles the game's C
+under `ico2/` for the host, with `port/` standing in for the PS2 hardware and Sony's libraries. The
+PS2 ELF build belongs to the decompilation (<https://github.com/nathanialf/ico>); this repository
+has none ([port/GAME_CODE.md](port/GAME_CODE.md)). How the port works, module by module, is in the
+developer documents: start at [port/README.md](port/README.md) for the index and
+[port/ARCHITECTURE.md](port/ARCHITECTURE.md) for the whole picture.
 
 ## Quickstart (Debian 13, Ubuntu 24.04)
 
@@ -24,7 +25,8 @@ The test programs are not part of the default target: `--target all tests`
 builds the game and every test, plain `--build` only the game and the tools
 (see ["Building one package"](#building-one-package)).
 
-`tools/setup.sh` does the venv step and installs the git hooks (below).
+`tools/setup.sh` does the venv step and installs the git pre-commit hook
+([port/CONVENTIONS.md](port/CONVENTIONS.md#the-pre-commit-hook)).
 
 The build needs no disc image and no `baserom/`: the program holds no disc
 data. The game reads the player's own PAL disc image (SCES-50760) at run
@@ -144,9 +146,9 @@ and the link map `ico_pc.map` under
 
 ## Apple Vulkan renderer (MoltenVK)
 
-Xcode, CMake and Ninja are required on the Mac building these targets.
-The dependency script installs SHA-256-pinned MoltenVK 1.4.2 and builds
-SDL3 3.4.18 as a static library for the selected SDK:
+Xcode, CMake and Ninja are required on the Mac building these targets. `tools/fetch_moltenvk.sh`
+installs the SHA-256-pinned MoltenVK 1.4.2, builds SDL3 3.4.18 as a static library for the selected
+SDK, and runs `tools/fetch_deps.sh --game-only` for the pinned libchdr and libmpeg2 source trees:
 
 ```sh
 tools/fetch_moltenvk.sh ios
@@ -154,36 +156,46 @@ cmake --preset ios-moltenvk
 cmake --build --preset ios-moltenvk
 ```
 
-Use `macos` and the `macos-moltenvk` preset for a native Apple silicon
-renderer build. That preset builds `ico_rhi`, with the existing Vulkan
-backend linked to MoltenVK. The iOS package targets ARM64 devices, iOS 15
-or newer; the macOS target is ARM64, macOS 12 or newer. The pinned iOS
+Use `macos` and the `macos-moltenvk` preset for a native Apple silicon renderer build. That preset
+builds `ico_rhi`, with the Vulkan backend linked to MoltenVK (`ICO_RHI_MOLTENVK`). The iOS package
+targets ARM64 devices, iOS 15 or newer; the macOS target is ARM64, macOS 12 or newer. The pinned iOS
 package has no simulator slice.
 
-To compile the shared renderer and its existing HLSL shaders too, supply
-a **macOS host** DXC executable (it runs during the build, even for iOS):
+To compile the renderer and its HLSL shaders too, supply a **macOS host** DXC executable (it runs
+during the build, even for iOS):
 
 ```sh
 cmake --preset ios-moltenvk -DICO_DXC=/absolute/path/to/dxc
 cmake --build build-host/ios-moltenvk --target ico_render
 ```
 
-The app includes `SDL3/SDL_main.h` and creates an `SDL_WINDOW_VULKAN`
-window. SDL uses the exported, linked
-`vkGetInstanceProcAddr` to create its Metal-backed Vulkan surface; the
-backend enables portability enumeration and the device's portability
-subset. No custom Metal backend is used. `ICO_MOLTENVK_ROOT` can override
-the extracted release root. Apple package notices can be generated with
+The app includes `SDL3/SDL_main.h` and creates an `SDL_WINDOW_VULKAN` window. SDL uses the
+exported, linked `vkGetInstanceProcAddr` to create its Metal-backed Vulkan surface; the backend
+enables portability enumeration and the device's portability subset. There is no Metal backend of
+its own. `ICO_MOLTENVK_ROOT` overrides the extracted release root. Apple package notices come from
 `tools/gen_notices.py --platform ios --out NOTICES.txt` (or `macos`).
+
+For a Mac without a host DXC, build it once from source (Git, Xcode, CMake and Ninja; a substantial
+LLVM build). The `ios-app` and `macos-app` presets default `ICO_DXC` to the result,
+`tools/toolchain/deps/dxc-build/bin/dxc`; these are the steps the Apple packages workflow runs:
+
+```sh
+git clone --depth 1 --branch v1.9.2602 --recurse-submodules \
+  https://github.com/microsoft/DirectXShaderCompiler tools/toolchain/deps/dxc-src
+cmake -S tools/toolchain/deps/dxc-src -B tools/toolchain/deps/dxc-build -G Ninja \
+  -C tools/toolchain/deps/dxc-src/cmake/caches/PredefinedParams.cmake \
+  -DCMAKE_BUILD_TYPE=Release -DENABLE_SPIRV_CODEGEN=ON \
+  -DHLSL_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_TESTS=OFF -DSPIRV_BUILD_TESTS=OFF \
+  "-DCMAKE_CXX_FLAGS=-Wno-unknown-warning-option -Wno-invalid-specialization"
+cmake --build tools/toolchain/deps/dxc-build --target dxc --parallel 6
+```
 
 ### Checking out on a Mac
 
-The game sources `.gitattributes` checks out as EUC-JP
-([EUC-JP sources](#euc-jp-sources)) need macOS's `EUC-JP-MS` instead:
-macOS's iconv does not keep their ASCII backslashes under `EUC-JP`. For
-these files `EUC-JP-MS` gives the same bytes as `EUC-JP` does on Linux. Set
-it in the clone's own attributes, which take precedence over the tracked
-file, and check the files out again:
+The game sources `.gitattributes` checks out as EUC-JP ([EUC-JP sources](#euc-jp-sources)) need
+macOS's `EUC-JP-MS` instead: macOS's iconv does not keep their ASCII backslashes under `EUC-JP`. For
+these files `EUC-JP-MS` gives the same bytes as `EUC-JP` does on Linux. Set it in the clone's own
+attributes, which take precedence over the tracked file, and check the files out again:
 
 ```sh
 attrs="$(git rev-parse --git-path info/attributes)"
@@ -195,8 +207,7 @@ rm -f $files && git checkout -- $files
 
 ### macOS application
 
-After building a macOS host DXC as described below, build the native Apple
-silicon application bundle with:
+With a macOS host DXC (above), build the native Apple silicon application bundle with:
 
 ```sh
 tools/fetch_moltenvk.sh macos
@@ -204,79 +215,47 @@ cmake --preset macos-app
 cmake --build --preset macos-app
 ```
 
-The result is `build-host/macos-app/ICO.app`. It is an unsigned ARM64 app
-bundle and may be launched from Finder or the command line. On first launch
-choose your own PAL SCES-50760 disc image; the verified game data is copied
-to the user's Application Support folder and the image is not bundled with
-the app.
+The result is `build-host/macos-app/ICO.app`, an unsigned ARM64 app bundle that starts from Finder
+or the command line. On the first start it asks for the player's own PAL SCES-50760 disc image; the
+verified game data goes to the user's Application Support folder, and no image is bundled with the
+app.
 
-For a distributable ad-hoc-signed bundle, notices, ZIP and DMG, run
-`tools/package_macos.sh <label>` (a label such as `v0.7.0` gives the bundle
-its version, as `tools/package_win.sh` does; without one it is 0.0.0). It writes `dist/ICO.app`,
-`dist/ico-pc-macos-arm64.zip`, `dist/ico-pc-macos-arm64.dmg` and the separate
-link map used to interpret crash offsets. The package is not notarized for
-distribution outside the building Mac.
+`tools/package_macos.sh <label> [CMake arguments...]` builds the distributable, ad-hoc-signed
+bundle with its notices: `dist/ICO.app`, `dist/ico-pc-<label>-macos-arm64.zip`,
+`dist/ico-pc-<label>-macos-arm64.dmg` and the link map `dist/ico-pc-<label>-macos-arm64.map`, which
+turns a crash offset into a function name. The label (`vX.Y.Z`) gives the bundle its version, as
+`tools/package_win.sh` does; without one the version is all zeros and the files are
+`ico-pc-macos-arm64.*`. The package is not notarized.
 
 ### iPhone IPA for LiveContainer
 
-Build the current working checkout into an unsigned IPA:
+Build the checkout into an unsigned IPA:
 
 ```sh
 tools/package_ios.sh <label> -DICO_DXC=/absolute/path/to/macos/host/dxc
 ```
 
-The label (`v0.7.0`) gives the bundle its version, as for macOS, and the
-files their names.
+The label (`vX.Y.Z`) gives the bundle its version, as for macOS, and the files their names. Omit
+`-DICO_DXC` when the `ios-app` preset's default DXC exists. The script writes
+`dist/ico-pc-<label>-ios-unsigned.ipa`, with the licences inside the bundle, and the link map
+`dist/ico-pc-<label>-ios.map`. No provisioning profile or signing identity is needed.
 
-The `ios-app` preset defaults to the host DXC at
-`tools/toolchain/deps/dxc-build/bin/dxc`; omit the argument if it exists.
-The script builds the app and writes `dist/ico-pc-<label>-ios-unsigned.ipa`,
-with licenses inside the bundle and a separate `dist/ico-pc-<label>-ios.map`
-for crash offsets. No provisioning profile or signing identity is required.
-iOS defaults to the previous fixed-function blend path: the new storage
-interlock path caused visual and performance regressions on an iPhone 12
-through MoltenVK, resolved in a device comparison using fixed-function
-blending. This default is set only in the iOS entry point; other platforms
-keep upstream's blend selection. An explicit `ICO_RD_BLEND` environment
-override is still respected. All game effects remain available.
-The dependency fetch also installs the pinned libchdr and libmpeg2 source
-trees, using `tools/fetch_deps.sh --game-only`.
+The iOS entry point (`port/platform/ios/main_ios.c`) sets `ICO_RD_BLEND=fixed` unless the
+environment already sets it, so iOS blends through the fixed-function path; every other platform
+picks its blend path from the device. It runs the game on a guarded 32 MB fiber stack on SDL's
+UIKit main thread.
 
-For a Mac without a host DXC, build it once from source (requires Git,
-Xcode, CMake and Ninja; this is a substantial LLVM build):
-
-```sh
-git clone --depth 1 --branch v1.9.2602 --recurse-submodules \
-  https://github.com/microsoft/DirectXShaderCompiler tools/toolchain/deps/dxc-src
-cmake -S tools/toolchain/deps/dxc-src -B tools/toolchain/deps/dxc-build -G Ninja \
-  -C tools/toolchain/deps/dxc-src/cmake/caches/PredefinedParams.cmake \
-  -DCMAKE_BUILD_TYPE=Release -DENABLE_SPIRV_CODEGEN=ON \
-  -DHLSL_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_TESTS=OFF -DCLANG_INCLUDE_TESTS=OFF \
-  -DSPIRV_BUILD_TESTS=OFF \
-  -DCMAKE_CXX_FLAGS=-Wno-invalid-specialization
-cmake --build tools/toolchain/deps/dxc-build --target dxc --parallel 6
-```
-
-Import the IPA into LiveContainer. Copy your own extracted `ico.o2r` into
-the guest app's **Documents** folder through LiveContainer's data-folder
-access, then launch ICO. A PAL `Ico_PAL.iso` or `Ico_PAL.chd` in that folder
-can also be extracted on first launch. Game data is not included in the IPA.
-Settings, saves and logs also live in Documents. The app uses the existing
-touch controls and controller input, runs fullscreen in landscape, and
-pauses audio/rendering while in the background. iOS uses the existing mobile
-defaults: a 60 FPS cap and adaptive resolution for the Enhanced preset.
-Selecting a fixed resolution such as 2× keeps that resolution; choose
-Auto to let the existing GPU-cost controller lower it when necessary.
-At 2× the scene contains roughly four times the pixels of 1×. iOS builds
-disable benchmark CSV output and detailed performance logging; internal
-frame timings remain available for automatic resolution. For a problem
-report, include the normal log, device and iOS versions, app build, and
-graphics settings. Settings are stored in `config.toml`.
-
-The wrapper uses SDL's UIKit entry point and a guarded 32 MB coroutine
-stack on the main thread. Shared game angle conversions explicitly go
-through `int` before `short`, preserving the EE's halfword wrapping on
-ARM64.
+Import the IPA into LiveContainer. Copy your own extracted `ico.o2r` into the guest app's
+**Documents** folder through LiveContainer's data-folder access, then start ICO; an `Ico_PAL.iso`,
+`.chd`, `.bin` or `.cue` in that folder is extracted on the first start instead
+([port/DATA.md](port/DATA.md#the-first-run)). The IPA holds no game data. Settings
+(`config.toml`), saves and logs also live in Documents. The app takes touch and controller input,
+runs full screen in landscape, and pauses audio and rendering in the background. iOS takes the
+mobile defaults: a 60 FPS cap and automatic resolution for the Enhanced preset; a fixed Resolution
+such as 2x stays as chosen (2x draws about four times the pixels of 1x). iOS builds write no
+benchmark CSV and no per-effect GPU timings (`port/platform/window_host.c`, `rd__perf_post` in
+`port/render/rd_perf.c`). A problem report needs the log, the device and iOS
+versions, the app build and the graphics settings.
 
 ## Presets
 
@@ -310,16 +289,20 @@ and macOS).
 
 | cache variable | default | effect |
 | --- | --- | --- |
-| `ICO_HEADLESS` | `ON` on every preset except `win-x64`, `linux-arm64` and `android-arm64` | `OFF` is the window build: the game draws through `port/render` (`ICO_RD=1`) into an SDL3 window. `ON` is the headless build for trace and test runs: no window and no renderer, `ICO_HEADLESS=1`. Both compile the same game sources |
+| `ICO_HEADLESS` | `ON` on every preset except `win-x64`, `linux-arm64`, `android-arm64` and the four Apple presets (`OFF` without a preset) | `OFF` is the window build: the game draws through `port/render` (`ICO_RD=1`) into an SDL3 window. `ON` is the headless build for trace and test runs: no window and no renderer, `ICO_HEADLESS=1`. Both compile the same game sources |
 | `ICO_LINK_EXE` | `OFF` | links `ico_pc` (`port/platform/main_host.c`), the game's program. Without it only the libraries and the tests are built |
 | `ICO_STRICT_WARNINGS` | `OFF` | makes `-Wreturn-type`, `-Wimplicit-function-declaration` and `-Wstrict-prototypes` errors. While it is off, the C89-era diagnostics that modern compilers make errors by default (implicit declarations and int, int/pointer conversions, incompatible pointers, return mismatches) are warnings |
-| `ICO_BUILD_BLOCKED` | `OFF` | also compiles the sources `cmake/IcoExclusions.cmake` leaves out (the list is empty today; it is the place to park a game source that stops compiling) |
+| `ICO_BUILD_BLOCKED` | `OFF` | also compiles the sources `cmake/IcoExclusions.cmake` leaves out (the lists are empty; they are the place to park a game source that stops compiling) |
 | `ICO_HEAP_STATS` | `OFF` | the game's allocator (`fumi/ios/memory.c`) reports to `port/platform/arena.c`, which logs each heap partition's high-water mark |
 | `ICO_FPTRAP` | `OFF` | set by the `fptrap` preset |
 | `ICO_SANITIZE` | empty | the `-fsanitize=` list; the `asan` preset sets `address,undefined` |
 | `ICO_RHI_VULKAN` | `ON` | builds the Vulkan renderer backend |
 | `ICO_RHI_D3D12` | `ON` for 64-bit Windows | builds the Direct3D 12 renderer backend next to the Vulkan one |
+| `ICO_RHI_MOLTENVK` | `ON` on Apple | links the Vulkan backend to MoltenVK |
+| `ICO_SHADERS_DXIL` | `ON` | also compiles the shaders to DXIL for the Direct3D 12 backend; the arm64 and Apple presets turn it off |
+| `ICO_VERSION_LABEL` | empty | with `ICO_LINK_EXE`: the package label (`vX.Y.Z` or `vX.Y.Z-rcN`) the program's version information comes from; the package scripts pass it, and a build without it has an all-zero version |
 | `ICO_BASE_ELF` | `baserom/pal/baseelf.elf` | the base ELF the data loader's reference tests read; without it they are not built |
+| `ICO_DISC_IMAGE`, `ICO_TEXPACK_DIR` | see [Tests](#tests) | the disc image and the texture pack folder the tests read |
 | `ICO_DXC`, `ICO_DEPS_DIR` | the fetched copies | the shader compiler and the dependency tree |
 
 At run time, the environment variable `ICO_TTY` (any value) turns on the
@@ -329,7 +312,7 @@ console, so use it with `--console` on a program started from a terminal.
 
 ## Building one package
 
-Agents and developers working on one change build only what it touches.
+A change builds only the targets it touches.
 
 ```sh
 tools/dev_build.sh . ico_pc rd_present_test -- -R '^rd_present$'
@@ -400,468 +383,92 @@ start the game), builds exactly the named targets at `-j4` under `flock` on
 
 ## Compilers
 
-GCC is the primary compiler, and the clang presets build the same sources;
-CI builds both so neither drifts. The game originally used GNU C nested
-functions, which clang does not implement; they have all been rewritten as
-file-scope functions, so no game source needs GCC any more. llvm-mingw ships
-no Linux sanitizer runtimes, so the `asan` preset is GCC either way.
+GCC is the primary compiler, and the clang presets build the same sources; CI builds both so neither
+drifts. Every game source compiles with both (`cmake/IcoExclusions.cmake` blocks none). llvm-mingw
+ships no Linux sanitizer runtimes, so the `asan` preset is GCC either way.
 
-Windows builds must target mingw (gcc or llvm-mingw), never MSVC (clang-cl
-or a `*-windows-msvc` triple). Clang targeting MSVC evaluates call arguments
-right to left, where ee-gcc and the GNU and mingw compilers go left to
-right, and the game's results depend on that order at some call sites.
+Windows builds must target mingw (gcc or llvm-mingw), never MSVC (clang-cl or a `*-windows-msvc`
+triple). Clang targeting MSVC evaluates call arguments right to left, where ee-gcc and the GNU and
+mingw compilers go left to right, and the game's results depend on that order at some call sites.
 
 ## How the game is compiled
 
-`cmake/IcoSources.cmake` is written by `tools/gen_sources.py` from
-`config/link_order.pal.txt`, the retail link's object list kept as the
-source list (nothing links with it). It holds the `ico2/` C sources, one
-list per programmer directory, the data-only members, and
-`ICO_EE_ONLY_SOURCES`: the PS2's FMV player under `ito/mpeg/`, which
-`port/fmv` replaces. Of `sce/` the build compiles only
-`sce/libsndn2/sound.c`, the Sg sequencer (`port/audio`); the rest of `sce/`
-and `ico2/vusrc/` stay in the tree as the decomp's sources, the SDK headers
-the game includes, and the reference for the renderer's shaders. Configure
-warns when the generated list is stale; rerun the script after changing the
-link order.
-
-Each programmer directory is one object library with the include path the
-period build gave it (its own `include/`, then the others, then
-`port/compat/` for the SDK header names), and `-fmacro-prefix-map` makes
-`__FILE__` the period spelling (`src/main.c`), which the assert messages
-print. The game's `main` is compiled as `ico_game_main`;
-`port/platform/main_host.c` is the program's entry point. `ico_pc` links
-the game objects (`ico_game`), the platform layer and the port's libraries,
-plus the hardware floor that both builds keep in the program itself
-(`port/null/gfx_null.c`, `port/null/libgcc_null.c`).
-
-The game options (`cmake/IcoFlags.cmake`) are `-std=gnu11
--fno-strict-aliasing -fwrapv -ffp-contract=off -fno-fast-math
--fsigned-char -fno-common -fgnu89-inline` and `ICO_HOST=1`; the file's
-comments say why each is there. The game and data objects alone also take
-the EE's bit-field rule, `-mno-ms-bitfields`, on Windows; `port/` code keeps
-the platform ABI, which SDL's and Windows' structs need. No configuration
-defines `NDEBUG`: the retail game ran with its asserts, and
-`port/compat/assert.h` routes them to `ico_assert`
-(`port/platform/assert_host.c`), which logs and stops the run.
-
-Rules for code that the game and the port share:
-
-- A record that game code and `port/` code both read (SDK parameter blocks,
-  the pad buffer, card directory entries) must have a layout that does not
-  depend on `-mno-ms-bitfields`, or the `port/` side must be compiled with
-  the game's layout options too.
-- `port/compat/eeregs.h` maps the EE's hardware registers to plain memory,
-  so a loop that polls one (`GS_CSR`, a DMA channel's busy bit) never sees
-  it change; such loops are replaced at their call sites.
-- VU0 and R5900 inline assembly has C bodies over `port/math`; the compiled game sources hold no EE
-  assembly and no EE opcode wrappers.
-- The simulation runs with the floating-point environment
-  `port/platform/fpenv.c` sets: `ico_fpenv_sim_enter()` selects round toward
-  zero with flush-to-zero and denormals-are-zero (MXCSR; FPCR on arm64),
-  `ico_fpenv_host_enter()` restores the host defaults for the window, SDL
-  and the renderer. `fpenv_test` checks both, and on `fptrap` that a
-  division by zero raises SIGFPE.
-
-While `ICO_STRICT_WARNINGS` is off the build prints many C89-era warnings,
-most of them `-Wstrict-prototypes`. The three warnings that option promotes
-can become errors once their counts reach zero.
-
-The port's own code (`port/`, every target compiled with
-`ICO_PORT_WARNINGS`) builds with `-Wall -Wextra -Wno-unused-parameter
--Werror` on every preset, gcc and clang: a new warning there fails the
-build. The game code (`ico2/`, the generated data tables) and the port
-tests that compile game sources into their executable keep
-`ICO_GAME_WARNINGS`, which only warn. A port TU that includes a game header
-still declaring an unprototyped function (`typedef.h`, `thread.h`, `act.h`,
-`s_init.h`, `debug.h`) adds `-Wno-strict-prototypes` for itself in its
-`CMakeLists.txt`; no other warning is switched off for port code.
-
-## The game code
-
-`ico2/` (and `sce/libsndn2/sound.c`, the one `sce/` file the port compiles)
-is the port's own source. It started as the decompilation's `main`, but it is only
-ever compiled for the host, so a change to it is a platform change made
-directly in the code: the host form replaces the original spelling. There
-are no `#ifdef ICO_HOST` / `#else` arms carrying the PS2 text, and the tree
-is not expected to compile for the PS2 or to match the ROM. `ICO_HOST` stays
-defined in the build (headers under `port/` test it); conditionals that
-select between host build variants (`ICO_RD`, `ICO_HEADLESS`,
-`ICO_HEAP_ASAN`, `ICO_FPTRAP`) stay too. `tools/strip_host_gates.py` is the
-record of how the gated tree became this one (968 sites); its `--check`
-runs in CI and in the pre-commit hook and fails on any `ICO_HOST`
-conditional under `ico2/` or `sce/`.
-
-The conventions that still matter on the host:
-`ICO_WORD` for a word that holds an address (pointer-wide), `ICO_RAW` /
-`ICO_RAWP` for a view of a record at an EE offset, `ICO_MAX_SIZE` for a host
-record wider than the original literal, the layout asserts
-and the template audit.
-
-The decompilation (<https://github.com/nathanialf/ico>) is upstream for
-reconstruction fixes only: a wrong type, field, operand or control flow in
-a function, a name, a struct layout. Such a fix flows one way:
-
-1. it is found in the port (a bug, a trace, a crash);
-2. it is verified in the decompilation against the ROM with that
-   repository's tooling (its byte-match build and checks);
-3. it is committed there under its rules;
-4. it is applied here by hand, to the host form of the code, with a
-   reference to the decompilation's commit.
-
-Nothing is merged from the decompilation, and platform changes never go
-back to it.
-
-## Data tables
-
-The program holds no disc data. The game's data tables are defined empty
-(`port/data/gen/table_defs.c`) and filled at boot from the boot ELF on the
-player's disc (`port/data/tables.c`), each
-range checked against the CRC-32 in `config/tables_manifest.txt`. The
-generated descriptors under `port/data/gen/` are committed and carry no disc
-bytes; `tools/gen_data_desc.py --check` keeps them fresh. Configuring and
-building need no base ELF and no pyelftools. Only the loader's reference
-test (`tables_loader`) and `tables_manifest` need a base ELF
-(`ICO_BASE_ELF`, a maintainer step in the appendix), and they are left out
-without one.
+`tools/gen_sources.py` writes the source lists (`cmake/IcoSources.cmake`) from the retail link order
+(`config/link_order.pal.txt`); configure warns when they are stale. Each programmer directory of
+`ico2/` is one object library with the period include path and the semantics options of
+`cmake/IcoFlags.cmake`; the game's `main` becomes `ico_game_main`, and `ico_pc` links it under
+`port/platform/main_host.c`. `port/` code builds with `-Werror`, the game code with warnings only.
+[port/GAME_CODE.md](port/GAME_CODE.md) has the options, the audits and the data tables.
 
 ## EUC-JP sources
 
-Some game sources carry Japanese text in EUC-JP, and their string literals
-are the ROM's bytes. `.gitattributes` lists each of them with
-`working-tree-encoding=EUC-JP`: git stores the file as UTF-8 and checks it
-out as EUC-JP, which is what the compiler reads. On a Mac, see
-[Checking out on a Mac](#checking-out-on-a-mac). An editor or a pipe that
-rewrites one of these files as UTF-8 changes its bytes; change them with an
-ASCII patch and `git apply`.
-
-## Hooks
-
-`tools/install_hooks.sh` (run by `tools/setup.sh`) installs a pre-commit
-hook that runs, in order:
-
-1. `tools/check_no_rom.sh`: refuses disc images, executables, extracted
-   assets, large binaries and integer tables ([`LEGAL.md`](LEGAL.md)). It
-   reads the staged blobs (`git show :path`), so what it judges is what
-   is committed;
-2. `tools/format.sh --check --staged`: the staged C must be formatted; it
-   checks the staged blobs, not the worktree;
-3. the three freshness checks CI also runs: `tools/gen_data_desc.py
-   --check` (`port/data/gen/`), `tools/gen_layout_asserts.py --check`
-   (`port/test/layout_asserts.c`) and `tools/gen_sources.py --check`
-   (`cmake/IcoSources.cmake`). `gen_data_desc.py` needs pyelftools, so the
-   hook uses `.venv/bin/python`. Regenerate with the same script without
-   `--check`;
-4. `tools/strip_host_gates.py --check`: no `ICO_HOST` conditional in the
-   game sources ([The game code](#the-game-code));
-5. `tools/stack_overread_audit.py`: no game code that relies on the PS2's
-   stack layout (the CI table below says what it looks for);
-6. `tools/check_call_types.py`: calls and declarations agree with the
-   definitions, as in CI;
-7. `tools/struct_cast_audit.py`: no fixed buffer in the game sources is cast
-   to a struct that is wider on the host (the CI table below says what it
-   looks for).
-
-`tools/format.sh` formats the tracked C with the tracked `.clang-format` and
-then applies `tools/format_layout.py`'s top-level blank-line layout. With
-`--check` it only reports (exit 1 if a file would change); `FILE...` limits
-it to those files, and `--check --staged [FILE...]` judges the staged
-version of those files, or of every staged file the script owns. A FILE that
-does not exist is an error.
-
-## Conventions
-
-Formatting. `tools/format.sh` runs clang-format with the tracked
-`.clang-format` (LLVM style, 4 spaces, 100 columns) over the C the script
-owns; the hook and CI check it. Use `/* */` comments only. A comment says
-what the code does and why, without release or package tags (git history
-keeps those); an issue number may stay where it explains a behaviour.
-
-Names are `prefix_snake_case`, the prefix being the module's. The main
-prefixes:
-
-| prefix | module |
-| --- | --- |
-| `ico_` | `port/platform`, `port/game`, `port/data`, `port/input`, `port/audio`, `port/config` |
-| `rd_`, `rd__` (internal) | `port/render` |
-| `rhi_`, `vkr_`, `d3dp_` | `port/rhi` and its Vulkan and Direct3D 12 backends |
-| `ui_` | `port/ui`, the menus |
-| `texpack_`, `modelpack_`, `gltf_` | the texture pack, model pack and glTF code in `port/render` |
-
-Every name `port/` declares with a module prefix uses `prefix_snake_case`;
-generated files and the names the game itself defines keep their spelling.
-The older mixed-case prefixed names were renamed by
-`tools/rename_port_symbols.py` with its table `tools/rename_table.txt`;
-`--check` with that table lists any mixed-case name left.
-
-Log lines start with the module's prefix and a colon, for example
-`ico_pc:` (the host: `main_host.c`, `host_config.c`, `diag_host.c`,
-`kernel_host.c`), `rd:`, `rhi:`, `rhi_vk:`, `rhi_d3d12:`, `window:`,
-`video:`, `photo:`, `config:`, `audio:`, `input:`, `textures:`, `models:`,
-`credits:`, `appearance:`, `settings:`, `mc:`. A test's own lines start
-with the test's name. Player guides quote some of these lines
-(`textures:`, `models:` and `window: an effects program is loaded`), so
-change their text together with the guide.
-
-A message box is titled `ICO PC` on every platform (Android's launcher
-name is `ICO`).
-
-New tests use the shared `CHECK` header of their module where one exists
-(`port/test/ico_check.h`; `port/ui/test/settings_fixture.h` for the Options
-tests) instead of defining their own.
-
-New Python tools start with a docstring, use `argparse` and run with
-`python3 -I`. Shell scripts start with `set -euo pipefail`.
+Some game sources carry Japanese text in EUC-JP, and their string literals are the ROM's bytes.
+`.gitattributes` lists each of them with `working-tree-encoding=EUC-JP`: git stores the file as
+UTF-8 and checks it out as EUC-JP, which is what the compiler reads. On a Mac, see
+[Checking out on a Mac](#checking-out-on-a-mac). An editor or a pipe that rewrites one of these
+files as UTF-8 changes its bytes; change them with an ASCII patch and `git apply`. The formatting,
+naming and hook rules are in [port/CONVENTIONS.md](port/CONVENTIONS.md).
 
 ## Tests
 
-`ctest` runs the unit tests on the Linux presets; the Windows presets build
-the test executables without running them. A test that needs the disc
-(`vfs_disc`, `archive_disc`, `texpack_disc`) or a Vulkan device (the
-`rhi_vk*`, `rd_*`, `shaders_pixel` and `vu1` tests) exits 77 without one,
-and `SKIP_RETURN_CODE 77` makes ctest report it as skipped, which passes.
-New in v0.6.1: `steam_shortcut` (the Add to Steam list writer,
-`port/platform/steam_shortcut.c`), `movie_pad` (START is the only input that
-skips a movie), `adpcm_slots` (the sound stream slots), `coverage_corpus` and
-`coverage_check_selftest` ([below](#coverage-corpus)).
-The disc tests read `ICO_DISC_IMAGE` (default `baserom/Ico_PAL.iso`).
-`texpack_disc` also matches a PCSX2 texture pack's file names against the
-disc's textures when `ICO_TEXPACK_DIR` (default
-`build-host/tmp/texpack/SCES-50760/replacements`) exists; no pack file is
-ever committed. `ICO_TEXPACK_DIR` is a cache variable, and the environment
-variable of the same name sets its default at the first configure; it feeds
-`texpack_disc`, `texpack_e2e` and `texpack_pack_files`.
+`ctest` runs the unit tests on the Linux presets; the Windows presets build the test programs
+without running them. The test programs are in the `tests` target, not in `all`
+([Building one package](#building-one-package)), and each test carries its area's label
+(`ctest -L render`). A test that needs something the machine may lack exits 77 without it, and
+`SKIP_RETURN_CODE 77` makes ctest report it as skipped, which passes: the disc (`vfs_disc`,
+`archive_disc`, `texpack_disc` and the other disc tests), a Vulkan device (the `rhi_vk*`, `rd_*`,
+`shaders_pixel` and `vu1` tests), Pillow or saved frame dumps.
 
-The Android code is tested on Linux, where it can be: `android_paths`
-(the files folder layout), `iso_import` (the first start's copy of the
-chosen disc image), `lifecycle` (background and foreground on fake
-operations) and `touch` (the touch overlay's mapping). The paths of a
-phone GPU are tested on the Linux Vulkan device by forcing them: the
-`*_nodual` tests run the render and shader tests again with
-`ICO_RD_NO_DUAL=1` (blending in two passes, for GPUs without dual-source
-blending such as Mali and PowerVR), `rhi_vk_nodual` with
-`ICO_VK_FAKE_NO_DUAL=1` (the feature cleared at device creation), and
-`rhi_vk_d24s8` with `ICO_VK_FAKE_D24S8=1` (the D24S8 depth fallback when
-D32F_S8 is missing), and the `*_mali` tests run the render tests (all but
-`rd_blur`), the shader, VU, movie and RHI tests again with
-`ICO_VK_FAKE_LIMITS=mali`, which clamps the
-device's limits to a Mali-G68's (four descriptor sets, 16 sampled images,
-samplers and storage buffers a stage, 256-byte storage offsets, 4096 memory
-allocations; `rhi_vk_mali` also checks that what goes past them is refused
-by the limit's name, and `rd_perf_mali` creates the whole reachable pipeline
-set). On a device, the log is mirrored to logcat: `adb logcat -s ico-pc`.
+- `ICO_DISC_IMAGE` (cache variable, default `baserom/Ico_PAL.iso`) is the PAL disc image the disc
+  tests read. A worktree without `baserom/` configures with `-DICO_DISC_IMAGE=/nonexistent
+  -DICO_BASE_ELF=/nonexistent` (`tools/dev_build.sh` does), so no test can start the game.
+- `ICO_TEXPACK_DIR` (cache variable, default `build-host/tmp/texpack/SCES-50760/replacements`; the
+  environment variable of the same name sets the default at the first configure) is a PCSX2 texture
+  pack's replacements folder. When it exists, `texpack_disc`, `texpack_e2e` and `texpack_pack_files`
+  match the pack's files against the disc's textures. No pack file is ever committed.
+- `ICO_BASE_ELF` adds the data loader's reference tests
+  ([Appendix](#appendix-maintainers-the-base-elf)).
 
-The renderer blends as the PS2 does (integer arithmetic, rounding down)
-where the GPU can read the pixel it draws over; the start-up log says
-which way: `rd: blend: exact (attachment read)` (Vulkan rasterization-order
-attachment access, phones and lavapipe), `exact (interlock)` (Vulkan
-fragment shader interlock: the Steam Deck and the desktop drivers),
-`exact (rov)` (D3D12) or `fixed-function (rounds up)` (none of them).
-lavapipe has every one and takes the attachment read, so the
-`*_storage` tests run the render tests again with `ICO_RD_BLEND=storage`
-and the `*_fixed` ones with `ICO_RD_BLEND=fixed` (the latter also compare
-`rd_present`'s and `rd_crt`'s recorded hashes, which are the fixed-function
-blend's); `ICO_VK_FAKE_NO_DST=1` / `ICO_DX_FAKE_NO_DST=1` report a device
-without them.
+The Android code is tested on Linux where it can be: `android_paths` (the files folder layout),
+`iso_import` (the first start's copy of the chosen disc image), `lifecycle` (background and
+foreground on fake operations) and `touch` (the touch overlay's mapping). On a device the log is
+mirrored to logcat: `adb logcat -s ico-pc`.
 
-A triangle of a VU program that fails the program's region test (a vertex
-outside the GS window 0..4094, or behind the eye) goes through one rule
-(`vu_region_rule` in `port/shaders/vu_common.hlsli`, mirrored on the CPU by
-`vu1ref_region_draw` in `port/render/vu1_ref`, tested by `vu1_test` and
-`rd_native`): one wholly beside the 4:3 picture is drawn, clipped by the
-GPU; one that reaches into the picture is not drawn out of the box (the
-Original preset at 4:3 and 1x: the PS2's picture), and in any other state
-(Enhanced, a wider aspect, a Resolution above 1x) it is drawn, clipped, when
-its three vertices are in front of the eye and it is not part of a card (a
-wall with one vertex past the window, a plank's face). A card is a
-free-standing strip, one that shares no corner with another strip of its
-mesh but its own double-sided copy (`markJoinedStrips` in
-`port/render/rd_mesh.c` marks the others), none of whose triangles passes
-the test, such as the opening's tree card; it stays undrawn, as does a
-triangle with a vertex behind the eye. Photo mode's free camera draws every
-one of them, clipped. The same rule covers every path that drops on the GS
-window: the CPU strips (`gifHostBeside` in `ico2/seki/src/GifPacket.c`,
-where each strip call or `gif_DrawPolyF4` quad is one strip, and the
-extended state comes from `ico_video_original`), the grids (a grid of two
-strips or more is joined: its strips share rows) and the particles (an
-effect, never a card: drawn clipped in any state but out of the box). The
-particle effects' origin gate in `particleEffect.c` stays the PS2's in every
-state: it also gates the effect's update, which draws from the game's
-shared random numbers, so it is game logic.
+The GPU paths a desktop driver does not take are tested on the Linux Vulkan device (lavapipe in
+CI) by forcing them; each variant runs the same tests and expectations again under an environment
+variable:
 
-## Native frame gates
+| tests | environment | what it forces |
+| --- | --- | --- |
+| `*_nodual` (`rd_pixel`, `rd_present`, `rd_fog`, `rd_shadow`, `rd_water`, ..., `shaders_pixel`) | `ICO_RD_NO_DUAL=1` | blending in two passes, for GPUs without dual-source blending |
+| `rhi_vk_nodual` | `ICO_VK_FAKE_NO_DUAL=1` | the dual-source feature cleared at device creation |
+| `rhi_vk_d24s8` | `ICO_VK_FAKE_D24S8=1` | the D24S8 depth fallback when D32F_S8 is missing |
+| `*_mali` (the render tests but `rd_blur`, `rd_mesh` sharded, `shaders_pixel`, `vu1`, `rd_video`, `rhi_vk`) | `ICO_VK_FAKE_LIMITS=mali` | a Mali-G68's limits (four descriptor sets, 16 sampled images a stage, 256-byte storage offsets, 4096 memory allocations); `rhi_vk_mali` checks that what goes past them is refused by the limit's name, and `rd_perf_mali` creates the whole reachable pipeline set |
+| `*_minlimits` (`rd_pixel`, `rd_present`, `rd_mesh`, `rd_interp`) | `ICO_VK_FAKE_LIMITS=min` | the limits every Vulkan device must meet |
+| `*_storage` (`rd_pixel`, `rd_fog`, `rd_present`) | `ICO_RD_BLEND=storage` | the exact blend through a storage-image read |
+| `*_fixed` (`rd_pixel`, `rd_fog`, `rd_present`, `rd_crt`) | `ICO_RD_BLEND=fixed` | the fixed-function blend (it rounds up); `rd_present` and `rd_crt` compare that blend's recorded hashes |
 
-Two checks guard the renderer rework (they need saved frame dumps and a
-Vulkan device, so they are developer tools, not part of CI). Both are
-`tools/native_frame_check.py` (Python 3 and Pillow; run it with `python3 -I`)
-over `rd_replay_tool`, and both are ctests that skip (exit 77) without
-`ICO_DUMPS`, the dumps, a device or Pillow:
+`ICO_VK_FAKE_NO_DST=1` and `ICO_DX_FAKE_NO_DST=1` report a device that cannot read the pixel it
+draws over. The start-up log names the blend path the device took (`rd: blend: exact (attachment
+read)`, `exact (interlock)`, `exact (rov)` or `fixed-function (rounds up)`; `rd__blend_exact_name`
+in `port/render/rd_dst_read.c`).
 
-- **Gate A** (`native_frame_gate_a`): the Original preset at 4:3, 1x, and
-  Enhanced at 4:3, 2x, must stay byte-identical. It renders every dump of the
-  dump list at both settings, every named target (SCENE, DISPLAY, the shadow
-  maps, WORK0..3, AA0/1, FEED128, the aura and held buffers) plus the
-  presented picture, and compares the SHA-256 of the RGBA pixels with
-  `docs/native_frame_baseline.json`. A mismatch names the dump, the settings
-  and the target; with the baseline pictures kept (`--ref-dir`) it also gives
-  the first differing pixel.
-- **Gate B** (`native_frame_gate_b`): the centre of a wide picture equals the
-  4:3 picture. Give it one game state captured at 4:3, 16:9, 32:9, 48:9 and
-  60:9 (a zip, a folder or PNG files; the file or folder name holds the
-  aspect: `4x3`, `16x9`, ...). Columns `[(W/2 - 256) * s, + 512 * s)` of
-  each wide picture must equal the 4:3 picture byte for byte. `--effects R`
-  allows a band of R pixels at each old edge (a blur kernel's radius) and
-  reports the largest difference in it. A continuity check compares the
-  gradient at each old edge column with the 99th percentile of the
-  neighbourhood (16 columns each side), per channel. `--allow FILE.json`
-  lists explained differences (`{"diffs": [{"group", "aspect", "cols",
-  "rows", "reason"}], "continuity": [{"group", "aspect", "edge", "reason"}]}`).
-  `native_frame_check_selftest` always runs the logic on synthetic pictures.
-
-The dump list is a text file of paths (`tools/native_frame_dumps.txt` is the
-default; it holds this machine's paths and is machine-local; the dumps are
-never committed). `ICO_DUMPS` names a list file or a folder of `.rddump` and
-`.zip` files; `ICO_SWEEPS` names the Gate B sweeps (paths separated by `:`);
-`ICO_REPLAY_TOOL` the tool (default `build-host/linux-x64/port/render/`).
-A run holds `build-host/tmp/replay.lock` and renders with 3 workers
-(`--jobs`), one `rd_replay_tool --pass-dump` process per dump and setting
-(every target and the presented picture from one run; a tool without that
-switch, or `--per-target`, gets one process per target, about ten times
-slower).
-
-```
-ICO_DUMPS=tools/native_frame_dumps.txt ctest --preset linux-x64 -R native_frame_gate_a
-python3 -I tools/native_frame_check.py gate-a --tool build-host/linux-x64/port/render/rd_replay_tool
-python3 -I tools/native_frame_check.py gate-b --effects 0 sweep-bridge.zip
-```
-
-After an intended change to Original at 4:3 (a bug fix that changes pixels),
-check the difference by eye first, then rebuild the manifest from the new
-build with `python3 -I tools/native_frame_check.py baseline --ref-dir
-build-host/tmp/native_frame_ref` and commit `docs/native_frame_baseline.json`
-with the change. The manifest holds hashes only (plus the harness commit, the
-settings, and each dump's name, size and SHA-256).
-
-### Coverage corpus
-
-`tools/coverage_check.py` (ctest `coverage_corpus`) renders every dump of
-`tools/coverage_corpus.txt` (machine-local paths) at its own aspect with
-`--enhanced --present 1376x896`, once with `--aa off` and once with `--aa msaa4`
-(plus the interpolated frame for a dump with `interp=T:PREV`), and compares each
-with the previous run: a mesh drawn fewer times than before fails, and so does a
-picture whose changed pixels (per-channel difference above `tol`) exceed the
-dump's `pixels` percentage. The previous run's pictures and draw counts are in
-`tools/.coverage/` (`ICO_COVERAGE_DIR`); a passing dump rolls forward, a failing
-one keeps its old baseline. It skips (77) without the tool, Pillow or dumps.
-After a build, seed or re-seed the baseline with
-`python3 -I tools/coverage_check.py seed --tool build-host/linux-x64/port/render/rd_replay_tool`.
-`coverage_check_selftest` runs the logic on a fake tool.
-
-## Frame captures (F12)
-
-F12 in the running game saves the frame on the screen, for a bug report or
-for renderer work. Three files go in `dumps/` under the user folder
-(`<pref>/dumps`; [where that is](PORTABLE_MODE.md#where-your-saves-are)),
-named `frame-<yyyymmdd-hhmmss>-v<N>`, where `<N>` is the count of vertical
-syncs since start:
-
-| file | holds |
-| --- | --- |
-| `.png` | the whole frame the game drew at that moment (optional for a report; large at a high Resolution, so it stays a loose file). At 16:9 it is a little wider than the window's picture; `tools/native_frame_check.py` reads this one |
-| `-present.png` | named `frame-<yyyymmdd-hhmmss>-present.png` (no `-v<N>`): the picture as the window showed it, the same pixels, without the port's own popups |
-| `.zip` | the `.rddump` (`port/render/rd_dump.c`, format version 10, `RD_DUMP_VERSION`) and a copy of `logs/ico-pc.log`, for a GitHub issue, which refuses `.rddump` files. With no log file (the program started with `--console`) it holds the dump alone |
-
-The game writes the `.rddump` first, zips it, and deletes the loose file once
-the zip is written; if the zip cannot be written the `.rddump` stays and the
-log says `dump: zip not written`. The `.rddump` holds the frame's draw lists with their state, the textures
-and meshes the frame used, and the camera. It has no display options: the
-resolution, aspect ratio and filtering of a replay are given on the
-command line. A replacement texture from a texture pack is stored blank
-(the dump carries the game's own textures, which are the disc's, so keep
-dumps out of the repository and public places). The version number is
-checked on load; versions 3 to 10 are read. Version 10 adds, after the GS
-size, the frame's display aspect, its visible width (`wExact`) and the
-native GS width the game culled and drew the frame at; versions 3 to 9 load
-as the 4:3 frame (aspect 4/3, 512 and 512). A dump holds the picture at the
-width it was drawn: it can be shown narrower (cropped) but never wider.
-
-### The aspect sweep (Shift+F12 in photo mode)
-
-One game state at every aspect, for Gate B and for looking at the sides.
-Pause the game in photo mode, then press Shift+F12 (PC; there is no key on
-Android). The game re-renders the paused frame at 4:3, 16:9, 32:9, 48:9 and
-60:9, one after the other for a second or two (the window shows each
-width as it goes; the game itself is not touched), and writes
-`<pref>/dumps/sweep-<yyyymmdd-hhmmss>.zip` holding `4x3.rddump`, `4x3.png`,
-`16x9.rddump`, `16x9.png`, ... For each aspect the game's frame is rebuilt
-at that width: the frame width is set, the scene is remade
-(`rd_reset_scene`) and the paused camera rebuilds the game's matrices,
-the cull included, so a draw beside the 4:3 picture is really drawn
-there. The sweep renders with the game's own camera rule: while it runs,
-the photo camera's free-camera drawing (which keeps the triangles with a
-vertex behind the eye) is off, so the frames drop what the game's camera
-drops, as in play; the same holds whenever the photo camera has not been
-moved or zoomed. Each `.png` is the frame's DISPLAY target at its native width, not
-cropped. Afterwards the live width and scene come back by themselves. Leaving photo mode
-during a sweep ends it with what was captured so far; the log says
-`aspect sweep:` for each step. The zip is also a valid input to
-`rd_replay_tool` (its first `.rddump` is the 4:3 one) and, as a folder
-or zip of PNGs, to `native_frame_check.py gate-b`.
-
-`rd_replay_tool` (`port/render/tools/rd_replay_tool.c`, built with the
-`ico_render` library; its usage comment lists every switch) renders a dump
-headless to a PNG, or inspects it without a graphics device. It takes the
-F12 `.zip` directly (the first `.rddump` in it) or an extracted `.rddump`.
-The switches used most:
-
-- `--list` prints every command of the replayed lists (list, index, type,
-  texture, bounding box); with `--no-device` nothing is rendered and no
-  device is needed. `--nop L:A[-B]` turns commands A to B of list L into
-  no-ops, to find the draw behind a pixel.
-- `--aspect A`, `--resolution Nx` (or `WxH`), `--full-height` and
-  `--enhanced` give the replay the display options the dump does not carry;
-  without them it renders the PS2 picture. `--aspect` defaults to the
-  dump's own aspect (`--list` prints it). A narrower aspect crops the
-  `--present` picture to the centre columns; a wider one is refused (`a dump
-  drawn at 4:3 cannot show 16:9: capture an aspect sweep`), and dumps before
-  version 10 are 4:3 dumps.
-- `--pass-dump DIR` renders the frame once and writes `<TARGET>.png` into
-  DIR (which must exist) for each named target (`SCENE`, `DISPLAY`,
-  `SHADOW0`..`2`, `WORK0`..`3`, `AA0`, `AA1`, `FEED128`, `AURA_WORK`,
-  `AURA_TAP`, `WORK2_PAD`, `FEED_HELD`, `DISPLAY_HELD`) and, with
-  `--present WxH`, `PRESENT.png`. `<out.png>` is unused (give `-`). An
-  unknown `--target` name exits 1 and lists the names.
-- `--interp T PREV` replays the frame between the dump PREV and the dump at
-  alpha T; `--dump-textures DIR` writes every texture of the dump as a PNG;
-  `--mesh NAME` prints the vertices of the meshes of that name.
-
-Two examples. List a dump's commands without a graphics device, then render
-the same dump at 48:9 and 4x with the full-height picture:
-
-```sh
-rd_replay_tool frame-20261010-083039-v7967.zip out.png --list --no-device
-rd_replay_tool frame-20261010-083039-v7967.zip out.png --enhanced \
-    --aspect 48:9 --resolution 4x --full-height
-```
-
-To find which draw makes a wrong pixel, repeat the render with
-`--nop 0:120-130` (list 0, commands 120 to 130 removed) and compare the
-two PNGs. Exit status 77 means no graphics device or no dump file, as in the
-ctest skip convention.
+How the VU programs treat a triangle outside the GS window is in
+[port/VU1_PROGRAMS.md](port/VU1_PROGRAMS.md). The frame-dump checks, the coverage corpus, F12
+captures and `rd_replay_tool` are in [port/TESTING.md](port/TESTING.md).
 
 ## Continuous integration
 
-`.github/workflows/ios.yml` (the "Apple packages" workflow) runs only when
-a release is published (never for a push or a pull request): on `macos-15`
-it builds the tagged source with `tools/package_ios.sh <tag>` (the tag must
-be `vX.Y.Z`), building the pinned DXC from source on a cache miss, and a
-second job on Ubuntu attaches `ico-pc-<tag>-ios-unsigned.ipa` to that
-release (`--clobber`, so a re-run replaces it). An independent pair of jobs
-does the same for the macOS app with `tools/package_macos.sh <tag>`,
-attaching `ico-pc-<tag>-macos-arm64.zip` and `.dmg` (the app is ad-hoc
-signed, not notarized). The workflow reads the repository only; the upload
-jobs alone may write to it. No secret, signing identity or game data is
-used.
+`.github/workflows/ios.yml` (the "Apple packages" workflow) runs when a release is published, or
+by hand (`workflow_dispatch`) with a `tag` input naming an existing release
+(`gh workflow run ios.yml -f tag=<tag>`); never for a push or a pull request. On `macos-15` it
+builds the tag's source with `tools/package_ios.sh <tag>` (the tag must be `vX.Y.Z`), building the
+pinned DXC from source on a cache miss, and a second job on Ubuntu attaches
+`ico-pc-<tag>-ios-unsigned.ipa` to that release (`--clobber`, so a re-run replaces it). An
+independent pair of jobs does the same for the macOS app with `tools/package_macos.sh <tag>`,
+attaching `ico-pc-<tag>-macos-arm64.zip` and `.dmg` (the app is ad-hoc signed, not notarized; its
+link map stays in the run's artifact for 30 days). The workflow reads the repository only; the
+upload jobs alone may write to it. No secret, signing identity or game data is used.
 
 `.github/workflows/ci.yml` runs on every push to main, every pull request and
 every pushed `v*` tag (which also packages for arm64, see
@@ -896,8 +503,8 @@ The `linux-arm64` job builds the `linux-arm64` preset on GitHub's arm64
 runner and runs its tests, with its own toolchain cache
 (`toolchain-arm64-...`, the same four scripts; a cold fetch builds DXC from
 source) that it saves. Its host packages are `linux`'s plus the Wayland and
-KMSDRM headers, `g++` and `git` ([Linux arm64](#linux-arm64)). The hygiene
-checks are `linux`'s alone. The gating `ctest` leaves out the render tests
+KMSDRM headers, `g++` and `git` ([Linux arm64](#linux-arm64)). Of the hygiene
+checks it runs only `tools/check_no_rom.sh`. The gating `ctest` leaves out the render tests
 that compare filtered pixels with a tolerance of 1 or 2 (`rd_pixel`,
 `rd_gsbase`, `rd_present`, `rd_crt` and every variant of them, such as
 `rd_present_depth_copy` and the `_nodual`, `_minlimits` and `_mali` runs, and
@@ -908,8 +515,7 @@ alone and does not gate (`continue-on-error`), so their output is still in
 the log. The rest gate as on `linux`: `fog_lut` runs natively,
 `fog_lut_arm64` skips (it looks for an x86-64 NDK and qemu), and the tests
 that need the disc or saved frames (`shadow_spawn`, `fmv_fields`,
-`rd_boot_present`, `rd_fog_depth_copy_dump`) skip. On an Adreno 650 (Turnip)
-all of the left-out tests but `rd_pixel`'s sheet-magnification check pass.
+`rd_boot_present`, `rd_fog_depth_copy_dump`) skip.
 
 The `android` job (90 minutes at most) builds the debug APK and checks its
 structure; the game is not run:
@@ -930,43 +536,34 @@ Run the same steps locally before pushing.
 
 ## Packages
 
-`tools/package_win.sh <label>` and `tools/package_linux.sh <label>` build
-the packages for HEAD in a clean worktree (`dist/ico-pc-<label>-win.zip`,
-`dist/ico-pc-<label>-linux.tar.gz`). Neither contains game data; both carry
-the README, the player guides, the licence files and the save importer
-(`x64/tools/mc_import.exe` with its `SDL3.dll` and a short `README.txt`), and
-a make-portable script (`x64/make_portable.cmd` in the zip, `make_portable.sh`
-in the tar; the sources are `tools/portable/`). Each script also writes a
-second archive from the same stage, the portable download:
-`dist/ico-pc-<label>-win-portable.zip` and
-`dist/ico-pc-<label>-linux-portable.tar.gz`. It differs in three ways: its
-`ico-pc.ini` has `portable=1` on (the game makes `userdata` beside the
-program at the first start), the README has a paragraph saying so, and it
-has no make-portable script. Both scripts check each archive's entries
-afterwards, and `tools/test/package_textures_test.sh` (ctest `package_textures`)
-covers the helpers.
-The archives hold no developer files: no link map, `rhi_d3d12_test`,
-`rd_replay_tool` or `compare_backends` (a bundle of programs of that kind
-made browsers and Windows flag the download; the scripts assert their
-absence). The link map stays in `dist/stage` (`ico_pc_x64.map`,
-`ico_pc.map`) to symbolize a crash address from a player's log, and
-`tools/package_win.sh` builds only `ico_pc` and `mc_import`. The Windows
-program carries version information (company, product, file version
-`x.y.z.N`: N is the release candidate's number for a label such as
-`v0.6.2-rc3`, 0 for the final), from `-DICO_VERSION_LABEL=<label>` which `package_win.sh` passes
-(`port/platform/win/ico_pc.rc`; a build without the label says 0.0.0.0).
-It has no icon and no signature. `ico_pc.manifest` has no `dpiAwareness`:
-SDL3 sets the process's DPI awareness itself when the window system starts.
-`tools/package_linux.sh` packages for the host's architecture: on an arm64
-host it builds `linux-arm64` into `dist/ico-pc-<label>-linux-arm64.tar.gz`
-(stage `dist/stage/linux-arm64/`, log `build-host/pkg-linux-arm64-<label>.log`)
-and the portable `dist/ico-pc-<label>-linux-arm64-portable.tar.gz`,
-the same contents with the aarch64 program and SDL3 (and, in
-`NOTICES.txt`, the notices of the Wayland protocol files SDL3 is built
-with). On either architecture it fails when a shipped binary (`ico_pc`,
-`tools/mc_import`, `libSDL3.so.0`) needs a glibc symbol version newer than
-2.39, Ubuntu 24.04's and the oldest system the README names; the log has
-each binary's newest.
+`tools/package_win.sh <label>` and `tools/package_linux.sh <label>` build the packages for HEAD in a
+clean worktree (`dist/ico-pc-<label>-win.zip`, `dist/ico-pc-<label>-linux.tar.gz`). Neither contains
+game data; both carry the README, the player guides, the licence files and the save importer
+(`x64/tools/mc_import.exe` with its `SDL3.dll` and a short `README.txt`), and a make-portable script
+(`x64/make_portable.cmd` in the zip, `make_portable.sh` in the tar; the sources are
+`tools/portable/`). Each script also writes a second archive from the same stage, the portable
+download: `dist/ico-pc-<label>-win-portable.zip` and `dist/ico-pc-<label>-linux-portable.tar.gz`. It
+differs in three ways: its `ico-pc.ini` has `portable=1` on (the game makes `userdata` beside the
+program at the first start), the README has a paragraph saying so, and it has no make-portable
+script. Both scripts check each archive's entries afterwards, and
+`tools/test/package_textures_test.sh` (ctest `package_textures`) covers the helpers. The archives
+hold no developer files: no link map, `rhi_d3d12_test`, `rd_replay_tool` or `compare_backends`
+(developer programs in a download make browsers and Windows flag it; the scripts assert their
+absence). The link map stays in `dist/stage` (`ico_pc_x64.map`, `ico_pc.map`) to symbolize a crash
+address from a player's log, and `tools/package_win.sh` builds only `ico_pc` and `mc_import`. The
+Windows program carries version information (company, product, file version `x.y.z.N`: N is the
+release candidate's number for a label `vX.Y.Z-rcN`, 0 for `vX.Y.Z`; `ico_version_from_label` in
+`cmake/IcoVersion.cmake`), from `-DICO_VERSION_LABEL=<label>` which `package_win.sh` passes
+(`port/platform/win/ico_pc.rc`; a build without the label has an all-zero version). It has no icon
+and no signature. `ico_pc.manifest` has no `dpiAwareness`: SDL3 sets the process's DPI awareness
+itself when the window system starts. `tools/package_linux.sh` packages for the host's architecture:
+on an arm64 host it builds `linux-arm64` into `dist/ico-pc-<label>-linux-arm64.tar.gz` (stage
+`dist/stage/linux-arm64/`, log `build-host/pkg-linux-arm64-<label>.log`) and the portable
+`dist/ico-pc-<label>-linux-arm64-portable.tar.gz`, the same contents with the aarch64 program and
+SDL3 (and, in `NOTICES.txt`, the notices of the Wayland protocol files SDL3 is built with). On
+either architecture it fails when a shipped binary (`ico_pc`, `tools/mc_import`, `libSDL3.so.0`)
+needs a glibc symbol version newer than 2.39, Ubuntu 24.04's and the oldest system the README names;
+the log has each binary's newest.
 
 The release's arm64 archive is built by CI, since the maintainer's machine
 is x86-64. Pushing a `v*` tag runs `ci.yml`, and its `linux-arm64` job,
@@ -1003,8 +600,8 @@ relative links, so they read the same on GitHub and in a package. Both
 package scripts copy them unchanged into a `docs/` folder at the package
 root, beside `README.md` (the list is `pkg_player_docs` in
 `tools/package_docs_lib.sh`; a new guide goes there too, and the scripts
-fail when one is missing from the archive). `BUILDING.md`, `LEGAL.md` and
-`THIRD_PARTY.md` are for developers and are linked from the README by their
+fail when one is missing from the archive). `BUILDING.md`, `LEGAL.md`,
+`THIRD_PARTY.md` and `docs/port/` are for developers and are linked from the README by their
 GitHub address; only the Linux package carries `THIRD_PARTY.md`, at its
 root. The APK carries no documents besides `assets/VERSION.txt` and
 `assets/NOTICES.txt`: Android players read the guides on GitHub. Release
@@ -1041,8 +638,11 @@ the file to the false-positive forms: Microsoft
 VirusTotal links in the release notes if you like (the FAQ tells players
 they can check there).
 
-A release uploads the three packages, each desktop one with its portable
-twin (the arm64 pair comes from CI, above):
+A release carries ten files. `gh release create` uploads seven: the Windows, Linux x86-64 and
+Linux arm64 archives, each with its portable twin (the arm64 pair comes from CI, above), and the
+APK. Publishing the release starts the Apple packages workflow, which attaches three more: the IPA
+and the macOS zip and dmg ([Continuous integration](#continuous-integration); run it by hand with
+`gh workflow run ios.yml -f tag=<tag>` when the release event does not start it):
 
 ```sh
 gh release create <tag> dist/ico-pc-<tag>-win.zip dist/ico-pc-<tag>-win-portable.zip dist/ico-pc-<tag>-linux.tar.gz dist/ico-pc-<tag>-linux-portable.tar.gz dist/ico-pc-<tag>-linux-arm64.tar.gz dist/ico-pc-<tag>-linux-arm64-portable.tar.gz dist/ico-pc-<tag>-android.apk
