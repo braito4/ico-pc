@@ -38,7 +38,7 @@ streams, the audio host and the WAV writer, and `out_sdl.c` when the build has a
 
 1. The game's sound thread calls the Sg sequencer (`SgSePlay`, `SgCalledTickProc`, the
    `SgStAdpcm*` and `SgStPcm*` stream calls). The sequencer fills a page of 16-byte packets and
-   sends it to the IOP by SIF RPC (`sce/libsndn2/sound.c`).
+   sends it to the IOP by [SIF](ARCHITECTURE.md#terms) RPC (`sce/libsndn2/sound.c`).
 2. The [SIF](ARCHITECTURE.md#terms) layer runs the registered host server synchronously
    (`port/data/sif_host.c`; [DATA.md](DATA.md) "SIF and IOP RAM"). The server is
    `ico_sndn2_host_serve` (`port/audio/sndn2_host.c`).
@@ -343,8 +343,8 @@ name the IRX's handler addresses (`port/audio/sndn2_host.c`, header comment).
 
 - `ICO_SNDN2_RPC_TICK` (0x64): a page of 16-byte packets, each dispatched in order, then the ADPCM
   stream scheduler and its queue (`st_adpcm_tick`), then the 0x200-byte reply page.
-- any other number (the EE sends only `ICO_SNDN2_RPC_INIT`, 0x65): one packet, and a zeroed
-  return page.
+- any other number (the [EE](ARCHITECTURE.md#terms) sends only `ICO_SNDN2_RPC_INIT`, 0x65): one
+  packet, and a zeroed return page.
 
 ### The packets
 
@@ -511,9 +511,9 @@ Hz; at 59.94 Hz 800.8 on average, spread exactly over every five vsyncs as 800 8
   four vsyncs queued (the simulation ran ahead) the block is dropped. Both are counted and logged
   at the close: `audio: SDL output closed (<n> refills after a dry queue, <n> blocks dropped)`
   (`ico_audio_sdl_push`, `ico_audio_sdl_close`).
-- Under the window's vsync lock the display is the simulation's clock, so the simulation runs a
-  little off 59.94 Hz. The window measures that rate every 10 s and hands the ratio to
-  `ico_audio_set_rate_ratio` (`port/platform/window_host.c`), and the stream plays at it
+- Under the window's [vsync lock](ARCHITECTURE.md#terms) the display is the simulation's clock, so
+  the simulation runs a little off 59.94 Hz. The window measures that rate every 10 s and hands the
+  ratio to `ico_audio_set_rate_ratio` (`port/platform/window_host.c`), and the stream plays at it
   (`SDL_SetAudioStreamFrequencyRatio`); ratios outside 0.5..2 are taken as 1. While more than two
   vsyncs wait before a push, the stream plays `ICO_AUDIO_TRIM` (0.25 %) faster on top, which drains
   latency the 10 s measurement left behind without an audible pitch change (`port/audio/volume.c`,

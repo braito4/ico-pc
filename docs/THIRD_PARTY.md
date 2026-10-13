@@ -1,10 +1,9 @@
 # Third-party code and tools
 
-What the PC port builds against, links or runs at build/test time, with the
-pinned version, licence and where it comes from. Licence policy:
-no GPL; everything statically linked into the MIT program must be
-MIT-compatible and its notice must ship with the binary. A new dependency gets a row here and an entry
-in `tools/notices/manifest.json` in the same change.
+What the PC port builds against, links or runs at build/test time, with the pinned version, licence
+and where it comes from. Licence policy: no GPL; everything statically linked into the MIT program
+must be MIT-compatible and its notice must ship with the binary. A new dependency gets a row here
+and an entry in `tools/notices/manifest.json` in the same change.
 
 Pins live in the fetch scripts, and the Mac's DXC pin in
 `.github/workflows/ios.yml`; changing a version means changing the pin
@@ -36,22 +35,19 @@ Pins live in the fetch scripts, and the Mac's DXC pin in
 | xxHash XXH3-64 | reimplementation of `XXH3_64bits` (seed 0, default secret) from xxHash v0.8.2 (`Cyan4973/xxHash` tag `v0.8.2`, `xxhash.h`; checked against the tag's `cli/xsum_sanity_check.c` vectors) | BSD-2-Clause, "Copyright (C) 2012-2021 Yann Collet" (`xxhash.h`); the notice is kept at the top of the file | in the tree: `port/render/xxh3.c`, our own C (scalar, no SIMD); the 192-byte default secret is `xxhash.h`'s `XXH3_kSecret` | `xxh3_64`: the hashes in PCSX2's texture-replacement file names (`port/render/texpack_name.c`), so PCSX2 texture packs load unchanged |
 | MinGW-w64 runtime (Windows only) | the `win-x64` toolchain's: Debian `mingw-w64-x86-64-dev` 12.0.0-5 (`tools/toolchain/mingw-gcc`) | ZPL-2.1 overall plus per-part notices (getopt, gdtoa, parts of the maths library, musl string functions, Wine headers), collected by the project in `COPYING.MinGW-w64-runtime.txt` ("Some parts of the runtime are under licenses which require that the copyright and license notices are included when distributing the code in binary form") | part of the cross toolchain; `ico_pc.exe` links it statically (`-static -static-libgcc`, `CMakeLists.txt`). The notices text is taken from llvm-mingw's copy of that file (`tools/toolchain/llvm-mingw/x86_64-w64-mingw32/share/mingw32/`, the same project's runtime), or Debian's `copyright` for the package when llvm-mingw is absent. libgcc, also linked statically, is under the GCC Runtime Library Exception, which asks for no notice | the C runtime startup and support functions of the Windows program, and `libdxguid.a`'s interface IDs |
 
-Binary-release obligations: stb_truetype's MIT notice, the font's
-copyright line and the full OFL 1.1 text (`port/assets/fonts/OFL.txt`; OFL
-condition 2), miniz's MIT notice, libmpeg2's Apache-2.0 licence text and its
-`NOTICE` content (Apache-2.0 section 4; the files are not modified, so no
-change notices are owed; `ithread_single.c` is a separate file of ours, not
-a modification), libchdr's two BSD-3-Clause notices and Zstandard's (BSD
-clause 2) with the MIT notice of its miniz copy, volk's MIT notice, the Vulkan headers' MIT notice (MIT
-chosen), the fdlibm, UCB and Red Hat notices of the newlib copies, xxHash's
-BSD-2-Clause notice (`port/render/xxh3.c`), in the Linux arm64 package the
-Wayland protocol files' MIT notices, on
-Android libadrenotools' and liblinkernsbypass's BSD-2-Clause notices,
-libc++'s NCSA / MIT notices and the Apache-2.0 licence text of AndroidX
-Window and the libraries it brings (none of them has a `NOTICE` file), and on
-Windows the MinGW-w64 runtime's notices. SDL3's zlib licence, minicoro's
-Unlicense / MIT-0, the LZMA SDK's public domain dedication and dr_flac's
-MIT-0 ask for nothing in binaries; their notices are included anyway.
+Binary-release obligations: stb_truetype's MIT notice, the font's copyright line and the full OFL
+1.1 text (`port/assets/fonts/OFL.txt`; OFL condition 2), miniz's MIT notice, libmpeg2's Apache-2.0
+licence text and its `NOTICE` content (Apache-2.0 section 4; the files are not modified, so no
+change notices are owed; `ithread_single.c` is a separate file of ours, not a modification),
+libchdr's two BSD-3-Clause notices and Zstandard's (BSD clause 2) with the MIT notice of its miniz
+copy, volk's MIT notice, the Vulkan headers' MIT notice (MIT chosen), the fdlibm, UCB and Red Hat
+notices of the newlib copies, xxHash's BSD-2-Clause notice (`port/render/xxh3.c`), in the Linux
+arm64 package the Wayland protocol files' MIT notices, on Android libadrenotools' and
+liblinkernsbypass's BSD-2-Clause notices, libc++'s NCSA / MIT notices and the Apache-2.0 licence
+text of AndroidX Window and the libraries it brings (none of them has a `NOTICE` file), and on
+Windows the MinGW-w64 runtime's notices. SDL3's zlib licence, minicoro's Unlicense / MIT-0, the LZMA
+SDK's public domain dedication and dr_flac's MIT-0 ask for nothing in binaries; their notices are
+included anyway.
 
 They are shipped as `NOTICES.txt`: beside the program, next to the port's
 own `LICENSE` (`LICENSE.txt` in the Windows package), by

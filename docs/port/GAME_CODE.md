@@ -10,7 +10,7 @@ from.
 | path | what it holds |
 | --- | --- |
 | `ico2/<programmer>/` | the game's sources, one directory per programmer (`common`, `fumi`, `ito`, `omori`, `script`, `seki`, `sugipon`), each with `src/` (or `ios/`, `isys/`, `sound/`) and `include/` |
-| `ico2/vusrc/` | the VU1 microprograms, kept as the reference for the renderer's shaders; never compiled |
+| `ico2/vusrc/` | the VU1 [microprograms](ARCHITECTURE.md#terms), kept as the reference for the renderer's shaders; never compiled |
 | `sce/` | Sony's SDK headers the game includes, and `sce/libsndn2/sound.c`, the one `sce/` source compiled |
 | `config/link_order.pal.txt` | the retail link's object list: the inventory of the game's translation units and data members |
 | `cmake/IcoSources.cmake` | the host source lists, generated from the link order |
@@ -43,7 +43,7 @@ list, minus `ICO_BLOCKED_SOURCES` unless `ICO_BUILD_BLOCKED=ON`, and prints the 
 
 - the include path the period build gave that directory (`ico_include_dirs`): its own `include/`,
   then the others in the order `sugipon omori common ito fumi seki script`, then `port/compat/` for
-  the SDK header names; the window build adds `port/render`;
+  the SDK header names; the [window build](ARCHITECTURE.md#terms) adds `port/render`;
 - the definitions `ICO_HOST=1` and either `ICO_RD=1` (the window build) or `ICO_HEADLESS=1`
   (`ICO_GAME_DEFINITIONS`);
 - `-fmacro-prefix-map=<source>/ico2/<programmer>/=`, so `__FILE__` reads as the period build
@@ -62,10 +62,10 @@ gcc and clang. The file is the place to park a source that stops compiling, with
 (`vu0-asm`, `nested-fn`, `decl`); `ICO_BUILD_BLOCKED=ON` compiles the parked sources anyway to
 recheck them.
 
-Of `sce/`, only `sce/libsndn2/sound.c`, the EE side of the Sg sound sequencer, is compiled, into
-`ico_sndn2` (`port/audio/CMakeLists.txt`). It takes the semantics options, `ICO_HOST=1` and the
-game's warning set like a game source; its header comment lists the host seams it carries (pointer
-arrays where the EE kept addresses in 32-bit context words).
+Of `sce/`, only `sce/libsndn2/sound.c`, the [EE](ARCHITECTURE.md#terms) side of the Sg sound
+sequencer, is compiled, into `ico_sndn2` (`port/audio/CMakeLists.txt`). It takes the semantics
+options, `ICO_HOST=1` and the game's warning set like a game source; its header comment lists the
+host seams it carries (pointer arrays where the EE kept addresses in 32-bit context words).
 
 ## Semantics options
 
@@ -172,11 +172,11 @@ seams" block) and `ico2/fumi/include/ee_view.h` give the game code one spelling 
 Three kinds of code reached the EE's hardware without an SDK call; each has one host rule.
 
 - **Registers.** `port/compat/eeregs.h` gives the register names of the SDK's `eeregs.h` as
-  addresses in two plain memory blocks, the EE I/O page and the GS privileged page
-  (`ico_hw_eeio`, `ico_hw_gs`, defined in `port/platform/hwregs.c`). A store lands there and a load
-  reads back the last store; nothing reacts. A loop that polls a register (`GS_CSR`, a DMA
-  channel's busy bit) therefore never sees it change, so such a loop is replaced at its call site
-  by the `port/` code that owns the device.
+  addresses in two plain memory blocks, the EE I/O page and the [GS](ARCHITECTURE.md#terms)
+  privileged page (`ico_hw_eeio`, `ico_hw_gs`, defined in `port/platform/hwregs.c`). A store lands
+  there and a load reads back the last store; nothing reacts. A loop that polls a register
+  (`GS_CSR`, a [DMA](ARCHITECTURE.md#terms) channel's busy bit) therefore never sees it change, so
+  such a loop is replaced at its call site by the `port/` code that owns the device.
 - **Inline assembly.** The [VU0](ARCHITECTURE.md#terms) macro-mode and R5900 assembly of the game
   has C bodies over `port/math`; no compiled game source holds an `asm` statement (the only one left
   is in `ico2/ito/mpeg/mv_main.c`, an `ICO_EE_ONLY_SOURCES` file).

@@ -1,9 +1,10 @@
 # VU1 programs
 
-ICO draws its models through five [VU1](ARCHITECTURE.md#terms) microprograms. The port runs no
-VU1: each program is a shader that reads the same vertex stream and the same VU data memory, and a
-CPU reference of each program is the shaders' test oracle. This document says what the programs
-compute, how the mesh path feeds the shaders, and what the port draws of what the programs drop.
+ICO draws its models through five [VU1](ARCHITECTURE.md#terms)
+[microprograms](ARCHITECTURE.md#terms). The port runs no VU1: each program is a shader that reads
+the same vertex stream and the same VU data memory, and a CPU reference of each program is the
+shaders' test oracle. This document says what the programs compute, how the mesh path feeds the
+shaders, and what the port draws of what the programs drop.
 
 ## Files
 
@@ -24,19 +25,20 @@ compute, how the mesh path feeds the shaders, and what the port draws of what th
 
 ## How the programs run
 
-`mc_TransMicroCode` uploads a program into every list whose resident program differs; the ids are
-1 normal_c, 2 normal_l, 3 cluster, 4 mesh, 5 particle (`ico2/seki/src/MicroCode.c`
-(`mc_TransMicroCode`)). A draw is `MSCALF code` (a BEGIN entry: constants into registers, then
-the end bit) followed by batches, each a VIF UNPACK to TOP and an `MSCNT`, which resumes at the
-program's START loop. Each program begins with an entry table of branches, one per code
-(`ico2/vusrc/mesh.vsm`, header comment). Codes 0 and 2 are the same in every program:
-`SET_GSREGISTER` copies a counted run of quadwords and `xgkick`s it as a GIF packet;
-`SET_UVOFFSET` writes `mem[2].xy`, the texture's UV scroll (`ico2/vusrc/vu1_common.h`).
+`mc_TransMicroCode` uploads a program into every list whose resident program differs; the ids are 1
+normal_c, 2 normal_l, 3 cluster, 4 mesh, 5 particle (`ico2/seki/src/MicroCode.c`
+(`mc_TransMicroCode`)). A draw is `MSCALF code` (a BEGIN entry: constants into registers, then the
+end bit) followed by batches, each a [VIF](ARCHITECTURE.md#terms) UNPACK to TOP and an `MSCNT`,
+which resumes at the program's START loop. Each program begins with an entry table of branches, one
+per code (`ico2/vusrc/mesh.vsm`, header comment). Codes 0 and 2 are the same in every program:
+`SET_GSREGISTER` copies a counted run of quadwords and `xgkick`s it as a
+[GIF](ARCHITECTURE.md#terms) packet; `SET_UVOFFSET` writes `mem[2].xy`, the texture's UV scroll
+(`ico2/vusrc/vu1_common.h`).
 
 On the host `MicroCodeAddress[]` is all zeros: `ico2/vusrc` is assembled only by the PS2 build.
 `mc_TransMicroCode` tells [rd](ARCHITECTURE.md#terms) the resident program of each list
 (`rd_vu_program`), and `mc_HostDma` passes each MSCAL code to `rd_vu_call` with the quadwords the
-UNPACKs left at TOP; code 0 goes to the GS register decoder instead
+UNPACKs left at TOP; code 0 goes to the [GS](ARCHITECTURE.md#terms) register decoder instead
 ([GS.md](GS.md#the-vu1-side-of-the-chains); `ico2/seki/src/MicroCode.c` (`mcHostVif`)).
 
 ## The programs
@@ -77,11 +79,11 @@ the colour as it is (`port/render/vu1_ref/vu1_normal.c` (`litColour`, `specColou
 `normalRef`); `port/shaders/vu_lit.hlsl`).
 
 **Code 36** (normal_c and normal_l) tests each triangle against the clip space of `mem[20..23]`:
-trivially rejected, drawn by the strip, or cut by `SCISSOR_COMMON` through six planes (Z-, Z+,
-X-, X+, Y-, Y+) and kicked as a fan (PRIM 0x5D, ABE on) before the batch's own packet. The replay
-keeps that order by drawing a code-36 batch twice: the cut triangles first, then the strip's
-(`ico2/vusrc/scissorcommcut.h`; `port/render/vu1_ref/vu1_scissor.c`; `port/render/rd_mesh.h`
-("the recorded payload")).
+trivially rejected, drawn by the strip, or cut by `SCISSOR_COMMON` through six planes (Z-, Z+, X-,
+X+, Y-, Y+) and kicked as a fan (PRIM 0x5D, ABE on) before the batch's own packet. The
+[replay](ARCHITECTURE.md#terms) keeps that order by drawing a code-36 batch twice: the cut triangles
+first, then the strip's (`ico2/vusrc/scissorcommcut.h`; `port/render/vu1_ref/vu1_scissor.c`;
+`port/render/rd_mesh.h` ("the recorded payload")).
 
 **cluster** blends position and normal over two bones, `P = B0 (pos, 1) w0 + B1 (pos, 1) w1`;
 the bones are VU memory 16.. (bone i at `16 + 4i`), the vertex weights hold the bones' VU
@@ -160,13 +162,13 @@ draws in. rd keeps one VU image per list at record time (a `Vu1Ref`): the common
 `VuCB` from its list's image at its position (`port/render/rd_mesh.h` ("VU1 state per list");
 `port/render/rd_mesh.c` (`rd_vu_draw_from_state`, `vuImage`)).
 
-**Draws.** `rd_draw_vu_mesh` records an `RDC_MESH` (or `RDC_SKINNED` with bones) with the block
-and the batch range. The GS state a batch draws with (TEX0, TEX1, CLAMP, ALPHA, TEST, the batch
-tag's ABE and TME) is the state block at the command's position: the material packets reach the
-GS through `SET_GSREGISTER` in order with the meshes, so they are ordinary rd state that leaks as on
-the GS (`port/render/rd_mesh.h` (`rd_draw_vu_mesh`)). Grids (`rd_draw_vu_grid`) and particles
-(`rd_draw_vu_particles`) copy the frame's packet buffer into the command; particles are drawn
-non-indexed, six vertices each (`port/render/rd_mesh.h`).
+**Draws.** `rd_draw_vu_mesh` records an `RDC_MESH` (or `RDC_SKINNED` with bones) with the block and
+the batch range. The GS state a batch draws with ([TEX0](ARCHITECTURE.md#terms), TEX1, CLAMP, ALPHA,
+TEST, the batch tag's ABE and TME) is the state block at the command's position: the material
+packets reach the GS through `SET_GSREGISTER` in order with the meshes, so they are ordinary rd
+state that leaks as on the GS (`port/render/rd_mesh.h` (`rd_draw_vu_mesh`)). Grids
+(`rd_draw_vu_grid`) and particles (`rd_draw_vu_particles`) copy the frame's packet buffer into the
+command; particles are drawn non-indexed, six vertices each (`port/render/rd_mesh.h`).
 
 **Not reproduced.** A particle batch that stores no sprite writes its end tag through an earlier
 program's `vi04`, which after a normal or mesh loop is VU memory 0, and the cluster region test
@@ -199,7 +201,7 @@ for the end-tag check.
 ## The region rule
 
 **On the PS2.** The triangle loops (codes 32 and 38, cluster, mesh) test each vertex against the
-GS window: X and Y in 0..4094 exclusive and `0 < w < 16777214` (cluster: against `mem[0]` and
+GS region: X and Y in 0..4094 exclusive and `0 < w < 16777214` (cluster: against `mem[0]` and
 `mem[1]`). A vertex outside sets ADC on itself and the next two, so no triangle using it is drawn
 (`port/render/rd_mesh.h` (`RdVuClip`); `port/shaders/vu_common.hlsli` (`vu_region_rule`)).
 The particle program skips a sprite whose corners or w fall outside its windows.
@@ -244,7 +246,7 @@ reaches the camera's picture and drawn whole when wholly beside it; under the fr
 every other state it is drawn whole and the GPU clips the quad, since a sprite is an effect and
 never a card (`port/shaders/vu_particle.hlsl` (`vu_particle_vs`); `port/render/vu1_ref/vu1_ref.h`
 (`vu1ref_particle_draw`)). Whether an effect is updated and drawn at all stays the PS2's gate on
-the GS window (0..4095) in every state, because the update draws from the shared random generator
+the GS region (0..4095) in every state, because the update draws from the shared random generator
 and is game logic (`ico2/sugipon/src/particleEffect.c` (`particleEffectOffScreen`)).
 
 **CPU strips.** The strips the [EE](ARCHITECTURE.md#terms) projects (`gif_DrawStripF` and the
@@ -261,14 +263,14 @@ picture) are hidden by the content table ([RENDER.md](RENDER.md#content-tables))
 
 `vu1` (`port/shaders/test/vu1_test.c`) has three parts. Part a: hand traces, a few vertices per
 program followed through the `.vsm` by hand, which the CPU reference must give exactly. Part b, on
-the Vulkan RHI: every vertex shader in its probe mode (`VU_F_PROBE`) writes each vertex's GS X, Y,
-Z, RGBA, STQ and region test, compared with the reference (X, Y within 1/16 pixel, Z and STQ within
-2^-20 relative, colours within 1, the region test exact); a strip drawn through the shipped entry
-and `vu_ps` against the reference's triangles drawn through the sprite shaders, every pixel within
-1 LSB; and the port's rule over the VU (`vu1ref_region_draw`, `vu1ref_region_between`,
-`vu1ref_particle_draw`), checked by coverage. Part c: `RdVuCommon` against the VU parameter block
-and the `VuCB` mirror. Exit 77 when parts a and c pass and there is no Vulkan device
-(`port/shaders/test/vu1_test.c`, header comment).
+the Vulkan [RHI](ARCHITECTURE.md#terms): every vertex shader in its probe mode (`VU_F_PROBE`) writes
+each vertex's GS X, Y, Z, RGBA, STQ and region test, compared with the reference (X, Y within 1/16
+pixel, Z and STQ within 2^-20 relative, colours within 1, the region test exact); a strip drawn
+through the shipped entry and `vu_ps` against the reference's triangles drawn through the sprite
+shaders, every pixel within 1 LSB; and the port's rule over the VU (`vu1ref_region_draw`,
+`vu1ref_region_between`, `vu1ref_particle_draw`), checked by coverage. Part c: `RdVuCommon` against
+the VU parameter block and the `VuCB` mirror. Exit 77 when parts a and c pass and there is no Vulkan
+device (`port/shaders/test/vu1_test.c`, header comment).
 
 `rd_native_test` (`port/render/test/rd_native_test.c`) renders one synthetic frame in absolute GS
 geometry at native widths 512, 688, 1376, 2048 and 2560, in Original 1x and Enhanced 1x and 2x. It

@@ -82,9 +82,9 @@ Some things to know:
 - The game's own menus and messages are already part of the picture when
   ReShade adds its effects, so the effects show on them too.
 
-If you do not want the game to give ReShade the depth information at all,
-close the game, open `config.toml` ([where it is](OPTIONS.md#settings-you-can-only-change-in-a-file)),
-and change this line under `[video]`:
+If you do not want the game to give ReShade the depth information at all, close the game, open
+`config.toml` ([where it is](OPTIONS.md#settings-you-can-only-change-in-a-file)), and change this
+line under `[video]`:
 
 ```
 effects_depth = false

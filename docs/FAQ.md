@@ -51,8 +51,8 @@ game's own. The game comes with a `textures` folder for one.
 2. Start the game.
 3. Open **Options > Display** and check that **Texture pack** says **On**.
 
-Packs made for PCSX2, a program that plays PS2 games on a PC, work as
-they are. You do not need to rename or convert anything. [The full guide](TEXTURE_PACKS.md) has more.
+Packs made for PCSX2, a program that plays PS2 games on a PC, work as they are. You do not need to
+rename or convert anything. [The full guide](TEXTURE_PACKS.md) has more.
 
 ## Can I turn off the blur, the glow or the fog?
 
@@ -111,10 +111,10 @@ dots next to the download, then pick **Keep**, **Show more**, **Keep
 anyway**. If Windows shows "Windows protected your
 PC" when you start the game, choose **More info**, then **Run anyway**.
 
-You can check the files yourself: upload the zip to
-[VirusTotal](https://www.virustotal.com/) and read what its scanners say.
-The whole program is open source, so you can also read what it does or
-build it yourself ([how to build it](https://github.com/nathanialf/ico-pc/blob/main/docs/BUILDING.md)).
+You can check the files yourself: upload the zip to [VirusTotal](https://www.virustotal.com/) and
+read what its scanners say. The whole program is open source, so you can also read what it does or
+build it yourself
+([how to build it](https://github.com/nathanialf/ico-pc/blob/main/docs/BUILDING.md)).
 
 ## Where are my saves?
 
@@ -163,9 +163,9 @@ it.
 
 ## Which disc image works?
 
-Only the PAL version of ICO, numbered SCES-50760, as a `.iso`, `.chd` or
-`.bin` file (a `.cue` file that points to the `.bin` works too). The US, Japanese and later editions do not work. If the image is not
-the right one, the game says so when you start it.
+Only the PAL version of ICO, numbered SCES-50760, as a `.iso`, `.chd` or `.bin` file (a `.cue` file
+that points to the `.bin` works too). The US, Japanese and later editions do not work. If the image
+is not the right one, the game says so when you start it.
 
 ## How do I take a photo?
 

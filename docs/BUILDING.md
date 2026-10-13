@@ -453,7 +453,7 @@ draws over. The start-up log names the blend path the device took (`rd: blend: e
 read)`, `exact (interlock)`, `exact (rov)` or `fixed-function (rounds up)`; `rd__blend_exact_name`
 in `port/render/rd_dst_read.c`).
 
-How the VU programs treat a triangle outside the GS window is in
+How the VU programs treat a triangle outside the GS region is in
 [port/VU1_PROGRAMS.md](port/VU1_PROGRAMS.md). The frame-dump checks, the coverage corpus, F12
 captures and `rd_replay_tool` are in [port/TESTING.md](port/TESTING.md).
 

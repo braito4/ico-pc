@@ -293,7 +293,7 @@ executable's folder (`port/platform/host_config.h`, header comment). At most 32 
 | `ticks` | exit after N [Main ticks](ARCHITECTURE.md#terms) |
 | `watchdog` | seconds, default 30; 0 is off |
 | `trace` | `0` off, `1` or a path on; on by default only in the headless build |
-| `pad_script` | the pad script to run |
+| `pad_script` | the [pad script](ARCHITECTURE.md#terms) to run |
 | `input_record` | the pad recording: `0`/`false`/`none` off, `1`/`true` on, or a path; on by default in the window build |
 | `verify` | `0` skips the disc image's SHA-1 check when it is mounted directly |
 | `use_iso` | `1` mounts the disc image instead of `ico.o2r`; default 1 headless, 0 in the window build |

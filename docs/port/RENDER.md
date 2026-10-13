@@ -39,12 +39,12 @@ The file table in `port/render/rd_internal.h` lists only part of these.
 
 ## The model
 
-The PS2 game builds 13 priority-ordered DMA chain lists per frame and kicks them in order 0..12
-at `dl_Swap`, and the GS is one state machine, so a register written in one list is still in
-force when the next starts. rd keeps both facts: a frame is 13 ordered command lists
-(`RD_LIST_COUNT`) recorded by the game [fiber](ARCHITECTURE.md#terms) and replayed in order
-against one persistent state block. Within a list submission order is draw order; rd never sorts
-by material (`port/render/rd.h`).
+The PS2 game builds 13 priority-ordered [DMA](ARCHITECTURE.md#terms) chain lists per frame and kicks
+them in order 0..12 at `dl_Swap`, and the GS is one state machine, so a register written in one list
+is still in force when the next starts. rd keeps both facts: a frame is 13 ordered command lists
+(`RD_LIST_COUNT`) recorded by the game [fiber](ARCHITECTURE.md#terms) and replayed in order against
+one persistent state block. Within a list submission order is draw order; rd never sorts by material
+(`port/render/rd.h`).
 
 | list | what draws in it |
 | --- | --- |
@@ -77,11 +77,12 @@ calls (`port/render/rd_core.c` (`recordDefaults`)). The values are in
 **Keep frames.** `rd_end_frame(1)` (`fbKeep`: pause and memory card screens) replays lists 11
 and 12 only, on top of the retained DISPLAY (`port/render/rd.h` (`rd_end_frame`)).
 
-**Threads.** Every `rd_*` call comes from the game fiber. The game's post passes are appended by
-the same code inside the vsync before `rd_end_frame`, so there is one hand-off point. GPU work the
-game's calls cause (replay, pipeline creation, present) runs through `rd_set_host_call`, which the
-window sets to `ico_sched_call_on_host` so the driver runs on the host stack in the host FP mode
-(`port/render/rd.h` (`RdHostCall`); `port/render/rd_core.c` (`rd__on_host`)).
+**Threads.** Every `rd_*` call comes from the game fiber. The game's post passes are appended by the
+same code inside the [vsync](ARCHITECTURE.md#terms) before `rd_end_frame`, so there is one hand-off
+point. GPU work the game's calls cause (replay, pipeline creation, [present](ARCHITECTURE.md#terms))
+runs through `rd_set_host_call`, which the window sets to `ico_sched_call_on_host` so the driver
+runs on the host stack in the host FP mode (`port/render/rd.h` (`RdHostCall`);
+`port/render/rd_core.c` (`rd__on_host`)).
 
 ## Recording
 
@@ -109,11 +110,11 @@ each are listed in `port/render/rd.h` ("state deltas"); the ones that set one GS
 [interpolation](ARCHITECTURE.md#terms); the frame
 being recorded takes a third slot (`RD_FRAME_RING` 3) (`port/render/rd_core.c`).
 
-**`rd_begin_frame`** applies pending settings (a texture pack switched off reverts its
-replacements; the model pack and its dump switch; a change of the targets' scales recreates them
-on the host stack and drops the interpolation history), halves the scene scale when a scene-sized
-texture did not fit the GPU since the last frame, opens the slot after the last closed frame with
-the persistent state as its start state, and records the list defaults
+**`rd_begin_frame`** applies pending settings (a texture pack switched off reverts its replacements;
+the model pack and its dump switch; a change of the targets' scales recreates them on the host stack
+and drops the interpolation history), halves the [scene scale](ARCHITECTURE.md#terms) when a
+scene-sized texture did not fit the GPU since the last frame, opens the slot after the last closed
+frame with the persistent state as its start state, and records the list defaults
 (`port/render/rd_core.c` (`rd_begin_frame`)).
 
 **`rd_end_frame`** keeps the frame head in the first replayed list (`rd__frame_head_resolve`),
@@ -169,12 +170,12 @@ sampler settings, PABE, FBA, DATE) goes into uniforms (`port/render/rd_state.h` 
 
 ## Frames and targets
 
-**The frame head.** `rd_frame_head` records the flip's draw environment (FRAME with FBMSK 0,
-PSMZ32 Z write on, the centred XYOFFSET, COLCLAMP 1, TEST 0x50000) and its clear at the head of
-both list 0 and list 11, since whether the frame replays from 0 or from 11 is known only when it
-closes; `rd_end_frame` turns the copy that is not first into NOPs. `rd_frame_flip` patches the
-clear colour and the half offset in place (`port/render/rd_frame.c` (`recordHead`,
-`rd_frame_flip`, `rd__frame_head_resolve`)).
+**The frame head.** `rd_frame_head` records the flip's draw environment (FRAME with
+[FBMSK](ARCHITECTURE.md#terms) 0, PSMZ32 Z write on, the centred XYOFFSET, COLCLAMP 1, TEST 0x50000)
+and its clear at the head of both list 0 and list 11, since whether the frame replays from 0 or from
+11 is known only when it closes; `rd_end_frame` turns the copy that is not first into NOPs.
+`rd_frame_flip` patches the clear colour and the half offset in place (`port/render/rd_frame.c`
+(`recordHead`, `rd_frame_flip`, `rd__frame_head_resolve`)).
 
 **Named targets** stand in for fixed VRAM regions. The scene-class ones (SCENE, DISPLAY, WORK2,
 AURA_WORK, the DATE snapshot, DISPLAY_HELD) are as wide as the
@@ -197,9 +198,9 @@ covers on the PS2 at every aspect (`port/render/rd_core.c` (`namedTargetDesc`, `
 
 **Scale.** A scene-class target's texture is its GS size times the scene scale; the work buffers
 take `rd_work_target_scale` (1 at the GS height, else the scene height over 448, at most 2), the
-shadow levels none (`port/render/rd_core.c` (`rd__target_scale_of`, `rd_work_target_scale`)).
-Under Full pixel a frame-wide scene target holds the frame's exact visible width plus
-`RD_FULL_PIXEL_GUARD` texels each side, centred, so the window's pixels are its texels
+shadow levels none (`port/render/rd_core.c` (`rd__target_scale_of`, `rd_work_target_scale`)). Under
+[Full pixel](ARCHITECTURE.md#terms) a frame-wide scene target holds the frame's exact visible width
+plus `RD_FULL_PIXEL_GUARD` texels each side, centred, so the window's pixels are its texels
 (`port/render/rd_core.c` (`rd__target_scale_of`)). [Scene scale](ARCHITECTURE.md#terms) and the
 display options are [DISPLAY.md](DISPLAY.md).
 
@@ -290,10 +291,10 @@ the frame's upload ring, and the static meshes the frame draws into the device a
 again only after a morph rewrote them); the interpolation's scratch meshes stay on the ring
 (`port/render/rd_replay.c` (`uploadTextures`, `uploadMeshes`)).
 
-**Bind groups.** Bind groups are valid only in the frame slot they were made in, so their caches
-are tagged with an epoch every `rhi_wait_frame` of the renderer starts anew (`rd__wait_frame`).
-Uniform blocks are written once per replay per content (FNV-1a), and texture groups are cached by
-(texture, sampler, DATE snapshot) (`port/render/rd_replay.c` (`s_bindEpoch`)).
+**Bind groups.** Bind groups are valid only in the [frame slot](ARCHITECTURE.md#terms) they were
+made in, so their caches are tagged with an epoch every `rhi_wait_frame` of the renderer starts anew
+(`rd__wait_frame`). Uniform blocks are written once per replay per content (FNV-1a), and texture
+groups are cached by (texture, sampler, DATE snapshot) (`port/render/rd_replay.c` (`s_bindEpoch`)).
 
 **DATE snapshots.** TEST.DATE tests the destination alpha's MSB. The replay copies the bound
 target's alpha MSB into the R8 `RD_TARGET_DATE_SNAPSHOT` over the area the draw can touch, and the
@@ -318,14 +319,13 @@ every result (darkVolume.c's count). `doScreenWrap` draws them into an RGBA16F a
 resolves `(Cd + acc) mod 256` against a copy of the target (`port/render/rd_replay.c`
 (`doScreenWrap`); `port/shaders/raw_wrap.hlsl`).
 
-**VU draws.** `doVu` binds the draw's VU block, the mesh stream (the device arena or the ring),
-the bones for a skinned draw, and sets the draw's flags: a chain clip plane, the free camera's
+**VU draws.** `doVu` binds the draw's VU block, the mesh stream (the device arena or the ring), the
+bones for a skinned draw, and sets the draw's flags: a chain clip plane, the free camera's
 `ICO_VU_BEHIND_EYE`, `ICO_VU_EXTENDED` outside [out of the box](ARCHITECTURE.md#terms)
-(`vuExtended`), and
-`ICO_VU_TICKS` for a draw seen through a camera blended between two ticks. A grid draw builds its
-index list here and marks every triangle of a grid of two strips or more joined
-(`port/render/rd_replay.c` (`doVu`, `doVuDraw`, `vuExtended`)). What the flags do is
-[VU1_PROGRAMS.md](VU1_PROGRAMS.md#the-region-rule).
+(`vuExtended`), and `ICO_VU_TICKS` for a draw seen through a camera blended between two
+[ticks](ARCHITECTURE.md#terms). A grid draw builds its index list here and marks every triangle of a
+grid of two strips or more joined (`port/render/rd_replay.c` (`doVu`, `doVuDraw`, `vuExtended`)).
+What the flags do is [VU1_PROGRAMS.md](VU1_PROGRAMS.md#the-region-rule).
 
 **The MSAA epoch.** With an MSAA setting (never under the Original
 [preset](ARCHITECTURE.md#terms)), SCENE has a
@@ -424,14 +424,14 @@ the other post sprites snap (`port/render/rd_post.c` (`s_spriteKey`)).
 `RD_POST_SHADOW_RESOLVE`, `RD_POST_BLUR` and `RD_POST_PRESENT_BLIT` are reserved numbers no caller
 issues; `rd_post` records nothing for them (logged once) (`port/render/rd_post.c`).
 
-**The staticBlur sprites.** `staticBlur.c`'s host path records its register writes as rd state
-and each sprite as `rd_post` of its effect's kind: motion blur (DISPLAY read as RGB24, H/2 stretched
-to H, LERP FIX), depth of field (SCENE to WORK1 to WORK0, six blur passes, four planes), glow
-(flare in modes 0 and 1, bloom in mode 2 with HIGHLIGHT), aura (AURA_WORK, AURA_TAP, FEED128
-feedback) and the sun's eye blur (WORK0 to WORK3) (`port/render/rd.h` (`RdPostKind`)).
-`rd_blur.c` records each as an `RdPostRec` with the corners, UVs, RGBAQ and Z as the GS gets them,
-the TEX0 size and TFX, and `doBlurSprite` draws it through `fx_rect_vs` / `fx_sprite_ps` in the GS
-integer arithmetic (`port/render/rd_blur.c`, header comment):
+**The staticBlur sprites.** `staticBlur.c`'s host path records its register writes as rd state and
+each sprite as `rd_post` of its effect's kind: motion blur (DISPLAY read as RGB24, H/2 stretched to
+H, LERP FIX), depth of field (SCENE to WORK1 to WORK0, six blur passes, four planes), glow (flare in
+modes 0 and 1, bloom in mode 2 with HIGHLIGHT), aura (AURA_WORK, AURA_TAP, FEED128 feedback) and the
+sun's eye blur (WORK0 to WORK3) (`port/render/rd.h` (`RdPostKind`)). `rd_blur.c` records each as an
+`RdPostRec` with the corners, UVs, RGBAQ and Z as the GS gets them, the
+[TEX0](ARCHITECTURE.md#terms) size and TFX, and `doBlurSprite` draws it through `fx_rect_vs` /
+`fx_sprite_ps` in the GS integer arithmetic (`port/render/rd_blur.c`, header comment):
 
 - coverage: pixels with `x0 <= X < x1` in 12.4, inside the scissor;
 - UV stepped in integers, 12.4; nearest, or the GS bilinear on 4-bit fractions, each texel wrapped
@@ -531,14 +531,14 @@ disc's matrices and no plane (`port/render/rd_chain.h`; `port/render/rd_content_
 
 ## Strip joining
 
-The region rule's card test treats a strip as free-standing when it shares no vertex position with
-a strip of another shape (`rd_mesh.c` `markJoinedStrips`). Packet.c makes a packet per material
-and texture of a part, so a wall strip with its own material shares its edges with the rest of the
-wall only through the part's other packets. Once per replayed frame, before the meshes are
-uploaded, `rd__join_parts` groups the VU draws whose keys name one object and part (the key
-without its ordinal byte) and `rd__mesh_join_part` marks across their meshes. Every packet of a
-part the game registers is drawn, so the group is the part's whole, live and in a dump's replay.
-Out of the box the rule never reads the mark (`port/render/rd_join.c`).
+The [region rule](ARCHITECTURE.md#terms)'s card test treats a strip as free-standing when it shares
+no vertex position with a strip of another shape (`rd_mesh.c` `markJoinedStrips`). Packet.c makes a
+packet per material and texture of a part, so a wall strip with its own material shares its edges
+with the rest of the wall only through the part's other packets. Once per replayed frame, before the
+meshes are uploaded, `rd__join_parts` groups the VU draws whose keys name one object and part (the
+key without its ordinal byte) and `rd__mesh_join_part` marks across their meshes. Every packet of a
+part the game registers is drawn, so the group is the part's whole, live and in a dump's replay. Out
+of the box the rule never reads the mark (`port/render/rd_join.c`).
 
 ## Screen planes
 
@@ -582,7 +582,7 @@ reduction, fog, motion blur, aura, glow, depth of field, softening, CRT, MSAA re
 (`port/render/rd_perf.c`; `port/render/rd.h` (`RdPerfRecord`, `rd_perf_pop`)). The window sums
 them into its 10 s statistics line and, with `[dev] perf_log = true`, writes one line per replay to
 `logs/ico-pc-perf.csv` beside the executable (`port/platform/window_host.c` (`perf_csv_open`,
-`perf_drain`)). The replay tool's `--stats` prints the same record.
+`perf_drain`)). The [replay tool](ARCHITECTURE.md#terms)'s `--stats` prints the same record.
 
 ## Dumps and the replay tool
 

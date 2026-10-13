@@ -80,22 +80,25 @@ program under an environment switch ([Environment switches](#environment-switche
   fallback (`libsd_irx`).
 - `mix_gain_test.c`: the music, effects and film gains, every fixed volume word unchanged at 100 %
   (`mix_gain`).
-- `pan_test.c`: mirror mode's pan swap and the per-vsync block size (`audio_pan`).
+- `pan_test.c`: mirror mode's pan swap and the per-[vsync](ARCHITECTURE.md#terms) block size
+  (`audio_pan`).
 - `sndn2_test.c`: the SNDN2DRV host and the Sg sequencer against what the IRX's code does; reads
   the disc when present (`sndn2`).
-- `spu2_bench.c`: the SPU2 render's cost, and with `--check` a CRC-32 of five 10 s scenes
-  (`spu2_render_crc`).
-- `spu2_test.c`: the software SPU2 and its libsd front end: interpolation, ADSR, voices, reverb
-  (`spu2`).
+- `spu2_bench.c`: the [SPU2](ARCHITECTURE.md#terms) render's cost, and with `--check` a CRC-32 of
+  five 10 s scenes (`spu2_render_crc`).
+- `spu2_test.c`: the software SPU2 and its [libsd](ARCHITECTURE.md#terms) front end: interpolation,
+  ADSR, voices, reverb (`spu2`).
 - `volume_test.c`: the output volume's mapping, clamp and integer scaling (`volume`).
 
 ### port/config/test, port/null/test, port/save/test
 
 - `config_test.c`: `config.toml`'s reader and writer, round trips, the ini over `config.toml` over
-  default precedence, the language answer, the wall clock and the EE timers (`config`).
+  default precedence, the language answer, the wall clock and the [EE](ARCHITECTURE.md#terms) timers
+  (`config`).
 - `null_devices_test.c`: the pad as an empty console answers it (`null_devices`).
 - `save_test.c`: the host memory card through the calls `mcard.c` makes, then `mcard.c` and
-  `mcdata.c` themselves on the fiber scheduler, then the card importer (`save`).
+  `mcdata.c` themselves on the [fiber](ARCHITECTURE.md#terms) scheduler, then the card importer
+  (`save`).
 
 ### port/data/test
 
@@ -107,8 +110,9 @@ program under an environment switch ([Environment switches](#environment-switche
   (`json`).
 - `tables_test.c`: the runtime table loader against the PS2 build's tables generated from the base
   ELF (`tables_loader`, with `ICO_BASE_ELF`).
-- `vfs_test.c`: the VFS and its ISO9660 backend, the libcdvd, SIF and IOP RAM layers
-  (`vfs_synthetic`, `vfs_disc`).
+- `vfs_test.c`: the [VFS](ARCHITECTURE.md#terms) and its ISO9660 backend, the
+  [libcdvd](ARCHITECTURE.md#terms), [SIF](ARCHITECTURE.md#terms) and [IOP](ARCHITECTURE.md#terms)
+  RAM layers (`vfs_synthetic`, `vfs_disc`).
 - `sha1.h` is the tests' SHA-1.
 
 ### port/fmv/test
@@ -159,7 +163,7 @@ program under an environment switch ([Environment switches](#environment-switche
 - `input_record_test.c`: the pad recording's format, round trip through the script reader, the
   change-only rule and the sample point (`input_record`).
 - `input_test.c`: bindings from config text, dead zone, quantisation, the stick fix, merging, the
-  libpad buffer, rumble, Escape (`input`).
+  [libpad](ARCHITECTURE.md#terms) buffer, rumble, Escape (`input`).
 - `mouse_camera_test.c`: the mouse camera's speed and range for the hand camera (`mouse_camera`).
 - `pad_script_test.c`: the `--pad-script` reader and what the null pad then shows the game's pad
   code (`pad_script`).
@@ -194,12 +198,12 @@ program under an environment switch ([Environment switches](#environment-switche
 - `ios_chain_test.c`: the game's thread, message and memory layer on the fiber scheduler under
   simulated vsyncs (`ios_chain`).
 - `lifecycle_test.c`: the mobile lifecycle's step tables on fake operations (`lifecycle`).
-- `memory_test.c`: the game's allocator over the arena, partitions at the EE's offsets
-  (`memory`).
+- `memory_test.c`: the game's allocator over the arena, [partitions](ARCHITECTURE.md#terms) at the
+  EE's offsets (`memory`).
 - `movie_pad_test.c`: the pad as a movie's skip check sees it from inside the player's loop
   (`movie_pad`).
-- `pace_loop_test.c`: the vsync lock's loop on a grid of the wall clock under a fake clock and a
-  fake swapchain (`pace_loop`).
+- `pace_loop_test.c`: the [vsync lock](ARCHITECTURE.md#terms)'s loop on a grid of the wall clock
+  under a fake clock and a fake swapchain (`pace_loop`).
 - `pace_policy_test.c`: the slow-present decision, Resolution "auto"'s steps and the gap between
   presents (`pace_policy`).
 - `perf_block_test.c`: a block of replays by phase: sums, maxes, the replays over a threshold, the
@@ -228,12 +232,14 @@ program under an environment switch ([Environment switches](#environment-switche
 - `rd_crt_test.c`: the CRT filter's options and its shader (`rd_crt`, `rd_crt_fixed`).
 - `rd_debug_test.c`: `debug.c` on the host, recorded (`rd_debug`).
 - `rd_filter_test.c`: the model viewer's draw filter on synthetic keys (`rd_filter`).
-- `rd_fog_selftest_test.c` with `rd_fog_selftest.cmake`: the fog's self-test and probe; its log
-  line matched for each path, MSAA counts, odd widths and Full pixel (`rd_fog_selftest*`).
+- `rd_fog_selftest_test.c` with `rd_fog_selftest.cmake`: the fog's self-test and probe; its log line
+  matched for each path, MSAA counts, odd widths and [Full pixel](ARCHITECTURE.md#terms)
+  (`rd_fog_selftest*`).
 - `rd_fog_test.c`: the depth fog of `fog_DrawFog` on the CPU and on the device, every depth path
   (`rd_fog`, `rd_fog_*`).
 - `rd_gsbase_test.c`: `GsBase.c`'s host path driving a synthetic scene (`rd_gsbase`).
-- `rd_interp_test.c`: presentation between ticks on two synthetic frames (`rd_interp`).
+- `rd_interp_test.c`: presentation between [ticks](ARCHITECTURE.md#terms) on two synthetic frames
+  (`rd_interp`).
 - `rd_layout_test.c`: the layout frame from the game's layout calls (`rd_layout`).
 - `rd_mesh_test.c`: the mesh path from `Packet.c` to the VU shaders (`rd_mesh`, sharded).
 - `rd_mip_test.c`: the Enhanced mip chain's size and its builder staying inside it (`rd_mip`).
@@ -288,12 +294,12 @@ program under an environment switch ([Environment switches](#environment-switche
 
 - `shaders_table_test.c`: every embedded entry compiled for SPIR-V and signed DXIL
   (`shaders_table`).
-- `gs_math_test.c`: `gs_math.hlsli` compiled as C against the GS formulas (`gs_math`);
-  `hlsl_shim.h` makes it compile.
+- `gs_math_test.c`: `gs_math.hlsli` compiled as C against the [GS](ARCHITECTURE.md#terms) formulas
+  (`gs_math`); `hlsl_shim.h` makes it compile.
 - `shaders_pixel_test.c`: sprite, blit and blend shaders through the Vulkan RHI
   (`shaders_pixel`, `_nodual`, `_mali`).
-- `vu1_test.c`: the VU1 program shaders against their CPU references and hand traces (`vu1`,
-  `vu1_mali`).
+- `vu1_test.c`: the [VU1](ARCHITECTURE.md#terms) program shaders against their CPU references and
+  hand traces (`vu1`, `vu1_mali`).
 - `port/test/gs_blend_test.c` is a standalone CPU program on the GS blender's drift, not a ctest.
 
 ### port/ui/test
@@ -441,15 +447,15 @@ GPU), `--present WxH`, `--aspect`, `--enhanced`, `--aa` and `--interp T PREV`
 
 ## Pad scripts, recordings and the trace
 
-A pad script drives the pad instead of a person, in the headless build through `pad_script=` in
-`ico-pc.ini`, `--pad-script FILE` or a `pad-script.txt` beside the program
+A pad script drives the pad instead of a person, in the [headless build](ARCHITECTURE.md#terms)
+through `pad_script=` in `ico-pc.ini`, `--pad-script FILE` or a `pad-script.txt` beside the program
 (`port/platform/main_host.c`, header comment). Each line is `<tick> <buttons-hex> [lx ly rx ry]`:
-from that Main tick on, the pad returns the line's values until the next
-line; ticks increase strictly; the buttons are the game's logical word, active high (`0x0040`
-Cross, `0x0010` Triangle, `0x0800` Start, `0x1000` up, `0x4000` down, `0x8000` left, `0x2000`
-right); the sticks are 0 to 255 with 128 centred (`port/input/pad_script.h`, header comment). The
-pad read of tick t sees the line for tick t, and `--ticks N` stops after ticks 0 to N-1, so scripts,
-traces and the tick limit share one numbering.
+from that [Main tick](ARCHITECTURE.md#terms) on, the pad returns the line's values until the next
+line; ticks increase strictly; the buttons are the game's logical word, active high (`0x0040` Cross,
+`0x0010` Triangle, `0x0800` Start, `0x1000` up, `0x4000` down, `0x8000` left, `0x2000` right); the
+sticks are 0 to 255 with 128 centred (`port/input/pad_script.h`, header comment). The pad read of
+tick t sees the line for tick t, and `--ticks N` stops after ticks 0 to N-1, so scripts, traces and
+the tick limit share one numbering.
 
 A pad recording writes what the game read from the pad as a pad script, so the headless build
 replays a player's session: the sample is taken in `scePadRead`, keyed by the tick that read it,

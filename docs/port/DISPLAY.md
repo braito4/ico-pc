@@ -1,11 +1,12 @@
 # Display, pacing and presentation
 
-How a tick's picture reaches the screen: the [native frame](ARCHITECTURE.md#terms) the game builds,
-the display options and their [presets](ARCHITECTURE.md#terms), the SDL window, the real-time pacing
-of the simulated [vsyncs](ARCHITECTURE.md#terms) (the vsync lock and its display clocks), the
-[present](ARCHITECTURE.md#terms), [interpolation](ARCHITECTURE.md#terms), the CRT filter and the log
-lines that describe all of it. What the renderer draws is [RENDER.md](RENDER.md); the backends are
-[RHI.md](RHI.md).
+How a [tick](ARCHITECTURE.md#terms)'s picture reaches the screen: the
+[native frame](ARCHITECTURE.md#terms) the game builds, the display options and their
+[presets](ARCHITECTURE.md#terms), the SDL window, the real-time pacing of the simulated
+[vsyncs](ARCHITECTURE.md#terms) (the [vsync lock](ARCHITECTURE.md#terms) and its display clocks),
+the [present](ARCHITECTURE.md#terms), [interpolation](ARCHITECTURE.md#terms), the CRT filter and the
+log lines that describe all of it. What the renderer draws is [RENDER.md](RENDER.md); the backends
+are [RHI.md](RHI.md).
 
 ## Files
 
@@ -28,10 +29,10 @@ lines that describe all of it. What the renderer draws is [RENDER.md](RENDER.md)
 
 ## The native frame
 
-The game builds each tick for a GS window as wide as the display aspect asks, with the PS2's height
-and vertical field of view. The projection never changes with the aspect: a world point lands on the
-same GS X at every width, about the centre 2048; only the window's extent grows
-(`port/include/ico_frame.h`, header comment).
+The game builds each tick for a [GS](ARCHITECTURE.md#terms) window as wide as the display aspect
+asks, with the PS2's height and vertical field of view. The projection never changes with the
+aspect: a world point lands on the same GS X at every width, about the centre 2048; only the
+window's extent grows (`port/include/ico_frame.h`, header comment).
 
 | field | meaning |
 | --- | --- |
@@ -55,12 +56,13 @@ each flip as `gsFrame`, which every frame extent of the next tick reads.
 asserts they agree (`port/include/ico_frame.h`, header comment; `port/game/video_options.c`
 (`ico_video_frame`)).
 
-**Full pixel** (`[video] full_pixel`) makes the picture the window's own pixels: with the "window"
-resolution and a frame wider than its exact width, the scene's scale is the box's width over the
-exact width (2.8125 at 1080p 16:9), held to a 1/4096 step when that keeps the box's width, and the
-scene-class targets hold the exact width alone, so one texel is one output pixel and nothing is
-cropped. Without it the scene is the box's width times `w / wExact`, rounded to a whole texel
-(`port/render/rd_present.c` (`rd__apply_display`); the targets: [RENDER.md](RENDER.md)).
+**[Full pixel](ARCHITECTURE.md#terms)** (`[video] full_pixel`) makes the picture the window's own
+pixels: with the "window" resolution and a frame wider than its exact width, the scene's scale is
+the box's width over the exact width (2.8125 at 1080p 16:9), held to a 1/4096 step when that keeps
+the box's width, and the scene-class targets hold the exact width alone, so one texel is one output
+pixel and nothing is cropped. Without it the scene is the box's width times `w / wExact`, rounded to
+a whole texel (`port/render/rd_present.c` (`rd__apply_display`); the targets:
+[RENDER.md](RENDER.md)).
 
 **The [scene scale](ARCHITECTURE.md#terms)** comes from the Resolution row in `rd__apply_display`:
 "Nx" is the GS size times N; "WxH" that size; "window" the presentation box (only with the Enhanced
@@ -99,8 +101,8 @@ comment). The keys:
 
 (`port/game/video_options.h`, key table; `port/game/video_options.c` (`read_config`,
 `ico_video_parse_resolution`, `kAspect`)). "Mobile" is the Android and iOS builds
-(`port/game/video_options.c` (`s_android`)). `[video] backend` picks the RHI backend
-(`port/platform/window_host.c` (`ico_window_open`)).
+(`port/game/video_options.c` (`s_android`)). `[video] backend` picks the
+[RHI](ARCHITECTURE.md#terms) backend (`port/platform/window_host.c` (`ico_window_open`)).
 
 **The preset.** A preset is not an option but a shortcut over four rows: resolution, aspect, texture
 filter and height. `ico_video_preset` derives it: Original when the rows are 1x, 4:3, original and
@@ -112,7 +114,7 @@ pixel off, Enhanced turns Full pixel on (`port/game/video_options.c` (`ico_video
 saved Full pixel. Full pixel without its key is on when the rows add up to Enhanced
 (`port/game/video_options.c` (`read_config`)). `ico_video_original` is the test for
 [out of the box](ARCHITECTURE.md#terms): `GsBase.c`'s frame latch hands its opposite to
-`GifPacket.c`, and the window gives rd the same test as `RdSettings.preset`
+`GifPacket.c`, and the window gives [rd](ARCHITECTURE.md#terms) the same test as `RdSettings.preset`
 (`port/game/video_options.h` (`ico_video_original`); `port/platform/window_host.c`
 (`video_settings`)).
 
@@ -129,8 +131,9 @@ backend that is not in the build falls back to Vulkan with a line (`port/platfor
 (`ico_window_open`)).
 
 **Auto aspect** is the window's width over its height clamped to 4:3 .. 60:9; with no window size
-yet (0 x 0, the headless build) it is 4:3 (`port/game/video_options.c` (`ico_video_aspect`)). The
-window passes its size on open and on every resize (`ico_video_set_window`).
+yet (0 x 0, the [headless build](ARCHITECTURE.md#terms)) it is 4:3 (`port/game/video_options.c`
+(`ico_video_aspect`)). The window passes its size on open and on every resize
+(`ico_video_set_window`).
 
 **Frame rate.** `original` presents once per tick, each picture held for the tick's refreshes;
 `uncapped` presents as often as the display allows and interpolates; a number does the same at most
@@ -148,11 +151,11 @@ while the presents take too long: every 2 s window of samples (at least 8), when
 above 70 % of the frame budget the scale steps down once: the window's size to the largest of 3x,
 2x, 1x below the window's own scale (the box's height over 448), Nx to (N-1)x, anything above 3x to
 3x; never below 1x, never back up (`port/platform/pace_policy.h` (`pace_auto_resolution_step`)). The
-cost is a replay's GPU time without the uploads when the backend has timestamps, else in mailbox
-mode its CPU time without the acquire and the present; under FIFO without timestamps there is no
-sample. The budget is the cap's period, two fields at frame rate Original, else 1/60 s; the rule is
-off under the CRT filter (`port/platform/window_host.c` (`auto_res_sample`, `auto_res_update`,
-`video_settings`)).
+cost is a [replay](ARCHITECTURE.md#terms)'s GPU time without the uploads when the backend has
+timestamps, else in mailbox mode its CPU time without the acquire and the present; under FIFO
+without timestamps there is no sample. The budget is the cap's period, two fields at frame rate
+Original, else 1/60 s; the rule is off under the CRT filter (`port/platform/window_host.c`
+(`auto_res_sample`, `auto_res_update`, `video_settings`)).
 
 ## The window host
 
@@ -228,16 +231,16 @@ window: N replays: CPU A ms (max M): interp, wait, acquire, upload, walk, bind, 
 
 It gives the replays' mean CPU time by phase, then `longest:` with each phase's maximum in the block
 (wait, acquire, upload, walk, bind, submit, present), so a log says which phase made the slowest
-replay slow; the GPU times when the backend has timestamps (uploads, lists 0-10, lists 11-12,
-present), else `no GPU timestamps`; and the simulation step's mean and maximum (`perf_log`;
-`port/platform/perf_block.h` (`perf_block_max_text`)). The phases are the replay's own: `wait` the
-frame slot's fence (`rhi_wait_frame`), `upload` the ring and the uploads, `acquire` the backbuffer,
-`walk` recording the lists less `bind`, `submit`, `present`; `fence waits` is the backend's blocked
-time inside wait and readback (`port/render/rd_replay.c` (`replayFrame`); `port/render/rd.h`
-(`RdPerfRecord`)). Further lines give the GPU time per list and per picture effect, the per-replay
-counts (draws, passes, binds, barriers, uploads) with the block's creations, the MSAA samples and
-resolves, and the graphics allocations against the device's limit with the process's memory
-(`perf_log`).
+replay slow; the GPU times when the backend has timestamps (uploads, [lists](ARCHITECTURE.md#terms)
+0-10, lists 11-12, present), else `no GPU timestamps`; and the simulation step's mean and maximum
+(`perf_log`; `port/platform/perf_block.h` (`perf_block_max_text`)). The phases are the replay's own:
+`wait` the [frame slot](ARCHITECTURE.md#terms)'s fence (`rhi_wait_frame`), `upload` the ring and the
+uploads, `acquire` the backbuffer, `walk` recording the lists less `bind`, `submit`, `present`;
+`fence waits` is the backend's blocked time inside wait and readback (`port/render/rd_replay.c`
+(`replayFrame`); `port/render/rd.h` (`RdPerfRecord`)). Further lines give the GPU time per list and
+per picture effect, the per-replay counts (draws, passes, binds, barriers, uploads) with the block's
+creations, the MSAA samples and resolves, and the graphics allocations against the device's limit
+with the process's memory (`perf_log`).
 
 **The slow replay line**
 (`window: slow replay T ms (replay R, frame F, alpha A, about vsync V): ...`) is logged for a replay
@@ -421,13 +424,13 @@ frame's aspect (`wExact / 384`; 4:3 in integer arithmetic at 512) in two blits: 
 target, nearest, doubling each field line (skipped with full height); then the lines target to the
 box, bilinear, black outside, the columns past the exact width left out of the source rectangle. The
 mirror mode flips the second blit. The output is the swapchain's backbuffer, or a headless RGBA8
-texture for the tests and the replay tool (`port/render/rd_present.c`, header comment,
-`rd__present_box`). After the picture come the overlay (the port's popups and hints, in output
-pixels), the deferred text (Enhanced: the frame's text items laid out on the output) and the top
-layer (the touch controls); `rd_present_blank` draws the overlay alone (the start-up screens). With
-supersampling `aa_reduce_ps` box-averages DISPLAY to the box; with an effects program and
-`effects_depth` `blit_depth_ps` writes the scene's depth beside it (`port/render/rd_present.c`). The
-UI box is the 4:3 part of the presentation box (`rd_ui_box_of`).
+texture for the tests and the [replay tool](ARCHITECTURE.md#terms) (`port/render/rd_present.c`,
+header comment, `rd__present_box`). After the picture come the overlay (the port's popups and hints,
+in output pixels), the deferred text (Enhanced: the frame's text items laid out on the output) and
+the top layer (the touch controls); `rd_present_blank` draws the overlay alone (the start-up
+screens). With supersampling `aa_reduce_ps` box-averages DISPLAY to the box; with an effects program
+and `effects_depth` `blit_depth_ps` writes the scene's depth beside it (`port/render/rd_present.c`).
+The UI box is the 4:3 part of the presentation box (`rd_ui_box_of`).
 
 **Present modes.** With vsync the Vulkan backend takes mailbox when the window prefers it and the
 surface offers it, FIFO latest ready when `ICO_VK_FIFO_LATEST_READY=1` asks for it and the device

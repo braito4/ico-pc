@@ -52,12 +52,13 @@ input attachment (`RHI_BIND_INPUT_ATTACHMENT`, Vulkan only) sits behind its own 
 per-frame resources outside the RHI. `rhi_wait_idle` idles the GPU; `rhi_collect_garbage_now` also
 carries out every deferred destroy (`port/rhi/rhi.h`, commands).
 
-**Formats** (`RhiFormat`): RGBA8 UNORM (alpha holds raw GS alpha, 0x80 = 1.0), RGBA8 UINT (the exact
-integer blend's targets), R8 UNORM and UINT, R16 UINT, RGBA16F, D32F, D32F_S8 (the scene's
-depth-stencil; the Vulkan backend may back it with D24S8, `RhiLimits.depthStencilFormatName`), BGRA8
-(the swapchain), BC1/2/3/7 (texture packs, only with `RhiLimits.bcTextures`, copy-destination and
-sampled only), R32 UINT (the scene depth's bits for the fog). Vertex formats are F32x1..4, U8x4
-UNORM and UINT, U16x2 UINT, U32x1 (`port/rhi/rhi.h`, formats).
+**Formats** (`RhiFormat`): RGBA8 UNORM (alpha holds raw [GS](ARCHITECTURE.md#terms) alpha, 0x80 =
+1.0), RGBA8 UINT (the exact integer blend's targets), R8 UNORM and UINT, R16 UINT, RGBA16F, D32F,
+D32F_S8 (the scene's depth-stencil; the Vulkan backend may back it with D24S8,
+`RhiLimits.depthStencilFormatName`), BGRA8 (the swapchain), BC1/2/3/7 (texture packs, only with
+`RhiLimits.bcTextures`, copy-destination and sampled only), R32 UINT (the scene depth's bits for the
+fog). Vertex formats are F32x1..4, U8x4 UNORM and UINT, U16x2 UINT, U32x1 (`port/rhi/rhi.h`,
+formats).
 
 **Resources.** Buffers have a usage mask and a memory kind: DEVICE (static meshes), UPLOAD (the
 per-frame ring, persistently mapped) or READBACK. Textures take a size, mip levels, a format, a
@@ -109,13 +110,14 @@ false on D3D12), the MSAA counts every renderer target supports and sample-rate 
 destination read's three bits: `fragmentInterlock` (Vulkan), `rov` (D3D12) and
 `rasterOrderAttachment` (Vulkan) (`port/rhi/rhi.h` (`RhiLimits`)).
 
-**Device and swapchain.** `rhi_init` takes an `SDL_Window` (NULL: headless, no swapchain), vsync,
-debug layers and the app name. `rhi_device_lost` turns true once the device is gone; the backend
-logs the reason once and the window ends the session. `rhi_resize_swapchain`, `rhi_swapchain_size`
-(the backend rebuilds on its own at the surface's size, and the renderer follows it at each
-acquire), `rhi_acquire_backbuffer` (id 0: rebuild needed), `rhi_present`, `rhi_present_shown` (false
-after a present that did nothing or a D3D12 present the OS reported occluded), and the Android
-lifecycle's `rhi_release_surface` and `rhi_recreate_surface` (`port/rhi/rhi.h`, device).
+**Device and swapchain.** `rhi_init` takes an `SDL_Window` (NULL: headless, no swapchain),
+[vsync](ARCHITECTURE.md#terms), debug layers and the app name. `rhi_device_lost` turns true once the
+device is gone; the backend logs the reason once and the window ends the session.
+`rhi_resize_swapchain`, `rhi_swapchain_size` (the backend rebuilds on its own at the surface's size,
+and the renderer follows it at each acquire), `rhi_acquire_backbuffer` (id 0: rebuild needed),
+`rhi_present`, `rhi_present_shown` (false after a [present](ARCHITECTURE.md#terms) that did nothing
+or a D3D12 present the OS reported occluded), and the Android lifecycle's `rhi_release_surface` and
+`rhi_recreate_surface` (`port/rhi/rhi.h`, device).
 
 **Stats** (`RhiStats`) are cumulative since `rhi_init`; the caller takes differences. The `*Ns`
 fields are CPU time blocked in the backend: `fenceWaitNs` on GPU completion (`rhi_wait_frame`,
@@ -129,10 +131,10 @@ other field reads 0 (`port/rhi/rhi.h` (`RhiStats`); `port/rhi/vk/vk_swapchain.c`
 `port/rhi/d3d12/d3d12_cmd.c` (`dx_wait_fence`)). The memory gauges (live and peak allocations, their
 bytes, the device's limit) are Vulkan's.
 
-**Timestamps.** `RHI_MAX_TIMESTAMPS` (32) a frame slot; `rhi_read_timestamps` hands back the slot
-`rhi_wait_frame` last recycled, so reading never waits. `RHI_TIMESTAMP_KEEP_BARRIERS` keeps the
-held-back image barriers held. Vulkan uses query pools; D3D12 reports none (`port/rhi/rhi.h`, GPU
-timestamps).
+**Timestamps.** `RHI_MAX_TIMESTAMPS` (32) a [frame slot](ARCHITECTURE.md#terms);
+`rhi_read_timestamps` hands back the slot `rhi_wait_frame` last recycled, so reading never waits.
+`RHI_TIMESTAMP_KEEP_BARRIERS` keeps the held-back image barriers held. Vulkan uses query pools;
+D3D12 reports none (`port/rhi/rhi.h`, GPU timestamps).
 
 **Present mode and timing.** `rhi_prefer_mailbox` asks for mailbox with vsync from the next
 swapchain (D3D12: not offered); `rhi_present_mailbox` and `rhi_present_mode_name` say what the
@@ -297,14 +299,14 @@ go to `ResizeBuffers`, since DXGI refuses a change of the waitable flag (`dx_swa
 that latency, anything else 2 (`dx_frame_latency_wanted`). After creation `SetMaximumFrameLatency`
 and `GetFrameLatencyWaitableObject`; a failure logs one line and Present waits for the display
 (`dx_frame_latency_open`). With the object and vsync on, `rhi_acquire_backbuffer` waits on it (1 s
-at most, logged once) before the replay records, timed into `acquireNs`, so `Present` returns at
-once and the picture is drawn after the wait rather than before it; the first acquire waits too.
-`rhi_present` calls `Present(1)` with vsync and `Present(0)` without (`DXGI_PRESENT_ALLOW_TEARING`
-where allowed), times it into `presentNs`, treats `DXGI_STATUS_OCCLUDED` as not shown, reads the
-frame statistics (`PresentCount`, `PresentRefreshCount`, `SyncRefreshCount`, `SyncQPCTime`) after a
-shown present, and resizes the buffers when the window's pixel size changed, as DXGI has no
-out-of-date result. The surface calls do nothing: a DXGI swapchain stays on its window
-(`port/rhi/d3d12/d3d12_swapchain.c`).
+at most, logged once) before the [replay](ARCHITECTURE.md#terms) records, timed into `acquireNs`, so
+`Present` returns at once and the picture is drawn after the wait rather than before it; the first
+acquire waits too. `rhi_present` calls `Present(1)` with vsync and `Present(0)` without
+(`DXGI_PRESENT_ALLOW_TEARING` where allowed), times it into `presentNs`, treats
+`DXGI_STATUS_OCCLUDED` as not shown, reads the frame statistics (`PresentCount`,
+`PresentRefreshCount`, `SyncRefreshCount`, `SyncQPCTime`) after a shown present, and resizes the
+buffers when the window's pixel size changed, as DXGI has no out-of-date result. The surface calls
+do nothing: a DXGI swapchain stays on its window (`port/rhi/d3d12/d3d12_swapchain.c`).
 
 **Not implemented on D3D12**: timestamps, mailbox with vsync, the display's timing of presents, the
 pipeline cache file, and the stats beyond those above (`port/rhi/d3d12/d3d12_device.c`).

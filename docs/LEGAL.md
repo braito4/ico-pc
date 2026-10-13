@@ -95,10 +95,9 @@ are allowed, each for the reason given. Nothing else is exempt.
 
 ### The loader's address registry, `port/data/gen/ee_symbols.c`
 
-The PC program compiles in a table of 914 entries (913 functions, one
-object), each `{EE address, host symbol, name string}`, sorted by address. The "no bulk symbol tables" rule
-above (and "Identifiers as references") does not apply to it, for these
-reasons:
+The PC program compiles in a table of 914 entries (913 functions, one object), each
+`{EE address, host symbol, name string}`, sorted by address. The "no bulk symbol tables" rule above
+(and "Identifiers as references") does not apply to it, for these reasons:
 
 - **What it holds.** Only the addresses that the data tables' pointer words
   hold: the generator (`tools/gen_data_desc.py`) walks the record types of

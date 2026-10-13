@@ -37,11 +37,12 @@ register blocks are plain writable memory because `dma_init` sets `CHCR.TIE` in 
 (`port/null/gfx_null.c` (`sceDmaGetChan`)).
 
 The window build defines `ICO_RD`. Under it the same functions also record into rd: register writes
-go through the decoder in `GifPacket.c`, [VU1](ARCHITECTURE.md#terms) chains through the VIF reader
-in `MicroCode.c`, model packets become rd meshes, and the post passes become `rd_post` calls
-(`ico2/seki/include/GifHost.h`). The frame latch, the cull and the CPU strips' rule below are in
-every build, because they are game logic: a headless run culls and kicks as a window run does
-(`ico2/seki/src/GsBase.c` (`gsbHostCullMargin`); `ico2/seki/src/GifPacket.c` (`gifHostFrameW`)).
+go through the decoder in `GifPacket.c`, [VU1](ARCHITECTURE.md#terms) chains through the
+[VIF](ARCHITECTURE.md#terms) reader in `MicroCode.c`, model packets become rd meshes, and the post
+passes become `rd_post` calls (`ico2/seki/include/GifHost.h`). The frame latch, the cull and the CPU
+strips' rule below are in every build, because they are game logic: a headless run culls and kicks
+as a window run does (`ico2/seki/src/GsBase.c` (`gsbHostCullMargin`); `ico2/seki/src/GifPacket.c`
+(`gifHostFrameW`)).
 
 ## The native frame and the frame latch
 
@@ -63,10 +64,10 @@ outside [out of the box](ARCHITECTURE.md#terms): when the latch said so or the f
 
 ## The GS defaults per list
 
-`gsb_SetGsDefault` opens the frame's first list and writes TEST, ZBUF, FBA and TEXA at the head of
-lists 0, 1, 2, 4, 6 to 12; lists 3 and 5 inherit whatever the list before left
-(`ico2/seki/src/GsBase.c` (`gsb_SetGsDefault`, `gsb_setNormalReg`, `gsb_setSemitransReg`,
-`gsb_setSpecularReg`, `gsb_setParticleReg`)):
+`gsb_SetGsDefault` opens the frame's first [list](ARCHITECTURE.md#terms) and writes TEST, ZBUF, FBA
+and [TEXA](ARCHITECTURE.md#terms) at the head of lists 0, 1, 2, 4, 6 to 12; lists 3 and 5 inherit
+whatever the list before left (`ico2/seki/src/GsBase.c` (`gsb_SetGsDefault`, `gsb_setNormalReg`,
+`gsb_setSemitransReg`, `gsb_setSpecularReg`, `gsb_setParticleReg`)):
 
 | lists | TEST | Z write | FBA | TEXA |
 | --- | --- | --- | --- | --- |
@@ -80,9 +81,10 @@ so the leak into lists 3 and 5 is the GS's (`port/render/rd_core.c` (`recordDefa
 [list](ARCHITECTURE.md#terms) table and the leakage rules are in rd.h's header comment
 (`port/render/rd.h`).
 
-`gsb_MakeCommonMatrix` builds the VU1 parameter block (16 quadwords: constants, the GIF tag,
-world to GS screen, viewport, inverse view) and the frame camera, and the window build hands both
-to rd: `rd_set_vu_common` and `rd_set_camera` (`ico2/seki/src/GsBase.c` (`gsbHostCommon`)).
+`gsb_MakeCommonMatrix` builds the VU1 parameter block (16 quadwords: constants, the
+[GIF](ARCHITECTURE.md#terms) tag, world to GS screen, viewport, inverse view) and the frame camera,
+and the window build hands both to rd: `rd_set_vu_common` and `rd_set_camera`
+(`ico2/seki/src/GsBase.c` (`gsbHostCommon`)).
 
 ## The flip on rd
 
@@ -97,13 +99,14 @@ pixel on any flip, as a progressive display shows it (`ico2/seki/src/GsBase.c` (
 
 The reduction (SCENE into the half-height DISPLAY, tinted, border-cropped) is recorded as
 `rd_post(RD_POST_REDUCTION)` at the end of list 12 of the frame `dl_Swap` is about to close
-(`ico2/seki/src/GsBase.c` (`gsbHostReduction`)). The other full-screen passes keep their game
-code and replace only the packet with an `rd_post` of the same writes: the fade in list 11
+(`ico2/seki/src/GsBase.c` (`gsbHostReduction`)). The other full-screen passes keep their game code
+and replace only the packet with an `rd_post` of the same writes: the fade in list 11
 (`RD_POST_FADE`), the letterbox (`RD_POST_LETTERBOX`), the brightness step (`RD_POST_BRIGHTNESS`),
 the screen softening in list 10 (`RD_POST_AA_DOWNSAMPLE` then `RD_POST_AA_COMPOSITE`) and the film
 grain (`RD_POST_FILM_NOISE`, after one PRIM write that lets the decoder bind `sandstorm_spr`'s
-TEX0) (`ico2/seki/src/GsBase.c` (`gsb_fade`, `gsb_scissorOnDemo`, `gsb_controlBrightness`,
-`gsb_antiAlias`, `gsb_filmNoise`)). How rd records them is `port/render/rd_post.c`.
+[TEX0](ARCHITECTURE.md#terms)) (`ico2/seki/src/GsBase.c` (`gsb_fade`, `gsb_scissorOnDemo`,
+`gsb_controlBrightness`, `gsb_antiAlias`, `gsb_filmNoise`)). How rd records them is
+`port/render/rd_post.c`.
 
 ## The cull against the blended cameras
 
@@ -151,9 +154,9 @@ through `gif_HostWriteRegs` and are decoded in order after what the open packet 
 (`ico2/seki/src/GifPacket.c` (`gsWrite`, `gsApplyPrim`, `gsVertex`, `gsSyncEnv`)).
 
 PRIM, TEX0, FRAME, XYOFFSET and SCISSOR are kept per list: lists are recorded in any order but
-replayed 0..12, and a list that skips a write (Texture.c skips TEX0 when its last texture is the
-same) means the value its own list wrote. A list that never wrote TEX0 inherits the last one of
-any list (`ico2/seki/src/GifPacket.c` (`GsShim`, `gsTex0`)).
+[replayed](ARCHITECTURE.md#terms) 0..12, and a list that skips a write (Texture.c skips TEX0 when
+its last texture is the same) means the value its own list wrote. A list that never wrote TEX0
+inherits the last one of any list (`ico2/seki/src/GifPacket.c` (`GsShim`, `gsTex0`)).
 
 Consecutive primitives of one kind, space, UV mode and projection mark are batched into one
 `rd_screen_prims` call, and any state change ends the batch first, so rd sees the writes in GS
@@ -264,11 +267,12 @@ card screens, which start the PS2's DMA at list 11), and nothing is DMA'd
 select the rd list with `rd_select_list` (`ico2/seki/src/DisplayList.c` (`dl_SetDLPriority`)).
 
 The two packet banks (`PacketBufferStruct`) get `DPK_HOST_PAD` (512 KB) past the EE's 512 KB each,
-from the common partition's host extra. A wide picture and the cull against the blended cameras
-register more parts than the PS2 did; at each frame's end the bank's fill is logged once it passes
-the EE's size and again per 16 KB of new peak. `dpk_HostRoom` refuses further objects once the fill
-is within `DPK_HOST_RESERVE` of the pad's end, which `RegistPacket.c` asks before writing an object
-(`ico2/seki/src/DmaPacket.c` (`dpkHostHighWater`, `dpk_HostFill`, `dpk_HostRoom`)).
+from the common [partition](ARCHITECTURE.md#terms)'s [host extra](ARCHITECTURE.md#terms). A wide
+picture and the cull against the blended cameras register more parts than the PS2 did; at each
+frame's end the bank's fill is logged once it passes the EE's size and again per 16 KB of new peak.
+`dpk_HostRoom` refuses further objects once the fill is within `DPK_HOST_RESERVE` of the pad's end,
+which `RegistPacket.c` asks before writing an object (`ico2/seki/src/DmaPacket.c`
+(`dpkHostHighWater`, `dpk_HostFill`, `dpk_HostRoom`)).
 
 ## Textures
 

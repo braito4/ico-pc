@@ -34,10 +34,10 @@ library holding `shaders_gen.c` with `shaders_gen.h` on its public include path
 (`cmake/IcoShaders.cmake`, header comment).
 
 **Flags.** SPIR-V: `-spirv -fspv-target-env=vulkan1.2` with `-fvk-b-shift 0`, `-fvk-t-shift 16`,
-`-fvk-s-shift 32`, `-fvk-u-shift 48` (all spaces), so a register number is the RHI slot and the
-Vulkan binding is the slot plus 0, 16, 32 or 48. Both targets: `-O3 -WX -I port/shaders` (a shader
-warning fails the build; no `-Zi`, no debug info in the blobs) (`cmake/IcoShaders.cmake`
-(`ICO_DXC_SPIRV_FLAGS`, `ICO_DXC_COMMON_FLAGS`)).
+`-fvk-s-shift 32`, `-fvk-u-shift 48` (all spaces), so a register number is the
+[RHI](ARCHITECTURE.md#terms) slot and the Vulkan binding is the slot plus 0, 16, 32 or 48. Both
+targets: `-O3 -WX -I port/shaders` (a shader warning fails the build; no `-Zi`, no debug info in the
+blobs) (`cmake/IcoShaders.cmake` (`ICO_DXC_SPIRV_FLAGS`, `ICO_DXC_COMMON_FLAGS`)).
 
 **Outputs.** Each entry writes `<build>/shaders/<name>.spv` and, with `ICO_SHADERS_DXIL` on (the
 default), `<name>.dxil`. With Ninja or Makefiles a second DXC command writes a `-MF` dependency
@@ -77,7 +77,7 @@ each file's header comment):
 | `fog_lut.hlsl` | `fog_lut_ps` and its `FOG_BUFFER` (`fog_lut_buffer_ps`) and `FOG_MS` (`fog_lut_ms_ps`) builds | the depth fog: bits 16..23 of the 32-bit Z through the fog CLUT, from the depth, an R32 UINT copy of it, or per sample |
 | `raw_wrap.hlsl` | `wrap_acc_ps`, `wrap_resolve_ps` | COLCLAMP 0 prims (`darkVolume.c`): an RGBA16F accumulation, then the sum modulo 256 |
 | `font.hlsl` | `font_ps`, `font_sheet_ps` | R8 coverage textures (the port's font atlas) read as sprite_ps reads a texel; sheet text in the menu sheets' style |
-| `yuv.hlsl` | `yuv_vs`, `yuv_ps`, `yuv_field_ps` | the FMV picture, 4:2:0 planes to RGB with the IPU's conversion; a field deinterlaced at the picture's size (`port/render/rd_video.c`) |
+| `yuv.hlsl` | `yuv_vs`, `yuv_ps`, `yuv_field_ps` | the FMV picture, 4:2:0 planes to RGB with the [IPU](ARCHITECTURE.md#terms)'s conversion; a field deinterlaced at the picture's size (`port/render/rd_video.c`) |
 | `crt.hlsl` | `crt_vs`, `crt_bloom_ps`, `crt_blur_ps`, `crt_ps` | the CRT filter ([DISPLAY.md](DISPLAY.md)) |
 | `vu_prelit.hlsl` | `vu_prelit_vs`, `vu_ps`, `vu_texa_ps`, `vu_probe_ps` | `normal_c` (codes 32, 34, 36); the pixel shader of every mesh program; the tests' probe output |
 | `vu_lit.hlsl` | `vu_lit_vs`, `vu_lit_spec_vs`, `vu_reflect_vs` | `normal_l` (codes 32/36, 34, 38) |
@@ -94,8 +94,9 @@ header comment).
 
 - `_nodual` (`ICO_NO_DUAL=1`): the entries that call `gs_dual_out` without the second output, for a
   device without dual-source blending: `sprite_ps`, `sprite_texa_ps`, `sprite_aa1_ps`,
-  `sprite_stq_ps`, the three fog builds, `font_ps`, `font_sheet_ps`, `vu_ps`, `vu_texa_ps`. rd draws
-  a lerp as two passes with them (`port/render/rd_pipeline.c` (`rd__expand_no_dual`)).
+  `sprite_stq_ps`, the three fog builds, `font_ps`, `font_sheet_ps`, `vu_ps`, `vu_texa_ps`.
+  [rd](ARCHITECTURE.md#terms) draws a lerp as two passes with them (`port/render/rd_pipeline.c`
+  (`rd__expand_no_dual`)).
 - `_dstrov` (`ICO_DST_READ=1`) and `_dstatt` (`ICO_DST_READ=2`): the exact blend computed from the
   destination (`port/render/rd_dst_read.c`), for the sprite entries, `fog_lut_ps`,
   `fog_lut_buffer_ps`, the font entries and `vu_ps`, `vu_texa_ps`. `_dstrov` reads and writes the
@@ -125,19 +126,21 @@ GEQUAL). Vulkan-only attributes (`[[vk::location]]`, `[[vk::index]]`) are behind
 ## common.hlsli
 
 **FrameCB** (b0): view, projection and their product (column-major, used as `mul(M, v)`), the eye (w
-1 on a camera cut tick), near, far, zoom and aspect, the bound target's size in GS pixels, its GS
-origin, `g_frameRegs[0]` (`g_frame`: the region scale, the drawing camera's picture half-width and
-half-height about 2048, the exact viewport's half texel) and `g_frameRegs[1]` (`g_vp`: the exact
-viewport, a power of two centred on the target, so positions on the GS's 1/16 grid map to the same
-texel at every frame width), `g_z` (the Z scale, texels per GS pixel), `g_misc` (frame counter,
-preset) and `g_vpo` (the exact viewport's centre offset; the texels a Full pixel target leaves out
-at its left). Nothing transforms a position: a GS X is drawn where the game put it, at every aspect
+1 on a camera cut [tick](ARCHITECTURE.md#terms)), near, far, zoom and aspect, the bound target's
+size in [GS](ARCHITECTURE.md#terms) pixels, its GS origin, `g_frameRegs[0]` (`g_frame`: the region
+scale, the drawing camera's picture half-width and half-height about 2048, the exact viewport's half
+texel) and `g_frameRegs[1]` (`g_vp`: the exact viewport, a power of two centred on the target, so
+positions on the GS's 1/16 grid map to the same texel at every frame width), `g_z` (the Z scale,
+texels per GS pixel), `g_misc` (frame counter, preset) and `g_vpo` (the exact viewport's centre
+offset; the texels a [Full pixel](ARCHITECTURE.md#terms) target leaves out at its left). Nothing
+transforms a position: a GS X is drawn where the game put it, at every aspect
 (`port/shaders/common.hlsli`, FrameCB).
 
-**DrawCB** (b1, 112 bytes): `g_col` (a constant colour), `g_mode` (the `DF_*` flags, TEXA mode and
-texel format, alpha test and AFAIL split, AREF), `g_blend` (the ALPHA register, FIX, COLCLAMP, and
-TEX1's mipmap fields with `DF_GS_LOD`), `g_uvRect`, `g_tex` (t1's size), `g_param` (per entry) and
-`g_scale` (t1 texels per GS texel; a Full pixel crop) (`port/shaders/common.hlsli`, DrawCB).
+**DrawCB** (b1, 112 bytes): `g_col` (a constant colour), `g_mode` (the `DF_*` flags,
+[TEXA](ARCHITECTURE.md#terms) mode and texel format, alpha test and AFAIL split, AREF), `g_blend`
+(the ALPHA register, FIX, COLCLAMP, and TEX1's mipmap fields with `DF_GS_LOD`), `g_uvRect`, `g_tex`
+(t1's size), `g_param` (per entry) and `g_scale` (t1 texels per GS texel; a Full pixel crop)
+(`port/shaders/common.hlsli`, DrawCB).
 
 **`DF_*` flags** (DrawCB `g_mode.x`): textured, DECAL, TCC, FBA, PABE, the FIX factor, the
 premultiplied additive forms, DATE and DATM, the AA1 coverage alpha, the TEXA sampler state,

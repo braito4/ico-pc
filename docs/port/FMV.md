@@ -39,14 +39,15 @@ comment):
 
 | part | the PS2 player | here |
 | --- | --- | --- |
-| file | `strFileOpen`: `DFDATAS/<base name>` looked up in DATA.DF's directory, streamed with libcdvd's `sceCdSt*` through a 576-sector IOP ring | the same directory read through the VFS (`find_in_datadf`), the same `sceCdSt*` calls and IOP allocation, 64 KB reads (`read_chunk`) |
+| file | `strFileOpen`: `DFDATAS/<base name>` looked up in DATA.DF's directory, streamed with [libcdvd](ARCHITECTURE.md#terms)'s `sceCdSt*` through a 576-sector IOP ring | the same directory read through the VFS (`find_in_datadf`), the same `sceCdSt*` calls and IOP allocation, 64 KB reads (`read_chunk`) |
 | video | libmpeg's `sceMpegDemuxPssRing` and the IPU's `sceMpegGetPicture` in a decode thread | `pss.c` and libmpeg2 on the calling [fiber](ARCHITECTURE.md#terms), a picture per free display slot (`fill_slots`) |
 | timing | `mv_disp.c`'s vblank handler: two vsyncs a picture, five pictures decoded ahead | `movie_pace.c`, driven once per simulated vsync |
-| audio | `mv_audiodec.c`: the PCM through an EE ring into a 24576-byte IOP buffer read by SNDN2DRV's PCM channels 0 and 1 | the same `SgStPcm*` calls in the same order with the same numbers; the IOP copy is a `memcpy` into IOP RAM |
+| audio | `mv_audiodec.c`: the PCM through an [EE](ARCHITECTURE.md#terms) ring into a 24576-byte IOP buffer read by SNDN2DRV's PCM channels 0 and 1 | the same `SgStPcm*` calls in the same order with the same numbers; the IOP copy is a `memcpy` into IOP RAM |
 | abort | `movie_abort_check` polled once a vsync after 11 pictures | the same |
 
-The decode thread, the interrupt and DMA handlers, the GS register setup and the read-starved
-pause (`sceCdStStat` never runs low on the host) have no host counterpart.
+The decode thread, the interrupt and [DMA](ARCHITECTURE.md#terms) handlers, the
+[GS](ARCHITECTURE.md#terms) register setup and the read-starved pause (`sceCdStStat` never runs low
+on the host) have no host counterpart.
 
 ### movie_init
 
@@ -90,8 +91,8 @@ The summary line names what happened:
     (<n> failed)
 
 (one line in the log; `aborted` in place of `played` after a skip). The presents count is the
-window build's: fewer presents than shown pictures means the screen missed some
-(`rd_video_presents`).
+[window build](ARCHITECTURE.md#terms)'s: fewer presents than shown pictures means the screen missed
+some (`rd_video_presents`).
 
 ### The PSS demuxer
 
@@ -214,12 +215,12 @@ is compiled there with `ICO_RD` (`port/fmv/CMakeLists.txt`), and without either 
 - **Overlay**: the presentation overlay (the touch controls, the popups) is drawn over the film in
   its box (`port/render/rd_video.c`, `rd__overlay_collect_film`; `rd_video_test`, overlay).
 
-Each call waits for its frame slot, records, submits and presents on its own, as `rd_end_frame`
-does for a game frame, on the simulation thread between game frames; the game draws no frame
-while a movie plays (`port/render/rd_video.c`, header comment). `rd_video_presents` counts the
-pictures put on screen and the ones that could not be (no device, no swapchain image); the
-window's 10 s statistics line and the `movie_proc` summary take differences, the only record in a
-log that a movie reached the screen (`port/fmv/rd_video.h`, `rd_video_presents`).
+Each call waits for its [frame slot](ARCHITECTURE.md#terms), records, submits and presents on its
+own, as `rd_end_frame` does for a game frame, on the simulation thread between game frames; the game
+draws no frame while a movie plays (`port/render/rd_video.c`, header comment). `rd_video_presents`
+counts the pictures put on screen and the ones that could not be (no device, no swapchain image);
+the window's 10 s statistics line and the `movie_proc` summary take differences, the only record in
+a log that a movie reached the screen (`port/fmv/rd_video.h`, `rd_video_presents`).
 
 ## Android
 
@@ -250,12 +251,12 @@ second the player also logs what the pad delivered to the poll: `fmv: pad now 0x
 `port/platform/test/movie_pad_test.c` runs that path with the game's own code: `keyInput.c`
 (`InitKeyInput`, `ExecKeyInput`), `pad.c` (the pad manager thread and `iosPadRead`),
 `shockdriver.c`, the thread and message layer, and `port/input`'s libpad and bindings, on the
-fiber scheduler, with a priority-27 thread that spins to the next vsync and polls as the movie
-loop does. The host side feeds the input layer as `input_sdl.c` does each vsync: a gamepad's
-Start, then the key bound to Start, then a one-vsync tap of each. It asserts that the Start edge
-reaches the poll within a vsync of the press for every source, exactly once per press, that the
-held button shows in `pad[0].now`, and that `ico_input_start_source` names the source for the
-skip's log line (`port/platform/test/movie_pad_test.c`, header comment).
+[fiber](ARCHITECTURE.md#terms) scheduler, with a priority-27 thread that spins to the next vsync and
+polls as the movie loop does. The host side feeds the input layer as `input_sdl.c` does each vsync:
+a gamepad's Start, then the key bound to Start, then a one-vsync tap of each. It asserts that the
+Start edge reaches the poll within a vsync of the press for every source, exactly once per press,
+that the held button shows in `pad[0].now`, and that `ico_input_start_source` names the source for
+the skip's log line (`port/platform/test/movie_pad_test.c`, header comment).
 
 ## Tests
 
@@ -263,7 +264,7 @@ skip's log line (`port/platform/test/movie_pad_test.c`, header comment).
 | --- | --- |
 | `fmv` (`fmv_test.c`) | a synthetic PSS through `ico_pss_next` in every split, access-unit cutting, a hand-built MPEG-2 intra stream decoded to known values, the pacing state machine; with the PAL image, `pal_advertise.pss` demuxed whole and its first 60 pictures decoded |
 | `fmv_fields` (`fmv_fields_test.c`) | a report on the disc's movies field by field (scan headers, line differences, comb measures), and `field_match.c` on a synthetic telecined film; skipped (77) without the image |
-| `rd_video`, `rd_video_mali` (`rd_video_test.c`) | `rd_video.c` on rd's headless device: flat and ramp pictures against a CPU model of the IPU CSC, bit for bit at 1:1; mirror; the CRT pass; a 576-line picture fitted into a 480-line area; fields woven and deinterlaced; the overlay; the second run under Mali-G68 limits (`ICO_VK_FAKE_LIMITS=mali`) |
+| `rd_video`, `rd_video_mali` (`rd_video_test.c`) | `rd_video.c` on [rd](ARCHITECTURE.md#terms)'s headless device: flat and ramp pictures against a CPU model of the IPU CSC, bit for bit at 1:1; mirror; the CRT pass; a 576-line picture fitted into a 480-line area; fields woven and deinterlaced; the overlay; the second run under Mali-G68 limits (`ICO_VK_FAKE_LIMITS=mali`) |
 | `rd_video_window` (`rd_video_window_test.c`) | on an SDL offscreen window, the output follows a swapchain the backend rebuilt at another size on its own, and the surface poll |
 | `movie_pad` (`port/platform/test/movie_pad_test.c`) | the pad as a movie's skip sees it (above) |
 

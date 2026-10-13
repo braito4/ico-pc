@@ -40,7 +40,7 @@ run explain itself. [ARCHITECTURE.md](ARCHITECTURE.md) places this layer among t
 | `port/platform/test/` | the platform unit tests |
 | `port/compat/eekernel.h`, `port/compat/eeregs.h` | the game-side declarations of the kernel calls and register names |
 | `port/null/gfx_null.c`, `libgcc_null.c` | the graphics floor (libgraph, libdma) and `fptodp` |
-| `ico2/fumi/ios/ios.c` | the game's partitions, with the host extras |
+| `ico2/fumi/ios/ios.c` | the game's partitions, with the [host extras](ARCHITECTURE.md#terms) |
 
 ## Entry points
 
@@ -72,12 +72,12 @@ costs rendering and speed on MoltenVK there (`port/platform/ios/main_ios.c`, `ma
 
 ## Fibers
 
-A fiber is an asymmetric coroutine over minicoro: `ico_fiber_resume` runs it on its own stack
-until it calls `ico_fiber_yield` (`port/platform/fiber.h`). The scheduler is the only resumer, so
-every switch between two game threads goes fiber, scheduler, fiber. Stacks are 256 KB
-(`ICO_FIBER_STACK_SIZE`). With minicoro's assembly backend (x86-64 Linux and Windows, arm64) the
-stack has a no-access guard page below it, so an overflow faults instead of corrupting the
-fiber's control block (`port/platform/fiber.c`, the stack allocation section;
+Each [fiber](ARCHITECTURE.md#terms) is an asymmetric coroutine over minicoro: `ico_fiber_resume`
+runs it on its own stack until it calls `ico_fiber_yield` (`port/platform/fiber.h`). The scheduler
+is the only resumer, so every switch between two game threads goes fiber, scheduler, fiber. Stacks
+are 256 KB (`ICO_FIBER_STACK_SIZE`). With minicoro's assembly backend (x86-64 Linux and Windows,
+arm64) the stack has a no-access guard page below it, so an overflow faults instead of corrupting
+the fiber's control block (`port/platform/fiber.c`, the stack allocation section;
 `ico_fiber_has_guard_page`).
 
 The game's own thread stacks (`mainThreadStack`, the stacks `iosThreadCreate` is handed) are
@@ -130,10 +130,10 @@ the signatures of `sce/libkernl/eekernel.h` and the 64-bit [GS](ARCHITECTURE.md#
 `unsigned long long`. Threads and semaphores map onto the scheduler (`CreateThread` to
 `ico_sched_create_thread`, `WaitSema` to `ico_sched_wait_sema`, ...); each call notes itself for the
 diagnostics (`ico_sched_note`). Interrupts are a table: `AddIntcHandler` and `AddDmacHandler` build
-handler lists per [INTC](ARCHITECTURE.md#terms) cause and DMA channel, `EnableIntc` and
-`DisableIntc` set masks, and `ico_kernel_raise_intc` runs an enabled cause's handlers in order as
-[interrupt code](ARCHITECTURE.md#terms); for vblank start it first completes a pending
-`SetVSyncFlag` (`port/platform/kernel_host.c`, `ico_kernel_raise_intc`, `SetVSyncFlag`).
+handler lists per [INTC](ARCHITECTURE.md#terms) cause and [DMA](ARCHITECTURE.md#terms) channel,
+`EnableIntc` and `DisableIntc` set masks, and `ico_kernel_raise_intc` runs an enabled cause's
+handlers in order as [interrupt code](ARCHITECTURE.md#terms); for vblank start it first completes a
+pending `SetVSyncFlag` (`port/platform/kernel_host.c`, `ico_kernel_raise_intc`, `SetVSyncFlag`).
 `DIntr`/`EIntr` report interrupts enabled, `FlushCache`, `SyncDCache` and `SetGsCrt` do nothing,
 `SetAlarm` fails (its one user, the PS2 movie player, is not compiled), `Exit` logs and exits, and
 `scePrintf` writes to stdout only when the `ICO_TTY` environment variable is set
@@ -185,8 +185,8 @@ that falls more than 100 ms behind resynchronises instead of running fast to cat
 (`port/platform/window_host.h`, `ico_window_pace`; `port/platform/window_host.c`, `RESYNC_NS`). The
 pure decisions (when a present counts as slow, the gap between presents) are in
 `port/platform/pace_policy.c`. The [headless build](ARCHITECTURE.md#terms) has no pacing and runs
-vsyncs as fast as it can. [DISPLAY.md](DISPLAY.md) describes the lock to the display and the
-presents between ticks.
+vsyncs as fast as it can. [DISPLAY.md](DISPLAY.md) describes the [vsync lock](ARCHITECTURE.md#terms)
+and the presents between ticks.
 
 ## Arena, partitions and host extras
 
@@ -215,16 +215,16 @@ by 64 KB (`port/platform/arena.h`, `ico_heap_stats_alloc`; `ico2/fumi/ios/memory
 
 ## Register pages
 
-`port/compat/eeregs.h` gives the EE's register names (`T0_COUNT`, `D2_CHCR`, `GIF_STAT`,
-`GS_CSR`, ...) as pointers into two blocks, `ico_hw_eeio` (the 64 KB EE I/O page at 0x10000000)
-and `ico_hw_gs` (the GS privileged page at 0x12000000), each name at its EE address minus the
-block base (`port/platform/hwregs.c`). A store lands in the block and a load reads it back;
-nothing reacts. The code that waited on hardware is replaced by the library that owns the
-hardware: the vsync waits are busy waits on the scheduler (above), `sceGsSyncPath` reports every
-path drained, `sceDmaSend` sends nothing (`port/null/gfx_null.c`, `sceGsSyncPath`,
-`sceDmaSend`), and the movie player's IPU and DMA register code is not compiled
-(`cmake/IcoSources.cmake`, `ICO_EE_ONLY_SOURCES`). Two registers do change on the host: the host
-loop's `GS_CSR.FIELD` (`ico2/common/src/main.c`, `ico_vsync`) and the timer counters (below).
+`port/compat/eeregs.h` gives the EE's register names (`T0_COUNT`, `D2_CHCR`, `GIF_STAT`, `GS_CSR`,
+...) as pointers into two blocks, `ico_hw_eeio` (the 64 KB EE I/O page at 0x10000000) and
+`ico_hw_gs` (the GS privileged page at 0x12000000), each name at its EE address minus the block base
+(`port/platform/hwregs.c`). A store lands in the block and a load reads it back; nothing reacts. The
+code that waited on hardware is replaced by the library that owns the hardware: the vsync waits are
+busy waits on the scheduler (above), `sceGsSyncPath` reports every path drained, `sceDmaSend` sends
+nothing (`port/null/gfx_null.c`, `sceGsSyncPath`, `sceDmaSend`), and the movie player's
+[IPU](ARCHITECTURE.md#terms) and DMA register code is not compiled (`cmake/IcoSources.cmake`,
+`ICO_EE_ONLY_SOURCES`). Two registers do change on the host: the host loop's `GS_CSR.FIELD`
+(`ico2/common/src/main.c`, `ico_vsync`) and the timer counters (below).
 
 ## Floating-point environment
 
@@ -326,18 +326,18 @@ diagnostic line is written with one unbuffered OS call to its own handle on the 
 leaves everything before it (`port/platform/diag_host.c`, header comment). On Android the
 handler then puts the system's handlers back so the system still writes its tombstone.
 
-A heartbeat and a watchdog share one OS thread of their own, so a game thread that spins without
-a kernel call cannot stop them. Every 2 s the heartbeat logs one line of progress
-(`port/platform/trace_host.c`, `ico_host_status`: vsyncs, ticks, stage, the disc and SIF
-counters). The watchdog stops the run, with every thread dumped and exit code 4, when no Main
-tick comes `watchdog=` seconds after boot (default 30) or no new tick or other progress for twice
-that; a movie notes each picture as progress, time inside a present is excused for an effects
-program, and the limit is doubled when one is loaded (`port/platform/diag_host.h`,
-`ico_diag_start`, `ico_diag_note_progress`; `port/platform/main_host.c`, `start_watchdog`).
-Milestone lines carry the wall time, vsyncs, Main ticks and the current thread
-(`ico_diag_milestone`), and game threads are named by the function `iosThreadCreate` runs
-(`ico_host_thread_func`). `ico_diag_float_fault` logs a NaN that reaches game code the PS2
-never fed one.
+A heartbeat and a watchdog share one OS thread of their own, so a game thread that spins without a
+kernel call cannot stop them. Every 2 s the heartbeat logs one line of progress
+(`port/platform/trace_host.c`, `ico_host_status`: vsyncs, ticks, stage, the disc and
+[SIF](ARCHITECTURE.md#terms) counters). The watchdog stops the run, with every thread dumped and
+exit code 4, when no Main tick comes `watchdog=` seconds after boot (default 30) or no new tick or
+other progress for twice that; a movie notes each picture as progress, time inside a present is
+excused for an effects program, and the limit is doubled when one is loaded
+(`port/platform/diag_host.h`, `ico_diag_start`, `ico_diag_note_progress`;
+`port/platform/main_host.c`, `start_watchdog`). Milestone lines carry the wall time, vsyncs, Main
+ticks and the current thread (`ico_diag_milestone`), and game threads are named by the function
+`iosThreadCreate` runs (`ico_host_thread_func`). `ico_diag_float_fault` logs a NaN that reaches game
+code the PS2 never fed one.
 
 The window build logs a stats block every 10 s. A host step that takes longer than
 `[dev] slow_step_ms` (default 8, 0 off) gets a slow-step line from the step profile: the time in the
@@ -408,16 +408,17 @@ build section).
 
 ## The null floor and the headless build
 
-The game's render layer is compiled in both builds and builds its packets and display lists in
-its own buffers as on the PS2, so the state the draw phase changes (fades, view matrices, the
+The game's render layer is compiled in both builds and builds its packets and display lists in its
+own buffers as on the PS2, so the state the draw phase changes (fades, view matrices, the
 lightning's random reseeds, heap allocations) is the same with or without a renderer. Under it,
-`port/null/gfx_null.c` stubs Sony's libgraph and libdma: a DMA kick is a no-op and the GS is
-always idle (`port/null/gfx_null.c`, header comment). `port/null/libgcc_null.c` supplies
-`fptodp`, which only feeds debug prints. `ico_port_null` links the host's devices (the disc,
-libpad, libscf) into `ico_pc` and the device tests (`port/null/CMakeLists.txt`).
+`port/null/gfx_null.c` stubs Sony's libgraph and libdma: a DMA kick is a no-op and the GS is always
+idle (`port/null/gfx_null.c`, header comment). `port/null/libgcc_null.c` supplies `fptodp`, which
+only feeds debug prints. `ico_port_null` links the host's devices (the disc,
+[libpad](ARCHITECTURE.md#terms), libscf) into `ico_pc` and the device tests
+(`port/null/CMakeLists.txt`).
 
 The headless build (`ICO_HEADLESS=ON`) leaves out the window, rd, the
-RHI and SDL. It differs from the window build in its defaults, all from
+[RHI](ARCHITECTURE.md#terms) and SDL. It differs from the window build in its defaults, all from
 `port/platform/main_host.c`'s header comment and `host_main`: vsyncs as fast as the CPU allows; a
 trace by default; `pad-script.txt` beside the executable taken as the
 [pad script](ARCHITECTURE.md#terms) when present, else no pad; no pad recording; `use_iso` on (the

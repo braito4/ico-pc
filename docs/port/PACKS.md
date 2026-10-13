@@ -35,12 +35,12 @@ from):
   [TEXA](ARCHITECTURE.md#terms) fields are 0 except for PSMCT24 and PSMCT16/16S, whose names depend
   on the TEXA in force.
 - **TEX0Hash**: XXH3-64 (seed 0, the default secret) over the level the draw binds, with the
-  following levels appended when the name is a mip chain. A level at least one GS block in size
-  in a format that fills its 32-bit word (PSMCT32, PSMT8, PSMT4) is hashed as the 256-byte GS
-  blocks covering it, swizzled as GS memory holds them (`texpack_block_offset`); any other level
-  is read out linearly, palette formats one byte per index, direct formats as RGBA32 with TEXA
-  applied. Texels inside the GS size but outside the TIM2's are hashed as zeros and the name is
-  marked unstable.
+  following levels appended when the name is a mip chain. A level at least one
+  [GS](ARCHITECTURE.md#terms) block in size in a format that fills its 32-bit word (PSMCT32, PSMT8,
+  PSMT4) is hashed as the 256-byte GS blocks covering it, swizzled as GS memory holds them
+  (`texpack_block_offset`); any other level is read out linearly, palette formats one byte per
+  index, direct formats as RGBA32 with TEXA applied. Texels inside the GS size but outside the
+  TIM2's are hashed as zeros and the name is marked unstable.
 - **CLUTHash**: XXH3-64 over 16 or 256 colours in index order, the CSM1 swizzle undone; a 16-bit
   CLUT is expanded with the TEXA in force, so its name depends on TEXA too. 24-bit CLUTs are not
   supported.

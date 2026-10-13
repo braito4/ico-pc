@@ -162,8 +162,9 @@ The last row is not one of the game's effects:
   original game's frame shape, with its thin black border. With Video mode
   at 50 Hz the strip at the top and bottom is a little taller.
 
-The Preset on the Display page sets Texture filtering, Full-height picture and Full pixel on this page too (Enhanced turns Full pixel on, Original turns it off), but it does not change the rest. Changes you make
-here show in photo mode at once.
+The Preset on the Display page sets Texture filtering, Full-height picture and Full pixel on this
+page too (Enhanced turns Full pixel on, Original turns it off), but it does not change the rest.
+Changes you make here show in photo mode at once.
 
 ## Graphics driver
 
@@ -260,7 +261,9 @@ The first four are off unless you turn them on, on a phone too.
 Two more rows are the game's own, and only show up in the pause menu's
 Options once you have finished the game:
 
-- **Film effect** is Off or 1 to 4, the game's own film look (a colour tint and grain) over the picture. Photo mode has its own Film effect, which works without finishing the game (see [Controls](CONTROLS.md#take-a-photo)).
+- **Film effect** is Off or 1 to 4, the game's own film look (a colour tint and grain) over the
+  picture. Photo mode has its own Film effect, which works without finishing the game (see
+  [Controls](CONTROLS.md#take-a-photo)).
 - **Players** is 1 or 2. With 2, a second controller controls Yorda.
 ## Language
 
@@ -292,7 +295,8 @@ and Achievement pop-ups.
   objects, and play their animations. [The viewer's controls](CONTROLS.md#look-at-the-models).
 - **Credits:** watch the ending credits again. It unlocks once you have
   finished the game.
-- **Character Customization:** change the colours of Ico and Yorda. [Details below](#character-customization).
+- **Character Customization:** change the colours of Ico and Yorda.
+  [Details below](#character-customization).
 - **Achievement pop-ups** is the switch that is also the first row of the
   [Achievements](#achievements) list. Turn it on or off in either place.
 - **Add to Steam** (on the title screen's Extras page only; it finds Steam
@@ -479,10 +483,12 @@ On Android, under `[paths]`:
 
 ## Choosing the renderer on Windows
 
-The game draws with Vulkan unless you tell it otherwise. To try Direct3D 12 instead, add this line to `ico-pc.ini` next to the game (or `backend = "d3d12"` under `[video]` in `config.toml`):
+The game draws with Vulkan unless you tell it otherwise. To try Direct3D 12 instead, add this line
+to `ico-pc.ini` next to the game (or `backend = "d3d12"` under `[video]` in `config.toml`):
 
 ```
 backend=d3d12
 ```
 
-Start the game; the first lines of `logs/ico-pc.log` then say `D3D12` instead of `Vulkan`. Delete the line to go back to Vulkan.
+Start the game; the first lines of `logs/ico-pc.log` then say `D3D12` instead of `Vulkan`. Delete
+the line to go back to Vulkan.

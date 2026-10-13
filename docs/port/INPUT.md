@@ -78,7 +78,8 @@ gamepad layout (`south`, `leftshoulder`, `dpup`, `lefttrigger`, the half-axes `l
 
 - Gamepad: a source is down at half its range or more; the analog sticks take the radial dead zone
   (`ico_input_deadzone`: shorter than the zone is zero, the rest rescaled from the zone's edge);
-  digital stick targets make a vector of length at most 1, merged with the analog stick by magnitude.
+  digital stick targets make a vector of length at most 1, merged with the analog stick by
+  magnitude.
 - Keyboard and mouse: buttons by their rows; the stick directions as digital vectors; while a
   walk key is down the left stick is scaled by `walk_scale`; the mouse camera's stick (below)
   merges into the right stick.
@@ -224,10 +225,10 @@ read of tick t sees the line for tick t. Ticks are not vsyncs: a movie or a stag
 many vsyncs and no tick (`port/input/pad_script.h`, Tick; `port/platform/trace_host.c`).
 
 A script is loaded from `--pad-script FILE` or the ini's `pad_script=` (`[dev] pad_script`); the
-headless build also takes `pad-script.txt` beside the executable when it exists; a window build
-takes a script only when one is named, so a stray file never replaces the live controller
-(`port/platform/main_host.c`, `setup_pad`). A bad script stops the run with the file and line
-(`pad-script: <file>:<line>: ...`). The Windows package removes `pad-script.txt`
+[headless build](ARCHITECTURE.md#terms) also takes `pad-script.txt` beside the executable when it
+exists; a window build takes a script only when one is named, so a stray file never replaces the
+live controller (`port/platform/main_host.c`, `setup_pad`). A bad script stops the run with the file
+and line (`pad-script: <file>:<line>: ...`). The Windows package removes `pad-script.txt`
 (`tools/package_win.sh`).
 
 `port/input/pad-boot.txt` plays from power-on through the boot signs and the title to New Game,
@@ -256,9 +257,9 @@ Main reads the pad). Lines are written after the vsync step that read them
 build as `logs/input-<time>.txt`, off headless; the ini's `input_record=` (`[dev] input_record`)
 takes `false`, `true` or a path. The header (`# ico-pc input recording`) carries the build, the
 config values the simulation depends on (`record_keys`), the effective fixed clock and stick fix,
-and the native frame's width and aspect; a width change adds `# tick N gs_width W`. Loading a
-recording as the pad script compares each header value with the run's and logs each difference
-(`record_check`), since the replay may then not follow the session.
+and the [native frame](ARCHITECTURE.md#terms)'s width and aspect; a width change adds
+`# tick N gs_width W`. Loading a recording as the pad script compares each header value with the
+run's and logs each difference (`record_check`), since the replay may then not follow the session.
 
 ## The mouse camera and the pointer
 

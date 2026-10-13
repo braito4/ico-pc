@@ -1,0 +1,48 @@
+# Developer documents
+
+How the PC port works, for contributors: what stands in for each part of the PS2, where that code
+lives and how it is tested. Start with [ARCHITECTURE.md](ARCHITECTURE.md); its last section,
+[Terms](ARCHITECTURE.md#terms), is the glossary every other document links to.
+
+## Documents
+
+In reading order.
+
+| File | What it answers |
+| --- | --- |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | What runs, what stands in for each PS2 component, and the Terms glossary. |
+| [PLATFORM.md](PLATFORM.md) | Entry points, fibers and the scheduler, the host loop, the arena, folders and diagnostics. |
+| [GAME_CODE.md](GAME_CODE.md) | How `ico2/` is compiled: the sources, options, host paths, layout asserts and audits. |
+| [CONVENTIONS.md](CONVENTIONS.md) | The pre-commit hook, formatting, names, log lines, tests and scripts. |
+| [DATA.md](DATA.md) | The disc layer: the VFS, disc images, `ico.o2r`, the extractor, libcdvd, SIF and the data tables. |
+| [MATH.md](MATH.md) | The FP environment, the PS2 float models, the soft `double`, the libm copies and VU0 in C. |
+| [GS.md](GS.md) | What the port adds under the game's GS layer: the register decoder and the hand-offs to rd. |
+| [VU1_PROGRAMS.md](VU1_PROGRAMS.md) | The five VU1 microprograms, their shaders, their CPU oracles and the region rule. |
+| [RENDER.md](RENDER.md) | rd: recording, state, the replay, pipelines, post passes, dumps and the replay tool. |
+| [DISPLAY.md](DISPLAY.md) | The native frame, the video options and presets, pacing and the vsync lock, presentation, interpolation and the CRT filter. |
+| [RHI.md](RHI.md) | The render hardware interface and its Vulkan, Direct3D 12 and MoltenVK backends. |
+| [SHADERS.md](SHADERS.md) | The HLSL sources, how they are compiled and embedded, the binding scheme and the shared constants. |
+| [AUDIO.md](AUDIO.md) | The software SPU2, libsd, the sound driver as a host server, streams, mixing and the output. |
+| [FMV.md](FMV.md) | The movie player: the PSS demuxer, the MPEG-2 decoder, pacing and the picture on screen. |
+| [INPUT.md](INPUT.md) | Devices, bindings, the virtual pad and libpad, pad scripts and recordings, mouse and touch. |
+| [SAVES.md](SAVES.md) | The memory cards as folders, where they live and the PS2 save importer. |
+| [CONFIG.md](CONFIG.md) | Every key of `config.toml` and `ico-pc.ini`, which layer wins and when the files are written. |
+| [UI.md](UI.md) | The port's menus: the layout extension, the Settings menu, strings, the font, popups, touch and mouse. |
+| [GAME_FEATURES.md](GAME_FEATURES.md) | Gameplay options and their hooks, achievements, photo mode, the model viewer, gallery and credits. |
+| [PACKS.md](PACKS.md) | Texture and model packs: names, loading, formats, log lines and dumping. |
+| [TESTING.md](TESTING.md) | The test framework, every test program, the render gates, dumps, traces and CI. |
+| [DIVERGENCES.md](DIVERGENCES.md) | Every known way the port's behaviour or output differs from the PS2 game. |
+
+## Elsewhere
+
+- [../BUILDING.md](../BUILDING.md): building, running the tests, CI and packaging.
+- [../LEGAL.md](../LEGAL.md): what the repository may and may not contain, and the references its
+  source was written from.
+- [../THIRD_PARTY.md](../THIRD_PARTY.md): the third-party code and its licences.
+- [../../README.md](../../README.md): the player's introduction and the guides.
+
+## How these documents are written
+
+They state only what the tree at HEAD does, cite each behaviour as `path (symbol)`, define each
+term once in [ARCHITECTURE.md](ARCHITECTURE.md#terms) "Terms" and link it elsewhere, and pass the
+`docs_check` gate (`python3 -I tools/check_docs.py`).

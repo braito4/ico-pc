@@ -195,21 +195,16 @@ error messages and what to try first.
 
 ## How it differs from the PS2
 
-- The title screen has an **Options** line and a **Quit to desktop** line
-  (**Quit game** on Android). Options is the same menu you get from the
-  pause menu.
-- The language and 50/60 Hz questions the PS2 asks at first start are
-  skipped. Both are in Options.
-- Starting a New Game shows one more screen, with **Mirror mode** and
-  **New Game+**. [More about them](docs/OPTIONS.md#starting-a-new-game).
-- You can change the language in the middle of a game.
-- The ending credits have one more heading and name, a credit for this
-  project.
-- The pause menu shows your journey's numbers on the right.
-
-Everything else is meant to match the PS2. If the picture or the timing is
-different from the console, that is a bug worth reporting. The full list
-of differences, written for people who work on the code, is in
+The title screen has an **Options** line and a **Quit to desktop** line
+(**Quit game** on Android); starting a New Game shows one more screen, with
+**Mirror mode** and **New Game+** ([more about them](docs/OPTIONS.md#starting-a-new-game));
+the language and 50/60 Hz questions the PS2 asks at first start live in
+Options instead, and the language can change in the middle of a game; the
+ending credits have one more heading and name, for this project; and the
+pause menu shows your journey's numbers. Everything else is meant to match
+the PS2: if the picture or the timing is different from the console, that
+is a bug worth reporting. The full list of differences, written for people
+who work on the code, is in
 [`docs/port/DIVERGENCES.md`](docs/port/DIVERGENCES.md).
 
 ## Building it yourself
@@ -228,11 +223,13 @@ contributors: [`docs/port/ARCHITECTURE.md`](docs/port/ARCHITECTURE.md).
 
 ## Legal and licence
 
-The code in this repository is MIT licensed ([`LICENSE`](https://github.com/nathanialf/ico-pc/blob/main/LICENSE)). The
-licence covers the code written for this project and grants no rights in the
-game, its data or anything else owned by Sony Interactive Entertainment or
-Team Ico. [`docs/LEGAL.md`](https://github.com/nathanialf/ico-pc/blob/main/docs/LEGAL.md) says what may and may not be in
-the repository, and [`docs/THIRD_PARTY.md`](https://github.com/nathanialf/ico-pc/blob/main/docs/THIRD_PARTY.md) lists the
-third-party code the program uses. The game code began as a fork of the
-[ICO](https://github.com/nathanialf/ico) project, which rebuilds the
-game's source code from the PS2 release.
+The code in this repository is MIT licensed
+([`LICENSE`](https://github.com/nathanialf/ico-pc/blob/main/LICENSE)). The licence covers the code
+written for this project and grants no rights in the game, its data or anything else owned by Sony
+Interactive Entertainment or Team Ico.
+[`docs/LEGAL.md`](https://github.com/nathanialf/ico-pc/blob/main/docs/LEGAL.md) says what may and
+may not be in the repository, and
+[`docs/THIRD_PARTY.md`](https://github.com/nathanialf/ico-pc/blob/main/docs/THIRD_PARTY.md) lists
+the third-party code the program uses. The game code began as a fork of the
+[ICO](https://github.com/nathanialf/ico) project, which rebuilds the game's source code from the PS2
+release.

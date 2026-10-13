@@ -115,7 +115,7 @@ link begins (`rd_chain_link`); the VU shaders discard what lies above it. Nothin
 the disc's chain is not, and at full length the two pictures are the same.
 
 The hooks are in `ico2/seki/src/BgAnimation.c`, under `ICO_RD` only (the
-window build): `bga_CalcAnimation` sets `bgaHostChain =
+[window build](ARCHITECTURE.md#terms)): `bga_CalcAnimation` sets `bgaHostChain =
 rd_chain_find(p->group)` and `bgaHostNatural = bgaHostChain != 0 && ico_opt_natural_chains()`;
 `bga_CalcObject` reads them at the Null and at its children. The plane travels from
 `RegistPacket.c`'s `regHostMesh` to `rd_draw_vu_mesh`. Being a draw-only change, the key is not
@@ -151,7 +151,8 @@ reads the back buttons through `lt_ext_back_buttons()` in place of a constant
 
 Developer mode turns on what the development build had and the retail build left as stubs:
 
-- `ico2/common/src/main.c` (`Main`) calls `debug_Menu` each tick; SELECT opens it.
+- `ico2/common/src/main.c` (`Main`) calls `debug_Menu` each [tick](ARCHITECTURE.md#terms); SELECT
+  opens it.
 - `ico2/common/src/debug.c` (`debug_PrintfDummy`) prints the retail build's dummy debug prints
   through the debug font.
 - `debug.c` (`debug_VariableInit`) loads `<pref>/dev/thisIsYourDebugOption` when `[dev]
@@ -190,13 +191,13 @@ renamed), a title and description string, a condition and a hidden flag
 | weapons | `sword`, `queen_sword`, `light_blade` (hidden) |
 | challenges | `never_taken`, `unbroken`, `swift`, `shore_secret` (hidden) |
 
-The conditions read only the game-state view and the persisted counters: a stage by its
-`stageData` number, a story flag, a signalled event, a run property (fresh from a new game, no
-capture, no game over, every opening part watched) or a counter (enemies, milliseconds holding
-hands, saves, distinct couches) (`port/game/achievements.c`, the `c_*` functions). The host loop
-calls `ico_ach_host_poll` once per vsync, which runs `ico_ach_tick` once per new
-[Main tick](ARCHITECTURE.md#terms): `ico_gs_tick`, every locked condition, the popup queue, and
-the counters' write every 750 ticks when changed (`port/platform/host_loop.c`;
+The conditions read only the game-state view and the persisted counters: a stage by its `stageData`
+number, a story flag, a signalled event, a run property (fresh from a new game, no capture, no game
+over, every opening part watched) or a counter (enemies, milliseconds holding hands, saves, distinct
+couches) (`port/game/achievements.c`, the `c_*` functions). The host loop calls `ico_ach_host_poll`
+once per [vsync](ARCHITECTURE.md#terms), which runs `ico_ach_tick` once per new
+[Main tick](ARCHITECTURE.md#terms): `ico_gs_tick`, every locked condition, the popup queue, and the
+counters' write every 750 ticks when changed (`port/platform/host_loop.c`;
 `port/game/achievements.h`, `ICO_ACH_STATS_FLUSH_TICKS`). Popups are at least 125 ticks apart and
 can be turned off with `[game] achievements = false`; unlocks are recorded either way
 (`ICO_ACH_POPUP_GAP_TICKS`, `ico_ach_popups_enabled`).
@@ -243,8 +244,8 @@ The game raises signals through one-line calls (`ico_gs_signal(event, arg)`):
 `SAVE_DONE`, `YORDA_RESCUED`, `NEW_GAME` and `LOAD` are derived from the snapshot by `ico_gs_tick`
 (`IcoGsEvent`). The queue takes no lock: every caller is a [fiber](ARCHITECTURE.md#terms) on the
 host thread or the host loop between scheduler runs (`ico_gs_signal`). `ico_gs_peek` serves a few
-bytes at a retail PAL EE address from the snapshot's fixed globals, with its table from
-`ico_gs_peek_table`; every other address is refused (`ico_gs_peek`).
+bytes at a retail PAL [EE](ARCHITECTURE.md#terms) address from the snapshot's fixed globals, with
+its table from `ico_gs_peek_table`; every other address is refused (`ico_gs_peek`).
 
 ## Photo mode
 

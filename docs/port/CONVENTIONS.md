@@ -69,12 +69,12 @@ A `FILE` that does not exist (in the index, with `--staged`) is an error.
 
 ## Comments
 
-C uses `/* */` comments only. A comment says what the code does and why, in the present tense:
-no release numbers, package codes or history; git history keeps those. A file starts with a
-comment that names its path or file name and says what it holds (`port/platform/arena.h`: "The
-simulated EE main RAM the game's heap lives in."). A comment that names a behaviour of another
-file names that file and the symbol. Host paths inside `ico2/` start their comment with `PC port`
-([GAME_CODE.md](GAME_CODE.md#host-paths-in-the-game-sources)).
+C uses `/* */` comments only. A comment says what the code does and why, in the present tense: no
+release numbers, package codes or history; git history keeps those. A file starts with a comment
+that names its path or file name and says what it holds (`port/platform/arena.h`: "The simulated
+[EE](ARCHITECTURE.md#terms) main RAM the game's heap lives in."). A comment that names a behaviour
+of another file names that file and the symbol. Host paths inside `ico2/` start their comment with
+`PC port` ([GAME_CODE.md](GAME_CODE.md#host-paths-in-the-game-sources)).
 
 ## Names
 

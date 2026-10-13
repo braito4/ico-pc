@@ -41,7 +41,7 @@ toward zero and FZ. `ico_fpenv_host_enter` puts back the host defaults, round to
 denormals kept and every exception masked, and clears the sticky flags so nothing the simulation
 raised carries over (`port/platform/fpenv.c`, `ico_fpenv_sim_enter`, `ico_fpenv_host_enter`). Any
 other architecture is a compile error. `ico_fpenv_raw` returns the control register for tests and
-trace headers (`port/platform/fpenv.h`).
+[trace](ARCHITECTURE.md#terms) headers (`port/platform/fpenv.h`).
 
 The mode does not give the EE's other differences: the EE has no infinities or NaNs, clamps
 results, and has its own division and square root. Those are the models of
@@ -50,10 +50,11 @@ results, and has its own division and square root. Those are the models of
 Where each mode is entered:
 
 - `ico_host_init` enters the simulation mode first, and installs `ico_fpenv_sim_enter` as the
-  scheduler's fiber start hook (`port/platform/host_loop.c`, `ico_host_init`;
-  `port/platform/sched.h`, `ico_sched_set_fiber_start_hook`). The fiber switch does not save MXCSR
-  or FPCR, and minicoro's Windows fiber path gives each [fiber](ARCHITECTURE.md#terms) an FP state
-  of its own, so every fiber sets the mode at its top (`port/platform/fiber.h`).
+  scheduler's [fiber](ARCHITECTURE.md#terms) start hook (`port/platform/host_loop.c`,
+  `ico_host_init`; `port/platform/sched.h`, `ico_sched_set_fiber_start_hook`). The fiber switch does
+  not save MXCSR or FPCR, and minicoro's Windows fiber path gives each
+  [fiber](ARCHITECTURE.md#terms) an FP state of its own, so every fiber sets the mode at its top
+  (`port/platform/fiber.h`).
 - `ico_host_step` enters the simulation mode at the start of each [vsync](ARCHITECTURE.md#terms)
   step and again after the audio push, which is an SDL call (`port/platform/host_loop.c`,
   `ico_host_step`).
@@ -349,12 +350,10 @@ root of `$f12`; with no argument there is nothing to compute, so the host body i
 
 ## Compile options
 
-`ICO_SEMANTIC_OPTIONS` compiles the game and `port/` against the EE's semantics:
-`-fno-strict-aliasing`, `-fwrapv`, `-ffp-contract=off` (no fused multiply-add: the EE rounds each
-step), `-fno-fast-math` (IEEE ordering; the EE semantics are added by `port/math`, never by the
-compiler), `-fsigned-char`, `-fno-common` and `-fgnu89-inline` (`cmake/IcoFlags.cmake`).
-`ico_math` and its tests are compiled with them and the port warning set
-(`port/math/CMakeLists.txt`).
+`ICO_SEMANTIC_OPTIONS` (`cmake/IcoFlags.cmake`) compiles the game and `port/` against the EE's
+semantics; the options and the reason for each are in
+[GAME_CODE.md](GAME_CODE.md#semantics-options). `ico_math` and its tests are compiled with them and
+the port warning set (`port/math/CMakeLists.txt`).
 
 x86-64 at the default target has no FMA, so a contracted multiply-add would show only on arm64,
 where clang contracts `a * b + c` into `fmadd` unless told not to. `tools/check_android_flags.sh`

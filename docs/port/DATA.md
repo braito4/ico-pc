@@ -1,10 +1,11 @@
 # Game data: the disc layer
 
-How the port reads the player's disc: the VFS and its two backends (the disc image read in place,
-and the extracted archive `ico.o2r`), the first-run extractor that writes the archive, the
-[libcdvd](ARCHITECTURE.md#terms) and [SIF](ARCHITECTURE.md#terms) host layers under the game's own
-cdvd manager, the IOP RAM stand-in, the loader that fills the game's data tables from the disc's
-boot ELF, and the port's own reads of DATA.DF. The repository holds no disc data
+How the port reads the player's disc: the [VFS](ARCHITECTURE.md#terms) and its two backends (the
+disc image read in place, and the extracted archive [`ico.o2r`](ARCHITECTURE.md#terms)), the
+first-run extractor that writes the archive, the [libcdvd](ARCHITECTURE.md#terms) and
+[SIF](ARCHITECTURE.md#terms) host layers under the game's own cdvd manager, the
+[IOP](ARCHITECTURE.md#terms) RAM stand-in, the loader that fills the game's data tables from the
+disc's boot ELF, and the port's own reads of DATA.DF. The repository holds no disc data
 ([LEGAL.md](../LEGAL.md)): what is here is structure, sector numbers and hashes.
 
 ## Files
@@ -128,11 +129,12 @@ archive and checks its SHA-1 again before making it the disc; the log line is `i
 
 ## The first run
 
-`mount_game_data` (`port/platform/main_host.c`) looks for `ico.o2r` in the per-user folder
-(`ico_host_pref_dir`: SDL's pref path in the window build, the executable's folder in the headless
-build, the portable folder in portable mode), then beside the executable. The first usable one is
-mounted; an unusable one is logged (`ico_pc: <path> is not usable: <why>`) and skipped. With none,
-the first run finds the disc image, extracts it into the per-user folder, and mounts the result.
+`mount_game_data` (`port/platform/main_host.c`) looks for `ico.o2r` in the
+[user folder](ARCHITECTURE.md#terms) (`ico_host_pref_dir`: SDL's pref path in the
+[window build](ARCHITECTURE.md#terms), the executable's folder in the headless build, the portable
+folder in portable mode), then beside the executable. The first usable one is mounted; an unusable
+one is logged (`ico_pc: <path> is not usable: <why>`) and skipped. With none, the first run finds
+the disc image, extracts it into the user folder, and mounts the result.
 
 `find_iso` (`main_host.c`) looks for the image in this order: `--iso`; `Ico_PAL.iso`, `Ico_PAL.chd`,
 `Ico_PAL.bin`, `Ico_PAL.cue` beside the executable (`image_names`); `iso=` in `ico-pc.ini`; the
@@ -179,9 +181,10 @@ then reads the copy like any file, and `main_host.c` deletes it once the game da
 unless `keep_image=1` is in `ico-pc.ini`. A cancelled or refused copy is removed.
 
 `use_iso=1` in `ico-pc.ini` (or `[dev] use_iso`) skips the archive and mounts the image directly
-with `ico_cdvd_host_mount_iso`; it is the headless build's default, so trace runs and tests read the
-image (`use_iso_mode`). In that mode the image's SHA-1 is checked unless `verify=0` or
-`--no-verify` (`verify_iso`); the extractor always verifies.
+with `ico_cdvd_host_mount_iso`; it is the [headless build](ARCHITECTURE.md#terms)'s default, so
+[trace](ARCHITECTURE.md#terms) runs and tests read the image (`use_iso_mode`). In that mode the
+image's SHA-1 is checked unless `verify=0` or `--no-verify` (`verify_iso`); the extractor always
+verifies.
 
 ## libcdvd on the host
 
@@ -205,7 +208,7 @@ image (`use_iso_mode`). In that mode the image's SHA-1 is checked unless `verify
   `sceCdDelayThread` loop does, so the other threads, the same-priority Main among them, run
   while the drive works. `ico_cdvd_host_vsync` completes the command; `sceCdInit` registers it with
   the host loop (`port/platform/host_loop.h`) when that exists, and tests call it themselves. From
-  the host context the wait completes at once.
+  the [host context](ARCHITECTURE.md#terms) the wait completes at once.
 - The stream calls read the requested sectors straight from the disc, so the ring is always full
   and `sceCdStStat` reports its size; pause and resume change nothing.
 - `sceCdReadClock` reports the port clock (`ico_clock_now`, `port/platform/clock.c`: local time,
@@ -223,8 +226,8 @@ a missing disc stops boot there as an empty drive did.
 
 ## SIF and IOP RAM
 
-There is no [IOP](ARCHITECTURE.md#terms). `port/data/sif_host.c` answers the EE side of the SIF
-(`port/compat/sifrpc.h`, `sifdev.h`):
+There is no [IOP](ARCHITECTURE.md#terms). `port/data/sif_host.c` answers the
+[EE](ARCHITECTURE.md#terms) side of the SIF (`port/compat/sifrpc.h`, `sifdev.h`):
 
 - The IOP reboot and module loads (`sceSifRebootIop`, `sceSifResetIop`, `sceSifLoadModule`, ...)
   report success; `sceSifLoadModule` hands out increasing module ids.

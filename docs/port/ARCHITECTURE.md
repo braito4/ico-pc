@@ -415,16 +415,25 @@ The one glossary of `docs/port/`. Other documents link here and do not redefine 
   (`port/render/rd.h`).
 - **RHI**: the render hardware interface under rd that the Vulkan and D3D12 backends implement
   (`port/rhi/rhi.h`).
+- **frame slot**: one of the RHI's `RHI_FRAMES_IN_FLIGHT` (2) sets of per-frame resources;
+  `rhi_wait_frame` waits for the frame last submitted in a slot before the slot is reused
+  (`port/rhi/rhi.h`, `rhi_frame_slot`).
 - **list**: one of the 13 ordered command lists of a frame, numbered by the game's display-list
   priorities (0 opaque world, ..., 11 UI, 12 debug font; `port/render/rd.h`, Lists).
 - **replay**: rd walking a recorded frame's lists in order and issuing them to the RHI
   (`port/render/rd_replay.c`).
 - **present**: putting the replayed picture on the screen (`rd_present`,
   `port/render/rd_present.c`).
+- **vsync lock**: the pacing in which the display's refresh drives the simulated vsyncs: the game
+  steps on a grid of n refreshes and each step is presented n times (`port/platform/pace_policy.h`,
+  `pace_lock_vsync`; [DISPLAY.md](DISPLAY.md#the-vsync-lock)).
 - **interpolation**: presenting between ticks by blending each keyed draw of the last frame from
   its match in the frame before (`port/render/rd_interp.c`).
 - **native frame**: the GS window a tick is built for, as wide as the display aspect asks with the
   PS2's height; 512 GS pixels at 4:3 (`port/include/ico_frame.h`).
+- **Full pixel**: `[video] full_pixel`: the scene drawn at the window's own pixel width, so one
+  texel is one output pixel and nothing is cropped (`port/game/video_options.h`, `fullPixel`;
+  [DISPLAY.md](DISPLAY.md#the-native-frame)).
 - **preset**: `[video] preset`, `original`, `enhanced` or `custom`: a shortcut over the display
   options (`port/game/video_options.h`).
 - **out of the box**: the Original preset on the 4:3 frame at 1x, the PS2's picture. In this state

@@ -288,10 +288,9 @@ Graphics driver**.
 
 ## Known limits
 
-- The game needs a graphics chip that supports Vulkan 1.2 (Vulkan is how
-  the game talks to the graphics). Older or cheaper devices may not have
-  it, and a system update does not always add it. On a phone with an
-  Adreno chip, a graphics driver package can help; see
+- The game needs a graphics chip that supports Vulkan 1.2 (Vulkan is how the game talks to the
+  graphics). Older or cheaper devices may not have it, and a system update does not always add it.
+  On a phone with an Adreno chip, a graphics driver package can help; see
   [When the game cannot start with the phone's driver](#when-the-game-cannot-start-with-the-phones-driver).
 - The file picker cannot hide files that are not disc images. If you pick
   the wrong file, the game says so and asks again at the next start.
