@@ -98,7 +98,7 @@ static int dlHostFull(const DlEntry *entry, int id)
 
         if (peak <= ee || ((used - ee - 1) >> 10) != ((peak - ee - 1) >> 10)) {
             fprintf(stderr,
-                    "dl: list %d at %u bytes, past the EE's %u (DIVERGENCES D16; "
+                    "dl: list %d at %u bytes, past the EE's %u (DIVERGENCES VD-5; "
                     "logged per 1 KB)\n",
                     dlPriority, used, ee);
         }
