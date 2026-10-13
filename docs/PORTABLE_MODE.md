@@ -12,6 +12,12 @@ user folder here. It is not the folder the program is in:
   Enter)
 - Linux and Steam Deck: `~/.local/share/ico-pc/ico-pc/`
   (`.local` is a hidden folder in your home folder)
+- Mac: usually `~/Library/Application Support/ico-pc/ico-pc/`
+  (in Finder, choose **Go > Go to Folder** and type that path). On a Mac,
+  `ico-pc.ini` and the `logs` folder are in this folder too.
+- iPhone: ICO's Documents folder, which you reach through LiveContainer.
+  The settings, the saves, `ico-pc.ini` and the `logs` folder are all
+  there.
 - Android: see [the Android guide](ANDROID.md#where-your-files-are)
 
 In the user folder:
@@ -32,7 +38,14 @@ In the user folder:
 
 Portable mode keeps your saves, settings and the game's files beside the
 program instead, in a folder named `userdata`. That is handy on a USB
-stick, or to keep two separate copies of the game.
+stick, or to keep two separate copies of the game. Portable mode is for
+Windows and Linux:
+
+- On Android and on an iPhone the game always keeps everything in its own
+  folder, so there is nothing to turn on. A `portable=` line in
+  `ico-pc.ini` is ignored there.
+- On a Mac, a `userdata` folder placed next to the ICO app is not used.
+  The game keeps everything in the folder above.
 
 There are three ways to have it:
 

@@ -2,9 +2,8 @@
 
 This is **ICO** (Sony Computer Entertainment, 2001) made to run natively on
 a Windows or Linux PC, the Steam Deck, 64-bit ARM Linux handhelds,
-Android phones and tablets, and (new, contributed) iPhones and Apple-silicon
-Macs. It
-runs the game's own code, so it plays, sounds and feels like the PAL
+Android phones and tablets, iPhones and Apple-silicon Macs. It runs the
+game's own code, so it plays, sounds and feels like the PAL
 PlayStation 2 game. There are extras, such as a sharper picture,
 widescreen and smoother motion. The sharper picture, widescreen and the
 other picture extras stay off until you turn them on, and the frame rate is
@@ -30,12 +29,11 @@ on.
     graphics driver (any recent NVIDIA, AMD or Intel graphics card works);
   - a Steam Deck;
   - a 64-bit ARM Linux handheld or board with an up-to-date graphics
-    driver (tested on one handheld so far);
+    driver;
   - or a 64-bit Android phone or tablet with Android 10 or later, usually
     one from 2022 or newer. [More about Android](docs/ANDROID.md);
   - or an iPhone (iOS 15 or newer) or an Apple-silicon Mac (macOS 12 or
-    newer), both contributed and untested by the maintainer; see
-    [Supported platforms](#supported-platforms).
+    newer); see [Supported platforms](#supported-platforms).
 - **About 1 GB of free space** for the game's files, which the first start
   copies out of the disc image.
 
@@ -46,10 +44,10 @@ on.
 | Windows 10 or 11, 64-bit, with a graphics card from NVIDIA, AMD or Intel | `-win.zip` (or `-win-portable.zip`) | The main test machine. Every release is played on it before it goes out. Draws with Vulkan, or Direct3D 12 if you choose it ([how](docs/OPTIONS.md#choosing-the-renderer-on-windows)). |
 | Linux PC, 64-bit x86: SteamOS 3.5, Debian 13, Ubuntu 24.04 or newer | `-linux.tar.gz` (or `-linux-portable.tar.gz`) | Built and checked by the automatic tests for every release. |
 | Steam Deck | `-linux.tar.gz` | Supported; [Steam Deck tips](docs/TROUBLESHOOTING.md#steam-deck). |
-| Linux handheld or board, 64-bit ARM: Debian 13, Ubuntu 24.04 or newer | `-linux-arm64.tar.gz` | Tested on one handheld so far. |
+| Linux handheld or board, 64-bit ARM: Debian 13, Ubuntu 24.04 or newer | `-linux-arm64.tar.gz` (or `-linux-arm64-portable.tar.gz`) | Built for every release. |
 | Android phone or tablet, 64-bit, Android 10 or newer (usually 2022 or newer) | `-android.apk` | Supported. It can be slower than on a PC. [The Android guide](docs/ANDROID.md). |
-| iPhone, iOS 15 or newer, through [LiveContainer](https://github.com/LiveContainer/LiveContainer) | `-ios-unsigned.ipa` | Contributed by katsifolis. The maintainer has no Apple device, so these builds are not tested here; problem reports are welcome. |
-| Apple-silicon Mac, macOS 12 or newer | `-macos-arm64.dmg` (or `.zip`) | Contributed by braito4, untested by the maintainer. The app is not notarized: the first time, right-click **ICO** and choose **Open**. |
+| iPhone, iOS 15 or newer, through [LiveContainer](https://github.com/LiveContainer/LiveContainer) | `-ios-unsigned.ipa` | The maintainer has no Apple device, so these builds are not tested here; problem reports are welcome. |
+| Apple-silicon Mac, macOS 12 or newer | `-macos-arm64.dmg` (or `-macos-arm64.zip`) | Not tested by the maintainer either. The first time, right-click **ICO** and choose **Open** ([how](#mac)). |
 
 Not supported: 32-bit systems, Windows 7 and 8, Intel Macs, and any disc
 other than the PAL release (SCES-50760).
@@ -59,14 +57,14 @@ other than the PAL release (SCES-50760).
 Download the file for your device from the
 [releases page](https://github.com/nathanialf/ico-pc/releases).
 
-**Windows**
+### Windows
 
 1. Download the file whose name ends in `-win.zip`.
 2. Unzip it into a folder you can write to, such as Documents or a Games
    folder. Keep all the files together.
 3. Open the `x64` folder and double-click `ico_pc_x64.exe`.
 
-**Linux and Steam Deck**
+### Linux and Steam Deck
 
 1. Download the file whose name ends in `-linux.tar.gz`.
 2. Unpack it into a folder in your home folder.
@@ -81,10 +79,9 @@ Mode. [Steam Deck tips](docs/TROUBLESHOOTING.md#steam-deck).
 
 On a 64-bit ARM Linux handheld or board, download the file whose name ends
 in `-linux-arm64.tar.gz` instead and follow the same steps. It also needs
-a fairly new system: Debian 13, Ubuntu 24.04 or newer. This download has
-been tested on one handheld so far.
+a fairly new system: Debian 13, Ubuntu 24.04 or newer.
 
-**Android**
+### Android
 
 1. Download the file whose name ends in `-android.apk` on your phone or
    tablet.
@@ -95,18 +92,58 @@ been tested on one handheld so far.
 [The Android guide](docs/ANDROID.md) explains the first start, the touch
 controls and where your saves are.
 
+### Mac
+
+1. Download the file whose name ends in `-macos-arm64.dmg` (or the one
+   ending in `-macos-arm64.zip`, which holds the same app).
+2. Open it and drag **ICO** into your Applications folder.
+3. The first time, right-click **ICO** and choose **Open**, then **Open**
+   again. Apple has not checked this app, so a plain double-click only
+   shows a warning the first time. If your Mac still will not open it, go
+   to **System Settings > Privacy & Security**, scroll down and choose
+   **Open Anyway** next to ICO. After that, open it like any other app.
+
+The Mac keeps your saves, your settings, `ico-pc.ini` and the `logs`
+folder in a folder of its own, usually
+`~/Library/Application Support/ico-pc/ico-pc/`. To get there, open Finder,
+choose **Go > Go to Folder**, type that path and press Return.
+
+### iPhone
+
+The iPhone version is not in the App Store. You run it inside
+[LiveContainer](https://github.com/LiveContainer/LiveContainer); set that
+up first with its own instructions.
+
+1. Download the file whose name ends in `-ios-unsigned.ipa` on your
+   iPhone.
+2. Add it to LiveContainer and start **ICO** once. It says the game data
+   is missing and closes. That is expected: it has not seen your disc
+   image yet.
+3. Copy your disc image into ICO's **Documents** folder through
+   LiveContainer's data-folder access, and name it `Ico_PAL.iso` (or
+   `Ico_PAL.chd`, `Ico_PAL.bin` or `Ico_PAL.cue`). The iPhone version does
+   not ask for the disc image, so it has to be there with one of those
+   names.
+4. Start **ICO** again. It copies the game's files out of the image, as
+   described in [The first start](#the-first-start).
+
+Your saves (the `memcard` folder), your settings (`config.toml`) and the
+`logs` folder are in that same Documents folder.
+
 ## The first start
 
-The first time you start the game, it asks for your disc image. Choose the
-file and wait while it copies the game's files out of it. This takes a
-minute or two and happens only once. After that, the game no longer needs
+The first time you start the game, it asks for your disc image (an
+iPhone uses the one you copied in, as above). Choose the file and wait
+while it copies the game's files out of it. This takes a minute or two and
+happens only once. From then on the game runs without
 the disc image, so you can move or delete it. On Android, the screen says
 what the game is doing the whole time
 ([the Android guide](docs/ANDROID.md#the-first-start) has the steps).
 
-You can skip the question. Put the disc image beside the program and name
-it `Ico_PAL.iso` (or `Ico_PAL.chd`, `Ico_PAL.bin` or `Ico_PAL.cue`). On Windows, "beside the program"
-means inside the `x64` folder.
+On Windows and Linux you can skip the question. Put the disc image beside
+the program and name it `Ico_PAL.iso` (or `Ico_PAL.chd`, `Ico_PAL.bin` or
+`Ico_PAL.cue`). On Windows, "beside the program" means inside the `x64`
+folder.
 
 ## Questions people ask first
 
@@ -140,8 +177,18 @@ means inside the `x64` folder.
 ## Getting help
 
 When something goes wrong, the game writes what happened into a file named
-`ico-pc.log`, in a `logs` folder beside the program (on Android, in the
-game's own folder). Open a report on the
+`ico-pc.log`, in a folder named `logs`. Where that folder is:
+
+- Windows and Linux: beside the program (on Windows, inside the `x64`
+  folder).
+- Mac: in the game's folder, usually
+  `~/Library/Application Support/ico-pc/ico-pc/logs`.
+- iPhone: in ICO's Documents folder.
+- Android: in the game's folder,
+  `Android/data/com.defnf.icopc/files/logs`
+  ([how to reach it](docs/ANDROID.md#where-your-files-are)).
+
+Open a report on the
 [issues page](https://github.com/nathanialf/ico-pc/issues) and attach that
 file. [When something goes wrong](docs/TROUBLESHOOTING.md) explains the
 error messages and what to try first.
@@ -156,17 +203,20 @@ error messages and what to try first.
 - Starting a New Game shows one more screen, with **Mirror mode** and
   **New Game+**. [More about them](docs/OPTIONS.md#starting-a-new-game).
 - You can change the language in the middle of a game.
-- The ending credits run about four seconds longer, for a line of credit
-  for this project.
+- The ending credits have one more heading and name, a credit for this
+  project.
 - The pause menu shows your journey's numbers on the right.
 
 Everything else is meant to match the PS2. If the picture or the timing is
-different from the console, that is a bug worth reporting.
+different from the console, that is a bug worth reporting. The full list
+of differences, written for people who work on the code, is in
+[`docs/port/DIVERGENCES.md`](docs/port/DIVERGENCES.md).
 
 ## Building it yourself
 
 See [`docs/BUILDING.md`](https://github.com/nathanialf/ico-pc/blob/main/docs/BUILDING.md).
-You do not need the disc image to build it.
+You do not need the disc image to build it. How the port works, for
+contributors: [`docs/port/ARCHITECTURE.md`](docs/port/ARCHITECTURE.md).
 
 ## Special thanks
 
@@ -184,4 +234,5 @@ game, its data or anything else owned by Sony Interactive Entertainment or
 Team Ico. [`docs/LEGAL.md`](https://github.com/nathanialf/ico-pc/blob/main/docs/LEGAL.md) says what may and may not be in
 the repository, and [`docs/THIRD_PARTY.md`](https://github.com/nathanialf/ico-pc/blob/main/docs/THIRD_PARTY.md) lists the
 third-party code the program uses. The game code began as a fork of the
-[ICO decompilation](https://github.com/nathanialf/ico) project.
+[ICO](https://github.com/nathanialf/ico) project, which rebuilds the
+game's source code from the PS2 release.

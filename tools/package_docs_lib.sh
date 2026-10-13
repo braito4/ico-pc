@@ -46,8 +46,9 @@ portable=1'
 # with # or ; are notes. Everything works without editing this file.
 #
 # iso: the full path of your disc image of the PAL release (SCES-50760), a
-# .iso or a .chd, for example iso=C:\\Games\\Ico_PAL.iso . A file named
-# Ico_PAL.iso or Ico_PAL.chd next to the program is used before this line.
+# .iso, a .chd, or a .bin with its .cue, for example
+# iso=C:\\Games\\Ico_PAL.iso . A file named Ico_PAL.iso, Ico_PAL.chd,
+# Ico_PAL.bin or Ico_PAL.cue next to the program is used before this line.
 # Leave it empty and the first start asks for the image, then saves your
 # choice here. The image is read once, to copy the game's data into your
 # user folder (%APPDATA%\\ico-pc\\ico-pc); later starts do not need it.
@@ -74,8 +75,9 @@ INI
 # with # or ; are notes. Everything works without editing this file.
 #
 # iso: the full path of your disc image of the PAL release (SCES-50760), a
-# .iso or a .chd, for example iso=/home/deck/Games/Ico_PAL.iso . A file
-# named Ico_PAL.iso or Ico_PAL.chd next to ico_pc is used before this line.
+# .iso, a .chd, or a .bin with its .cue, for example
+# iso=/home/deck/Games/Ico_PAL.iso . A file named Ico_PAL.iso, Ico_PAL.chd,
+# Ico_PAL.bin or Ico_PAL.cue next to ico_pc is used before this line.
 # Leave it empty and the first start asks for the image (the file dialog
 # needs zenity), then saves your choice here. The image is read once, to
 # copy the game's data into your user folder (~/.local/share/ico-pc/ico-pc/);

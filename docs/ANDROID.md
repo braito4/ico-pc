@@ -32,19 +32,16 @@
 To update, install the new version over the old one in the same way. Your
 saves stay.
 
-That holds from one release to the next. A test build you were given
-(not from the releases page) is signed differently, and Android will not
-install a release over it. You would have to uninstall the test build
-first, and uninstalling deletes the game's whole folder, saves included
-(see [Where your files are](#where-your-files-are)). Before you uninstall,
-copy the `memcard` folder out to a computer.
+A test build someone gave you (not from the releases page) can be signed
+differently, and then Android will not install a release over it until you
+uninstall the test build, which deletes your saves: copy the `memcard`
+folder to a computer first ([where it is](#where-your-files-are)).
 
 ## The first start
 
-1. The first time the game opens, and again after each update, the screen
-   says **Starting ICO** and **Preparing graphics**, with a count and a bar.
-   This takes a few seconds, and up to about ten on some phones. Later starts
-   skip it or show it only for a moment.
+1. The first time the game opens, the screen can say **Starting ICO** and
+   **Preparing graphics**, with a count and a bar, for a few seconds. Later
+   starts skip it or show it only for a moment.
 2. The game opens your phone's file picker. Find your disc image and tap
    it. The picker shows every file, so make sure you pick the `.iso`,
    `.chd` or `.bin`. If you have a `.bin` and a `.cue`, pick the `.bin`; the
@@ -107,16 +104,16 @@ In that folder:
 - `memcard` holds your saves.
 - `logs` holds the log file, `ico-pc.log`, which helps with problem
   reports.
-- `textures` is where a [texture pack](TEXTURE_PACKS.md) goes:
-  `textures/SCES-50760/replacements`. The game makes these folders when
+- `textures/SCES-50760/replacements` is where a
+  [texture pack](TEXTURE_PACKS.md) goes. The game makes these folders when
   it starts.
-- `models` is where a [model pack](MODEL_PACKS.md) goes:
-  `models/SCES-50760/replacements`.
+- `models/SCES-50760/replacements` is where a
+  [model pack](MODEL_PACKS.md) goes. Make these folders yourself.
 - `screenshots` holds the pictures you take in photo mode.
 - `config.toml` holds your settings.
 
-The game makes the `textures` and `models` folders for you. Inside them,
-make the `SCES-50760/replacements` folders yourself.
+If the phone's shared storage cannot be written to, the game uses a
+private folder instead, which a computer or the Files app cannot open.
 
 > [!WARNING]
 > Uninstalling the game deletes this whole folder, saves included. Copy
@@ -137,7 +134,10 @@ four face buttons in the lower right with R1 just above them, R2 in the top
 right, Start and Select at the top in the middle, and a look pad on the rest
 of the upper right. They have the same real size on every screen and never
 cover each other. They fade away when you stop touching the screen and
-come back when you touch it. [The full description](CONTROLS.md#touch-controls-phones-and-tablets).
+come back when you touch it. **Options > Controls** has **Touch size** and
+**Touch opacity** to make them bigger or smaller and more or less
+see-through.
+[The full description](CONTROLS.md#touch-controls-phones-and-tablets).
 If Ico does not run in every direction you push the on-screen stick, turn
 on **Options > Gameplay > Analogue stick fix**.
 
@@ -297,8 +297,3 @@ Graphics driver**.
   the wrong file, the game says so and asks again at the next start.
 - The game runs slower than on a PC, especially at a high Resolution in
   Options > Display. See [If the game stutters](#if-the-game-stutters).
-- Options > Controls has Touch size and Touch opacity for the on-screen
-  buttons.
-
-Tell us what you find on the
-[issues page](https://github.com/nathanialf/ico-pc/issues).
