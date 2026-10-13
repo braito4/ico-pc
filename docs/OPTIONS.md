@@ -454,3 +454,13 @@ On Android, under `[paths]`:
 | Line | What it does |
 | --- | --- |
 | `keep_image = false` | `true` keeps the copy of your disc image that the first start makes. On Android, a line `keep_image=1` in `ico-pc.ini` works as well. [About Android](ANDROID.md#the-first-start). |
+
+## Choosing the renderer on Windows
+
+The game draws with Vulkan unless you tell it otherwise. To try Direct3D 12 instead, add this line to `ico-pc.ini` next to the game (or `backend = "d3d12"` under `[video]` in `config.toml`):
+
+```
+backend=d3d12
+```
+
+Start the game; the first lines of `logs/ico-pc.log` then say Direct3D 12. Delete the line to go back to Vulkan.

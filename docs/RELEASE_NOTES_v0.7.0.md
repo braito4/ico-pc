@@ -19,5 +19,5 @@
 
 ## Known issues
 
-- Some movement ghosting remains in a few places while the camera moves: the chandelier room and the main gate show it most, the courtyard with the sunbeams much less. Work continues on it.
-- On NVIDIA cards under Vulkan, a frame-rate limit equal to the screen's refresh rate can still show a picture a refresh late once or twice a second; Direct3D 12 or Uncapped are smoother if that bothers you.
+- Some ghosting while the camera moves (a faint trailing image) remains in every area. With Vertical sync on, the Uncapped frame rate shows it least; you can also try the Direct3D 12 renderer on Windows, see [Choosing the renderer on Windows](https://github.com/nathanialf/ico-pc/blob/main/docs/OPTIONS.md#choosing-the-renderer-on-windows).
+- A few wall pieces still jitter briefly as the camera turns in the chandelier room and at the main gate; the courtyard with the sunbeams is mostly cured.
