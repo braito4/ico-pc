@@ -45,7 +45,15 @@
  *     a menu closing) on a FIFO-only swapchain: the grid never moves and
  *     the steps start on it while the presents return before it;
  *   the first frame after a reset 1/2, 1; nothing presented: the grid;
- *   pace_fifo_hold (no lock at 144 Hz); the nominal ratio; the log's trace.
+ *   pace_fifo_hold (no lock at 144 Hz); the nominal ratio; the log's trace;
+ *   the vblank clock (a note at each vblank of the fake's display, with
+ *   the same wake-ups; FIFO): a FIFO queue against a display off its
+ *   report by -1000 to +1000 ppm (it fills and skips or drains and
+ *   repeats without the clock; nothing with it, the slot within 3 ppm),
+ *   presents finishing near a vblank (the ratchet), D3D12's full queue
+ *   at +163 ppm, the skip guard (no skip after a present that waited for
+ *   the display, while a 30 ms step and a slow GPU still skip), and clocks
+ *   not believed (twice the rate, one that stops, missed wake-ups).
  */
 #include <stdio.h>
 #include <string.h>
@@ -88,6 +96,8 @@ typedef struct Fake {
     /* mailbox: a picture is ready gpu (+ up to gpuJitter) after its present
        returns; the display's state */
     uint64_t gpu, gpuJitter;
+    unsigned spikeEvery; /* every spikeEvery-th picture takes spike more (0: none) */
+    uint64_t spike;
     Pic pics[PICS];
     unsigned nPics;
     uint64_t nextId, shownId, vbDone, lastReady;
@@ -123,6 +133,20 @@ typedef struct Fake {
     unsigned presents;
     float alpha[ALPHA_LOG];
     unsigned nAlpha;
+    /* the vblank clock: a note at each vblank (vbDouble: and half a
+       refresh before it, an output at twice the rate), wake (+ up to
+       wakeJitter) after it; every vbDropEvery-th not noted (a wake-up
+       missed) */
+    int vbOn, vbDouble;
+    unsigned vbDropEvery, vbCount;
+#define VB_NOTES 1024
+    uint64_t vbNote[VB_NOTES];
+    unsigned vbHead, vbNotes;
+    /* presents that took a quarter of the report or more while the lock
+       was told they waited for nothing (Opt.noGuard: the rule before the
+       skip guard) */
+    uint64_t report;
+    unsigned waitedSeen;
 } Fake;
 
 static uint64_t f_now(void *u)
@@ -160,6 +184,21 @@ static int f_hidden(const Fake *f)
     return f->vsync >= f->hiddenFrom && f->vsync < f->hiddenTo;
 }
 
+/* a vblank clock's note of the vblank at v */
+static void f_vb_note(Fake *f, uint64_t v)
+{
+    f->vbCount++;
+    if (f->vbDropEvery != 0 && f->vbCount % f->vbDropEvery == 0) {
+        return; /* the wake-up missed */
+    }
+    if (f->vbNotes == VB_NOTES) {
+        f->vbHead = (f->vbHead + 1) % VB_NOTES; /* the oldest dropped */
+        f->vbNotes--;
+    }
+    f->vbNote[(f->vbHead + f->vbNotes++) % VB_NOTES] =
+        v + f->wake + (f->wakeJitter ? f_rand(f) % f->wakeJitter : 0);
+}
+
 /* the mailbox display's vblanks up to t */
 static void f_display_to(Fake *f, uint64_t t)
 {
@@ -171,6 +210,12 @@ static void f_display_to(Fake *f, uint64_t t)
             break;
         }
         f->vbDone++;
+        if (f->vbOn) {
+            if (f->vbDouble) {
+                f_vb_note(f, v - (uint64_t)(f->display / 2.0));
+            }
+            f_vb_note(f, v);
+        }
         for (unsigned i = 0; i < f->nPics; i++) {
             if (f->pics[i].ready <= v) {
                 best = (int)i;
@@ -221,6 +266,10 @@ static void f_present_mailbox(Fake *f)
     f->now += f_cost(f);
     f_display_to(f, f->now);
     uint64_t ready = f->now + f->gpu + (f->gpuJitter ? f_rand(f) % f->gpuJitter : 0);
+
+    if (f->spikeEvery != 0 && (f->nextId + 1) % f->spikeEvery == 0) {
+        ready += f->spike;
+    }
 
     if (ready < f->lastReady) {
         ready = f->lastReady; /* the GPU's work in order */
@@ -364,6 +413,36 @@ static int f_shown(void *u, uint64_t *id, uint64_t *ns)
     return 1;
 }
 
+/* the vblank clock: the next note made by now */
+static int f_vblank(void *u, uint64_t *ns)
+{
+    Fake *f = u;
+
+    if (f->clockFails) {
+        return -1;
+    }
+    f_display_to(f, f->now);
+    if (f->vbNotes == 0 || f->vbNote[f->vbHead] > f->now) {
+        return 0;
+    }
+    *ns = f->vbNote[f->vbHead];
+    f->vbHead = (f->vbHead + 1) % VB_NOTES;
+    f->vbNotes--;
+    return 1;
+}
+
+/* the rule before the skip guard: no present waited (the fake counts the
+   ones that did) */
+static uint64_t f_waited_none(void *u, uint64_t costNs)
+{
+    Fake *f = u;
+
+    if (costNs * 4 >= f->report) {
+        f->waitedSeen++;
+    }
+    return 0;
+}
+
 typedef struct Opt {
     unsigned n;
     uint64_t report; /* the refresh the display reports */
@@ -371,7 +450,10 @@ typedef struct Opt {
     double seconds;
     unsigned bigAt; /* the step after vsync bigAt takes bigStep */
     uint64_t bigStep;
-    bool fifo, clock; /* a FIFO-only swapchain; the display clock offered */
+    bool fifo;        /* a FIFO-only swapchain */
+    int clockKind;    /* the display clock offered (PACE_CLOCK_KIND_*) */
+    bool noGuard;     /* the skip rule before the guard (f_waited_none) */
+    double phaseFrom; /* the step's offset after a vblank measured from (s; 0: not) */
 } Opt;
 
 typedef struct Run {
@@ -384,6 +466,13 @@ typedef struct Run {
     unsigned alphaChecked;
     double ratio; /* pace_lock_rate_ratio over the last 10 s */
     unsigned repeats, drops;
+    /* from the fake's countFrom: skips, presents that waited, the latest
+       step, resyncs */
+    unsigned skippedFrom, waitedFrom, resyncsFrom;
+    uint64_t lateMaxFrom;
+    /* from Opt.phaseFrom: the due times' offsets after the vblank before
+       them (ns) */
+    double phaseMin, phaseMax;
     PaceLock L;
 } Run;
 
@@ -391,20 +480,28 @@ static Run run(Fake *f, const Opt *o)
 {
     Run r;
     PaceLock *L = &r.L;
+    const bool shown = o->clockKind == PACE_CLOCK_KIND_SHOWN;
     const PaceLockIo io = {f,
                            f_now,
                            f_present,
                            f_sleep,
                            f_visible,
-                           o->clock ? f_present_id : NULL,
-                           o->clock ? f_shown : NULL};
+                           shown ? f_present_id : NULL,
+                           shown ? f_shown : NULL,
+                           o->clockKind == PACE_CLOCK_KIND_VBLANK ? f_vblank : NULL,
+                           o->noGuard ? f_waited_none : NULL};
     const uint64_t start = f->now, end = start + (uint64_t)(o->seconds * 1e9);
     const uint64_t ratioAt = start + (uint64_t)((o->seconds - 10.0) * 1e9);
-    unsigned vsync = 0, gapsAtFrame = 0;
-    bool newFrame = true, ratioStarted = false;
+    const uint64_t phaseAt = start + (uint64_t)(o->phaseFrom * 1e9);
+    unsigned vsync = 0, gapsAtFrame = 0, skippedAt = 0, waitedAt = 0, resyncsAt = 0;
+    bool newFrame = true, ratioStarted = false, counting = false;
 
     memset(&r, 0, sizeof r);
-    pace_lock_reset(L, o->n, o->report, NTSC, f->now, !o->fifo, o->clock);
+    r.phaseMin = 1e18;
+    r.phaseMax = -1e18;
+    f->vbOn = o->clockKind == PACE_CLOCK_KIND_VBLANK;
+    f->report = o->report;
+    pace_lock_reset(L, o->n, o->report, NTSC, f->now, !o->fifo, o->clockKind);
     f->vbDone = f_vb_index(f, f->now);
     f->vbIdx = f->vbDone;
     if (f->countFrom == 0) {
@@ -441,9 +538,26 @@ static Run run(Fake *f, const Opt *o)
             ratioStarted = true;
             (void)pace_lock_rate_ratio(L); /* the block starts */
         }
+        if (!counting && f->now >= f->countFrom) {
+            counting = true;
+            skippedAt = L->skipped;
+            waitedAt = L->waited + f->waitedSeen;
+            resyncsAt = L->resyncs;
+        }
         const uint64_t due = pace_lock_vsync(L, &io, newFrame);
         const double dev = (double)due - (double)before - periodBefore;
         const uint64_t late = f->now - due;
+
+        if (counting && late > r.lateMaxFrom) {
+            r.lateMaxFrom = late;
+        }
+        if (o->phaseFrom > 0.0 && due >= phaseAt) {
+            /* the due time's offset after the vblank before it */
+            const double ph = (double)due - (double)f_vb(f, f_vb_index(f, due));
+
+            r.phaseMin = ph < r.phaseMin ? ph : r.phaseMin;
+            r.phaseMax = ph > r.phaseMax ? ph : r.phaseMax;
+        }
 
         vsync++;
         if (L->resyncs == resyncs && vsync > 1) {
@@ -472,6 +586,9 @@ static Run run(Fake *f, const Opt *o)
     r.repeats = f->repeats;
     r.drops = f->drops;
     r.ratio = pace_lock_rate_ratio(L);
+    r.skippedFrom = L->skipped - skippedAt;
+    r.waitedFrom = L->waited + f->waitedSeen - waitedAt;
+    r.resyncsFrom = L->resyncs - resyncsAt;
     return r;
 }
 
@@ -512,7 +629,7 @@ static void test60(void)
         Fake f = fake(D60);
         Opt o = opt(1, R60, 60.0);
 
-        o.clock = clock != 0;
+        o.clockKind = clock ? PACE_CLOCK_KIND_SHOWN : PACE_CLOCK_KIND_NONE;
         const Run r = run(&f, &o);
 
         printf("60 Hz%s: %u presents, %u steps, late max %.3f ms, grid off by %.3f ms at most, "
@@ -567,7 +684,7 @@ static void testRc3Pattern(void)
         Run r;
 
         o.step = 2 * MS;
-        o.clock = clock != 0;
+        o.clockKind = clock ? PACE_CLOCK_KIND_SHOWN : PACE_CLOCK_KIND_NONE;
         f.costs = fits;
         f.nCosts = 3;
         r = run(&f, &o);
@@ -609,7 +726,7 @@ static void test120(void)
 
         f.cost = 1 * MS;
         f.gpu = 3 * MS;
-        o.clock = clock != 0;
+        o.clockKind = clock ? PACE_CLOCK_KIND_SHOWN : PACE_CLOCK_KIND_NONE;
         r = run(&f, &o);
         printf("120 Hz%s: %u presents, %u steps, late max %.3f ms, %u repeated, %u dropped\n",
                clock ? " (clock)" : "", r.presents, r.steps, (double)r.lateMax / 1e6, r.repeats,
@@ -644,7 +761,7 @@ static void testPhase(void)
             f.gpu = p < 16 ? 8 * MS : 11 * MS;
             f.gpuJitter = 3 * MS;
             o.stepJitter = p < 16 ? 0 : 2 * MS;
-            o.clock = clock != 0;
+            o.clockKind = clock ? PACE_CLOCK_KIND_SHOWN : PACE_CLOCK_KIND_NONE;
             if (clock) {
                 f.countFrom = 5 * SEC + 30 * SEC; /* the last 30 s */
             }
@@ -748,7 +865,7 @@ static void testDrift(void)
     f.gpu = 6 * MS;
     f.gpuJitter = 1 * MS;
     f.countFrom = 5 * SEC + 10 * SEC;
-    o.clock = true;
+    o.clockKind = PACE_CLOCK_KIND_SHOWN;
     r = run(&f, &o);
     printf("with the clock: %u repeated, %u dropped after 10 s, slot %.3f ns (display %.3f), "
            "phase moved %.3f ms, %u refreshes timed\n",
@@ -759,6 +876,314 @@ static void testDrift(void)
     CHECK(r.lateMax == 0);
 }
 
+static const char *rule_name(int kind)
+{
+    return kind == 0 ? "the rule before the guard" : kind == 1 ? "the guard" : "the vblank clock";
+}
+
+/* The FIFO queue against a display whose true refresh is not the report
+   (issue 74: Windows reports 59.951 Hz for a 59.940 Hz scan-out, +165 ppm
+   against 16.6806 ms).  A grid shorter than the scan-out fills the queue:
+   every present then waits for a vblank, the steps start later and later,
+   and a present is skipped (a picture never made: a jump in motion); a
+   longer one drains it: the display shows a picture twice.  No rule about
+   skips can take a rate difference away (the guard alone only moves the
+   skip a slot later); the vblank clock measures the refresh, the slot
+   follows it and the steps sit a sixteenth of a refresh after a vblank:
+   nothing fills or drains.  10 minutes each, counted from 60 s (with the
+   clock from 10 s).  At +50 ppm the queue does not fill far enough to
+   skip within 10 minutes; it waits. */
+static void testFifoDrift(void)
+{
+    static const double disp[] = {1e9 / 59.94,        1e9 / 60.0,           16680600.0 * 1.001,
+                                  16680600.0 * 0.999, 16680600.0 * 1.00005, 16680600.0 * 0.99995};
+
+    for (unsigned i = 0; i < sizeof disp / sizeof disp[0]; i++) {
+        const double ppm = pace_ppm(disp[i], 16680600.0);
+
+        for (int kind = 0; kind < 3; kind++) {
+            Fake f = fake(disp[i]);
+            Opt o = opt(1, 16680600ull, 600.0);
+
+            f.mode = F_FIFO;
+            f.gpu = 6 * MS;
+            f.gpuJitter = 1 * MS;
+            f.countFrom = 5 * SEC + (kind == 2 ? 10 : 60) * SEC;
+            o.fifo = true;
+            o.noGuard = kind == 0;
+            o.clockKind = kind == 2 ? PACE_CLOCK_KIND_VBLANK : PACE_CLOCK_KIND_NONE;
+            const Run r = run(&f, &o);
+
+            printf("fifo, display %.4f ms (%+.0f ppm against the report), %s: %u skipped, %u "
+                   "repeated, %u dropped, %u waited, late max %.3f ms; the slot %+.2f ppm off "
+                   "the display\n",
+                   disp[i] / 1e6, ppm, rule_name(kind), r.skippedFrom, r.repeats, r.drops,
+                   r.waitedFrom, (double)r.lateMaxFrom / 1e6, pace_ppm(r.L.slotNs, disp[i]));
+            CHECK(r.resyncs == 0);
+            if (kind == 2) {
+                const double off = pace_ppm(r.L.slotNs, disp[i]);
+
+                CHECK(r.L.clock == PACE_CLOCK_ON);
+                CHECK(r.skippedFrom == 0 && r.repeats == 0 && r.drops == 0);
+                CHECK(r.waitedFrom == 0);
+                CHECK(off > -3.0 && off < 3.0);
+                CHECK(r.lateMax == 0);
+            } else if (ppm > 0.0) {
+                /* fills: presents wait, and past 100 ppm the steps fall a
+                   slot behind and skip */
+                CHECK(r.waitedFrom > 0 && r.repeats == 0);
+                CHECK(ppm < 100.0 || r.skippedFrom >= 1);
+            } else {
+                /* drains: pictures shown twice, nothing skipped */
+                CHECK(r.repeats >= 1 && r.skippedFrom == 0 && r.waitedFrom == 0);
+            }
+        }
+    }
+}
+
+/* Presents that finish near a vblank on a display on its report: the
+   GPU's time 6 +- 3 ms.  At some phases a picture finishes just after its
+   vblank and is shown a refresh later (the display shows the one before
+   twice), and so is every picture after it (the ratchet: the queue holds
+   one more).  A GPU hitch (12 ms more every 450 pictures, a pan) ratchets
+   again and the queue fills: the presents wait for the display.  With the
+   vblank clock the steps sit a sixteenth of a refresh after a vblank
+   (slot / 16 +- 150 us after 5 s: the clock's wake-up is 30 to 130 us), a
+   picture finishes before the next one, and nothing repeats or waits
+   (without hitches; a hitch still shows its picture late once, which no
+   pacing hides).  16 phases, 60 s. */
+static void testFifoRatchet(void)
+{
+    unsigned oldRepeatRuns = 0, oldWaitRuns = 0;
+
+    for (int hitch = 0; hitch < 2; hitch++) {
+        for (unsigned p = 0; p < 16; p++) {
+            for (int kind = 0; kind < 3; kind += 2) {
+                Fake f = fake(D60);
+                Opt o = opt(1, R60, 60.0);
+
+                f.mode = F_FIFO;
+                f.phase = 5 * SEC - (uint64_t)((double)p * D60 / 16.0);
+                f.gpu = 3 * MS;
+                f.gpuJitter = 6 * MS;
+                f.rng = 777u + p;
+                f.spikeEvery = hitch ? 450 : 0;
+                f.spike = 12 * MS;
+                o.fifo = true;
+                o.stepJitter = 1 * MS;
+                o.noGuard = kind == 0;
+                o.clockKind = kind == 2 ? PACE_CLOCK_KIND_VBLANK : PACE_CLOCK_KIND_NONE;
+                o.phaseFrom = kind == 2 ? 5.0 : 0.0;
+                const Run r = run(&f, &o);
+                const unsigned waited = r.L.waited + f.waitedSeen;
+
+                if (kind == 0) {
+                    oldRepeatRuns += !hitch && r.repeats + r.drops > 0;
+                    oldWaitRuns += hitch && waited > 0;
+                    continue;
+                }
+                CHECK(r.skipped == 0 && waited == 0 && r.lateMax == 0);
+                CHECK(hitch || (r.repeats == 0 && r.drops == 0));
+                CHECK(r.phaseMin > D60 / 16.0 - 150000.0 && r.phaseMax < D60 / 16.0 + 150000.0);
+                if (p == 0 && !hitch) {
+                    printf("the ratchet with the vblank clock: the steps %.3f to %.3f ms after a "
+                           "vblank (a sixteenth: %.3f)\n",
+                           r.phaseMin / 1e6, r.phaseMax / 1e6, D60 / 16e6);
+                }
+            }
+        }
+    }
+    printf("the ratchet without the clock, 16 phases x 60 s: %u with pictures shown late, %u "
+           "with presents that waited for the display after GPU hitches\n",
+           oldRepeatRuns, oldWaitRuns);
+    CHECK(oldRepeatRuns >= 1);
+    CHECK(oldWaitRuns >= 1);
+}
+
+/* D3D12's model: a queue the display drains one a vblank, full from the
+   start (the reporter's logs: Present blocking 10-11 ms on average), the
+   display 163 ppm slower than the report, 10 minutes.  Without the clock
+   every present waits and the steps fall behind until one skips (both
+   rules: the rate differs); with it the slot is the display's, the steps
+   a sixteenth of a refresh after a vblank find the queue one picture
+   short of full, and nothing waits, at a depth of 3 or 2. */
+static void testQueueBlocking(void)
+{
+    for (unsigned depth = 2; depth <= 3; depth++) {
+        for (int kind = 0; kind < 3; kind++) {
+            Fake f = fake(16680600.0 * (1.0 + 163e-6));
+            Opt o = opt(1, 16680600ull, 600.0);
+
+            f.mode = F_QUEUE;
+            f.depth = depth;
+            f.queued = depth;
+            f.cost = 2 * MS;
+            f.jitterMax = 100000ull;
+            f.countFrom = 5 * SEC + 10 * SEC;
+            o.step = 2 * MS;
+            o.stepJitter = 1 * MS;
+            o.fifo = true;
+            o.noGuard = kind == 0;
+            o.clockKind = kind == 2 ? PACE_CLOCK_KIND_VBLANK : PACE_CLOCK_KIND_NONE;
+            const Run r = run(&f, &o);
+            const double off = pace_ppm(r.L.slotNs, f.display);
+
+            printf("queue of %u, display +163 ppm, %s: %u skipped, %u of %u presents waited, "
+                   "late max %.3f ms, the slot %+.2f ppm off the display\n",
+                   depth, rule_name(kind), r.skippedFrom, r.waitedFrom, r.presents,
+                   (double)r.lateMaxFrom / 1e6, off);
+            CHECK(r.resyncs == 0);
+            if (kind == 2) {
+                CHECK(r.skippedFrom == 0 && r.waitedFrom == 0 && r.lateMaxFrom == 0);
+                CHECK(off > -3.0 && off < 3.0);
+            } else {
+                CHECK(r.skippedFrom >= 1);
+                CHECK(r.waitedFrom * 10 >= r.presents * 9); /* nearly every present */
+            }
+        }
+    }
+}
+
+/* The skip guard.  A present that waited for the display (a FIFO
+   present blocking to the vblank after it) while the step is less than a
+   slot behind is not followed by a skip: with 8 ms steps at the phases
+   where the vblank falls just before the present's end, the rule before
+   the guard skipped every other present; the guard none.  A step or a
+   GPU a slot or more behind still skips: a 30 ms step with the vblank
+   clock (testLongSteps' numbers), and a GPU slower than the refresh (22
+   ms a picture, NVIDIA's fence waits), where without the bound the game
+   ran at the GPU's rate and dropped its lag every 6 periods.  The resync
+   past PACE_LOCK_DEBT_VSYNCS is unchanged. */
+static void testSkipGuard(void)
+{
+    unsigned oldHalf = 0;
+
+    for (unsigned p = 0; p < 8; p++) {
+        for (int kind = 0; kind < 2; kind++) {
+            Fake f = fake(D60);
+            Opt o = opt(1, R60, 30.0);
+
+            f.mode = F_BLOCK;
+            f.phase = 5 * SEC - (uint64_t)((double)p * D60 / 8.0);
+            o.step = 8 * MS;
+            o.stepJitter = 2 * MS;
+            o.fifo = true;
+            o.noGuard = kind == 0;
+            const Run r = run(&f, &o);
+
+            if (kind == 0) {
+                oldHalf += r.skipped * 3 > r.steps; /* a third or more skipped */
+            } else {
+                CHECK(r.skipped == 0 && r.presents == r.steps && r.resyncs == 0);
+                CHECK(r.lateMax < R60);
+            }
+        }
+    }
+    printf("8 ms steps, presents blocking to a vblank, 8 phases: %u where the rule before the "
+           "guard skipped a third of the presents or more, none with the guard\n",
+           oldHalf);
+    CHECK(oldHalf >= 2);
+    {
+        /* a 30 ms step with the vblank clock */
+        Fake f = fake(D60);
+        Opt o = opt(1, R60, 20.0);
+        Run r;
+
+        f.mode = F_FIFO;
+        o.fifo = true;
+        o.clockKind = PACE_CLOCK_KIND_VBLANK;
+        o.bigAt = 600;
+        o.bigStep = 30 * MS;
+        r = run(&f, &o);
+        printf("a 30 ms step with the vblank clock: %u late (max %.3f ms), %u resyncs, %u "
+               "skipped\n",
+               r.lateSteps, (double)r.lateMax / 1e6, r.resyncs, r.skipped);
+        CHECK(r.resyncs == 0 && r.lateSteps == 2 && r.lateMax < 16 * MS);
+        CHECK(r.skipped >= 1);
+        CHECK(r.steps >= 1199 && r.steps <= 1201);
+        CHECK(r.L.clock == PACE_CLOCK_ON);
+        /* a 300 ms step: the lag dropped, as without the clock */
+        f = fake(D60);
+        f.mode = F_FIFO;
+        o.bigStep = 300 * MS;
+        r = run(&f, &o);
+        CHECK(r.resyncs == 1);
+        CHECK(r.L.droppedNs > 280 * MS && r.L.droppedNs < 290 * MS);
+        CHECK(r.lateSteps <= 1);
+    }
+    for (int kind = 0; kind < 2; kind++) {
+        /* a GPU slower than the refresh: the game keeps its speed */
+        Fake f = fake(D60);
+        Opt o = opt(1, R60, 30.0);
+        Run r;
+
+        f.mode = F_NV;
+        f.pre = 450000ull;
+        f.tail = 3600000ull;
+        f.gpuNv = 22 * MS;
+        o.step = 2 * MS;
+        o.fifo = true;
+        o.noGuard = kind == 0;
+        r = run(&f, &o);
+        printf("a GPU of 22 ms a picture, %s: %u steps, %u presents, %u skipped, %u resyncs\n",
+               rule_name(kind), r.steps, r.presents, r.skipped, r.resyncs);
+        CHECK(r.steps >= 1799 && r.steps <= 1801);
+        CHECK(r.resyncs == 0);
+        CHECK(r.presents >= 1300 && r.presents <= 1400);
+    }
+}
+
+/* Vblank clocks not believed: an output at twice the rate (another
+   display), one that stops; and one that misses every 7th wake-up (each
+   such interval counts two refreshes): the slot on the display within 3
+   ppm and the missed wake-ups counted */
+static void testVblankClockLeft(void)
+{
+    Fake f = fake(D60);
+    Opt o = opt(1, R60, 30.0);
+    Run r;
+
+    f.mode = F_FIFO;
+    f.vbDouble = 1;
+    o.fifo = true;
+    o.clockKind = PACE_CLOCK_KIND_VBLANK;
+    r = run(&f, &o);
+    printf("a vblank clock at twice the rate: left %d, slot %.1f ns, measured %.1f ns\n", r.L.clock,
+           r.L.slotNs, r.L.measuredNs);
+    CHECK(r.L.clock == PACE_CLOCK_LEFT_PERIOD);
+    CHECK(r.L.slotNs == (double)R60);
+    CHECK(r.lateMax == 0 && r.skipped == 0);
+
+    f = fake(D60);
+    f.mode = F_FIFO;
+    f.clockFails = 1;
+    r = run(&f, &o);
+    CHECK(r.L.clock == PACE_CLOCK_LEFT_ERROR);
+    CHECK(r.L.slotNs == (double)R60);
+    CHECK(r.lateMax == 0 && r.presents == r.steps);
+
+    {
+        const double d = D60 * (1.0 - 50e-6);
+
+        f = fake(d);
+        f.mode = F_FIFO;
+        f.vbDropEvery = 7;
+        f.countFrom = 5 * SEC + 10 * SEC;
+        o.seconds = 120.0;
+        r = run(&f, &o);
+        const double off = pace_ppm(r.L.slotNs, d);
+        const unsigned missed = r.L.vb.n - r.L.vb.intervals;
+
+        printf("every 7th vblank not noted: the slot %+.2f ppm off the display, %u wake-ups "
+               "missed of %u refreshes\n",
+               off, missed, r.L.vb.n);
+        CHECK(r.L.clock == PACE_CLOCK_ON);
+        CHECK(off > -3.0 && off < 3.0);
+        CHECK(missed * 7 >= r.L.vb.n - 7 && missed * 7 <= r.L.vb.n + 7);
+        CHECK(r.repeats == 0 && r.drops == 0 && r.skippedFrom == 0);
+    }
+}
+
 /* clocks not believed: 2 % off the report, one that stops */
 static void testClockLeft(void)
 {
@@ -766,7 +1191,7 @@ static void testClockLeft(void)
     Opt o = opt(1, R60, 30.0);
     Run r;
 
-    o.clock = true;
+    o.clockKind = PACE_CLOCK_KIND_SHOWN;
     r = run(&f, &o);
     printf("a clock 2 %% off: left %d, slot %.1f ns\n", r.L.clock, r.L.slotNs);
     CHECK(r.L.clock == PACE_CLOCK_LEFT_PERIOD);
@@ -789,7 +1214,7 @@ static void testHidden(void)
 
     f.hiddenFrom = 300;
     f.hiddenTo = 900;
-    o.clock = true;
+    o.clockKind = PACE_CLOCK_KIND_SHOWN;
     r = run(&f, &o);
     printf("hidden 10 s: %u presents, %u steps, %u not presented, late max %.3f ms\n", r.presents,
            r.steps, r.unshown, (double)r.lateMax / 1e6);
@@ -943,10 +1368,10 @@ static void testNothingPresented(void)
 {
     Fake f = fake(D60);
     PaceLock L;
-    const PaceLockIo io = {&f, f_now, f_none, f_sleep, NULL, NULL, NULL};
+    const PaceLockIo io = {&f, f_now, f_none, f_sleep, NULL, NULL, NULL, NULL, NULL};
     uint64_t due;
 
-    pace_lock_reset(&L, 1, R60, NTSC, f.now, true, false);
+    pace_lock_reset(&L, 1, R60, NTSC, f.now, true, PACE_CLOCK_KIND_NONE);
     due = pace_lock_vsync(&L, &io, true);
     CHECK(due == 5 * SEC + R60);
     CHECK(f.now == due);
@@ -962,9 +1387,9 @@ static void testFirstFrame(void)
 {
     Fake f = fake(D60);
     PaceLock L;
-    const PaceLockIo io = {&f, f_now, f_present, f_sleep, NULL, NULL, NULL};
+    const PaceLockIo io = {&f, f_now, f_present, f_sleep, NULL, NULL, NULL, NULL, NULL};
 
-    pace_lock_reset(&L, 1, R60, NTSC, f.now, true, false);
+    pace_lock_reset(&L, 1, R60, NTSC, f.now, true, PACE_CLOCK_KIND_NONE);
     (void)pace_lock_vsync(&L, &io, true);
     f.now += 2 * MS;
     (void)pace_lock_vsync(&L, &io, false);
@@ -985,12 +1410,12 @@ static void testPause(void)
     for (int paused = 0; paused < 2; paused++) {
         Fake f = fake(D60);
         PaceLock L;
-        const PaceLockIo io = {&f, f_now, f_present, f_sleep, NULL, NULL, NULL};
+        const PaceLockIo io = {&f, f_now, f_present, f_sleep, NULL, NULL, NULL, NULL, NULL};
         uint64_t due;
 
         f.cost = 2 * MS;
         f.gpu = 6 * MS;
-        pace_lock_reset(&L, 1, R60, NTSC, f.now, true, false);
+        pace_lock_reset(&L, 1, R60, NTSC, f.now, true, PACE_CLOCK_KIND_NONE);
         for (unsigned v = 0; v < 30; v++) {
             f.now += 1 * MS;
             (void)pace_lock_vsync(&L, &io, v % 2 == 0);
@@ -1033,14 +1458,14 @@ static void testChanges(void)
     for (int paused = 0; paused < 2; paused++) {
         Fake f = fake(D60);
         PaceLock L;
-        const PaceLockIo io = {&f, f_now, f_present, f_sleep, NULL, NULL, NULL};
+        const PaceLockIo io = {&f, f_now, f_present, f_sleep, NULL, NULL, NULL, NULL, NULL};
         unsigned changes = 0, late = 0, resyncs = 0;
         uint64_t dropped = 0;
 
         f.mode = F_FIFO;
         f.cost = 2 * MS;
         f.gpu = 6 * MS;
-        pace_lock_reset(&L, 1, R60, NTSC, f.now, false, false);
+        pace_lock_reset(&L, 1, R60, NTSC, f.now, false, PACE_CLOCK_KIND_NONE);
         for (unsigned v = 0; v < 600; v++) {
             const bool change = v > 0 && v % 120 == 0; /* at 2, 4, 6 and 8 s */
 
@@ -1053,7 +1478,7 @@ static void testChanges(void)
                    counts start again too: summed here) */
                 resyncs += L.resyncs;
                 dropped += L.droppedNs;
-                pace_lock_reset(&L, 1, R60, NTSC, L.due, false, false);
+                pace_lock_reset(&L, 1, R60, NTSC, L.due, false, PACE_CLOCK_KIND_NONE);
                 f.cost = 150 * MS; /* the first present on the new chain */
                 changes++;
             }
@@ -1222,15 +1647,16 @@ static void testNominalRatio(void)
 {
     PaceLock L;
 
-    pace_lock_reset(&L, 1, 16666667ull, NTSC, 1, true, false);
+    pace_lock_reset(&L, 1, 16666667ull, NTSC, 1, true, PACE_CLOCK_KIND_NONE);
     CHECK(pace_lock_nominal_ratio(&L) > 1.000999 && pace_lock_nominal_ratio(&L) < 1.001001);
-    pace_lock_reset(&L, 2, 8333333ull, NTSC, 1, true, false);
+    pace_lock_reset(&L, 2, 8333333ull, NTSC, 1, true, PACE_CLOCK_KIND_NONE);
     CHECK(pace_lock_nominal_ratio(&L) > 1.000999 && pace_lock_nominal_ratio(&L) < 1.001001);
-    pace_lock_reset(&L, 1, 16683333ull, NTSC, 1, true, false);
+    pace_lock_reset(&L, 1, 16683333ull, NTSC, 1, true, PACE_CLOCK_KIND_NONE);
     CHECK(pace_lock_nominal_ratio(&L) == 1.0);
-    pace_lock_reset(&L, 1, 20000000ull, 20000000ull, 1, true, false); /* PAL on 50 */
+    pace_lock_reset(&L, 1, 20000000ull, 20000000ull, 1, true, PACE_CLOCK_KIND_NONE); /* PAL on 50 */
     CHECK(pace_lock_nominal_ratio(&L) == 1.0);
-    pace_lock_reset(&L, 1, 17500000ull, NTSC, 1, true, false); /* 4.7 % off: not trusted */
+    pace_lock_reset(&L, 1, 17500000ull, NTSC, 1, true,
+                    PACE_CLOCK_KIND_NONE); /* 4.7 % off: not trusted */
     CHECK(pace_lock_nominal_ratio(&L) == 1.0);
 }
 
@@ -1240,12 +1666,13 @@ static void testTrace(void)
 {
     Fake f = fake(D60);
     PaceLock L;
-    const PaceLockIo io = {&f, f_now, f_present, f_sleep, f_visible, f_present_id, f_shown};
+    const PaceLockIo io = {&f,           f_now,   f_present, f_sleep, f_visible,
+                           f_present_id, f_shown, NULL,      NULL};
     char buf[1024];
     unsigned k;
 
     f.vbDone = f_vb_index(&f, f.now);
-    pace_lock_reset(&L, 1, R60, NTSC, f.now, true, true);
+    pace_lock_reset(&L, 1, R60, NTSC, f.now, true, PACE_CLOCK_KIND_SHOWN);
     for (unsigned v = 0; v < 100; v++) {
         f.vsync = v;
         (void)pace_lock_vsync(&L, &io, v % 2 == 0);
@@ -1282,6 +1709,11 @@ int main(void)
     testPause();
     testChanges();
     testLatestReady();
+    testFifoDrift();
+    testFifoRatchet();
+    testQueueBlocking();
+    testSkipGuard();
+    testVblankClockLeft();
     if (fails) {
         printf("pace_loop_test: %d failures\n", fails);
         return 1;

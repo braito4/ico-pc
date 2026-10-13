@@ -170,6 +170,9 @@ static struct {
     int gridLock;
     int paceHz;           /* the simulation's rate the last pace had (50 or 60; 0: none yet) */
     int clockGone;        /* the display's timing stopped or was not believed: FIFO */
+    int vblankGone;       /* the vblank clock stopped or was not believed (the grid on the
+                             report until the display or the settings change) */
+    Uint64 lockWaitNs;    /* the last locked present's wait (lock_io_present) */
     int presentModeApply; /* the lock wants another present mode: ico_window_pace applies it */
     int timingUse;        /* rhi_present_timing_use as last set (presents carry ids) */
     PaceLock lock;
@@ -513,6 +516,7 @@ static void video_apply(int force)
         /* a settings change tries the display's timing again (the lock
            leaves it when it stops or is not believed) */
         s_pres.clockGone = 0;
+        s_pres.vblankGone = 0;
     }
     ico_video_get(&o);
     /* on a change of the options only (never a resize's forced call: a
@@ -1721,10 +1725,13 @@ int ico_window_pump(void)
                it the present mode, is decided again */
             video_apply(1);
             if (s_disp.clock != 0) {
-                /* the display clock on the new display's output */
+                /* the display clock on the new display's output, and the
+                   lock started again on it (pace_locked) */
                 disp_clock_stop();
                 disp_clock_start();
+                s_pres.lockN = 0;
             }
+            s_pres.vblankGone = 0;
             break;
         case SDL_EVENT_DISPLAY_CURRENT_MODE_CHANGED:
             video_apply(1);
@@ -2407,20 +2414,21 @@ static void disp_lock_start(void)
     disp_clock_start();
 }
 
-/* Every locked vsync: the clock's vblanks taken */
-static void disp_vsync(Uint64 refresh)
+/* The clock's next vblank, counted for the display line: 1 taken (*ns),
+   0 none yet, -1 the clock is not running (it stopped itself: stopped
+   here, logged) */
+static int disp_take(Uint64 refresh, uint64_t *ns)
 {
-    uint64_t ns;
     int r;
 
     if (s_disp.clock != 1) {
-        return;
+        return -1;
     }
-    while ((r = ico_display_clock_next(&ns)) == 1) {
+    r = ico_display_clock_next(ns);
+    if (r == 1) {
         s_disp.vblanks++;
-        pace_intervals_add(&s_disp.vb, ns, refresh);
-    }
-    if (r < 0) {
+        pace_intervals_add(&s_disp.vb, *ns, refresh);
+    } else if (r < 0) {
         static unsigned s_lines;
 
         ico_display_clock_stop();
@@ -2430,19 +2438,32 @@ static void disp_vsync(Uint64 refresh)
                             "returned at once)\n");
         }
     }
+    return r;
 }
 
-/* A present the lock made that returned at s_pres.lastReturn after
-   s_pres.cost */
+/* Every locked vsync: the clock's vblanks taken for the display line when
+   the lock does not take them (lock_io_vblank: one taker) */
+static void disp_vsync(Uint64 refresh)
+{
+    uint64_t ns;
+
+    if (s_pres.lock.clockKind == PACE_CLOCK_KIND_VBLANK && s_pres.lock.clock == PACE_CLOCK_ON) {
+        return;
+    }
+    while (disp_take(refresh, &ns) == 1) {}
+}
+
+/* A present the lock made that returned at s_pres.lastReturn and waited
+   s_pres.lockWaitNs (the lock's own rule: a quarter of a refresh) */
 static void disp_present(Uint64 refresh)
 {
     uint64_t count, refreshes, syncRefresh, syncNs;
 
     pace_intervals_add(&s_disp.ret, s_pres.lastReturn, refresh);
-    if (s_pres.cost * 4 >= refresh) {
+    if (s_pres.lockWaitNs * 4 >= refresh) {
         s_disp.waited++;
-        if (s_pres.cost > s_disp.waitedMaxNs) {
-            s_disp.waitedMaxNs = s_pres.cost;
+        if (s_pres.lockWaitNs > s_disp.waitedMaxNs) {
+            s_disp.waitedMaxNs = s_pres.lockWaitNs;
         }
     }
     if (rhi_present_statistics(&count, &refreshes, &syncRefresh, &syncNs)) {
@@ -2560,17 +2581,38 @@ static void pace_log(Uint64 now)
         char timing[160];
 
         ratio = r > 0.0 ? r : (s_pres.audioRatio > 0.0 ? s_pres.audioRatio : 1.0);
-        if (L->clock == PACE_CLOCK_ON) {
+        if (L->clockKind == PACE_CLOCK_KIND_SHOWN && L->clock == PACE_CLOCK_ON) {
             snprintf(timing, sizeof(timing),
                      "display timing on: %u presents timed, phase nudge %+.3f ms, %u late, %u "
                      "early",
                      L->seen - s_pres.lockSeenAt, (L->nudgeSum - s_pres.lockNudgeAt) / 1e6,
                      L->late - s_pres.lockLateAt, L->early - s_pres.lockEarlyAt);
-        } else {
+        } else if (L->clockKind == PACE_CLOCK_KIND_SHOWN) {
             snprintf(timing, sizeof(timing), "display timing %s",
-                     L->clock == PACE_CLOCK_NONE         ? "off"
-                     : L->clock == PACE_CLOCK_LEFT_ERROR ? "stopped"
-                                                         : "left (its refresh was off the report)");
+                     L->clock == PACE_CLOCK_LEFT_ERROR ? "stopped"
+                                                       : "left (its refresh was off the report)");
+        } else if (L->clockKind == PACE_CLOCK_KIND_VBLANK && L->clock == PACE_CLOCK_ON) {
+            char name[64];
+
+            ico_display_clock_name(name, sizeof(name));
+            if (L->measuredNs > 0.0) {
+                /* the slot against the report (+: longer), and the step's
+                   offset after the last vblank (+: after it) */
+                snprintf(timing, sizeof(timing),
+                         "display clock vblank (output %s, measured %.4f ms, slot %+.0f ppm, "
+                         "phase %+.2f ms)",
+                         name, L->measuredNs / 1e6, pace_ppm(L->slotNs, (double)L->refreshNs),
+                         L->vbPhaseNs / 1e6);
+            } else {
+                snprintf(timing, sizeof(timing), "display clock vblank (output %s, measuring)",
+                         name);
+            }
+        } else if (L->clockKind == PACE_CLOCK_KIND_VBLANK) {
+            snprintf(timing, sizeof(timing), "display clock %s",
+                     L->clock == PACE_CLOCK_LEFT_ERROR ? "stopped"
+                                                       : "left (its interval was off the report)");
+        } else {
+            snprintf(timing, sizeof(timing), "display clock off");
         }
         snprintf(lock, sizeof(lock),
                  "lock held (grid %.4f ms, %u present%s a step, %s, audio rate x%.4f, %s, %u "
@@ -2879,12 +2921,39 @@ static uint64_t lock_io_now(void *u)
 static bool lock_io_present(void *u, float a)
 {
     const LockIoCtx *c = u;
+    RhiStats before, after;
 
+    rhi_get_stats(&before);
     if (!present_once(a, c->refresh, c->period)) {
         return false;
     }
+    rhi_get_stats(&after);
+    /* how long it waited: the backend's own blocked time in it (Vulkan:
+       the acquire, the present and the fence waits; D3D12: Present and
+       the fence waits), which leaves out the replay's own CPU time; the
+       whole present where the backend times nothing.  Never more than the
+       present (a rebuild's first present is paused out: present_once) */
+    if (after.presents != before.presents &&
+        after.acquireNs + after.presentNs + after.fenceWaitNs != 0) {
+        const Uint64 w = (after.acquireNs - before.acquireNs) +
+                         (after.presentNs - before.presentNs) +
+                         (after.fenceWaitNs - before.fenceWaitNs);
+
+        s_pres.lockWaitNs = w < s_pres.cost ? w : s_pres.cost;
+    } else {
+        s_pres.lockWaitNs = s_pres.cost;
+    }
     disp_present(c->refresh); /* the display line's counts */
     return true;
+}
+
+/* the lock's rule for a present that waited for the display: the wait
+   lock_io_present measured */
+static uint64_t lock_io_waited(void *u, uint64_t costNs)
+{
+    (void)u;
+    (void)costNs;
+    return s_pres.lockWaitNs;
 }
 
 /* the window on the screen: off it, nothing is presented */
@@ -2917,23 +2986,53 @@ static int lock_io_shown(void *u, uint64_t *id, uint64_t *ns)
     return rhi_present_timing_next(id, ns);
 }
 
-/* Words for the display's timing (PaceLock.clock) */
-static const char *lock_clock_words(int clock)
+/* the vblank clock (display_clock.h): the next vblank noted */
+static int lock_io_vblank(void *u, uint64_t *ns)
 {
-    switch (clock) {
-    case PACE_CLOCK_ON:
-        return "in use";
-    case PACE_CLOCK_LEFT_ERROR:
-        return "stopped (a wait on a present failed); presenting fifo until the display "
-               "settings change";
-    case PACE_CLOCK_LEFT_PERIOD:
-        return "left (it gave a refresh more than 0.5 % off the one the display reports); "
-               "presenting fifo until the display settings change";
-    default:
-        return s_pres.clockGone       ? "left earlier (fifo until the display settings change)"
-               : rhi_present_timing() ? "not used"
-                                      : "off";
+    const LockIoCtx *c = u;
+
+    return disp_take(c->refresh, ns);
+}
+
+/* Words for the lock's display clock (PaceLock.clockKind and .clock), for
+   the lock's first line and its changes */
+static const char *lock_clock_words(const PaceLock *L, char *buf, size_t len)
+{
+    char name[64];
+
+    if (L->clockKind == PACE_CLOCK_KIND_SHOWN) {
+        switch (L->clock) {
+        case PACE_CLOCK_ON:
+            return "display timing in use";
+        case PACE_CLOCK_LEFT_ERROR:
+            return "display timing stopped (a wait on a present failed); presenting fifo until "
+                   "the display settings change";
+        default:
+            return "display timing left (it gave a refresh more than 1 % off the one the "
+                   "display reports); presenting fifo until the display settings change";
+        }
     }
+    if (L->clockKind == PACE_CLOCK_KIND_VBLANK) {
+        switch (L->clock) {
+        case PACE_CLOCK_ON:
+            snprintf(buf, len, "display clock vblank (output %s)",
+                     ico_display_clock_name(name, sizeof(name)));
+            return buf;
+        case PACE_CLOCK_LEFT_ERROR:
+            return "display clock stopped (a wait for a vblank failed); the grid on the "
+                   "reported refresh until the display or the settings change";
+        default:
+            snprintf(buf, len,
+                     "display clock left (its interval was off the report: %.4f ms against "
+                     "%.4f); the grid on the reported refresh until the display or the "
+                     "settings change",
+                     L->measuredNs / 1e6, (double)L->refreshNs / 1e6);
+            return buf;
+        }
+    }
+    return s_pres.clockGone ? "display clock off (display timing left earlier: fifo until the "
+                              "display settings change)"
+                            : "display clock off";
 }
 
 /* presents carry ids for the display's timing only under the lock with the
@@ -2959,16 +3058,28 @@ static void pace_locked(unsigned n, Uint64 period)
                            lock_io_sleep,
                            lock_io_visible,
                            clock ? lock_io_present_id : NULL,
-                           clock ? lock_io_shown : NULL};
+                           clock ? lock_io_shown : NULL,
+                           lock_io_vblank,
+                           lock_io_waited};
+    char words[256];
 
     ctx.refresh = display_refresh_ns(period);
     ctx.period = period;
     s_pres.statVsyncs++;
     if (s_pres.lockN != n || s_pres.lockRefresh != ctx.refresh ||
         s_pres.lockMailbox != (int)rhi_present_mailbox()) {
-        /* a new lock: from the last step's due time */
+        /* the display's counts for the log, and its vblank clock (Windows) */
+        disp_lock_start();
+        /* a new lock: from the last step's due time, on the present-wait
+           clock (mailbox) when the backend times presents, else on the
+           vblank clock when it runs (FIFO either way: video_settings),
+           else on the reported refresh alone */
+        const int kind = clock && !s_pres.clockGone                ? PACE_CLOCK_KIND_SHOWN
+                         : s_disp.clock == 1 && !s_pres.vblankGone ? PACE_CLOCK_KIND_VBLANK
+                                                                   : PACE_CLOCK_KIND_NONE;
+
         pace_lock_reset(&s_pres.lock, n, ctx.refresh, period, s_deadline, rhi_present_mailbox(),
-                        clock && !s_pres.clockGone);
+                        kind);
         s_pres.lockN = n;
         s_pres.lockRefresh = ctx.refresh;
         s_pres.lockMailbox = rhi_present_mailbox();
@@ -2978,6 +3089,7 @@ static void pace_locked(unsigned n, Uint64 period)
         s_pres.lockNudgeAt = 0.0;
         s_pres.lockSeenAt = s_pres.lockLateAt = s_pres.lockEarlyAt = 0;
         s_pres.lockWaitedAt = s_pres.lockSkippedAt = 0;
+        s_pres.lockWaitNs = 0;
         s_pres.nextPresent = 0;
         {
             static unsigned s_lines;
@@ -2987,10 +3099,10 @@ static void pace_locked(unsigned n, Uint64 period)
             if (s_lines++ < 8) {
                 fprintf(stderr,
                         "window: vsync lock: the game steps every %.4f ms (%u refresh%s of "
-                        "%.4f ms), %u present%s a step, present mode %s, display timing %s\n",
+                        "%.4f ms), %u present%s a step, present mode %s, %s\n",
                         (double)(n * ctx.refresh) / 1e6, n, n == 1 ? "" : "es",
                         (double)ctx.refresh / 1e6, n, n == 1 ? "" : "s", rhi_present_mode_name(),
-                        lock_clock_words(s_pres.lock.clock));
+                        lock_clock_words(&s_pres.lock, words, sizeof(words)));
                 /* the compositor's refresh against SDL's (Windows; the
                    primary display's: a cross-check, not a clock) */
                 if (ico_display_dwm_refresh(&dwmHz, &dwmNs)) {
@@ -3002,9 +3114,6 @@ static void pace_locked(unsigned n, Uint64 period)
                 }
             }
         }
-        /* the display's counts for the log, and its clock (measured only:
-           the grid stays on the reported refresh) */
-        disp_lock_start();
         /* the audio at the display's nominal rate until the first
            measured block (the 10 s line) */
         s_pres.audioRatio = pace_lock_nominal_ratio(&s_pres.lock);
@@ -3015,7 +3124,8 @@ static void pace_locked(unsigned n, Uint64 period)
     if ((clock && !s_pres.clockGone) != s_pres.mailbox) {
         s_pres.presentModeApply = 1;
     }
-    timing_use(s_pres.lock.clock == PACE_CLOCK_ON);
+    timing_use(s_pres.lock.clockKind == PACE_CLOCK_KIND_SHOWN &&
+               s_pres.lock.clock == PACE_CLOCK_ON);
     /* the frame closed in the step that was due at s_deadline */
     const int newFrame = frame_seen(s_deadline);
 
@@ -3027,14 +3137,22 @@ static void pace_locked(unsigned n, Uint64 period)
     s_pres.lockResyncs = s_pres.lock.resyncs;
     s_pres.lockDroppedNs = s_pres.lock.droppedNs;
     if (s_pres.lock.clock != s_pres.lockClock) {
-        /* the display's timing stopped or was not believed: FIFO until the
-           next settings change */
+        /* the display clock stopped or was not believed: the present-wait
+           clock's mailbox goes to FIFO until the next settings change; the
+           vblank clock's grid stays on the report (already FIFO) until the
+           display or the settings change */
+        static unsigned s_lines;
+
         s_pres.lockClock = s_pres.lock.clock;
-        fprintf(stderr, "window: vsync lock: display timing %s\n",
-                lock_clock_words(s_pres.lock.clock));
-        if (s_pres.lock.clock != PACE_CLOCK_ON) {
+        if (s_lines++ < 16) {
+            fprintf(stderr, "window: vsync lock: %s\n",
+                    lock_clock_words(&s_pres.lock, words, sizeof(words)));
+        }
+        if (s_pres.lock.clock != PACE_CLOCK_ON && s_pres.lock.clockKind == PACE_CLOCK_KIND_SHOWN) {
             s_pres.clockGone = 1;
             s_pres.presentModeApply = 1;
+        } else if (s_pres.lock.clock != PACE_CLOCK_ON) {
+            s_pres.vblankGone = 1;
         }
     }
     /* the first presents of each lock (a few locks a session), for the

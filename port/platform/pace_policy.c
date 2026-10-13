@@ -233,14 +233,15 @@ float pace_lock_alpha(unsigned k, unsigned n, unsigned perFrame)
 }
 
 void pace_lock_reset(PaceLock *L, unsigned n, uint64_t refreshNs, uint64_t periodNs, uint64_t nowNs,
-                     bool mailbox, bool clock)
+                     bool mailbox, int clockKind)
 {
     *L = (PaceLock){0};
     L->n = n;
     L->refreshNs = refreshNs;
     L->periodNs = periodNs;
     L->mailbox = mailbox;
-    L->clock = clock ? PACE_CLOCK_ON : PACE_CLOCK_NONE;
+    L->clockKind = clockKind;
+    L->clock = clockKind != PACE_CLOCK_KIND_NONE ? PACE_CLOCK_ON : PACE_CLOCK_NONE;
     L->due = nowNs;
     L->slotNs = (double)refreshNs;
     L->perFrame = 2; /* a game frame every two vsyncs until two closes are seen */
@@ -432,6 +433,85 @@ static void clock_take(PaceLock *L, const PaceLockIo *io)
     }
 }
 
+/* the grid moved by e ns (the vblank clock's one move onto the vblanks):
+   the last step's due time, and the rate block's start with it, so the
+   move is no rate */
+static void due_move(PaceLock *L, double e)
+{
+    const double at = L->dueFrac + e;
+    const double whole = at >= 0.0 ? (double)(uint64_t)at : -(double)(uint64_t)(1.0 - at);
+
+    L->due = (uint64_t)((int64_t)L->due + (int64_t)whole);
+    L->dueFrac = at - whole;
+    if (L->rateFirst != 0) {
+        L->rateFirst = (uint64_t)((int64_t)L->rateFirst + (int64_t)whole);
+    }
+}
+
+/* the vblank clock's news: each vblank noted since the last call, oldest
+   first (PaceLock.vb), then the period law once for the step */
+static void vblank_take(PaceLock *L, const PaceLockIo *io)
+{
+    const double rep = (double)L->refreshNs;
+    uint64_t v;
+    int r;
+
+    while (L->clock == PACE_CLOCK_ON && (r = io->vblank(io->user, &v)) != 0) {
+        if (r < 0) {
+            clock_leave(L, PACE_CLOCK_LEFT_ERROR);
+            return;
+        }
+        pace_intervals_add(&L->vb, v, L->refreshNs);
+        if (L->vb.n < PACE_VB_MIN) {
+            continue;
+        }
+        if (L->measuredNs == 0.0) {
+            /* the first use: an interval more than 1 % off the report is
+               another output's (or no vblank at all) */
+            const double tm = pace_intervals_mean(&L->vb);
+            const double off = tm - rep;
+
+            if ((off < 0.0 ? -off : off) * 100.0 > rep) {
+                L->measuredNs = tm;
+                clock_leave(L, PACE_CLOCK_LEFT_PERIOD);
+                return;
+            }
+        }
+        L->measuredNs = pace_intervals_mean(&L->vb);
+        /* the phase: the vblank's offset after the last step against the
+           wanted one (the step slot / 16 after a vblank); e > 0: the step
+           is to move later */
+        const double sl = L->slotNs;
+        double ph = rem_of((double)v - ((double)L->due + L->dueFrac), sl);
+
+        if (ph < 0.0) {
+            ph += sl;
+        }
+        L->vbPhaseNs = wrap_half(-ph, sl);
+        if (!L->phaseSet) {
+            /* once: the grid onto the vblanks at once */
+            due_move(L, wrap_half(ph + sl / PACE_VB_OFFSET_DIV, sl));
+            L->nudgeLeft = 0.0;
+            L->phaseSet = true;
+            L->phaseSnaps++;
+            continue;
+        }
+        L->nudgeLeft +=
+            wrap_half(ph + sl / PACE_VB_OFFSET_DIV - L->nudgeLeft, sl) * PACE_VB_KP_PHASE;
+    }
+    if (L->clock != PACE_CLOCK_ON || L->measuredNs == 0.0) {
+        return;
+    }
+    /* the period: the slot toward the measured refresh, never past 1 % of
+       the report */
+    L->slotNs += (L->measuredNs - L->slotNs) * PACE_VB_KP_PERIOD;
+    const double away = L->slotNs - rep;
+
+    if ((away < 0.0 ? -away : away) * 100.0 > rep) {
+        clock_leave(L, PACE_CLOCK_LEFT_PERIOD);
+    }
+}
+
 /* a present's interval from the one before, for the log */
 static void lock_trace(PaceLock *L, uint64_t returnNs, uint64_t id)
 {
@@ -495,8 +575,11 @@ uint64_t pace_lock_vsync(PaceLock *L, const PaceLockIo *io, bool newFrame)
     uint64_t now = io->now(io->user);
     const double period = L->slotNs * (double)L->n;
 
-    if (L->clock == PACE_CLOCK_ON && io->shown != NULL) {
+    if (L->clock == PACE_CLOCK_ON && L->clockKind == PACE_CLOCK_KIND_SHOWN && io->shown != NULL) {
         clock_take(L, io);
+    } else if (L->clock == PACE_CLOCK_ON && L->clockKind == PACE_CLOCK_KIND_VBLANK &&
+               io->vblank != NULL) {
+        vblank_take(L, io);
     }
     L->vsyncsSinceClose++;
     if (newFrame) {
@@ -540,6 +623,7 @@ uint64_t pace_lock_vsync(PaceLock *L, const PaceLockIo *io, bool newFrame)
         nextFrac = 0.0;
         L->pendCount = 0;
         L->latCount = L->latNext = 0;
+        L->phaseSet = false; /* the vblank clock moves the new grid onto them again */
     }
     for (unsigned j = 0; j < L->n; j++) {
         /* the slot: the step's due time for the first present, a refresh
@@ -559,8 +643,13 @@ uint64_t pace_lock_vsync(PaceLock *L, const PaceLockIo *io, bool newFrame)
             L->pendCount = 0;
             continue;
         }
-        if (now >= next && L->framePresented) {
-            /* behind: no picture again until the step */
+        if (now >= next && L->framePresented &&
+            (!L->lastBlocked || (double)(now - next) >= L->slotNs)) {
+            /* behind: no picture again until the step.  Not after a
+               present that waited for the display while less than a slot
+               behind (the skip guard): the step is late by the display's
+               own wait, the queue has pictures to show, and the skip
+               would be the picture shown twice */
             L->skipped++;
             continue;
         }
@@ -575,19 +664,23 @@ uint64_t pace_lock_vsync(PaceLock *L, const PaceLockIo *io, bool newFrame)
             continue; /* nothing presented */
         }
         const uint64_t ret = io->now(io->user);
-        const uint64_t id =
-            L->clock == PACE_CLOCK_ON && io->presentId != NULL ? io->presentId(io->user) : 0;
+        const uint64_t id = L->clock == PACE_CLOCK_ON && L->clockKind == PACE_CLOCK_KIND_SHOWN &&
+                                    io->presentId != NULL
+                                ? io->presentId(io->user)
+                                : 0;
+        /* the time it waited (the backend's own where it knows it) */
+        const uint64_t waitNs = io->waited != NULL ? io->waited(io->user, ret - now) : ret - now;
 
         L->presents++;
         L->framePresented = true;
         lock_trace(L, ret, id > L->lastId ? id : 0);
         L->lastReturn = ret;
-        L->lastBlocked = (double)(ret - now) * 4.0 >= L->slotNs;
+        L->lastBlocked = (double)waitNs * 4.0 >= L->slotNs;
         if (L->lastBlocked) {
-            /* counted only (the log): FIFO's queue was full */
+            /* FIFO's queue was full: counted (the log), and the skip guard */
             L->waited++;
-            if (ret - now > L->waitedMaxNs) {
-                L->waitedMaxNs = ret - now;
+            if (waitNs > L->waitedMaxNs) {
+                L->waitedMaxNs = waitNs;
             }
         }
         if (id > L->lastId) {
@@ -623,6 +716,7 @@ void pace_lock_pause(PaceLock *L, uint64_t ns)
     for (unsigned i = 0; i < L->pendCount; i++) {
         L->pendSlot[i] += (double)ns;
     }
+    L->phaseSet = false; /* the vblank clock moves the grid onto them again */
 }
 
 uint64_t pace_first_present_pause(uint64_t swapchains, uint64_t *seen, uint64_t costNs,

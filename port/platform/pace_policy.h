@@ -68,6 +68,26 @@ uint64_t pace_present_gap(int cap, bool uncappedVsync, bool mailbox, uint64_t re
  * the refresh keeps mailbox and its own gap, one below keeps its own gap. */
 bool pace_cap_equals_refresh(int cap, uint64_t refreshNs);
 
+/* The display's intervals: the times of the display clock's vblanks, or
+ * of the lock's present returns, against a slot (the refresh the display
+ * reports), for window_host.c's 10 s display line and for the vsync
+ * lock's vblank clock (PaceLock.vb: its measured refresh).  An interval
+ * under half a slot is dropped (a wake-up that was not a new refresh; last
+ * stays); one under
+ * 1.5 slots is one refresh; one of 1.5 slots or more is late, and when it
+ * is about k slots (k 2..3: under 3.5) it counts as k refreshes in the
+ * mean; a longer one (a pause, the window off the screen) is missed and
+ * left out of the mean.  min and max are of the intervals not dropped. */
+typedef struct PaceIntervals {
+    uint64_t last;      /* the last time added (0: none) */
+    double sum;         /* the counted intervals' total (ns) */
+    uint64_t min, max;  /* (ns; min 0: none) */
+    unsigned n;         /* refreshes the sum spans */
+    unsigned intervals; /* intervals not dropped */
+    unsigned late;      /* intervals of 1.5 slots or more */
+    unsigned missed;    /* of those, longer than 3.5 slots (not in the mean) */
+} PaceIntervals;
+
 /* ------------------------------------------------------------------------
  * The vsync lock (issue 74): the simulation on a grid of the wall clock.
  *
@@ -82,34 +102,24 @@ bool pace_cap_equals_refresh(int cap, uint64_t refreshNs);
  * slots); the k-th present since the last game frame closed shows the
  * exact alpha k / (n * vsyncs per frame) (pace_lock_alpha).
  *
- * Nothing waits on a present's return.  The v0.6.1 to v0.7.0 rc3 locks
- * stepped on FIFO returns, taken for vblanks.  On NVIDIA (rc3: RTX 3090,
- * three images) two presents return about 9 ms apart and the next one
- * about 32 ms later, so the steps ran 9/32/9 ms apart (ghosts in motion)
- * and the judges of the returns dropped the lock.  So the presents go
- * through mailbox (PaceLock.mailbox: a present never waits for the
- * display, which shows the newest finished picture at each refresh), as
- * "uncapped" does, when the display clock below is in use.  Without it
- * they go through FIFO on the same grid: under mailbox the grid's phase
- * against the refreshes is left where it starts, and where the presents'
- * ends straddle a refresh pictures repeat and drop for the whole session,
- * while FIFO shows them in order whatever the phase (pace_loop_test
- * testNoClockMode: 61 of 64 runs against 30 with one slip each).
- *
  * The grid's period is the refresh the display reports.  The OS clock and
- * the display's differ by tens of ppm: a picture shown twice or never about
- * every few minutes.  With a display clock (PaceLockIo.shown:
+ * the display's differ by tens of ppm (a picture shown twice or never every
+ * few minutes), and a report can be off by more (Windows' 59.951 Hz for a
+ * 59.940 Hz scan-out: 163 ppm).  Two display clocks take that away
+ * (PaceLock.clockKind); the clock never steps the simulation itself, and
+ * the loop never waits for it.
+ *
+ * PACE_CLOCK_KIND_SHOWN, the present-wait clock (PaceLockIo.shown:
  * VK_KHR_present_wait, a thread of the backend's waiting on each present
- * and noting when it reached the screen) a phase-locked loop takes that
- * away.  At each step the loop takes the presents the display showed since
- * the last one: the refresh that showed one, against the slot it was
- * presented in (the time a present is due on the grid, n a period) and the
- * wanted offset, wrapped to half a refresh, is the phase error e; the steps
- * move by PACE_GRID_KP * e (at most PACE_GRID_NUDGE_MAX_NS a step) and the
- * slot by PACE_GRID_KI * e, never past 1 % of the reported refresh (past it
- * the clock is not believed: it is left and the slot goes back to the
- * report).  The clock never steps the simulation itself, and the loop never
- * waits for it.
+ * and noting when it reached the screen; mailbox): a phase-locked loop on
+ * the pictures shown.  At each step the loop takes the presents the
+ * display showed since the last one: the refresh that showed one, against
+ * the slot it was presented in (the time a present is due on the grid, n a
+ * period) and the wanted offset, wrapped to half a refresh, is the phase
+ * error e; the steps move by PACE_GRID_KP * e (at most
+ * PACE_GRID_NUDGE_MAX_NS a step) and the slot by PACE_GRID_KI * e, never
+ * past 1 % of the reported refresh (past it the clock is not believed: it
+ * is left and the slot goes back to the report).
  *
  * The wanted offset is the first one seen, moved a 64th of a refresh each
  * time a picture is shown a refresh later or earlier than the run of them
@@ -122,11 +132,58 @@ bool pace_cap_equals_refresh(int cap, uint64_t refreshNs);
  * grid stays).  A present that started half a slot late (after a slow
  * step) or took a whole slot (a replay past its slot) is not counted.
  *
- * FIFO (no display clock, D3D12, a Vulkan surface without mailbox): the
- * same grid; on the display's rate a present returns at once while the
- * queue has room.  Nothing is held back (pace_fifo_hold is not used under
- * the lock): a present that takes a quarter of a slot or more waited for a
- * vblank (the queue was full) and is counted (waited, waitedMaxNs).
+ * PACE_CLOCK_KIND_VBLANK, the vblank clock (PaceLockIo.vblank: Windows, a
+ * thread on the window's output's vblanks, display_clock.h; FIFO): every
+ * vblank noted goes into PaceLock.vb (pace_intervals_add against the
+ * report: an interval of about k refreshes counts k, a wake-up under half
+ * a refresh after the last is dropped).  Once PACE_VB_MIN refreshes are
+ * in, the measured refresh Tm (measuredNs) is the mean over all of them
+ * (the first and last vblank's times over the refreshes between, less any
+ * long gap), and the two laws run:
+ *   period: each step slot += (Tm - slot) * PACE_VB_KP_PERIOD; the clock is
+ *     left (the slot back to the report) when Tm is more than 1 % off the
+ *     report at its first use (a wrong output) or the slot is later, so a
+ *     wrong clock never runs the game more than 1 % off its speed;
+ *   phase: the step is wanted a slot / PACE_VB_OFFSET_DIV after a vblank
+ *     (the most time before the next one: a picture finished within
+ *     15/16 of a refresh of its step is never a refresh late, so a full
+ *     queue cannot ratchet).  For each vblank v, ph = (v - due) mod slot
+ *     (due: the last step's due time) and e = wrap_half(ph + slot / 16)
+ *     less the moves still owed; e > 0 when the step is earlier against
+ *     the vblanks than wanted, and the steps move later by
+ *     e * PACE_VB_KP_PHASE (nudgeLeft, at most PACE_GRID_NUDGE_MAX_NS a
+ *     step).  The first time PACE_VB_MIN refreshes are in, and again after
+ *     a resync or a pause (the grid moved), the grid is moved by e at once
+ *     (phaseSet; half a slot at most), so nothing is pulled in slowly.
+ * The noted times carry the thread's wake-up (tens of us), so the step
+ * sits that much more after the true vblank.
+ *
+ * Without a clock (PACE_CLOCK_KIND_NONE: Linux, macOS, Android, a clock
+ * that did not start) the grid stays on the report.  The presents go
+ * through mailbox (PaceLock.mailbox: a present never waits for the
+ * display, which shows the newest finished picture at each refresh), as
+ * "uncapped" does, only with the present-wait clock: under mailbox the
+ * grid's phase against the refreshes is left where it starts, and where
+ * the presents' ends straddle a refresh pictures repeat and drop for the
+ * whole session, while FIFO shows them in order whatever the phase
+ * (pace_loop_test testNoClockMode: 61 of 64 runs against 30 with one slip
+ * each).  The v0.6.1 to v0.7.0 rc3 locks stepped on FIFO returns, taken
+ * for vblanks: on NVIDIA (rc3: RTX 3090, three images) two presents return
+ * about 9 ms apart and the next one about 32 ms later, so the steps ran
+ * 9/32/9 ms apart (ghosts in motion); nothing waits on a present's return.
+ *
+ * FIFO: on the display's rate a present returns at once while the queue
+ * has room.  Nothing is held back (pace_fifo_hold is not used under the
+ * lock).  A present that waited a quarter of a slot or more (PaceLockIo.
+ * waited: the backend's own acquire, present and fence-wait time where it
+ * gives one, else the whole present) waited for a vblank (the queue was
+ * full) and is counted (waited, waitedMaxNs).  The skip guard: a step
+ * that ends past the next step's due time skips the rest of its presents
+ * (a frame already shown), unless the present before waited for the
+ * display and the step is less than a slot behind: then the lateness is
+ * the display's own wait, the queue has pictures to show, and a skip is
+ * what would make a picture shown twice.  A step a slot or more behind (a
+ * slow GPU, a 30 ms step) still skips.
  *
  * Off the screen (PaceLockIo.visible false: minimised, hidden, occluded):
  * no presents, the grid goes on.  A step that ends past the next one's due
@@ -150,6 +207,18 @@ bool pace_cap_equals_refresh(int cap, uint64_t refreshNs);
 #define PACE_GRID_RING 31    /* the run's latencies */
 #define PACE_GRID_RING_MIN 15
 #define PACE_GRID_CLEAN 300 /* pictures with the run that end a move away */
+/* the vblank clock's laws */
+#define PACE_VB_MIN 64                 /* refreshes measured before the laws run */
+#define PACE_VB_KP_PERIOD (1.0 / 64.0) /* the slot's share of Tm - slot a step */
+#define PACE_VB_KP_PHASE (1.0 / 16.0)  /* the steps' move: this of each vblank's error */
+#define PACE_VB_OFFSET_DIV 16          /* the step wanted slot / 16 after a vblank */
+
+/* the display clock offered (pace_lock_reset) */
+enum {
+    PACE_CLOCK_KIND_NONE = 0, /* none: the grid on the report */
+    PACE_CLOCK_KIND_SHOWN,    /* present wait (PaceLockIo.shown, presentId) */
+    PACE_CLOCK_KIND_VBLANK    /* the output's vblanks (PaceLockIo.vblank) */
+};
 
 /* the display clock (PaceLock.clock) */
 enum {
@@ -176,9 +245,10 @@ typedef struct PaceLock {
     bool closeSeen;      /* a frame closed since the reset (perFrame is measured from the next) */
     bool framePresented; /* the last frame that closed was presented */
     bool frameHeld;      /* and was held back once (pace_fifo_hold) */
-    bool lastBlocked;    /* the last present took a quarter of a slot or more (FIFO: a vblank's) */
+    bool lastBlocked;    /* the last present waited a quarter of a slot or more (.waited) */
     /* the display clock */
-    int clock; /* PACE_CLOCK_* */
+    int clockKind; /* PACE_CLOCK_KIND_* offered */
+    int clock;     /* PACE_CLOCK_*: its state */
     uint64_t pendId[PACE_GRID_PENDING];
     double pendSlot[PACE_GRID_PENDING];  /* the slot it was presented in */
     bool pendLate[PACE_GRID_PENDING];    /* started half a slot past it or took a slot: not
@@ -198,9 +268,19 @@ typedef struct PaceLock {
     int away;             /* the way the wanted offset moves (+1 later, -1 earlier, 0 none) */
     double awayMoved;     /* how far it moved that way (half a refresh at most) */
     unsigned clean;       /* pictures with the run since the last that was not */
-    /* counts since the reset; waited: presents that took a quarter of a
-       slot or more (FIFO: the queue was full, they waited for a vblank),
-       waitedMaxNs the longest of them */
+    /* the vblank clock: every vblank noted since the reset against the
+       report (vb.n refreshes over vb.sum ns), the refresh measured from
+       them (0: fewer than PACE_VB_MIN yet), the grid moved onto them once
+       (phaseSet; again after a resync or a pause), the last vblank's
+       offset before its step (ns, above 0: the step after it) */
+    PaceIntervals vb;
+    double measuredNs;
+    bool phaseSet;
+    unsigned phaseSnaps;
+    double vbPhaseNs;
+    /* counts since the reset; waited: presents that waited a quarter of
+       a slot or more (PaceLockIo.waited; FIFO: the queue was full, they
+       waited for a vblank), waitedMaxNs the longest wait */
     unsigned presents, steps, waited, unshown, skipped, resyncs;
     uint64_t waitedMaxNs;
     uint64_t droppedNs; /* lag dropped (more than PACE_LOCK_DEBT_VSYNCS periods) */
@@ -235,10 +315,10 @@ float pace_lock_alpha(unsigned k, unsigned n, unsigned perFrame);
 /* A new lock (the first locked vsync, a new n, refresh or present mode, the
  * window back from the background): counts cleared, the grid from nowNs
  * (when the last step was due), its slot the reported refresh.  mailbox:
- * the swapchain presents in mailbox mode; clock: the display clock is
- * offered (PaceLockIo.shown). */
+ * the swapchain presents in mailbox mode; clockKind: the display clock
+ * offered (PACE_CLOCK_KIND_*: PaceLockIo.shown or .vblank). */
 void pace_lock_reset(PaceLock *L, unsigned n, uint64_t refreshNs, uint64_t periodNs, uint64_t nowNs,
-                     bool mailbox, bool clock);
+                     bool mailbox, int clockKind);
 
 /* What the loop needs from the window (a fake one in pace_loop_test). */
 typedef struct PaceLockIo {
@@ -257,6 +337,14 @@ typedef struct PaceLockIo {
        the clock stopped */
     uint64_t (*presentId)(void *user);
     int (*shown)(void *user, uint64_t *id, uint64_t *ns);
+    /* the vblank clock (NULL: none): the next vblank noted, oldest first,
+       *ns when (the now clock): 1 one taken, 0 none yet, -1 the clock
+       stopped */
+    int (*vblank)(void *user, uint64_t *ns);
+    /* how long the last present waited, given its whole time costNs: the
+       backend's own blocked time (the acquire, the present, fence waits)
+       where it knows it.  NULL: costNs */
+    uint64_t (*waited)(void *user, uint64_t costNs);
 } PaceLockIo;
 
 /* One simulated vsync under the lock (L->n > 0), called right after its
@@ -323,25 +411,6 @@ bool pace_fifo_hold(uint64_t nowNs, uint64_t lastReturnNs, uint64_t refreshNs, u
  * does not push every later present back; when startNs is more than a gap
  * past nextPresent (a stall) the grid restarts at startNs + gap. */
 uint64_t pace_next_present(uint64_t nextPresent, uint64_t startNs, uint64_t gap);
-
-/* The display's intervals, for the log (window_host.c's 10 s display
- * line; diagnostics only, nothing paces on them): the times of the
- * display clock's vblanks, or of the lock's present returns, against a
- * slot (the refresh the display reports).  An interval under half a slot
- * is dropped (a wake-up that was not a new refresh; last stays); one under
- * 1.5 slots is one refresh; one of 1.5 slots or more is late, and when it
- * is about k slots (k 2..3: under 3.5) it counts as k refreshes in the
- * mean; a longer one (a pause, the window off the screen) is missed and
- * left out of the mean.  min and max are of the intervals not dropped. */
-typedef struct PaceIntervals {
-    uint64_t last;      /* the last time added (0: none) */
-    double sum;         /* the counted intervals' total (ns) */
-    uint64_t min, max;  /* (ns; min 0: none) */
-    unsigned n;         /* refreshes the sum spans */
-    unsigned intervals; /* intervals not dropped */
-    unsigned late;      /* intervals of 1.5 slots or more */
-    unsigned missed;    /* of those, longer than 3.5 slots (not in the mean) */
-} PaceIntervals;
 
 /* The counts cleared; last kept, so the interval across two blocks counts
  * in the second (zero the struct to forget it too). */

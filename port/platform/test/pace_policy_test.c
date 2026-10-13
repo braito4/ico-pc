@@ -8,6 +8,10 @@
  * (testPresentGap).  The vsync lock's n and alphas (testLockTable), its
  * period's sanity (testGridPeriod: n refreshes within 1 % of the game's
  * period, a display 1 % off refused); its loop is pace_loop_test's.
+ * The vblank clock's laws on a synthetic display (testVblankLaws): the 1 %
+ * bound on the measured refresh, and the phase law's sign (the steps
+ * follow a display that moves later or earlier, a sixteenth of a refresh
+ * after its vblanks).
  */
 #include <stdio.h>
 #include "pace_policy.h"
@@ -423,7 +427,7 @@ static void testLockPause(void)
     PaceLock L;
     const uint64_t r60 = 16666667ull, ntsc = 16683333ull;
 
-    pace_lock_reset(&L, 1, r60, ntsc, 1000000000ull, false, false);
+    pace_lock_reset(&L, 1, r60, ntsc, 1000000000ull, false, PACE_CLOCK_KIND_NONE);
     L.lastReturn = 1000000000ull + 100000ull;
     L.rateFirst = 1000000000ull;
     L.rateLast = 1000000000ull;
@@ -435,6 +439,134 @@ static void testLockPause(void)
     CHECK(L.rateFirst == 1140000000ull && L.rateLast == 1140000000ull);
     CHECK(L.pendSlot[0] == 1140000000.0);
     CHECK(L.resyncs == 0 && L.droppedNs == 0);
+}
+
+/* A synthetic display for the vblank clock: vblank k at phase + k *
+   period, noted exactly; presents return at once */
+typedef struct Synth {
+    uint64_t now;
+    double phase, period;
+    uint64_t k; /* the next vblank to note */
+} Synth;
+
+static uint64_t s_now(void *u)
+{
+    return ((Synth *)u)->now;
+}
+
+static bool s_present(void *u, float a)
+{
+    (void)u;
+    (void)a;
+    return true;
+}
+
+static void s_sleep(void *u, uint64_t ns)
+{
+    Synth *d = u;
+
+    if (ns > d->now) {
+        d->now = ns;
+    }
+}
+
+static int s_vblank(void *u, uint64_t *ns)
+{
+    Synth *d = u;
+    const double v = d->phase + (double)d->k * d->period;
+
+    if (v > (double)d->now) {
+        return 0;
+    }
+    *ns = (uint64_t)v;
+    d->k++;
+    return 1;
+}
+
+/* steps vsyncs, each 3 ms of work; returns the last due time */
+static uint64_t synth_run(PaceLock *L, Synth *d, unsigned vsyncs)
+{
+    const PaceLockIo io = {d, s_now, s_present, s_sleep, NULL, NULL, NULL, s_vblank, NULL};
+    uint64_t due = 0;
+
+    for (unsigned v = 0; v < vsyncs; v++) {
+        due = pace_lock_vsync(L, &io, v % 2 == 0);
+        d->now += 3 * MS;
+    }
+    return due;
+}
+
+/* the due time's offset after the vblank before it (ns) */
+static double synth_offset(const Synth *d, uint64_t due)
+{
+    double x = (double)due - d->phase;
+
+    return x - d->period * (double)(int64_t)(x / d->period);
+}
+
+static void testVblankLaws(void)
+{
+    const uint64_t rep = 16680600ull, ntsc = 16683333ull, t0 = 5000000000ull;
+    PaceLock L;
+
+    /* the measured refresh 1.5 % off the report: another output, left at
+       its first use, the slot back on the report; 0.9 % off: believed,
+       the slot on it */
+    for (int i = 0; i < 2; i++) {
+        Synth d = {t0, (double)t0 - 3e6, (double)rep * (i ? 1.009 : 1.015), 0};
+
+        while (d.phase + (double)d.k * d.period <= (double)t0) {
+            d.k++;
+        }
+        pace_lock_reset(&L, 1, rep, ntsc, t0, false, PACE_CLOCK_KIND_VBLANK);
+        (void)synth_run(&L, &d, 3000);
+        if (i == 0) {
+            CHECK(L.clock == PACE_CLOCK_LEFT_PERIOD);
+            CHECK(L.slotNs == (double)rep);
+        } else {
+            CHECK(L.clock == PACE_CLOCK_ON);
+            CHECK(L.slotNs > d.period - 1.0 && L.slotNs < d.period + 1.0);
+            CHECK(L.measuredNs > d.period - 1.0 && L.measuredNs < d.period + 1.0);
+        }
+    }
+    /* the phase: vblanks 5 ms after the steps; once PACE_VB_MIN are in the
+       grid moves at once to a sixteenth of a refresh after them.  Then the
+       display a fifth of a ms later, then earlier: the steps follow it
+       (moved later, then earlier) and sit a sixteenth after it again */
+    {
+        Synth d = {t0, (double)t0 + 5e6, (double)rep, 1};
+        const double want = (double)rep / PACE_VB_OFFSET_DIV;
+        uint64_t due;
+        double moved;
+
+        pace_lock_reset(&L, 1, rep, ntsc, t0, false, PACE_CLOCK_KIND_VBLANK);
+        due = synth_run(&L, &d, PACE_VB_MIN + 4);
+        CHECK(L.phaseSet && L.phaseSnaps == 1);
+        CHECK(synth_offset(&d, due) > want - 1000.0 && synth_offset(&d, due) < want + 1000.0);
+        due = synth_run(&L, &d, 600);
+        CHECK(synth_offset(&d, due) > want - 100.0 && synth_offset(&d, due) < want + 100.0);
+        /* the steps move later (nudges above 0) within 40 steps; the
+           period law takes up a part of the move later (one interval 200 us
+           long is in the mean) and the nudges give it back, the steps a
+           sixteenth after the vblanks throughout */
+        moved = L.nudgeSum;
+        d.phase += 200000.0;
+        (void)synth_run(&L, &d, 40);
+        printf("vblank phase: a sixteenth %.1f us; the display 200 us later: the steps moved "
+               "%+.1f us in 40 steps\n",
+               want / 1e3, (L.nudgeSum - moved) / 1e3);
+        CHECK(L.nudgeSum - moved > 150000.0 && L.nudgeSum - moved < 210000.0);
+        due = synth_run(&L, &d, 600);
+        CHECK(synth_offset(&d, due) > want - 10000.0 && synth_offset(&d, due) < want + 10000.0);
+        /* earlier: the steps move earlier */
+        moved = L.nudgeSum;
+        d.phase -= 400000.0;
+        (void)synth_run(&L, &d, 40);
+        CHECK(L.nudgeSum - moved < -300000.0);
+        due = synth_run(&L, &d, 600);
+        CHECK(synth_offset(&d, due) > want - 10000.0 && synth_offset(&d, due) < want + 10000.0);
+        CHECK(L.clock == PACE_CLOCK_ON && L.phaseSnaps == 1 && L.skipped == 0);
+    }
 }
 
 /* The first present on a swapchain made since the last one
@@ -674,6 +806,7 @@ int main(void)
     testLimiterGrid();
     testLockTable();
     testGridPeriod();
+    testVblankLaws();
 
     if (fails) {
         printf("pace_policy_test: %d failures\n", fails);
