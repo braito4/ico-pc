@@ -1,0 +1,636 @@
+# The renderer (rd)
+
+[rd](ARCHITECTURE.md#terms) records what the game draws as [lists](ARCHITECTURE.md#terms) of
+commands and [replays](ARCHITECTURE.md#terms) them on the [RHI](ARCHITECTURE.md#terms) with the
+[GS](ARCHITECTURE.md#terms)'s rules for state, sampling, blending and depth. Callers:
+[GS.md](GS.md); VU shaders: [VU1_PROGRAMS.md](VU1_PROGRAMS.md); sources: [SHADERS.md](SHADERS.md).
+
+## Files
+
+| path | what it holds |
+| --- | --- |
+| `port/render/rd.h` | the API the game's render layer calls; the model in its header comment |
+| `port/render/rd_internal.h` | the command records, the context `g_rd`, what the rd files and tests share |
+| `port/render/rd_state.h` | the finite GS state the game uses: blend, test, TEXA, wrap, filters, the pipeline key |
+| `port/render/rd_core.c` | recording: the 13 lists, the payload arena, state deltas, targets, the frame ring |
+| `port/render/rd_frame.c` | the flip's frame head, the Z scale per target, the VU block, the camera in FrameCB |
+| `port/render/rd_tex.h`, `rd_tex.c` | the texture cache: GS formats decoded into rd textures |
+| `port/render/rd_mesh.h`, `rd_mesh.c` | the VU mesh path (VU1_PROGRAMS.md) |
+| `port/render/rd_replay.c` | a frame onto the RHI: every command's replay |
+| `port/render/rd_pipeline.c` | pipeline keys from the state block, the pipeline cache, the reachable set |
+| `port/render/rd_dst_read.c` | the exact GS blend read from the destination in the fragment shader |
+| `port/render/rd_post.c` | `rd_post`: each post kind as the GS writes and sprites GsBase.c issues |
+| `port/render/rd_blur.c` | staticBlur.c's sprites and the reduction's, for `doBlurSprite` |
+| `port/render/rd_shadow.c` | the shadow count on the stencil |
+| `port/render/rd_water.c` | render-to-texture blocks, target aliases, camera scopes, pool STs |
+| `port/render/rd_fog_path.c` | how the fog reads the scene depth; the fog probe and self-test |
+| `port/render/rd_content_hide.c` | the content table: stage faces the native frame must not show |
+| `port/render/rd_content_chain.c`, `rd_chain.h` | the chains drawn at their links' size |
+| `port/render/rd_join.c` | the region rule's card test joined over a part's packets |
+| `port/render/rd_screen_planes.c` | the attribute planes of screen-prim triangles |
+| `port/render/rd_camera_blend.h` | the blended camera, shared with the game's cull |
+| `port/render/rd_perf.c` | the per-replay performance records |
+| `port/render/rd_dump.c`, `rd_png.c` | frame dumps; a minimal PNG writer |
+| `port/render/tools/rd_replay_tool.c` | [the replay tool](ARCHITECTURE.md#terms) |
+| `port/render/rd_interp.c`, `rd_present.c`, `rd_crt.c`, `rd_video.c` | presentation ([DISPLAY.md](DISPLAY.md)) |
+| `port/render/texpack*.c`, `modelpack.c`, `gltf.c` | texture and model packs ([PACKS.md](PACKS.md)) |
+
+The file table in `port/render/rd_internal.h` lists only part of these.
+
+## The model
+
+The PS2 game builds 13 priority-ordered DMA chain lists per frame and kicks them in order 0..12
+at `dl_Swap`, and the GS is one state machine, so a register written in one list is still in
+force when the next starts. rd keeps both facts: a frame is 13 ordered command lists
+(`RD_LIST_COUNT`) recorded by the game [fiber](ARCHITECTURE.md#terms) and replayed in order
+against one persistent state block. Within a list submission order is draw order; rd never sorts
+by material (`port/render/rd.h`).
+
+| list | what draws in it |
+| --- | --- |
+| 0 | opaque world and characters |
+| 1 | semitransparent skinned |
+| 2 | semitransparent static, points and lines |
+| 3 | shadow volumes, then the shadow composite (inherits state) |
+| 4 | specular and reflection passes, puddle and pool reflection, fog |
+| 5 | dissolving objects (inherits state) |
+| 6 | particles |
+| 7 | shine level 1, then depth of field and motion blur |
+| 8, 9 | shine levels 2 and 3 |
+| 10 | the softening chain |
+| 11 | UI, subtitles, film noise, brightness, keep, fade, letterbox |
+| 12 | debug font; the reduction at its end |
+
+(`port/render/rd.h`, "Lists").
+
+**Coordinates.** Call sites pass what they passed to the GS: XYZ in 12.4 fixed point about the
+2048, 2048 window centre, Z as the GS value the call site computed, UVs in 12.4 texels or STQ.
+rd records them as they are; the replay converts them (`port/render/rd.h`, "Coordinates";
+`port/render/rd_replay.c` (`rd__frame_group_ex`)).
+
+**Defaults and leakage.** `rd_begin_frame` records the TEST, ZBUF, FBA and
+[TEXA](ARCHITECTURE.md#terms) defaults
+`gsb_SetGsDefault` writes, at the heads of every list but 3 and 5, through the ordinary state
+calls (`port/render/rd_core.c` (`recordDefaults`)). The values are in
+[GS.md](GS.md#the-gs-defaults-per-list).
+
+**Keep frames.** `rd_end_frame(1)` (`fbKeep`: pause and memory card screens) replays lists 11
+and 12 only, on top of the retained DISPLAY (`port/render/rd.h` (`rd_end_frame`)).
+
+**Threads.** Every `rd_*` call comes from the game fiber. The game's post passes are appended by
+the same code inside the vsync before `rd_end_frame`, so there is one hand-off point. GPU work the
+game's calls cause (replay, pipeline creation, present) runs through `rd_set_host_call`, which the
+window sets to `ico_sched_call_on_host` so the driver runs on the host stack in the host FP mode
+(`port/render/rd.h` (`RdHostCall`); `port/render/rd_core.c` (`rd__on_host`)).
+
+## Recording
+
+A list is an array of fixed-size `RdCmd` records (40 bytes: a type, seven bytes, the draw's key,
+four words, two floats); variable data (vertices, transforms, post parameters) lives in the
+frame's payload arena, addressed by byte offset. Every field has a fixed width and there are no
+pointers, so a frame can be written to a file as it is and a dump reads the same on 32-bit and
+64-bit builds (`port/render/rd_internal.h` (`RdCmd`, `RdCmdType`)).
+
+| kind | commands |
+| --- | --- |
+| state deltas | `RDC_TEST`, `RDC_BLEND`, `RDC_ABE`, `RDC_ZWRITE`, `RDC_FBA`, `RDC_PABE`, `RDC_COLCLAMP`, `RDC_TEXA`, `RDC_FILTER`, `RDC_WRAP`, `RDC_TEXTURE`, `RDC_TEXTURE_OFF`, `RDC_UVOFFSET`, `RDC_COLORMASK`, `RDC_TARGET`, `RDC_SCISSOR`, `RDC_ALPHA`, `RDC_SHADE`, `RDC_AA1` |
+| actions | `RDC_CLEAR`, `RDC_SCREEN`, `RDC_EXACT_BLEND`, `RDC_COPY` |
+| VU draws | `RDC_MESH`, `RDC_SKINNED`, `RDC_GRID`, `RDC_PARTICLES` |
+| shadows | `RDC_SHADOW_RESET`, `RDC_SHADOW_STRIP`, `RDC_SHADOW_RESOLVE` |
+| post and text | `RDC_POST_STUB` (fog and blur sprites), `RDC_OVERLAY_TEXT` (collected by the present) |
+| recorded only | `RDC_WORLD_PRIMS` (tests; no replay model) |
+
+State calls record deltas and change nothing at once (`port/render/rd_core.c`). The callers of
+each are listed in `port/render/rd.h` ("state deltas"); the ones that set one GS register alone
+(`rd_abe`, `rd_blend_func`, `rd_scissor`, `rd_sampler_tex1`, `rd_sampler_wrap`, `rd_gouraud`,
+`rd_aa1`) exist for the register decoder (`port/render/rd.h`).
+
+**The frame ring.** The two most recent closed frames are retained for
+[interpolation](ARCHITECTURE.md#terms); the frame
+being recorded takes a third slot (`RD_FRAME_RING` 3) (`port/render/rd_core.c`).
+
+**`rd_begin_frame`** applies pending settings (a texture pack switched off reverts its
+replacements; the model pack and its dump switch; a change of the targets' scales recreates them
+on the host stack and drops the interpolation history), halves the scene scale when a scene-sized
+texture did not fit the GPU since the last frame, opens the slot after the last closed frame with
+the persistent state as its start state, and records the list defaults
+(`port/render/rd_core.c` (`rd_begin_frame`)).
+
+**`rd_end_frame`** keeps the frame head in the first replayed list (`rd__frame_head_resolve`),
+walks the frame's state deltas in replay order from its start state to get its end state (the next
+frame's start: state leaks from frame to frame as GS registers do), and with interpolation off
+replays and presents the frame once on the host stack. With `ICO_RD_DUMP_EVERY` set it also writes
+dumps (below) (`port/render/rd_core.c` (`rd_end_frame`, `rd__walk`)). `rd_discard_frame` drops an
+open frame unreplayed, as the PS2 drops a display list it never kicks (`port/render/rd.h`).
+
+**Keys.** `RD_KEY(obj, part, ordinal)` names the same logical draw in consecutive frames so the
+presenter can pair them; key 0 snaps (`port/render/rd.h` (`RdKey`)).
+
+**The draw filter.** The model viewer shows one object: `rd_set_draw_filter` records a world draw
+only when its key's object is in the set, and `rd_draw_filter_open` learns the set from the
+object's own display list. UI and full-screen prims, post passes, state and targets are never
+filtered (`port/render/rd.h` ("the draw filter")).
+
+## The state
+
+`port/render/rd_state.h` enumerates the GS state the game reaches, from the sources, and the
+pipelines are built from these enumerations, not from the whole register space.
+
+**ALPHA.** `out = ((A - B) * C >> 7) + D`, A, B, D from Cs, Cd, 0 and C from As, Ad, FIX. The
+twelve modes of `gif_SetAlpha` (`alphaTable`) are `RdBlend`; modes 3 and 8 to 11 are reachable
+only through the BGA lightning record, so every entry is kept. FIX is 0..255 with 0x80 = 1.0,
+passed through unchanged (`port/render/rd_state.h` (`RdBlend`)).
+
+| RdBlend | ALPHA | equation | used by |
+| --- | --- | --- | --- |
+| 0 | 0x68 | Cs*FIX + Cd | shadow count, dissolve in |
+| 1 | 0x62 | Cd - Cs*FIX | dissolve out |
+| 2 | 0x64 | (Cs-Cd)*FIX + Cd | letterbox, motion blur, softening, fades |
+| 3 | 0x29 | Cd*FIX + Cs | disc data only |
+| 4, 7 | 0x44 | (Cs-Cd)*As + Cd | default material |
+| 5 | 0x48 | Cs*As + Cd | additive, specular |
+| 6 | 0x42 | Cd - Cs*As | subtractive material |
+| 8, 9, 10 | 0x58, 0x52, 0x54 | the Ad forms | disc data only |
+| 11 | 0x49 | Cd*As + Cd | disc data only |
+
+**TEST** is decomposed into `RdTestState` (ATE, ATST, AREF, AFAIL, DATE, ZTE, ZTST); the fourteen
+literal values the game writes are named `RD_TEST_*` so call sites stay greppable
+(`port/render/rd_state.h` (`rd_test_from_gs`)). **TEXA** has three modes (`RdTexA`: 80/80, 7F/81
+AEM, 80/80 AEM). **CLAMP** is REPEAT or CLAMP per axis. **TEX1**'s filters are nearest or linear,
+and its mipmap fields pack into one word (`rd_tex1_lod`: MMIN, MXL, LCM, L, K) that picks the GS
+level of a texture with GS levels. **TFX** is MODULATE or DECAL here; HIGHLIGHT reaches only the
+staticBlur sprites, which carry it in their record (`port/render/rd_state.h`).
+
+`RdDrawState` is the full block a list replays against. `RdPipelineKey` (16 bytes) is what
+selects a GPU pipeline: program, blend path, Z test and write, colour mask, stencil mode, target
+format, topology, AA1, the no-dual-source form and the sample count. Everything else (AREF, FIX,
+sampler settings, PABE, FBA, DATE) goes into uniforms (`port/render/rd_state.h` (`RdPipelineKey`,
+`RD_PIPELINE_REACHABLE_MAX`)).
+
+## Frames and targets
+
+**The frame head.** `rd_frame_head` records the flip's draw environment (FRAME with FBMSK 0,
+PSMZ32 Z write on, the centred XYOFFSET, COLCLAMP 1, TEST 0x50000) and its clear at the head of
+both list 0 and list 11, since whether the frame replays from 0 or from 11 is known only when it
+closes; `rd_end_frame` turns the copy that is not first into NOPs. `rd_frame_flip` patches the
+clear colour and the half offset in place (`port/render/rd_frame.c` (`recordHead`,
+`rd_frame_flip`, `rd__frame_head_resolve`)).
+
+**Named targets** stand in for fixed VRAM regions. The scene-class ones (SCENE, DISPLAY, WORK2,
+AURA_WORK, the DATE snapshot, DISPLAY_HELD) are as wide as the
+[native frame](ARCHITECTURE.md#terms) `W` in GS pixels; the
+work buffers are the PS2's sizes per 512 columns, so a buffer pixel covers the screen pixels it
+covers on the PS2 at every aspect (`port/render/rd_core.c` (`namedTargetDesc`, `sceneClass`)):
+
+| target | size (GS pixels) | stands for |
+| --- | --- | --- |
+| SCENE | W x H, with depth and stencil | FBP 0x40 / TBP 0x800 |
+| DISPLAY | W x H/2 | FBP 0, the shown buffer, retained across frames |
+| SHADOW0, 1, 2 | W/2 x 256, W/4 x 128, W/8 x 64 | the shadow blur levels |
+| WORK0, WORK3 | W/2 x 128 | staticBlur work buffers |
+| WORK1, AA0 | W/2 x 256 | blur work; softening level 1 |
+| AA1, FEED128, AURA_TAP | W/4 x 128 | softening level 2; aura feedback |
+| WORK2, AURA_WORK | W x H | flare mask; aura buffer (with SCENE's Z) |
+| WORK2_PAD | W/2 x 64 | a band the game clears and never reads |
+| DATE_SNAPSHOT | W x H, R8 | the alpha MSB copy for DATE |
+| FEED_HELD, DISPLAY_HELD | as FEED128, DISPLAY | host only: a [tick](ARCHITECTURE.md#terms)'s first present's copy |
+
+**Scale.** A scene-class target's texture is its GS size times the scene scale; the work buffers
+take `rd_work_target_scale` (1 at the GS height, else the scene height over 448, at most 2), the
+shadow levels none (`port/render/rd_core.c` (`rd__target_scale_of`, `rd_work_target_scale`)).
+Under Full pixel a frame-wide scene target holds the frame's exact visible width plus
+`RD_FULL_PIXEL_GUARD` texels each side, centred, so the window's pixels are its texels
+(`port/render/rd_core.c` (`rd__target_scale_of`)). [Scene scale](ARCHITECTURE.md#terms) and the
+display options are [DISPLAY.md](DISPLAY.md).
+
+**Temporary targets** (`rd_temp_target`) live until the next `rd_begin_frame` unless kept, and
+come from a pool of parked textures of the same size (`port/render/rd_core.c`
+(`rd__temp_target_alloc`)). A target with a new texture starts cleared to zero colour and
+stencil and depth 1.0, so a start's first frames never show the driver's old memory
+(`port/render/rd_replay.c` (`clearNewTargets`)). When the GPU cannot hold a scene-sized texture
+the scale is halved between frames and `rd_scene_scale_lowered` reports it to the Resolution row
+(`port/render/rd_core.c` (`rd__note_scene_pressure`, `rd_begin_frame`)).
+
+**Z.** The shaders map GS Z to a depth that grows with it (`gs_z_to_depth`), so GS GEQUAL is the
+GPU's GEQUAL. The scale is per target Z format: PSMZ32 is z * 2^-33 on a D32S8 buffer, z * 2^-32 on
+the Vulkan D24S8 fallback; PSMZ24 2^-24; PSMZ16 2^-16 (`port/render/rd_frame.c`
+(`rd__target_z_scale`, `rd__gs_depth`)).
+
+**The VU block and the camera.** `rd_set_vu_common` keeps the last block of the open frame and
+updates the VU image of all 13 lists; `rd__fill_camera_cb` puts the frame camera into FrameCB
+(view, projection, their product, the eye, near, far, zoom, aspect) (`port/render/rd_frame.c`).
+
+## Textures
+
+The texture cache decodes the TIM2 bytes Texture.c keeps in memory into an rd texture the first
+time it is needed and keeps it until the content changes (`port/render/rd_tex.h`):
+
+- **key**: (texture id, content generation, TEXA mode); the mode is one of `RdTexA` (alpha baked)
+  or `RDTEX_TEXA_REPLAY` (the source format's alpha kept and TEXA applied by the shader at replay,
+  so TEXA leaks between lists as on the GS).
+- **decode**: PSMCT32, 24, 16, 16S, PSMT8, PSMT4, PSMT8H, PSMT4HL, PSMT4HH and the PSMZ formats;
+  CLUTs in CSM1 or index order. Output RGBA8 with the raw GS alpha (0x80 = 1.0) for 32-bit texels,
+  the A bit for 16-bit ones and 0 for 24-bit ones (`rdtex_decode`).
+- **size**: padded with zero texels to 2^TW x 2^TH, so STQ and REPEAT wrap where the GS wraps.
+- **update**: a new generation of the same size and format re-expands into the same rd texture;
+  otherwise the old one is retired and destroyed two `rdtex_frame_tick` calls later.
+- **levels**: a mipmapped TEX1 stores the TIM2's own levels when they are authored pictures
+  (`rdtex_store_levels`, `RDTEX_AUTHORED_RATIO`), sampled at the GS's level; otherwise the
+  replay builds the further levels by a 2x2 box, colour weighted by alpha, with alpha coverage
+  kept for alpha-tested textures (`port/render/rd_replay.c` (`uploadMips`);
+  `port/render/rd_tex.h` (`rdtex_build_mip_chain`, `rdtex_keep_alpha_coverage`)).
+
+## The replay
+
+`rd__replay_frame` records one RHI command list per replay. The lists are walked in order 0..12
+(11 and 12 for a keep frame) from the frame's start state; state commands update the state block
+and actions draw (`port/render/rd_replay.c`):
+
+| command | replay |
+| --- | --- |
+| `RDC_CLEAR` | a render pass with a load-op clear, or a pending clear folded into the next pass |
+| `RDC_SCREEN` | GS window-space prims through `sprite_*_vs` / `sprite_ps` (`doScreen`) |
+| `RDC_EXACT_BLEND` | `blend_int` on RGBA8_UINT copies of source and destination, copied back (`doExact`) |
+| `RDC_COPY` | a texture copy (`doCopy`) |
+| `RDC_MESH` .. `RDC_PARTICLES` | the VU1 program shaders (`doVu`) |
+| `RDC_SHADOW_*` | the stencil count (`doShadowReset`, `doShadowStrip`, `doShadowResolve`) |
+| `RDC_POST_STUB` | `RD_POST_FOG`: `doFog`; the reduction and the staticBlur kinds: `doBlurSprite` |
+| `RDC_OVERLAY_TEXT` | nothing here: the present collects it |
+| anything else | `rd__not_implemented`: logged once and skipped (fatal in the tests) |
+
+**GS sampling rules.** The GS samples a pixel at its integer coordinate and covers `x0 <= x < x1`
+for a sprite; the GPU samples at x + 0.5 with the top-left rule. FrameCB's origin moves GS
+coordinates half a pixel right and down, so a GS integer lands on a GPU pixel centre and the two
+rules select the same pixels. The game's -4 corner nudges and +8 UV nudges stay in the data
+(`port/render/rd_replay.c`, header comment).
+
+**Screen prims.** `expand` turns sprites, fans and strips into triangle lists, points into
+one-pixel sprites and line strips into line lists, after the mirror mode's UI flip. Sprites on a
+scaled target have their corners snapped to whole GS pixels. Consecutive `RDC_SCREEN` commands
+that bind the same things are one draw (`joinsRun`, `flushScreenRun`); every action that records
+anything flushes the run first (`port/render/rd_replay.c` (`expand`, `doScreen`, `ScreenRun`)).
+A triangle with STQ is drawn perspective-correct, and the screen-prim triangles of the sprite
+shaders carry their own colour and STQ planes (below) (`port/render/rd_replay.c`).
+
+**Passes.** Render passes stay open across draws to the same colour and depth pair and close on a
+target change, a clear, a copy, or a draw that samples a target whose state must change. rd tracks
+every texture's RHI state (the backends do not). A draw that samples its own render target samples
+a copy taken just before it, as the GS reads the live buffer (`port/render/rd_replay.c`, header
+comment).
+
+**The exact viewport.** While a frame's lists replay, every pass has one viewport size, the
+largest power of two the GPU takes, centred on the target, and FrameCB maps positions to it; the
+scissor, always inside the target, bounds the drawing. Every step is exact for a GS position at an
+integer scale, and the clip-space numbers are the same at every frame width, so the GPU clips the
+same corners the same way whatever the width (`port/render/rd_replay.c` (`s_vpExact`)). The
+present and the camera probe keep the plain mapping.
+
+**Uploads.** Before the first pass the replay uploads pending textures and their levels through
+the frame's upload ring, and the static meshes the frame draws into the device arena (once, and
+again only after a morph rewrote them); the interpolation's scratch meshes stay on the ring
+(`port/render/rd_replay.c` (`uploadTextures`, `uploadMeshes`)).
+
+**Bind groups.** Bind groups are valid only in the frame slot they were made in, so their caches
+are tagged with an epoch every `rhi_wait_frame` of the renderer starts anew (`rd__wait_frame`).
+Uniform blocks are written once per replay per content (FNV-1a), and texture groups are cached by
+(texture, sampler, DATE snapshot) (`port/render/rd_replay.c` (`s_bindEpoch`)).
+
+**DATE snapshots.** TEST.DATE tests the destination alpha's MSB. The replay copies the bound
+target's alpha MSB into the R8 `RD_TARGET_DATE_SNAPSHOT` over the area the draw can touch, and the
+shader tests it at the fragment's own texel. The snapshot is retaken when the target changed or
+anything may have written alpha since, so consecutive DATE draws see each other's writes; within
+one draw, overlapping primitives see the snapshot (`port/render/rd_replay.c` (`dateSnapshot`,
+`rd__date_retake`)).
+
+**Exact blends.** `RDC_EXACT_BLEND` (from `rd_post` with `exactInt`) runs the GS integer blend
+through `blend_int` on RGBA8_UINT copies of both targets and copies the result back; source and
+destination must be the same size (`port/render/rd_post.c`; `port/render/rd_replay.c`
+(`doExact`)).
+
+**AA1.** PRIM.AA1 on lines and triangles: `aa1Expand` adds a one-GS-pixel fringe along each edge
+(outside it, along its minor axis) whose coverage runs from 1 on the edge to 0 and is the
+fragment's alpha in `sprite_aa1_ps`; a triangle's own vertices carry `ICO_AA1_INTERIOR`. A draw
+whose fringes need Z write off is split in two (`port/render/rd_replay.c` (`aa1Band`,
+`aa1Fringe`, `aa1Expand`)).
+
+**COLCLAMP 0.** Additive and subtractive screen prims under COLCLAMP 0 keep the low 8 bits of
+every result (darkVolume.c's count). `doScreenWrap` draws them into an RGBA16F accumulator and then
+resolves `(Cd + acc) mod 256` against a copy of the target (`port/render/rd_replay.c`
+(`doScreenWrap`); `port/shaders/raw_wrap.hlsl`).
+
+**VU draws.** `doVu` binds the draw's VU block, the mesh stream (the device arena or the ring),
+the bones for a skinned draw, and sets the draw's flags: a chain clip plane, the free camera's
+`ICO_VU_BEHIND_EYE`, `ICO_VU_EXTENDED` outside [out of the box](ARCHITECTURE.md#terms)
+(`vuExtended`), and
+`ICO_VU_TICKS` for a draw seen through a camera blended between two ticks. A grid draw builds its
+index list here and marks every triangle of a grid of two strips or more joined
+(`port/render/rd_replay.c` (`doVu`, `doVuDraw`, `vuExtended`)). What the flags do is
+[VU1_PROGRAMS.md](VU1_PROGRAMS.md#the-region-rule).
+
+**The MSAA epoch.** With an MSAA setting (never under the Original
+[preset](ARCHITECTURE.md#terms)), SCENE has a
+multisampled twin, SCENE_MS. The epoch opens at the first pass into SCENE (with SCENE's depth or
+none) and every such pass draws into SCENE_MS; it closes at the first command that reads or writes
+SCENE's single-sampled colour or depth any other way (a texture read of SCENE, a DATE snapshot, a
+copy or exact blend, the wrap's snapshot, the shadow count's pass, the end of the replay). Closing
+resolves the colour by the samples' mean and the depth by the smallest sample (the farthest under
+GEQUAL), so a surface the game draws again after the close with GEQUAL passes where it passed at
+1x. Integer-aligned sprites drawn inside it are moved half a texel so they cover whole pixels; the
+fog runs per sample inside the epoch when the device has sample-rate shading
+(`port/render/rd_replay.c`, "the MSAA epoch"; `msaaPass`, `msaaEnd`, `msaaSpriteExpand`). When no
+way of reading the multisampled depth passed the fog's self-test, rd draws without MSAA and
+`rd_aa_msaa_blocked` says so (`port/render/rd.h` (`rd_aa_msaa_blocked`)).
+
+## Pipelines
+
+The shaders take the alpha test, the AFAIL split, the texture function, TCC, TEXA, FBA, PABE,
+DATE and the blend factor's source as uniforms, so the pipeline key is normalised: one
+representative blend per blend path, and the AFAIL split carried by Z write and colour mask
+(`port/render/rd_pipeline.c`, header comment). The blend paths on UNORM targets
+(`port/render/rd_pipeline.c`):
+
+| modes | path |
+| --- | --- |
+| 0, 1, 5, 6 (Cs*F + Cd, Cd - Cs*F) | `DF_PREMUL`: the shader writes `min((Cs*F) >> 7, 255)`, the blender adds or reverse-subtracts with ONE; exact for F up to 255 |
+| 2, 4, 7 (the LERPs) | dual-source factor F/128, F above 0x80 clamped |
+| 3 (Cd*FIX + Cs) | SRC1 as the destination factor, FIX clamped to 0x80 |
+| 8, 9, 10 (Ad) | DST_ALPHA, which reads Ad/255 |
+| 11 (Cd*As + Cd) | not representable: Cd unchanged, reported once |
+
+PABE writes Cs unblended for a pixel whose As MSB is clear, through the second output; the
+premultiplied and Ad forms cannot, and those pixels blend (reported once). On a device without
+dual-source blending the LERPs and mode 3 draw in two passes: colour with the factor in c0.a, then
+when the mask has A an alpha pass with blending off and no Z write under a Z test that admits the
+colour pass's fragments (`port/render/rd_pipeline.c` (`rd__expand_no_dual`)). Where the
+destination read is available these paths give way to it (next section).
+
+The cache holds four times the enumerated reachable set (`RD_PIPELINE_REACHABLE_MAX` 768); a key
+past it or one whose creation failed is logged once and drawn as nothing, never an abort
+(`port/render/rd_state.h`; `port/render/rd_pipeline.c` (`rd__get_pipeline`)).
+`rd_precreate_pipelines` creates the whole reachable set at start so the first frames do not stall
+on the driver (`port/render/rd.h` (`rd_precreate_pipelines`)).
+
+## Destination reads and blend paths
+
+The GS blends in integers with an arithmetic shift, no clamp of C, then COLCLAMP, PABE and FBA;
+the GPU's fixed-function blender computes in float and rounds to nearest, one level above the GS
+on many LERP channels. The destination read computes the GS result in the fragment shader from the
+pixel's own destination, read in rasterization order, with blending off
+(`gs_dst_channel`, `port/shaders/gs_math.hlsli`) (`port/render/rd_dst_read.c`). Two realisations
+(`port/rhi/rhi.h` (`RhiDstRead`); `port/render/rd_dst_read.c`):
+
+- **attachment**: the colour attachment read as an input attachment in rasterization order
+  (Vulkan rasterization-order attachment access over dynamic rendering local read). Depth,
+  stencil, discard and write mask stay fixed-function. Every pass on a readable RGBA8 target is
+  begun readable.
+- **storage**: the target as a rasterizer-ordered view (D3D12 ROV; Vulkan storage image under
+  fragment shader interlock). The target is then no colour attachment, so a blended draw runs in a
+  storage pass of its own with the depth attached. A draw that writes Z and can discard is split
+  into colour without Z write then a depth-only pass when its Z test is ALWAYS; under
+  GEQUAL/GREATER it stays on the fixed-function blend (logged once).
+
+The preference is attachment, then storage, then the fixed-function blend. What goes through it:
+the screen prims, the VU meshes and the fog sprite whose fixed-function blend is not the GS's (the
+LERPs, mode 3, the Ad forms, mode 11, PABE on the premultiplied forms, COLCLAMP 0) on RGBA8
+targets. What stays on the fixed-function blend: the premultiplied forms (already exact), the MSAA
+epoch's passes, targets other than RGBA8, the port's presentation overlay. The staticBlur sprites
+and `blend_int` keep their own exact paths (`port/render/rd_dst_read.c`; `port/render/rd_replay.c`
+(`dstPassMode`, `passWantsReadable`)).
+
+## Post passes
+
+`rd_post` records the post kinds that are plain GS sprites in the original as the register writes
+and sprites the original routine issues, through the same `rd_*` calls, in the original's order.
+They leak state into the rest of the list as the packets do (the fade leaves ALPHA 0x44 and PABE
+0, the keep pass TEXA 80/80 and DISPLAY bound). Registers the original does not write are left as
+they are; every pass that writes FRAME also records FBMSK 0 (`port/render/rd_post.c`, header
+comment). The fade and letterbox sprites carry a key so the presenter can blend them between ticks;
+the other post sprites snap (`port/render/rd_post.c` (`s_spriteKey`)).
+
+| kind | source | what it records |
+| --- | --- | --- |
+| REDUCTION | `gsb_Reduction` | DISPLAY cleared, SCENE drawn into it at half height, bilinear, tinted, inside a 2-pixel border crop; both sprites through the GS sprite model |
+| KEEP | `gsb_KeepFrameBuffer` | DISPLAY read as PSMCT24 drawn back over the scene at 112 grey |
+| FADE | `gsb_fade` | a full-scene sprite, ALPHA 0x44, PABE 0, the fade colour |
+| LETTERBOX | `gsb_scissorOnDemo` | two 58-line bars, ALPHA 0x64 with FIX the band level |
+| BRIGHTNESS | `gsb_controlBrightness` | a white sprite, alpha the step, `gif_SetAlpha(1, 7, 0)` |
+| AA_DOWNSAMPLE, AA_COMPOSITE | `gsb_antiAlias` (screen softening) | SCENE into AA0 (W/2 x 256), AA0 into AA1 (W/4 x 128); then AA1 and AA0 back into SCENE with LERP FIX |
+| FILM_NOISE | `gsb_filmNoise` | the grain sprite over the bound texture, ALPHA 0x44 |
+| FOG | `fog_DrawFog` | the fog sprite and its CLUT, drawn by `doFog` |
+| COMPOSITE_FIX | effects | a textured quad with ALPHA and FIX; with `exactInt` an `RDC_EXACT_BLEND` |
+| COPY | `gif_MoveImage` | a texture copy |
+| MOTION_BLUR .. EYE_BLUR | `staticBlur.c` | one GS sprite each, recorded by `rd_blur.c` |
+
+`RD_POST_SHADOW_RESOLVE`, `RD_POST_BLUR` and `RD_POST_PRESENT_BLIT` are reserved numbers no caller
+issues; `rd_post` records nothing for them (logged once) (`port/render/rd_post.c`).
+
+**The staticBlur sprites.** `staticBlur.c`'s host path records its register writes as rd state
+and each sprite as `rd_post` of its effect's kind: motion blur (DISPLAY read as RGB24, H/2 stretched
+to H, LERP FIX), depth of field (SCENE to WORK1 to WORK0, six blur passes, four planes), glow
+(flare in modes 0 and 1, bloom in mode 2 with HIGHLIGHT), aura (AURA_WORK, AURA_TAP, FEED128
+feedback) and the sun's eye blur (WORK0 to WORK3) (`port/render/rd.h` (`RdPostKind`)).
+`rd_blur.c` records each as an `RdPostRec` with the corners, UVs, RGBAQ and Z as the GS gets them,
+the TEX0 size and TFX, and `doBlurSprite` draws it through `fx_rect_vs` / `fx_sprite_ps` in the GS
+integer arithmetic (`port/render/rd_blur.c`, header comment):
+
+- coverage: pixels with `x0 <= X < x1` in 12.4, inside the scissor;
+- UV stepped in integers, 12.4; nearest, or the GS bilinear on 4-bit fractions, each texel wrapped
+  by CLAMP on the TEX0 size, clamped to the backing target and expanded by TEXA before filtering;
+- TFX MODULATE, DECAL, HIGHLIGHT, HIGHLIGHT2, clamped at 255;
+- the alpha test, DATE against the destination before the sprite, the Z test in hardware;
+- `((A - B) C >> 7) + D` on integers with PABE, COLCLAMP, FBA, written to UNORM8 as k / 255.
+
+The destination is read from a snapshot taken just before the sprite, so the result is the GS
+integer arithmetic of every pass, feedback or not (`port/render/rd_blur.c`). With Full pixel the
+reduction's textured sprite is drawn with the whole target as scissor and both axes clamped, so
+the border shows the picture SCENE holds (`port/render/rd_replay.c` (`doBlurSprite`)).
+
+## Shadows
+
+The PS2 adds each shadow-volume face into a scene-sized buffer (FBP 0x142) with ALPHA 0x68 FIX
+0x80 and COLCLAMP 0, the face colour 0x04 or 0xFC by its facing, so a pixel ends at 4n mod 256 for
+n the net count of faces in front of the scene; `shadow_Draw` then reads it as PSMCT24 under TEXA
+0x80 AEM, blurs and composites it (`port/render/rd_shadow.c`, header comment).
+
+rd counts on the stencil of the bound depth target (SCENE) instead: INCR_WRAP for 0x04, DECR_WRAP
+for 0xFC, both faces, where the depth test passes, no colour or depth write, write mask 0x3F, so
+the stencil holds n mod 64 and 4n mod 256 = 4 (n mod 64). The resolve writes the colour the GS sum
+would have left: six passes with the stencil test EQUAL on bit k add 4 << k to RGB, a seventh
+writes A = 0x80 where the count is not 0, the TEXA expansion of the PSMCT24 read. The order of the
+faces does not matter on either side, so the triangles are drawn as two lists, increments then
+decrements (`port/render/rd_shadow.c`; `port/render/rd.h` (`rd_shadow_count_target`,
+`rd_shadow_tris`, `rd_shadow_resolve`); `port/render/rd_replay.c` (`doShadowStrip`,
+`doShadowResolve`)).
+
+## Water and render-to-texture blocks
+
+`puddle.c`, `pool.c` and `queen_barrier_disp.c` draw into the VRAM block `tex_AllocVramAuto` hands
+out after `tex_ResetVramPri`, TBP 0x2800 in their lists, which the register decoder maps to AA0.
+`rd_water.c` supplies what the decoder cannot know (`port/render/rd_water.c`, header comment):
+
+- `rd_gs_named_block` and `rd_block_target`: a per-frame target of the block's own GS size, with
+  its own depth when asked, the same target for the same (TBP, size) for the rest of the frame;
+- `rd_alias_target`: from here on in the current list, `rd_set_target`, `rd_clear_target` and
+  `rd_texture` of `from` record `to` (at most 4 aliases a list), so replay and dumps see an
+  ordinary target;
+- `rd_push_camera` / `rd_pop_camera`: the reflection camera of a mid-frame `gsb_SetVSMatrix`,
+  kept for the Enhanced projection and interpolation and not dumped; nesting depth 4, 8 scopes a
+  frame;
+- `rd_grid_screen_st`: the formula and scales of pool.c's screen-space STs for the next
+  `rd_draw_vu_grid`, written into its command so dumps carry it, so the interpolation can compute
+  the STs again through the blended camera (`port/render/rd.h` (`RdGridSt`)).
+
+The records live per frame slot and are cleared when the slot is reused
+(`port/render/rd_water.c` (`rd__water_frame_reset`)).
+
+## The fog path and its self-test
+
+The depth fog reads SCENE's depth: the GS copies the Z buffer, a PSMT4 view copies the third byte
+of every word into the fourth, and the fog sprite reads the top byte through the 256-entry CLUT,
+so the index is bits 16..23 of the 32-bit Z and only pixels with Z <= 0xFFFFFF are fogged
+(`port/shaders/fog_lut.hlsl`). The replay reads the depth one of three ways
+(`port/render/rd_fog_path.c` (`RdFogPath`)):
+
+| path | how |
+| --- | --- |
+| inplace | the depth target sampled where it is |
+| copy | a whole copy into a second depth texture, sampled |
+| buffer | the depth aspect copied into a buffer and back into an R32_UINT texture (Vulkan only) |
+
+`rd_fog_selftest` replays a frame of its own (never recorded or presented) on SCENE at its real
+size and scale: a 16 x 16 grid of cells at known GS Z and the fog with a LUT whose every entry
+differs, read back and compared with the GS arithmetic, for each path in the platform's order
+(desktop: inplace, copy, buffer; tile-based or D24S8: copy, inplace, buffer). The first that passes
+is the path from then on, and one log line `fog: depth path` names it with every result. It runs
+after `rd_precreate_pipelines` and again whenever SCENE is made at a new size. `ICO_RD_FOG_PATH`
+or `ICO_RD_DEPTH_COPY` names a path to try first; `ICO_RD_FOG_PATH=test` tries every path
+(`port/render/rd_fog_path.c`; `port/render/rd.h` (`rd_fog_selftest`)). The probe logs five
+texels' Z, index and colour on the first fogged replay after start and after a new scene size
+(`fog: probe`) (`port/render/rd_fog_path.c`).
+
+## Content tables
+
+**Hidden stage faces.** A few stage faces relied on the PS2's 4:3 picture: closing planes that
+seal a model where the 4:3 camera never looks. They are listed in `rd__content_hide` by the
+stream bits of their corners; `markContentHidden` marks a triangle whose three vertices are black
+and corners of one entry with `ICO_VU_INDEX_HIDE`, drawn nowhere. Black alone does not identify
+such a face, and a model pack's replacement never matches. An entry is listed only when 4:3 dumps
+with it hidden equal those without, byte for byte, in Original 1x and Enhanced 2x
+(`tools/content_table_check.py decide`) (`port/render/rd_content_hide.c`; `port/render/rd_mesh.c`
+(`markContentHidden`)). A new entry comes from a report: find the mesh with
+`rd_replay_tool --list` and `--mesh` on the player's dump, list its black corners, and run the
+check.
+
+**Natural chains.** Two stage animations let a chain down by scaling a Null's Y, which squashes
+the links. With the option on the Null takes no scale along the chain, its children move along
+it instead (`rd_chain_null`), and each link gets a clip plane in its own space where the disc's
+squashed top link begins (`rd_chain_link`); the VU shaders discard the pixels past it. Off, the
+disc's matrices and no plane (`port/render/rd_chain.h`; `port/render/rd_content_chain.c`
+(`rd__chains`); `ico2/seki/src/BgAnimation.c`). The table is checked against the disc by
+`tools/content_table_check.py chains`.
+
+## Strip joining
+
+The region rule's card test treats a strip as free-standing when it shares no vertex position with
+a strip of another shape (`rd_mesh.c` `markJoinedStrips`). Packet.c makes a packet per material
+and texture of a part, so a wall strip with its own material shares its edges with the rest of the
+wall only through the part's other packets. Once per replayed frame, before the meshes are
+uploaded, `rd__join_parts` groups the VU draws whose keys name one object and part (the key
+without its ordinal byte) and `rd__mesh_join_part` marks across their meshes. Every packet of a
+part the game registers is drawn, so the group is the part's whole, live and in a dump's replay.
+Out of the box the rule never reads the mark (`port/render/rd_join.c`).
+
+## Screen planes
+
+The GPU interpolates colour and ST from the pixel's place in the target, so its float rounding
+depends on where the triangle sits. `doScreen` gives every screen-prim triangle its colour and S,
+T, Q planes per GS pixel about its first corner, computed from the corners' GS positions and
+values alone, and the shaders evaluate them at the pixel's offset from that corner: the same
+numbers at every frame width. Sprites keep their own path, their colour being flat
+(`port/render/rd_screen_planes.c` (`rd__plane_pass`); `port/shaders/sprite.hlsl`
+(`sprite_planes`)). The VU programs' triangles do the same (`port/shaders/vu_common.hlsli`
+(`vu_attr_planes`)).
+
+## Camera blending
+
+The presenter draws the pictures between two ticks through a camera blended from the two ticks'
+cameras: the inverse views blended as affine matrices (the 3 x 3 split by polar decomposition
+into a rotation, slerped, and a stretch, lerped; the eye lerped) and the projection lerped element
+by element. The game's cull has to know that camera too, so these header-only functions are the
+one implementation, included by `rd_interp.c` and `GsBase.c` in every build
+(`port/render/rd_camera_blend.h` (`rdcb_blend_view`, `rdcb_blend_proj`, `rdcb_camera_jump`)). A
+step past `RD_INTERP_CAMERA_TURN` (30 degrees) or `RD_INTERP_CAMERA_MOVE` (300 units) a tick is a
+cut, and `RD_CULL_MARGIN` is the cull's frustum margin (`port/render/rd_camera_blend.h`).
+
+## Interpolation and presentation
+
+With `RdSettings.interpolate` on, `rd_end_frame` only closes the frame and the host calls
+`rd_present(alpha)` (the [present](ARCHITECTURE.md#terms)) as often as the display allows: the last
+closed frame is replayed with every keyed draw blended from its match in the frame before, so the
+picture runs one tick behind the simulation and never feeds back into it
+(`port/render/rd_interp.c`). `rd_present.c` shows DISPLAY in a box of the frame's aspect on the
+output, `rd_crt.c` replaces that blit under the CRT filter, and `rd_video.c` shows the FMV picture.
+All of it is [DISPLAY.md](DISPLAY.md).
+
+## Performance records
+
+A record (`RdPerfRecord`) is filled while a replay runs (its CPU phases and counts), closed with
+the RHI's counters, and then waits in a slot per frame in flight until its GPU timestamps can be
+read without waiting. The timestamps carry the effect whose work they end, so the record has a GPU
+time per list, for the uploads, for the present, and per picture effect (`RD_PERF_POST_*`:
+reduction, fog, motion blur, aura, glow, depth of field, softening, CRT, MSAA resolve)
+(`port/render/rd_perf.c`; `port/render/rd.h` (`RdPerfRecord`, `rd_perf_pop`)). The window sums
+them into its 10 s statistics line and, with `[dev] perf_log = true`, writes one line per replay to
+`logs/ico-pc-perf.csv` beside the executable (`port/platform/window_host.c` (`perf_csv_open`,
+`perf_drain`)). The replay tool's `--stats` prints the same record.
+
+## Dumps and the replay tool
+
+A [.rddump](ARCHITECTURE.md#terms) is the in-memory frame, little-endian, versioned by
+`RD_DUMP_VERSION` (10): the frame's native size and aspect, its camera, start and end states, the
+13 lists, the payload, the textures and temporary targets it references, and its VU meshes. Target
+contents are not written: a frame that reads a retained target replays from what the loading
+context holds. Loading creates the textures and targets anew and rewrites every id. Dumps hold game
+assets and are never committed (`port/render/rd_dump.c`, header comment).
+
+Dumps are written by F12 (a PNG of the picture and a zip of the dump and the log, in
+`<pref>/dumps`) and by `[dev] dump_every = N` (with `dump_dir`, `dump_interp`, `dump_from`),
+which the host hands to rd as `ICO_RD_DUMP_EVERY`, `ICO_RD_DUMP_DIR`, `ICO_RD_DUMP_INTERP` and
+`ICO_RD_DUMP_FROM`; `dump_interp` also writes the frame before (`-prev`) and the frame blended half
+way (`-i50`) (`port/platform/window_host.c` (`frame_dump`); `port/platform/host_config.c`
+(`export_dump_keys`); `port/render/rd_core.c` (`readDumpConfig`, `rd_end_frame`)). `rd_png.c`
+writes uncompressed PNGs for the tool and the tests (`port/render/rd_png.c`).
+
+`rd_replay_tool <dump> <out.png>` loads a dump (or the first `.rddump` in an F12 zip) and renders
+it headless (`port/render/tools/rd_replay_tool.c`, usage comment):
+
+| option | does |
+| --- | --- |
+| `--target NAME` | writes a named target instead of DISPLAY |
+| `--pass-dump DIR` | writes every named target to `DIR/<NAME>.png`, and with `--present` the presented picture |
+| `--present WxH` | renders the presenter into a W x H output |
+| `--backend vulkan\|d3d12` | picks the RHI backend, to compare backends |
+| `--enhanced`, `--aspect`, `--resolution`, `--full-height`, `--full-pixel`, `--filter`, `--mirror`, `--crt` | the display options a dump does not carry; the PS2 picture by default |
+| `--list` | every command of the replayed lists, with textures, prims, boxes and state |
+| `--no-device` | loads into a record-only renderer for `--list`, `--mesh`, `--dump-textures` |
+| `--nop L:A[-B]` | turns commands into NOPs, to find the draw behind a pixel |
+| `--mesh NAME` | a VU mesh vertex by vertex, with the kick, overlap and joined marks |
+| `--dump-textures DIR` | every image texture as decoded |
+| `--stats` | the replay's performance record, with GPU times |
+| `--prev DUMP` | replays earlier dumps first so retained targets hold the run's pictures |
+| `--no-half`, `--no-aa1` | the frame without the field's half pixel or without PRIM.AA1 |
+| `--interp T PREV` | the frame the presenter builds between PREV and the dump at alpha T |
+
+## Shader families
+
+The entries the replay binds are named in `s_vsNames` and `s_fsNames` (`port/render/rd_replay.c`).
+The families used outside the VU path (`port/shaders`; detail in [SHADERS.md](SHADERS.md)):
+
+| file | what it draws |
+| --- | --- |
+| `sprite.hlsl` | screen-space prims in GS window coordinates: `sprite_ui_vs`/`sprite_world_vs` and `sprite_ps`; the AA1 fringe entries; the plane entries |
+| `blit.hlsl` | fullscreen copies: `blit_ps`, `blit_depth_ps` (the effects depth), `aa_reduce_ps` (the supersampled DISPLAY box-averaged) |
+| `fx_sprite.hlsl` | one GS sprite in the GS integer arithmetic: `fx_rect_vs`, `fx_sprite_ps` |
+| `fog_lut.hlsl` | the depth fog: `fog_lut_ps`, `fog_lut_buffer_ps`, `fog_lut_ms_ps` |
+| `raw_wrap.hlsl` | COLCLAMP 0 prims: `wrap_acc_ps` then `wrap_resolve_ps` |
+| `blend_int.hlsl` | the integer blend of `RDC_EXACT_BLEND` |
