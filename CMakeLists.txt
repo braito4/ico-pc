@@ -331,6 +331,12 @@ if(ICO_BASH AND NOT CMAKE_CROSSCOMPILING)
     add_test(NAME package_textures COMMAND ${ICO_BASH} ${CMAKE_SOURCE_DIR}/tools/test/package_textures_test.sh)
 endif()
 
+# the documentation gate: links, anchors and wording of README.md and docs/
+# (no build, no game)
+if(Python3_FOUND)
+    add_test(NAME docs_check COMMAND "${Python3_EXECUTABLE}" -I "${CMAKE_SOURCE_DIR}/tools/check_docs.py")
+endif()
+
 # On arm64 Android (and arm64 Linux) the movie decoder
 # (port/fmv, Ittiam libmpeg2) uses the library's own NEON routines, which are
 # assembly: the language is enabled here, in the top directory, as CMake

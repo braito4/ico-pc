@@ -1,0 +1,35 @@
+# tools/check_docs_allow.txt: the allow-list of tools/check_docs.py.
+#
+# One regex per line; lines starting with # are comments. `GLOB: REGEX`
+# limits the regex to the docs whose path from the repository root matches
+# GLOB (`*` and `?` within one folder, `**` across folders). A finding is
+# dropped when a regex matches its whole matched text, or is found anywhere
+# in its line. Keep each entry as narrow as the word it allows, and say why
+# above it.
+
+# The GS's antialiasing bit (the PRIM register's AA1 field), not a package
+# code.
+docs/port/*.md: PRIM\.AA1
+docs/port/*.md: \bAA1 edge\b
+
+# The pad's shoulder buttons and stick presses (R1, R2, R3), not package
+# codes, in the guides and the release notes.
+README.md: R[1-3]
+docs/*.md: R[1-3]
+
+# The renderer's offscreen buffers WORK0..3 and AA0/AA1, named in the same
+# line, not package codes.
+docs/*.md: \bWORK0\b
+docs/port/*.md: \bWORK0\b
+
+# The ReShade guide is about shaders: the word is the player's own there.
+docs/RESHADE.md: shaders?
+
+# The passive "was used to (do)" is not the habitual "used to".
+\b(was|were|is|are|be|been) used to\b
+
+# Sony's company name history in the legal notice, not the port's.
+docs/LEGAL.md: Entertainment Inc\. \(formerly
+
+# The third-party notice records the versions of the libraries it lists.
+docs/THIRD_PARTY.md: v?0\.[0-9]+\.[0-9]+
