@@ -375,7 +375,7 @@ typedef struct Opt {
 } Opt;
 
 typedef struct Run {
-    unsigned steps, presents, held, skipped, unshown, resyncs;
+    unsigned steps, presents, skipped, unshown, resyncs;
     unsigned lateSteps;  /* steps that started 0.5 ms or more after their due time */
     uint64_t lateMax;    /* the latest step start against its due time */
     uint64_t gridDevMax; /* the most a due time was off a period (and the clock's nudge) after
@@ -425,7 +425,7 @@ static Run run(Fake *f, const Opt *o)
         }
         if (newFrame) {
             /* the frame that just closed: its alphas were 1 / (2n) .. 1 */
-            const unsigned gaps = L->held + L->skipped + L->unshown;
+            const unsigned gaps = L->skipped + L->unshown;
 
             for (unsigned i = 0; i < f->nAlpha && vsync > 4 && gaps == gapsAtFrame; i++) {
                 r.alphaChecked++;
@@ -466,7 +466,6 @@ static Run run(Fake *f, const Opt *o)
     f_display_to(f, f->now);
     r.steps = L->steps;
     r.presents = f->presents;
-    r.held = L->held;
     r.skipped = L->skipped;
     r.unshown = L->unshown;
     r.resyncs = L->resyncs;
@@ -526,7 +525,7 @@ static void test60(void)
         CHECK(r.steps >= 3599 && r.steps <= 3601);
         CHECK(r.alphaBad == 0 && r.alphaChecked >= 3590);
         CHECK(r.repeats == 0 && r.drops == 0);
-        CHECK(r.held == 0 && r.skipped == 0 && r.resyncs == 0);
+        CHECK(r.skipped == 0 && r.resyncs == 0);
         /* the audio plays 60 / 59.94 faster */
         CHECK(r.ratio > 1.000951 && r.ratio < 1.001051);
         CHECK(!clock || (r.L.clock == PACE_CLOCK_ON && r.L.seen > 3000));
@@ -854,8 +853,8 @@ static void testFifoModels(void)
         o.step = 2 * MS;
         o.fifo = true;
         r = run(&f, &o);
-        printf("fifo queue %u, %u a step: late max %.3f ms, %u held, %u presents, %u steps\n",
-               q[i].depth, q[i].n, (double)r.lateMax / 1e6, r.held, r.presents, r.steps);
+        printf("fifo queue %u, %u a step: late max %.3f ms, %u waited, %u presents, %u steps\n",
+               q[i].depth, q[i].n, (double)r.lateMax / 1e6, r.L.waited, r.presents, r.steps);
         CHECK(r.lateMax == 0);
         CHECK(r.gridDevMax <= 1u);
         CHECK(r.presents == q[i].n * r.steps);
@@ -877,10 +876,11 @@ static void testFifoModels(void)
     /* A present that blocks to the vblank after its replay (the old lock's
        model).  On the display's rate the vblanks keep their place against
        the grid: where one falls in a slot after the present's end the step
-       is on time, where it falls before it the present would return past
-       the next due time and is held (pace_fifo_hold), the new frame once */
+       is on time, where it falls before it the present returns past the
+       next due time (nothing is held under the lock: the step is late, the
+       present counted in waited) */
     {
-        unsigned onTime = 0, held = 0;
+        unsigned onTime = 0, waited = 0;
 
         for (unsigned p = 0; p < 8; p++) {
             Fake f = fake(D60);
@@ -895,12 +895,12 @@ static void testFifoModels(void)
             CHECK(r.gridDevMax <= 1u && r.resyncs == 0);
             CHECK(r.steps >= 1199 && r.steps <= 1201);
             CHECK(r.lateMax <= 17 * MS);
-            onTime += r.lateSteps == 0 && r.held == 0;
-            held += r.held > 0;
+            onTime += r.lateSteps == 0;
+            waited += r.L.waited > 0;
         }
-        printf("fifo blocking, 8 phases: %u with every step on time and every present made, %u "
-               "with presents held\n",
-               onTime, held);
+        printf("fifo blocking, 8 phases: %u with every step on time, %u with presents that "
+               "waited\n",
+               onTime, waited);
         CHECK(onTime >= 5);
     }
     /* NVIDIA's FIFO with the fence waits (the rc2 model) and the work rising
@@ -922,8 +922,8 @@ static void testFifoModels(void)
         o.step = 800000ull;
         o.fifo = true;
         r = run(&f, &o);
-        printf("fifo nv, a menu closing: late max %.3f ms, %u held, %u presents, %u steps\n",
-               (double)r.lateMax / 1e6, r.held, r.presents, r.steps);
+        printf("fifo nv, a menu closing: late max %.3f ms, %u waited, %u presents, %u steps\n",
+               (double)r.lateMax / 1e6, r.L.waited, r.presents, r.steps);
         CHECK(r.lateMax == 0);
         CHECK(r.gridDevMax <= 1u);
         CHECK(r.presents == r.steps);
@@ -1011,7 +1011,7 @@ static void testPause(void)
             CHECK(L.resyncs == 0 && L.droppedNs == 0);
             CHECK(L.steps == stepsBefore + 1 && L.presents == presentsBefore + 1);
             CHECK(next == due + 140 * MS + R60);
-            CHECK(L.skipped == 0 && L.held == 0);
+            CHECK(L.skipped == 0);
         } else {
             /* the lag is dropped: a resync */
             CHECK(L.resyncs == 1 && L.droppedNs > 100 * MS);
@@ -1111,7 +1111,7 @@ static void testLatestReady(void)
 
         CHECK(r.lateMax == 0);
         CHECK(r.presents == r.steps);
-        CHECK(r.held == 0 && r.skipped == 0 && r.resyncs == 0);
+        CHECK(r.skipped == 0 && r.resyncs == 0);
         CHECK(r.alphaBad == 0);
         if (r.repeats + r.drops) {
             badPhases++;

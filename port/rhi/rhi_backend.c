@@ -468,6 +468,12 @@ int rhi_present_timing_next(uint64_t *id, uint64_t *ns)
     return s_up ? be()->present_timing_next(id, ns) : -1;
 }
 
+bool rhi_present_statistics(uint64_t *presentCount, uint64_t *presentRefresh, uint64_t *syncRefresh,
+                            uint64_t *syncNs)
+{
+    return s_up && be()->present_statistics(presentCount, presentRefresh, syncRefresh, syncNs);
+}
+
 void rhi_set_pipeline_cache_path(const char *path)
 {
     be()->set_pipeline_cache_path(path);

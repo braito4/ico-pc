@@ -12,6 +12,7 @@
 #include "audio_host.h"
 #include "config.h"
 #include "diag_host.h"
+#include "display_clock.h"
 #include "dump_zip.h"
 #include "font.h" /* port/ui: ico_window_progress's text and bar */
 #include "host_config.h"
@@ -25,6 +26,7 @@
 #include "mouse_look.h"
 #include "options.h"
 #include "pace_policy.h"
+#include "perf_block.h"
 #include "photo_mode.h"
 #include "photo_ui.h"
 #include "pointer.h"
@@ -58,6 +60,9 @@
 /* Slow-step lines a stats block logs at most (the rest are
    counted in its first line) */
 #define SLOW_STEP_LINES 5
+/* Slow-replay lines (a replay over a refresh) a stats block logs at most
+   (the rest are counted in its first line) */
+#define SLOW_REPLAY_LINES 5
 
 _Static_assert(SDLK_F11 == ICO_HOTKEY_KEY_F11, "hotkeys.h: SDL3's SDLK_F11");
 
@@ -187,7 +192,7 @@ static struct {
     Uint64 swapchains;
     /* the lock's counts at the 10 s block's start */
     double lockNudgeAt;
-    unsigned lockSeenAt, lockLateAt, lockEarlyAt, lockHeldAt, lockSkippedAt;
+    unsigned lockSeenAt, lockLateAt, lockEarlyAt, lockWaitedAt, lockSkippedAt;
     double audioRatio; /* the audio's rate ratio last set (ico_audio_set_rate_ratio) */
     Uint64 lastReturn; /* when the last present returned (0: none yet) */
     Uint64 lateMaxNs;  /* the block's latest step against when it was due */
@@ -232,9 +237,9 @@ static struct {
 static struct {
     int csvTried;
     FILE *csv;
-    unsigned n, gpuN;
-    double total, maxTotal, interp, wait, acquire, upload, walk, bind, submit, present, readback,
-        fence;
+    unsigned gpuN;
+    PerfBlock ph;        /* the CPU phases (perf_block.h) */
+    unsigned slowLogged; /* slow-replay lines logged in the block */
     double gpu, maxGpu, gpuList[GPU_LISTS], gpuUpload, gpuPresent;
     double gpuPost[RD_PERF_POST_COUNT]; /* per picture effect (rd.h RD_PERF_POST_*) */
     unsigned gpuPostPartial;            /* replays whose effects were not all timed apart */
@@ -245,6 +250,27 @@ static struct {
     uint64_t bufCreated, bufDestroyed, texCreated, texDestroyed, allocs, fenceWaits, waitIdles,
         readbacks;
 } s_perf;
+
+/* The display under the vsync lock, for the 10 s display line
+   (diagnostics only: nothing paces on these).  The display clock
+   (display_clock.h: Windows, a DXGI output's vblanks) runs while the lock
+   holds; its vblanks and the lock's present returns go into intervals
+   against the reported refresh (pace_intervals_add), the presents that
+   took a quarter of a refresh or more are counted (they waited for the
+   display: FIFO's queue was full), and with D3D12 the swapchain's own
+   count of the pictures it showed gives the repeats (pace_shown_add). */
+static struct {
+    int clock;        /* 1 running, 0 not (none, not locked), -1 it stopped itself */
+    unsigned vblanks; /* vblanks taken in the block */
+    PaceIntervals vb, ret;
+    unsigned waited;
+    Uint64 waitedMaxNs;
+    PaceShown shown;
+    int statsSeen; /* the swapchain's counts were read in the block */
+} s_disp;
+
+static void disp_clock_stop(void);
+static void disp_clock_start(void);
 
 /* The renderer's settings from the display options and the window's pixel
    size. */
@@ -1694,6 +1720,11 @@ int ico_window_pump(void)
             /* the refresh may differ: whether the cap equals it, and with
                it the present mode, is decided again */
             video_apply(1);
+            if (s_disp.clock != 0) {
+                /* the display clock on the new display's output */
+                disp_clock_stop();
+                disp_clock_start();
+            }
             break;
         case SDL_EVENT_DISPLAY_CURRENT_MODE_CHANGED:
             video_apply(1);
@@ -2112,10 +2143,39 @@ static void auto_res_sample(const RdPerfRecord *r)
     pace_samples_add(&s_autoRes.samples, now, ms > 0.0 ? (Uint64)(ms * 1e6) : 0);
 }
 
+/* A replay over a refresh (it cannot fit a slot): where its time went,
+   with its own counters; at most SLOW_REPLAY_LINES a block (the block's
+   first line counts them all).  The records arrive two replays late
+   (rd_perf.c), so the vsync is the one the record was drained at. */
+static void slow_replay(const RdPerfRecord *r)
+{
+    char gpu[32] = "no GPU timestamps";
+
+    if (s_perf.slowLogged >= SLOW_REPLAY_LINES) {
+        return;
+    }
+    s_perf.slowLogged++;
+    if (r->gpuValid) {
+        snprintf(gpu, sizeof(gpu), "GPU %.1f ms", r->gpuMs);
+    }
+    fprintf(stderr,
+            "window: slow replay %.1f ms (replay %u, frame %u, alpha %.2f, about vsync %u): interp "
+            "%.1f, wait %.1f (fence %.1f), acquire %.1f, upload %.1f, walk %.1f, bind %.1f, "
+            "submit %.1f, present %.1f; %u textures and %u meshes (%u KB) uploaded (%u KB in "
+            "all), %u pipelines created, %u allocations, %u buffers and %u textures created, %u "
+            "DATE snapshots; %s\n",
+            r->totalMs, r->replay, r->frame, (double)r->alpha, ico_host_vsync_count(), r->interpMs,
+            r->waitMs, r->fenceWaitMs, r->acquireMs, r->uploadMs, r->walkMs, r->bindMs, r->submitMs,
+            r->presentMs, r->textureUploads, r->meshUploads, (unsigned)(r->meshUploadBytes / 1024u),
+            (unsigned)(r->uploadBytes / 1024u), r->pipelineCreates, r->memoryAllocs,
+            r->buffersCreated, r->texturesCreated, r->dateSnapshots, gpu);
+}
+
 /* The finished records into the block's sums and the CSV */
 static void perf_drain(void)
 {
     RdPerfRecord r;
+    double refreshMs = -1.0; /* the slow-replay threshold, read at the first record */
 
     while (rd_perf_pop(&r)) {
         auto_res_sample(&r);
@@ -2128,19 +2188,21 @@ static void perf_drain(void)
         if (s_perf.csv != NULL) {
             perf_csv_line(&r);
         }
-        s_perf.n++;
-        s_perf.total += r.totalMs;
-        s_perf.maxTotal = r.totalMs > s_perf.maxTotal ? r.totalMs : s_perf.maxTotal;
-        s_perf.interp += r.interpMs;
-        s_perf.wait += r.waitMs;
-        s_perf.acquire += r.acquireMs;
-        s_perf.upload += r.uploadMs;
-        s_perf.walk += r.walkMs;
-        s_perf.bind += r.bindMs;
-        s_perf.submit += r.submitMs;
-        s_perf.present += r.presentMs;
-        s_perf.readback += r.readbackMs;
-        s_perf.fence += r.fenceWaitMs;
+        {
+            const double ph[PERF_PH_COUNT] = {
+                [PERF_PH_INTERP] = r.interpMs,     [PERF_PH_WAIT] = r.waitMs,
+                [PERF_PH_ACQUIRE] = r.acquireMs,   [PERF_PH_UPLOAD] = r.uploadMs,
+                [PERF_PH_WALK] = r.walkMs,         [PERF_PH_BIND] = r.bindMs,
+                [PERF_PH_SUBMIT] = r.submitMs,     [PERF_PH_PRESENT] = r.presentMs,
+                [PERF_PH_READBACK] = r.readbackMs, [PERF_PH_FENCE] = r.fenceWaitMs};
+
+            if (refreshMs < 0.0) {
+                refreshMs = (double)display_refresh_ns(0) / 1e6; /* 0: none, never over */
+            }
+            if (perf_block_add(&s_perf.ph, ph, r.totalMs, refreshMs)) {
+                slow_replay(&r);
+            }
+        }
         if (r.gpuValid) {
             s_perf.gpuN++;
             s_perf.gpu += r.gpuMs;
@@ -2207,9 +2269,13 @@ static void perf_log(void)
     perf_reset();
     return;
 #endif
-    const double n = s_perf.n ? (double)s_perf.n : 1.0;
+    const PerfBlock *b = &s_perf.ph;
+    const double n = b->n ? (double)b->n : 1.0;
     const double g = s_perf.gpuN ? (double)s_perf.gpuN : 1.0;
     char gpu[160] = "no GPU timestamps";
+    char longest[160];
+
+    perf_block_max_text(b, longest, sizeof(longest));
 
     if (s_perf.gpuN) {
         double scene = 0.0;
@@ -2225,10 +2291,11 @@ static void perf_log(void)
     fprintf(stderr,
             "window: %u replays: CPU %.2f ms (max %.2f): interp %.2f, wait %.2f, acquire %.2f, "
             "upload %.2f, walk %.2f, bind %.2f, submit %.2f, present %.2f, readback %.2f "
-            "(fence waits %.2f); %s; simulation step %.2f ms (max %.2f)\n",
-            s_perf.n, s_perf.total / n, s_perf.maxTotal, s_perf.interp / n, s_perf.wait / n,
-            s_perf.acquire / n, s_perf.upload / n, s_perf.walk / n, s_perf.bind / n,
-            s_perf.submit / n, s_perf.present / n, s_perf.readback / n, s_perf.fence / n, gpu,
+            "(fence waits %.2f); longest: %s; %s; simulation step %.2f ms (max %.2f)\n",
+            b->n, b->total / n, b->totalMax, b->sum[PERF_PH_INTERP] / n, b->sum[PERF_PH_WAIT] / n,
+            b->sum[PERF_PH_ACQUIRE] / n, b->sum[PERF_PH_UPLOAD] / n, b->sum[PERF_PH_WALK] / n,
+            b->sum[PERF_PH_BIND] / n, b->sum[PERF_PH_SUBMIT] / n, b->sum[PERF_PH_PRESENT] / n,
+            b->sum[PERF_PH_READBACK] / n, b->sum[PERF_PH_FENCE] / n, longest, gpu,
             s_pres.stepCount ? s_pres.stepSumMs / s_pres.stepCount : 0.0, s_pres.stepMaxMs);
     if (s_perf.gpuN) {
         /* the GPU time per replay by list and by picture effect (each
@@ -2303,6 +2370,131 @@ static void perf_log(void)
     perf_reset();
 }
 
+/* The display clock stopped (the lock left, the window closing) */
+static void disp_clock_stop(void)
+{
+    if (s_disp.clock != 0) {
+        ico_display_clock_stop();
+        s_disp.clock = 0;
+    }
+}
+
+/* The display clock started on the window's output (nothing when it
+   runs); the log names the output the first few times */
+static void disp_clock_start(void)
+{
+    static unsigned s_lines;
+    char name[64];
+
+    if (s_disp.clock == 1) {
+        return;
+    }
+    s_disp.clock = ico_display_clock_start(s_window) ? 1 : 0;
+    memset(&s_disp.vb, 0, sizeof(s_disp.vb));
+    if (s_disp.clock && s_lines++ < 8) {
+        fprintf(stderr, "window: display clock: the vblanks of %s (measured for the log)\n",
+                ico_display_clock_name(name, sizeof(name)));
+    }
+}
+
+/* A new lock: the display's counts start again, the clock started */
+static void disp_lock_start(void)
+{
+    const int clock = s_disp.clock;
+
+    memset(&s_disp, 0, sizeof(s_disp));
+    s_disp.clock = clock < 0 ? 0 : clock; /* one that stopped itself is tried again */
+    disp_clock_start();
+}
+
+/* Every locked vsync: the clock's vblanks taken */
+static void disp_vsync(Uint64 refresh)
+{
+    uint64_t ns;
+    int r;
+
+    if (s_disp.clock != 1) {
+        return;
+    }
+    while ((r = ico_display_clock_next(&ns)) == 1) {
+        s_disp.vblanks++;
+        pace_intervals_add(&s_disp.vb, ns, refresh);
+    }
+    if (r < 0) {
+        static unsigned s_lines;
+
+        ico_display_clock_stop();
+        s_disp.clock = -1;
+        if (s_lines++ < 8) {
+            fprintf(stderr, "window: display clock: stopped (a wait for a vblank failed or "
+                            "returned at once)\n");
+        }
+    }
+}
+
+/* A present the lock made that returned at s_pres.lastReturn after
+   s_pres.cost */
+static void disp_present(Uint64 refresh)
+{
+    uint64_t count, refreshes, syncRefresh, syncNs;
+
+    pace_intervals_add(&s_disp.ret, s_pres.lastReturn, refresh);
+    if (s_pres.cost * 4 >= refresh) {
+        s_disp.waited++;
+        if (s_pres.cost > s_disp.waitedMaxNs) {
+            s_disp.waitedMaxNs = s_pres.cost;
+        }
+    }
+    if (rhi_present_statistics(&count, &refreshes, &syncRefresh, &syncNs)) {
+        pace_shown_add(&s_disp.shown, count, refreshes);
+        s_disp.statsSeen = 1;
+    }
+}
+
+/* The block's display line (under the lock) */
+static void disp_log(double sec, Uint64 reported)
+{
+    const PaceIntervals *v = &s_disp.vb, *p = &s_disp.ret;
+    const double rep = (double)reported;
+    char vb[256], dxgi[96] = "";
+
+    if (s_disp.clock == 1 && v->n > 0) {
+        const double mean = pace_intervals_mean(v);
+
+        snprintf(vb, sizeof(vb),
+                 "vblanks %u in %.1f s, %.4f ms apart (min %.3f, max %.3f: %.3f Hz), reported "
+                 "%.4f ms (%.3f Hz): %+.0f ppm, %u wake-ups missed",
+                 s_disp.vblanks, sec, mean / 1e6, (double)v->min / 1e6, (double)v->max / 1e6,
+                 1e9 / mean, rep / 1e6, rep > 0.0 ? 1e9 / rep : 0.0, pace_ppm(mean, rep),
+                 v->n + 2u * v->missed - v->intervals);
+    } else {
+        snprintf(vb, sizeof(vb), "%s",
+                 s_disp.clock == 1    ? "display clock on, no vblanks yet"
+                 : s_disp.clock == -1 ? "display clock stopped"
+                                      : "no display clock");
+    }
+    if (s_disp.statsSeen) {
+        snprintf(dxgi, sizeof(dxgi), "; DXGI: %u pictures shown over %u refreshes, %u repeated",
+                 s_disp.shown.shown, s_disp.shown.refreshes, s_disp.shown.repeats);
+    }
+    fprintf(stderr,
+            "window: display: %s; presents returned %.3f ms apart (min %.3f, max %.3f), %u a "
+            "refresh late, %u waited for the display (longest %.1f ms)%s\n",
+            vb, pace_intervals_mean(p) / 1e6, (double)p->min / 1e6, (double)p->max / 1e6, p->late,
+            s_disp.waited, (double)s_disp.waitedMaxNs / 1e6, dxgi);
+}
+
+/* A new block of the display's counts (the times last seen kept) */
+static void disp_block_reset(void)
+{
+    pace_intervals_reset(&s_disp.vb);
+    pace_intervals_reset(&s_disp.ret);
+    s_disp.vblanks = s_disp.waited = 0;
+    s_disp.waitedMaxNs = 0;
+    s_disp.shown.shown = s_disp.shown.refreshes = s_disp.shown.repeats = 0;
+    s_disp.statsSeen = 0;
+}
+
 /* Presents and frames per second, every 10 s of real time, in both
    presentation modes. "game frames" counts the frames shown (closed
    frames the pace saw); "frame numbers" also counts the ones the game
@@ -2329,6 +2521,7 @@ static void pace_log(Uint64 now)
     if (now - s_pres.statAt < ico_stats_period_ns(now, s_pres.fastUntil)) {
         return;
     }
+    perf_drain(); /* the block's last records, for its replays over a refresh */
     const double sec = (double)(now - s_pres.statAt) / 1e9;
     uint32_t replays = 0;
     const double maxMs = rd_replay_time_max(1, &replays);
@@ -2356,7 +2549,7 @@ static void pace_log(Uint64 now)
        simulation runs at the display's rate over n (0.1 % fast on a 60.00
        Hz screen), and the audio plays the samples that much faster, so its
        queue neither grows nor runs dry; 1 otherwise */
-    char lock[400]; /* timing (160) + the lock line (gcc -O2 counts the worst case) */
+    char lock[416]; /* timing (160) + the lock line (gcc -O2 counts the worst case) */
     double ratio = 1.0;
 
     if (s_pres.lockN > 0) {
@@ -2381,15 +2574,15 @@ static void pace_log(Uint64 now)
         }
         snprintf(lock, sizeof(lock),
                  "lock held (grid %.4f ms, %u present%s a step, %s, audio rate x%.4f, %s, %u "
-                 "presents held, %u skipped)",
+                 "waited for the display, %u skipped)",
                  L->slotNs * (double)L->n / 1e6, L->n, L->n == 1 ? "" : "s",
-                 L->mailbox ? "mailbox" : "fifo", ratio, timing, L->held - s_pres.lockHeldAt,
+                 L->mailbox ? "mailbox" : "fifo", ratio, timing, L->waited - s_pres.lockWaitedAt,
                  L->skipped - s_pres.lockSkippedAt);
         s_pres.lockNudgeAt = L->nudgeSum;
         s_pres.lockSeenAt = L->seen;
         s_pres.lockLateAt = L->late;
         s_pres.lockEarlyAt = L->early;
-        s_pres.lockHeldAt = L->held;
+        s_pres.lockWaitedAt = L->waited;
         s_pres.lockSkippedAt = L->skipped;
     } else if (s_pres.fifoLock) {
         /* fifo with a cap that is not a whole multiple of the game's rate
@@ -2406,19 +2599,23 @@ static void pace_log(Uint64 now)
             "window: %u presents, %u movie presents%s and %u game frames (%u frame numbers) in "
             "%.1f s: %.1f "
             "presented fps, %.1f game fps; %u vsyncs (%.1f Hz simulated), %u resyncs dropping "
-            "%.0f ms; longest replay %.1f ms of %u; %u steps over %.0f ms; framerate %s, present "
+            "%.0f ms; longest replay %.1f ms of %u, %u over a refresh; %u steps over %.0f ms; "
+            "framerate %s, present "
             "%s, display %.2f Hz (%.3f presents a refresh), window %dx%d%s; step late max %.1f "
             "ms; %s\n",
             s_pres.statPresents, movie - s_pres.statMovie, movieFailed, s_pres.statFrames,
             fn - s_pres.statFrameNo, sec, s_pres.statPresents / sec, s_pres.statFrames / sec,
             s_pres.statVsyncs, s_pres.statVsyncs / sec, s_pres.statResyncs,
-            (double)s_pres.statDropped / 1e6, maxMs, replays, s_pres.slowSteps, s_pres.slowMs,
-            ico_video_framerate_name(s_pres.framerate, fr, sizeof(fr)), rhi_present_mode_name(),
-            dm != NULL ? (double)dm->refresh_rate : 0.0,
+            (double)s_pres.statDropped / 1e6, maxMs, replays, s_perf.ph.over, s_pres.slowSteps,
+            s_pres.slowMs, ico_video_framerate_name(s_pres.framerate, fr, sizeof(fr)),
+            rhi_present_mode_name(), dm != NULL ? (double)dm->refresh_rate : 0.0,
             dm != NULL && dm->refresh_rate > 1.0f ? s_pres.statPresents / sec / dm->refresh_rate
                                                   : 0.0,
             pw, ph, window_fullscreen() ? " fullscreen" : "", (double)s_pres.lateMaxNs / 1e6, lock);
-    perf_drain();
+    if (s_pres.lockN > 0) {
+        disp_log(sec, s_pres.lock.refreshNs);
+    }
+    disp_block_reset();
     perf_log();
     s_pres.statAt = now;
     s_pres.statPresents = s_pres.statFrames = s_pres.statVsyncs = s_pres.statResyncs = 0;
@@ -2683,7 +2880,11 @@ static bool lock_io_present(void *u, float a)
 {
     const LockIoCtx *c = u;
 
-    return present_once(a, c->refresh, c->period) != 0;
+    if (!present_once(a, c->refresh, c->period)) {
+        return false;
+    }
+    disp_present(c->refresh); /* the display line's counts */
+    return true;
 }
 
 /* the window on the screen: off it, nothing is presented */
@@ -2776,10 +2977,12 @@ static void pace_locked(unsigned n, Uint64 period)
         s_pres.lockDroppedNs = 0;
         s_pres.lockNudgeAt = 0.0;
         s_pres.lockSeenAt = s_pres.lockLateAt = s_pres.lockEarlyAt = 0;
-        s_pres.lockHeldAt = s_pres.lockSkippedAt = 0;
+        s_pres.lockWaitedAt = s_pres.lockSkippedAt = 0;
         s_pres.nextPresent = 0;
         {
             static unsigned s_lines;
+            double dwmHz;
+            uint64_t dwmNs;
 
             if (s_lines++ < 8) {
                 fprintf(stderr,
@@ -2788,8 +2991,20 @@ static void pace_locked(unsigned n, Uint64 period)
                         (double)(n * ctx.refresh) / 1e6, n, n == 1 ? "" : "es",
                         (double)ctx.refresh / 1e6, n, n == 1 ? "" : "s", rhi_present_mode_name(),
                         lock_clock_words(s_pres.lock.clock));
+                /* the compositor's refresh against SDL's (Windows; the
+                   primary display's: a cross-check, not a clock) */
+                if (ico_display_dwm_refresh(&dwmHz, &dwmNs)) {
+                    fprintf(stderr,
+                            "window: vsync lock: DWM reports %.3f Hz (%.4f ms); SDL reports "
+                            "%.3f Hz (%.4f ms)\n",
+                            dwmHz, (double)dwmNs / 1e6, 1e9 / (double)ctx.refresh,
+                            (double)ctx.refresh / 1e6);
+                }
             }
         }
+        /* the display's counts for the log, and its clock (measured only:
+           the grid stays on the reported refresh) */
+        disp_lock_start();
         /* the audio at the display's nominal rate until the first
            measured block (the 10 s line) */
         s_pres.audioRatio = pace_lock_nominal_ratio(&s_pres.lock);
@@ -2804,6 +3019,7 @@ static void pace_locked(unsigned n, Uint64 period)
     /* the frame closed in the step that was due at s_deadline */
     const int newFrame = frame_seen(s_deadline);
 
+    disp_vsync(ctx.refresh); /* the display clock's vblanks since the last vsync */
     s_deadline = pace_lock_vsync(&s_pres.lock, &io, newFrame != 0);
     /* the lag the lock dropped, as the resync lines count it */
     s_pres.statResyncs += s_pres.lock.resyncs - s_pres.lockResyncs;
@@ -2906,6 +3122,7 @@ static void pace(int hz)
         }
         s_pres.lockN = 0;
         timing_use(0); /* the presents below as without the timing */
+        disp_clock_stop();
     }
     s_deadline += period;
     s_pres.statVsyncs++;
@@ -3090,6 +3307,7 @@ void ico_window_close(void)
 #endif
     ui_touch_set_source(NULL);
     ui_host_shutdown();
+    disp_clock_stop();
     rd_set_host_call(NULL);
     rd_shutdown();
     if (s_window != NULL) {

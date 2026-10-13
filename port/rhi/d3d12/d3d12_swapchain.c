@@ -183,6 +183,50 @@ const char *rhi_present_mode_name(void)
     return g_dx.tearing ? "immediate" : "mailbox";
 }
 
+/* The frame statistics after a present (rhi_present_statistics): not
+ * through DX_CHECK, DXGI_ERROR_FRAME_STATISTICS_DISJOINT is a normal
+ * answer (a mode change; the first presents) */
+static void dx_frame_stats(void)
+{
+    DXGI_FRAME_STATISTICS fs;
+    memset(&fs, 0, sizeof(fs));
+    if (FAILED(IDXGISwapChain3_GetFrameStatistics(g_dx.swapchain, &fs)) || fs.PresentCount == 0) {
+        return;
+    }
+    g_dx.frameStatsPresent = fs.PresentCount;
+    g_dx.frameStatsRefresh = fs.PresentRefreshCount;
+    g_dx.frameStatsSyncRefresh = fs.SyncRefreshCount;
+    g_dx.frameStatsSyncNs = 0;
+#ifdef ICO_RHI_HAVE_SDL
+    {
+        /* SyncQPCTime on SDL_GetTicksNS's clock: as long before it as
+           before QueryPerformanceCounter now */
+        LARGE_INTEGER now;
+        const uint64_t ticks = SDL_GetTicksNS();
+        QueryPerformanceCounter(&now);
+        const uint64_t sync = (uint64_t)fs.SyncQPCTime.QuadPart;
+        if (sync != 0 && sync <= (uint64_t)now.QuadPart) {
+            const uint64_t ago = dx_qpc_ns((uint64_t)now.QuadPart - sync);
+            g_dx.frameStatsSyncNs = ago < ticks ? ticks - ago : 0;
+        }
+    }
+#endif
+    g_dx.frameStatsValid = true;
+}
+
+bool rhi_present_statistics(uint64_t *presentCount, uint64_t *presentRefresh, uint64_t *syncRefresh,
+                            uint64_t *syncNs)
+{
+    if (!g_dx.swapchain || !g_dx.frameStatsValid) {
+        return false;
+    }
+    *presentCount = g_dx.frameStatsPresent;
+    *presentRefresh = g_dx.frameStatsRefresh;
+    *syncRefresh = g_dx.frameStatsSyncRefresh;
+    *syncNs = g_dx.frameStatsSyncNs;
+    return true;
+}
+
 void rhi_present(void)
 {
     s_presentShown = false;
@@ -194,8 +238,12 @@ void rhi_present(void)
         return;
     }
     UINT flags = (!g_dx.vsync && g_dx.tearing) ? DXGI_PRESENT_ALLOW_TEARING : 0u;
+    const uint64_t t0 = dx_now_ns();
     HRESULT hr = IDXGISwapChain3_Present(g_dx.swapchain, g_dx.vsync ? 1u : 0u, flags);
+    g_dx.presentNs += dx_now_ns() - t0; /* RhiStats */
+    g_dx.presents++;
     g_dx.swapAcquired = false;
+    g_dx.frameStatsValid = false;
     if (FAILED(hr)) {
         /* DXGI_ERROR_DEVICE_REMOVED / _RESET / _HUNG mark the device lost
          * here (dx_check); the window loop ends the session */
@@ -206,6 +254,9 @@ void rhi_present(void)
        covered; the flip-model present returned without waiting for a
        vblank and nothing was shown */
     s_presentShown = hr != DXGI_STATUS_OCCLUDED;
+    if (s_presentShown) {
+        dx_frame_stats();
+    }
     /* DXGI has no out-of-date result: follow the window's size here, as
      * the Vulkan backend does on VK_ERROR_OUT_OF_DATE_KHR */
     int w = (int)g_dx.swapWidth, h = (int)g_dx.swapHeight;

@@ -459,10 +459,115 @@ static void testFirstPresentPause(void)
     CHECK(pace_first_present_pause(4, &seen, 20000000ull, r60) == 0 && seen == 4);
 }
 
+/* The display's intervals for the log (pace_intervals_*): one-refresh
+   intervals give the mean, min and max; an early wake-up (under half a
+   slot) is dropped and the next interval counts from the time before it;
+   2 and 3 slots count as that many refreshes and late; 4 slots is missed
+   and out of the mean; the reset keeps last.  pace_ppm's sign: a longer
+   measured refresh than the report is positive.  pace_shown_add: repeats
+   from refreshes past pictures, a count that goes back and a long gap
+   start again. */
+static void testIntervals(void)
+{
+    const uint64_t slot = 16680600ull;
+    PaceIntervals s = {0};
+    uint64_t t = 1000 * MS;
+
+    CHECK(pace_intervals_mean(&s) == 0.0);
+    pace_intervals_add(&s, t, slot); /* the first time: no interval */
+    CHECK(s.intervals == 0 && s.n == 0 && s.last == t);
+    for (int i = 0; i < 10; i++) {
+        t += slot + (i % 2 ? 100000ull : 0ull) - 50000ull; /* 16.6306 and 16.7306 */
+        pace_intervals_add(&s, t, slot);
+    }
+    CHECK(s.intervals == 10 && s.n == 10 && s.late == 0 && s.missed == 0);
+    CHECK(s.min == slot - 50000ull && s.max == slot + 50000ull);
+    CHECK(pace_intervals_mean(&s) > (double)slot - 1.0 && pace_intervals_mean(&s) < slot + 1.0);
+    /* an early wake-up 3 ms after the last: dropped, last stays */
+    pace_intervals_add(&s, t + 3 * MS, slot);
+    CHECK(s.intervals == 10 && s.last == t);
+    t += slot;
+    pace_intervals_add(&s, t, slot);
+    CHECK(s.intervals == 11 && s.n == 11 && s.late == 0);
+    /* two slots: late, two refreshes; three: late, three */
+    t += 2 * slot;
+    pace_intervals_add(&s, t, slot);
+    CHECK(s.intervals == 12 && s.n == 13 && s.late == 1 && s.missed == 0);
+    t += 3 * slot + 2 * MS;
+    pace_intervals_add(&s, t, slot);
+    CHECK(s.intervals == 13 && s.n == 16 && s.late == 2 && s.missed == 0);
+    CHECK(s.max == 3 * slot + 2 * MS);
+    /* four slots (a pause): late and missed, not in the mean */
+    const double sum = s.sum;
+
+    t += 4 * slot;
+    pace_intervals_add(&s, t, slot);
+    CHECK(s.intervals == 14 && s.n == 16 && s.late == 3 && s.missed == 1 && s.sum == sum);
+    /* 1.4 slots is one refresh, 1.5 is late */
+    t += slot * 14 / 10;
+    pace_intervals_add(&s, t, slot);
+    CHECK(s.n == 17 && s.late == 3);
+    t += slot * 3 / 2;
+    pace_intervals_add(&s, t, slot);
+    CHECK(s.n == 19 && s.late == 4);
+    /* a time that went back: a new start, no interval */
+    pace_intervals_add(&s, t - MS, slot);
+    CHECK(s.intervals == 16 && s.last == t - MS);
+    /* the reset keeps last: the next interval counts */
+    t -= MS;
+    pace_intervals_reset(&s);
+    CHECK(s.n == 0 && s.intervals == 0 && s.late == 0 && s.min == 0 && s.max == 0);
+    CHECK(s.last == t);
+    pace_intervals_add(&s, t + slot, slot);
+    CHECK(s.n == 1 && s.min == slot && pace_intervals_mean(&s) == (double)slot);
+
+    /* ppm: 59.940 Hz measured against 59.951 reported: about +183 ppm (the
+       grid on the report runs faster); 60.000 against it: negative */
+    {
+        const double rep = 1e9 / 59.951;
+        const double p = pace_ppm(1e9 / 59.940, rep);
+        const double q = pace_ppm(1e9 / 60.0, rep);
+
+        CHECK(p > 180.0 && p < 186.0);
+        CHECK(q < -810.0 && q > -820.0);
+        CHECK(pace_ppm(0.0, rep) == 0.0 && pace_ppm(rep, 0.0) == 0.0);
+        CHECK(pace_ppm(rep, rep) == 0.0);
+    }
+
+    /* the pictures shown */
+    {
+        PaceShown d = {0};
+
+        pace_shown_add(&d, 100, 1000); /* the first sample */
+        CHECK(d.have && d.shown == 0 && d.refreshes == 0 && d.repeats == 0);
+        pace_shown_add(&d, 101, 1001);
+        pace_shown_add(&d, 101, 1001); /* nothing new: nothing */
+        pace_shown_add(&d, 102, 1002);
+        CHECK(d.shown == 2 && d.refreshes == 2 && d.repeats == 0);
+        pace_shown_add(&d, 103, 1004); /* a picture shown twice */
+        CHECK(d.shown == 3 && d.refreshes == 4 && d.repeats == 1);
+        pace_shown_add(&d, 106, 1007); /* three a refresh apart, sampled late */
+        CHECK(d.shown == 6 && d.refreshes == 7 && d.repeats == 1);
+        pace_shown_add(&d, 108, 1008); /* more pictures than refreshes: no repeat */
+        CHECK(d.shown == 8 && d.refreshes == 8 && d.repeats == 1);
+        /* a new swapchain: the counts go back, a new start */
+        pace_shown_add(&d, 2, 1010);
+        CHECK(d.resets == 1 && d.shown == 8 && d.refreshes == 8);
+        pace_shown_add(&d, 3, 1012);
+        CHECK(d.shown == 9 && d.refreshes == 10 && d.repeats == 2);
+        /* a gap past PACE_SHOWN_GAP refreshes: a new start */
+        pace_shown_add(&d, 4, 1012 + PACE_SHOWN_GAP + 1);
+        CHECK(d.resets == 2 && d.shown == 9 && d.repeats == 2);
+        pace_shown_add(&d, 5, 1012 + PACE_SHOWN_GAP + 2);
+        CHECK(d.shown == 10 && d.repeats == 2 && d.resets == 2);
+    }
+}
+
 int main(void)
 {
     PaceHist h = {0};
     testLockPause();
+    testIntervals();
     testFirstPresentPause();
     int i, flips;
     bool last;

@@ -32,6 +32,21 @@ updating the graphics driver usually fixes it.
 4. If you are asked for it, also attach `config.toml` from the folder with
    your saves ([where that is](PORTABLE_MODE.md#where-your-saves-are)).
 
+If you are asked for a timing file, close the game, open `config.toml` in a
+text editor and add these two lines at the end:
+
+```toml
+[dev]
+perf_log = true
+```
+
+If the file already has a `[dev]` line, add only the `perf_log = true` line
+under it. The game then also writes `ico-pc-perf.csv` in the same `logs`
+folder as `ico-pc.log`, one line for each picture it draws (about 1 MB a
+minute). Play until the problem shows, close the game, and attach that file
+with the log. Then delete what you added, so the game stops writing the
+file.
+
 ## Save a picture of a problem
 
 If something looks wrong on screen, press **F12** while it is showing. The

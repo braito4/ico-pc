@@ -793,8 +793,9 @@ bool rhi_readback_texture(RhiTexture t, RhiViewAspect aspect, void *dst, size_t 
 
 /* ------------------------------------------------------------- performance
  * Counters since rhi_init, cumulative: the caller takes differences
- * (rd_core's per-replay records).  D3D12: only swapchains is counted;
- * every other field reads 0.  The
+ * (rd_core's per-replay records).  D3D12: only swapchains, presents,
+ * presentNs, fenceWaits and fenceWaitNs are counted; every other field
+ * reads 0.  The
  * *Ns fields are CPU time blocked in the backend: fenceWaitNs on GPU
  * completion (rhi_wait_frame, rhi_wait_idle, readbacks), acquireNs in the
  * swapchain acquire, presentNs in the present call. */
@@ -887,6 +888,16 @@ bool rhi_present_timing(void);
 void rhi_present_timing_use(bool on);
 uint64_t rhi_present_last_id(void);
 int rhi_present_timing_next(uint64_t *id, uint64_t *ns);
+/* The swapchain's own count of the pictures it showed, read after each
+ * present (D3D12: IDXGISwapChain::GetFrameStatistics; diagnostics for the
+ * window's log): *presentCount the present count of the last picture
+ * shown, *presentRefresh the refresh count it was shown at, *syncRefresh
+ * and *syncNs the last vblank the statistics saw (*syncNs on
+ * SDL_GetTicksNS's clock, 0 when not known).  false: none (Vulkan; D3D12
+ * before the first picture is shown, without a window, or while DXGI says
+ * the counts are disjoint: a mode change, the window off the screen). */
+bool rhi_present_statistics(uint64_t *presentCount, uint64_t *presentRefresh, uint64_t *syncRefresh,
+                            uint64_t *syncNs);
 
 /* A pipeline cache kept across runs: Vulkan loads a VkPipelineCache
  * blob from path at rhi_init when its header names this device (header

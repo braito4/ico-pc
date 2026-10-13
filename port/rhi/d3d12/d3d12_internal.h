@@ -214,6 +214,12 @@ typedef struct DxState {
     uint32_t swapTextures[4];
     uint32_t swapIndex;
     bool swapAcquired;
+    /* RhiStats: presents and the time in Present, fence waits that
+     * blocked and their time (dx_now_ns) */
+    uint64_t presents, presentNs, fenceWaits, fenceWaitNs;
+    /* the frame statistics after the last present (rhi_present_statistics) */
+    bool frameStatsValid;
+    uint64_t frameStatsPresent, frameStatsRefresh, frameStatsSyncRefresh, frameStatsSyncNs;
 
     DxGarbageOverflow overflow[DX_GARBAGE_OVERFLOW]; /* see DX_GARBAGE_OVERFLOW */
     uint32_t overflowCount;
@@ -237,6 +243,25 @@ extern DxState g_dx;
     } while (0)
 
 bool dx_check(HRESULT hr, const char *what, const char *file, int line);
+
+/* QueryPerformanceCounter ticks in ns, and a monotonic time in ns */
+static inline uint64_t dx_qpc_ns(uint64_t ticks)
+{
+    static LARGE_INTEGER s_freq;
+    if (s_freq.QuadPart <= 0 && (!QueryPerformanceFrequency(&s_freq) || s_freq.QuadPart <= 0)) {
+        return 0;
+    }
+    const uint64_t f = (uint64_t)s_freq.QuadPart;
+    return ticks / f * 1000000000ull + ticks % f * 1000000000ull / f;
+}
+
+static inline uint64_t dx_now_ns(void)
+{
+    LARGE_INTEGER c;
+    QueryPerformanceCounter(&c);
+    return dx_qpc_ns((uint64_t)c.QuadPart);
+}
+
 /* Prints and counts the debug layer's stored messages (errors and
  * corruption count toward rhi_d3d12_debug_error_count). */
 void dx_drain_messages(void);

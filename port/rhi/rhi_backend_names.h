@@ -86,6 +86,7 @@
 #define rhi_present_timing_use   RHI__NAME(present_timing_use)
 #define rhi_present_last_id      RHI__NAME(present_last_id)
 #define rhi_present_timing_next  RHI__NAME(present_timing_next)
+#define rhi_present_statistics   RHI__NAME(present_statistics)
 #define rhi_set_pipeline_cache_path RHI__NAME(set_pipeline_cache_path)
 #define rhi_set_vulkan_loader     RHI__NAME(set_vulkan_loader)
 #define rhi_injector_name        RHI__NAME(injector_name)

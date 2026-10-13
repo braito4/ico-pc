@@ -392,6 +392,13 @@ if(TARGET ico_pc AND NOT ICO_HEADLESS)
     endif()
     target_sources(ico_pc PRIVATE port/platform/window_host.c port/platform/window_video.c
                                   port/platform/dump_zip.c)
+    # The display's vblanks for the vsync lock's log (display_clock.h): a
+    # DXGI output's on Windows, none elsewhere
+    if(WIN32)
+        target_sources(ico_pc PRIVATE port/platform/display_clock_win.c)
+    else()
+        target_sources(ico_pc PRIVATE port/platform/display_clock_none.c)
+    endif()
     target_link_libraries(ico_pc PRIVATE ico_render ico_miniz SDL3::SDL3)
     if(NOT ANDROID AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
         # Extras > Add to Steam: desktop only (Windows, Linux, Steam Deck)

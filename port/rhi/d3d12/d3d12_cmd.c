@@ -21,7 +21,10 @@ void dx_wait_fence(uint64_t value)
         return;
     }
     if (DX_CHECK(ID3D12Fence_SetEventOnCompletion(g_dx.fence, value, g_dx.fenceEvent))) {
+        const uint64_t t0 = dx_now_ns();
         WaitForSingleObject(g_dx.fenceEvent, INFINITE);
+        g_dx.fenceWaitNs += dx_now_ns() - t0; /* RhiStats */
+        g_dx.fenceWaits++;
     }
 }
 

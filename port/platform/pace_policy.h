@@ -124,11 +124,9 @@ bool pace_cap_equals_refresh(int cap, uint64_t refreshNs);
  *
  * FIFO (no display clock, D3D12, a Vulkan surface without mailbox): the
  * same grid; on the display's rate a present returns at once while the
- * queue has room.
- * After one that waited for a vblank (it took a quarter of a slot or more:
- * the queue was full), a present that would return on a vblank past the
- * next step is held back (pace_fifo_hold), a new frame at most once, which
- * lets the display take one from the queue.
+ * queue has room.  Nothing is held back (pace_fifo_hold is not used under
+ * the lock): a present that takes a quarter of a slot or more waited for a
+ * vblank (the queue was full) and is counted (waited, waitedMaxNs).
  *
  * Off the screen (PaceLockIo.visible false: minimised, hidden, occluded):
  * no presents, the grid goes on.  A step that ends past the next one's due
@@ -200,8 +198,11 @@ typedef struct PaceLock {
     int away;             /* the way the wanted offset moves (+1 later, -1 earlier, 0 none) */
     double awayMoved;     /* how far it moved that way (half a refresh at most) */
     unsigned clean;       /* pictures with the run since the last that was not */
-    /* counts since the reset */
-    unsigned presents, steps, held, unshown, skipped, resyncs;
+    /* counts since the reset; waited: presents that took a quarter of a
+       slot or more (FIFO: the queue was full, they waited for a vblank),
+       waitedMaxNs the longest of them */
+    unsigned presents, steps, waited, unshown, skipped, resyncs;
+    uint64_t waitedMaxNs;
     uint64_t droppedNs; /* lag dropped (more than PACE_LOCK_DEBT_VSYNCS periods) */
     /* the rate block (pace_lock_rate_ratio) */
     uint64_t rateFirst, rateLast;
@@ -322,6 +323,59 @@ bool pace_fifo_hold(uint64_t nowNs, uint64_t lastReturnNs, uint64_t refreshNs, u
  * does not push every later present back; when startNs is more than a gap
  * past nextPresent (a stall) the grid restarts at startNs + gap. */
 uint64_t pace_next_present(uint64_t nextPresent, uint64_t startNs, uint64_t gap);
+
+/* The display's intervals, for the log (window_host.c's 10 s display
+ * line; diagnostics only, nothing paces on them): the times of the
+ * display clock's vblanks, or of the lock's present returns, against a
+ * slot (the refresh the display reports).  An interval under half a slot
+ * is dropped (a wake-up that was not a new refresh; last stays); one under
+ * 1.5 slots is one refresh; one of 1.5 slots or more is late, and when it
+ * is about k slots (k 2..3: under 3.5) it counts as k refreshes in the
+ * mean; a longer one (a pause, the window off the screen) is missed and
+ * left out of the mean.  min and max are of the intervals not dropped. */
+typedef struct PaceIntervals {
+    uint64_t last;      /* the last time added (0: none) */
+    double sum;         /* the counted intervals' total (ns) */
+    uint64_t min, max;  /* (ns; min 0: none) */
+    unsigned n;         /* refreshes the sum spans */
+    unsigned intervals; /* intervals not dropped */
+    unsigned late;      /* intervals of 1.5 slots or more */
+    unsigned missed;    /* of those, longer than 3.5 slots (not in the mean) */
+} PaceIntervals;
+
+/* The counts cleared; last kept, so the interval across two blocks counts
+ * in the second (zero the struct to forget it too). */
+void pace_intervals_reset(PaceIntervals *s);
+
+/* One time ns (any monotonic clock, above 0) against slotNs. */
+void pace_intervals_add(PaceIntervals *s, uint64_t ns, uint64_t slotNs);
+
+/* The mean interval a refresh (ns; 0 with none). */
+double pace_intervals_mean(const PaceIntervals *s);
+
+/* A measured refresh against the reported one in ppm: positive when the
+ * measured refresh is longer (a grid on the report runs faster than the
+ * display); 0 when either is 0. */
+double pace_ppm(double measuredNs, double reportedNs);
+
+/* The pictures the display showed, from a swapchain's own counts (DXGI's
+ * frame statistics: PresentCount and PresentRefreshCount of the last
+ * picture shown): over two samples, shown = the presents shown between,
+ * refreshes = the refreshes between, and when more refreshes passed than
+ * pictures were shown the difference is pictures shown again (repeats).
+ * A count that went back (a new swapchain) or a gap of more than
+ * PACE_SHOWN_GAP refreshes (a pause) starts again from that sample
+ * (resets). */
+#define PACE_SHOWN_GAP 240u
+
+/* Zero-initialise. */
+typedef struct PaceShown {
+    uint64_t lastPresent, lastRefresh;
+    bool have; /* lastPresent and lastRefresh hold a sample */
+    unsigned shown, refreshes, repeats, resets;
+} PaceShown;
+
+void pace_shown_add(PaceShown *s, uint64_t presentCount, uint64_t presentRefresh);
 
 /* Resolution "auto" (video_options.h ICO_RES_AUTO).  The window
  * feeds each present's cost (the GPU time of a replay when the backend has

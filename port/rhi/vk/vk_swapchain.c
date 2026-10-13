@@ -412,6 +412,17 @@ uint64_t rhi_present_last_id(void)
     return vkr_pw_wanted() ? g_vkr.presentId : 0;
 }
 
+/* rhi.h: no count of the pictures shown on Vulkan */
+bool rhi_present_statistics(uint64_t *presentCount, uint64_t *presentRefresh, uint64_t *syncRefresh,
+                            uint64_t *syncNs)
+{
+    (void)presentCount;
+    (void)presentRefresh;
+    (void)syncRefresh;
+    (void)syncNs;
+    return false;
+}
+
 static void vkr_destroy_retired(void);
 
 static void vkr_destroy_swap_resources(void)

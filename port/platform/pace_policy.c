@@ -583,6 +583,13 @@ uint64_t pace_lock_vsync(PaceLock *L, const PaceLockIo *io, bool newFrame)
         lock_trace(L, ret, id > L->lastId ? id : 0);
         L->lastReturn = ret;
         L->lastBlocked = (double)(ret - now) * 4.0 >= L->slotNs;
+        if (L->lastBlocked) {
+            /* counted only (the log): FIFO's queue was full */
+            L->waited++;
+            if (ret - now > L->waitedMaxNs) {
+                L->waitedMaxNs = ret - now;
+            }
+        }
         if (id > L->lastId) {
             /* not counted for the phase: a present that started half a
                slot late (a slow step) or took a whole slot (a replay past
@@ -656,4 +663,85 @@ double pace_lock_rate_ratio(PaceLock *L)
     L->rateSteps = 0;
     L->rateClean = true;
     return ratio;
+}
+
+void pace_intervals_reset(PaceIntervals *s)
+{
+    const uint64_t last = s->last;
+
+    *s = (PaceIntervals){0};
+    s->last = last;
+}
+
+void pace_intervals_add(PaceIntervals *s, uint64_t ns, uint64_t slotNs)
+{
+    if (ns == 0 || slotNs == 0) {
+        return;
+    }
+    if (s->last == 0 || ns <= s->last) {
+        s->last = ns;
+        return;
+    }
+    const uint64_t d = ns - s->last;
+
+    if (d * 2 < slotNs) {
+        return; /* not a new refresh: last stays */
+    }
+    s->last = ns;
+    s->intervals++;
+    if (s->min == 0 || d < s->min) {
+        s->min = d;
+    }
+    if (d > s->max) {
+        s->max = d;
+    }
+    if (d * 2 < slotNs * 3) {
+        s->n++;
+        s->sum += (double)d;
+        return;
+    }
+    s->late++;
+    if (d * 2 < slotNs * 7) {
+        /* about 2 or 3 slots: that many refreshes */
+        s->n += d * 2 < slotNs * 5 ? 2u : 3u;
+        s->sum += (double)d;
+    } else {
+        s->missed++;
+    }
+}
+
+double pace_intervals_mean(const PaceIntervals *s)
+{
+    return s->n ? s->sum / (double)s->n : 0.0;
+}
+
+double pace_ppm(double measuredNs, double reportedNs)
+{
+    if (measuredNs <= 0.0 || reportedNs <= 0.0) {
+        return 0.0;
+    }
+    return (measuredNs / reportedNs - 1.0) * 1e6;
+}
+
+void pace_shown_add(PaceShown *s, uint64_t presentCount, uint64_t presentRefresh)
+{
+    if (s->have && presentCount == s->lastPresent && presentRefresh == s->lastRefresh) {
+        return; /* no picture shown since */
+    }
+    if (s->have && presentCount > s->lastPresent && presentRefresh >= s->lastRefresh &&
+        presentRefresh - s->lastRefresh <= PACE_SHOWN_GAP) {
+        const uint64_t dp = presentCount - s->lastPresent;
+        const uint64_t dr = presentRefresh - s->lastRefresh;
+
+        s->shown += (unsigned)dp;
+        s->refreshes += (unsigned)dr;
+        if (dr > dp) {
+            s->repeats += (unsigned)(dr - dp);
+        }
+    } else if (s->have) {
+        s->resets++; /* went back, a gap, or refreshes with no picture */
+    }
+    s->lastPresent = presentCount;
+    s->lastRefresh = presentRefresh;
+    s->have = true;
 }
