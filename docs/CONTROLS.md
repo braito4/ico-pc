@@ -23,7 +23,7 @@ usual job, and the original button for its own.
 | Circle (in menus, goes back like Triangle) | right face button | E | right button |
 | Square | left face button | Q | |
 | Triangle (back) | top face button | R | |
-| L1 / R1 | shoulder buttons | Tab or ` / F | middle button (R1) |
+| L1 / R1 | shoulder buttons | Tab or the ` key (left of 1) / F | middle button (R1) |
 | L2 / R2 | triggers | Z / X | |
 | L3 / R3 (press a stick in) | press a stick in | V / B | |
 | Start / Select | start / back (or view) | Enter / Backspace | |
@@ -126,9 +126,10 @@ Pick a model from the list and press Cross.
 | Repeat the animation over and over, or stop repeating | Square |
 | Go back to the list | Triangle or Circle |
 
-With Developer mode on, **Select** also saves the model's files for
-people who make model packs. A message tells you how many files it saved
-and where. [More about model packs](MODEL_PACKS.md#make-a-model-pack).
+With Developer mode on, **Select** (Backspace on a keyboard) also saves the
+model's files for people who make model packs. A message tells you how many
+files it saved and where. [More about model
+packs](MODEL_PACKS.md#make-a-model-pack).
 
 ## Change the colours of Ico and Yorda
 
@@ -204,10 +205,11 @@ game had not prepared yet.
 Your pictures are saved as PNG files in a `screenshots` folder, in the
 same folder as your saves. [Where that is](PORTABLE_MODE.md#where-your-saves-are).
 
-You can change how fast the camera moves, or swap up and down when you
-look around. Close the game, open `config.toml` (it is next to your saves)
-in a text editor, and find the `[photo]` part. For example, this line
-makes the camera move half as fast:
+You can change how fast the camera moves, or swap up and down when you look
+around. Close the game, open `config.toml` (it is next to your saves, [where
+that is](PORTABLE_MODE.md#where-your-saves-are)) in a text editor, and find
+the `[photo]` part. For example, this line makes the camera move half as
+fast:
 
 ```
 stick_speed = 0.5
@@ -241,10 +243,13 @@ pictures:
 - **The look pad** is the rest of the upper right part of the screen.
   Slide a finger there to look around, as you would with the right stick.
 
-The buttons have the same real size on every phone and tablet. On a small
-screen they shrink a little so nothing overlaps. On a foldable, nothing
-sits on the fold: opened flat, each hand's buttons stay on its own side;
-half-folded like a laptop, all the buttons move to the lower half.
+The buttons have about the same real size on every phone and tablet. On a
+small screen they shrink a little so nothing overlaps. On a foldable,
+nothing sits on the fold. When the fold runs from top to bottom, each
+hand's buttons stay on their own side of it, flat or half-folded. When it
+runs across the screen: half-folded like a laptop, all the buttons move to
+the lower half; opened flat, they stay where they are, unless one would sit
+on the fold: then they all move below it.
 
 You can use several fingers at once, for example the stick and a button.
 

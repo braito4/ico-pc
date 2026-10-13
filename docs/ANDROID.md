@@ -9,13 +9,15 @@
 ## What you need
 
 - **A 64-bit Android phone or tablet with Android 10 or later.** Its
-  graphics must support Vulkan 1.2, which most phones and tablets from
-  2022 or newer do. If yours does not, the game tells you when it starts,
-  and on a phone with an Adreno chip it offers to use a graphics driver
-  package instead (see
+  graphics must support Vulkan 1.2 (the way the game talks to the
+  graphics). If you are not sure, install the game and start it: if your
+  phone cannot run it, the game tells you when it starts and offers to use
+  a graphics driver package instead, which only helps on a phone with an
+  Adreno chip (most phones with a Qualcomm Snapdragon processor; see
   [Using a different graphics driver](#using-a-different-graphics-driver)).
 - **Your own disc image of ICO, PAL version (SCES-50760)**, as a `.iso`,
   `.chd` or `.bin` file, copied onto the phone or tablet.
+  [What a disc image is](../README.md#what-you-need).
 - **Free space** for the first start: the size of the disc image plus
   about 1.2 GB. Once the game is set up, it needs about 1 GB.
 
@@ -32,10 +34,10 @@
 To update, install the new version over the old one in the same way. Your
 saves stay.
 
-A test build someone gave you (not from the releases page) can be signed
-differently, and then Android will not install a release over it until you
-uninstall the test build, which deletes your saves: copy the `memcard`
-folder to a computer first ([where it is](#where-your-files-are)).
+A test build someone gave you (not from the releases page) may block
+installing a release over it; then you must uninstall the test build
+first, which deletes your saves: copy the `memcard` folder to a computer
+first ([where it is](#where-your-files-are)).
 
 ## The first start
 
@@ -75,17 +77,20 @@ folder yourself, named `Ico_PAL.iso` (or `Ico_PAL.chd` or `Ico_PAL.bin`). The ga
 uses it without asking. It deletes that file too once it is set up.
 
 **Keeping the copy.** Most people do not need this. If you want the disc
-image to stay in the game's folder, put a text file named `ico-pc.ini` in
-that folder ([where it is](#where-your-files-are)) with this line in it
-(putting `keep_image = true` in `config.toml` under `[paths]` works the
-same):
+image to stay in the game's folder, you need a text file named
+`ico-pc.ini` in that folder ([where it is](#where-your-files-are)) with
+this line in it:
 
 ```
 keep_image=1
 ```
 
-The folder appears the first time you open the game, so this works best
-together with copying `Ico_PAL.iso` there yourself.
+1. Open the game once and close the file picker without choosing a file
+   (the game says no disc image was chosen and closes). The game's folder
+   now exists.
+2. On a computer, make the text file with Notepad or any text editor.
+3. With the USB cable, copy `ico-pc.ini` and your disc image, named
+   `Ico_PAL.iso`, into the game's folder, and start the game again.
 
 ## Where your files are
 
@@ -96,8 +101,7 @@ Android/data/com.defnf.icopc/files
 ```
 
 You can reach it with a USB cable from a computer: open the phone's
-storage, then `Android`, `data`, `com.defnf.icopc`, `files`. Some phones
-also let you open it in their Files app.
+storage, then `Android`, `data`, `com.defnf.icopc`, `files`.
 
 In that folder:
 
@@ -111,9 +115,13 @@ In that folder:
   [model pack](MODEL_PACKS.md) goes. Make these folders yourself.
 - `screenshots` holds the pictures you take in photo mode.
 - `config.toml` holds your settings.
+- A big file of about 1 GB is the game's data, copied out of your disc
+  image. Do not delete it, or the next start asks for the disc image
+  again.
 
-If the phone's shared storage cannot be written to, the game uses a
-private folder instead, which a computer or the Files app cannot open.
+If the game cannot write to that folder (it is then missing or empty),
+it uses a private folder instead, which a computer or the Files app cannot
+open.
 
 > [!WARNING]
 > Uninstalling the game deletes this whole folder, saves included. Copy
@@ -131,19 +139,22 @@ own copy of `memcard` too.
 PlayStation controller with the game's own button pictures: a stick in the
 lower left, the D-pad above it beside L1 and L2 in the top left corner, the
 four face buttons in the lower right with R1 just above them, R2 in the top
-right, Start and Select at the top in the middle, and a look pad on the rest
-of the upper right. They have the same real size on every screen and never
-cover each other. They fade away when you stop touching the screen and
-come back when you touch it. **Options > Controls** has **Touch size** and
-**Touch opacity** to make them bigger or smaller and more or less
-see-through.
+right, Start and Select at the top in the middle, and a look pad (the area
+you swipe to turn the camera) on the rest of the upper right. They are about
+the same real size on every phone and tablet (smaller when the screen is too
+short for the chosen Touch size) and never cover each other. They fade away
+when you stop touching the screen and come back when you touch it.
+**Options > Controls** has **Touch size** and **Touch opacity** to make
+them bigger or smaller and more or less see-through.
 [The full description](CONTROLS.md#touch-controls-phones-and-tablets).
 If Ico does not run in every direction you push the on-screen stick, turn
 on **Options > Gameplay > Analogue stick fix**.
 
-**Foldables.** The buttons keep clear of the fold. With a foldable opened
-flat, each hand's buttons stay on its own side of the fold. Half-folded like
-a laptop, all the buttons move to the lower half of the screen.
+**Foldables.** The buttons keep clear of the fold. When the fold runs from
+top to bottom, each hand's buttons stay on their own side of it, flat or
+half-folded. When it runs across the screen: half-folded like a laptop,
+all the buttons move to the lower half; opened flat, they stay where they
+are, unless one would sit on the fold: then they all move below it.
 
 **Back.** The phone's Back button or gesture opens the pause menu while
 you play, like Start. In the menus it goes back, like Triangle.
@@ -173,12 +184,13 @@ then draws each picture once, as the PS2 did, which leaves the phone the
 most time for the game itself. The game starts at 60 frames a second on
 Android.
 
-If it still stutters, lower **Options > Display > Resolution**: 1x is the
-lightest. **Auto** does this for you: it starts at the size of your
-screen and steps down (3x, then 2x, then 1x) when the phone cannot draw
-the pictures in time. It never steps back up while the game runs; the
-row shows where it ended up, for example **Auto (2x)**. The Enhanced
-preset uses Auto on Android.
+If it still stutters and you changed **Preset** to Enhanced or raised
+**Options > Display > Resolution**, lower it again: 1x (the normal setting)
+is the lightest. **Auto** does this for you: it starts at the size of your
+screen and steps down (3x, then 2x, then 1x) when the phone cannot draw the
+pictures in time. It never steps back up while the game runs; the row shows
+where it ended up, for example **Auto (2x)**. The Enhanced preset uses Auto
+on Android.
 
 ## Send a problem report
 
@@ -192,13 +204,14 @@ A few problems are easier to track down with a little more. If one of
 these is yours, add it to the report.
 
 **The game is slow.** If the whole log is too big to send, send its first
-lines (they say which phone, graphics chip and settings the game found)
+lines (they say which graphics chip, graphics driver and settings the game
+found)
 and, from a moment of play that stutters, a few of the speed reports the
 game writes every 10 seconds. Those lines start with `window:`. Copy them
 as they are.
 
 **The picture is the wrong size.** If the opening scene after the logo
-(the forest) is drawn too small, shifted or stretched, send the first
+is drawn too small, shifted or stretched, send the first
 lines of the log from that start, down to where the scene looks right.
 They say what size the game was told the screen is, and when that changed.
 Copy them as they are.
@@ -235,8 +248,8 @@ unfold.
 
 Options > Display > Aspect ratio decides how the picture fits:
 
-- **Auto** fills a wide phone screen. The game draws the whole width
-  natively and shows more of the scene to the sides instead of leaving
+- **Auto** fills a wide phone screen. The game draws the whole width of
+  the screen and shows more of the scene to the sides instead of leaving
   bars. Menus, subtitles and movies stay in a 4:3 box in the middle.
 - The normal 4:3 setting shows bars at the sides, as on the PS2.
 - On a folding screen that is nearly square, the picture keeps its 4:3
@@ -251,8 +264,8 @@ your phone, a newer graphics driver from the community can sometimes fix
 it. If you do not have a problem, you can skip this.
 
 1. On your phone, download a driver package. The community shares them on
-   GitHub as zip files, in the "AdrenoToolsDrivers" releases by K11MCH1.
-   Leave the file as a zip. Do not unpack it.
+   GitHub as zip files (search for "AdrenoToolsDrivers"). Leave the file
+   as a zip. Do not unpack it.
 2. In the game, open **Options > Graphics driver** and choose **Add a
    driver**. Pick the zip file you downloaded. The game says when the
    driver has been added, or that the file is not a driver package.
@@ -265,7 +278,8 @@ choose **Remove this driver** to delete it. Restart the game after either.
 
 If a driver does not start, the game falls back to the phone's own driver
 and tells you so. You can still play. The driver is not removed, so you can
-try another one or remove it yourself.
+try another one, or remove it yourself: in **Options > Graphics driver**,
+set **Driver** to it, then choose **Remove this driver**.
 
 ### When the game cannot start with the phone's driver
 

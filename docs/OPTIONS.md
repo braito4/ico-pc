@@ -59,7 +59,7 @@ How the picture looks.
 - **Aspect ratio** is the picture's shape: 4:3 (the PS2's), 16:10, 16:9,
   21:9, 32:9 or 48:9. **Auto** follows the shape of your window or screen,
   up to 60:9.
-  The game draws the whole width of the picture natively, so on a wider
+  The game draws the extra width itself (nothing is stretched), so on a wider
   picture you see more of the world to the sides, and it looks the way the
   original did. Menus, subtitles and movies stay in a 4:3 box in the middle.
 - **Anti-aliasing** smooths jagged edges. The choices go in this order:
@@ -69,7 +69,7 @@ How the picture looks.
   do is skipped when you step through the row. Supersampling draws the
   picture at a larger size and shrinks it back, which smooths everything
   (including the insides of textures) but needs more from your graphics
-  card. MSAA works the same with Full pixel on or off, at any window size.
+  card.
   While the Preset is **Original**, this row stays at **Off** and cannot be
   changed. Pick **Enhanced**, or change one of the Preset's rows, to use
   it. The row shows your saved choice. When the game is not using it,
@@ -82,10 +82,11 @@ How the picture looks.
   shows every game on the whole screen, whatever this row says. This row is
   not on phones and tablets.
 - **Vertical sync** stops the picture from tearing. With it off, the
-  picture can tear if your screen allows it. With it on and **Frame rate**
-  set to your screen's refresh rate (60 on a 60 Hz screen, 120 on a
-  120 Hz screen), the game takes its steps in time with the screen, so
-  every picture is shown for the same length of time. On Windows the game
+  picture can tear if your screen allows it. With it on, **Video mode** at
+  60 Hz (the normal choice) and **Frame rate** at 60 on a 60 Hz screen or
+  120 on a 120 Hz screen, the game takes its steps in time with the screen,
+  so every picture is shown for the same length of time. With Video mode at
+  50 Hz, none of the Frame rate row's limits do this. On Windows the game
   measures how fast the screen really refreshes and follows that, rather
   than the number Windows reports. With
   Direct3D 12 (see [Choosing the renderer on Windows](#choosing-the-renderer-on-windows))
@@ -98,20 +99,21 @@ How the picture looks.
   installed** when there is none. This row is only on the title screen's
   Options. [About model packs](MODEL_PACKS.md).
 - **Frame rate** is Original (as on the PS2), Uncapped, or a fixed limit of
-  60, 120, 144 or 240 frames a second. On a computer it starts at
-  Uncapped. With Vertical sync on, Uncapped follows your screen: one new
-  picture each time the screen shows one. If your screen says it refreshes
-  fewer than sixty times a second, Vulkan still draws sixty a second when
-  your graphics driver can hand pictures to the screen without waiting for
-  it; Direct3D 12 always draws one picture for each refresh. With Vertical
-  sync off, Uncapped draws as fast as your computer can. A limit equal to
-  your screen's refresh rate (60 on a 60 Hz screen, 120 on a 120 Hz screen)
-  follows the screen, so motion stays smooth, and the 144 and 240 limits
-  reach their rate. On phones and tablets it starts at 60.
-  If motion ever looks uneven, check that this limit matches your
-  screen's refresh rate (see your system's display settings). If a faint
-  trailing image stays while you move, try another limit, or on Windows
-  the Direct3D 12 renderer ([Choosing the renderer on Windows](#choosing-the-renderer-on-windows)).
+  60, 120, 144 or 240 frames a second. On a computer it starts at Uncapped.
+  With Vertical sync on, Uncapped follows your screen: one new picture each
+  time the screen shows one. If your screen says it refreshes fewer than
+  sixty times a second, Vulkan usually still draws sixty a second (it
+  depends on your graphics driver); Direct3D 12 always draws one picture for
+  each refresh. With Vertical sync off, Uncapped draws as fast as your
+  computer can. A limit equal to your screen's refresh rate (60 on a 60 Hz
+  screen, 120 on a 120 Hz screen) follows the screen, so motion stays
+  smooth. On a 144 Hz or 240 Hz screen the 144 or 240 limit counts as equal
+  to it, even when the system reports 143 or 239. On phones and tablets it
+  starts at 60. If motion ever looks uneven, check that this limit matches
+  your screen's refresh rate (see your system's display settings). If a
+  faint trailing image stays while you move, try another limit, or on
+  Windows the Direct3D 12 renderer ([Choosing the renderer on
+  Windows](#choosing-the-renderer-on-windows)).
 - **Video mode** is PAL 50 Hz or 60 Hz. The normal choice is 60 Hz. This
   row is only on the title screen's Options.
 
@@ -124,7 +126,8 @@ The picture's finish, the CRT filter and the game's own picture effects.
 - **Full-height picture** shows every line of the picture. The PS2 showed
   half of them, which looks a little softer.
 - **Texture filtering** is how smooth the textures look up close: Original
-  (as on the PS2), Trilinear or Anisotropic.
+  (as on the PS2), Trilinear (smooth) or Anisotropic (smooth, and sharper
+  on surfaces seen at an angle).
 - **Brightness** sets how bright the picture is. Square puts back the
   normal value, 7.
 - **CRT filter** makes the picture look like an old tube television. Off
@@ -155,12 +158,13 @@ The last row is not one of the game's effects:
   screen, so nothing is rounded, cropped or stretched, and the strip the PS2
   hid under its thin black border is shown too. The picture is exactly as
   wide as the window shows it, at every size and shape of window. It needs
-  the Enhanced Preset with Resolution set to the size of your window. With
-  Original, a fixed Resolution (1x to 16x), the CRT filter or supersampling,
-  this row only opens up the thin black border. Picking the Enhanced Preset
-  turns it on, and you can turn it on or off here at any time. Off keeps the
-  original game's frame shape, with its thin black border. With Video mode
-  at 50 Hz the strip at the top and bottom is a little taller.
+  Resolution set to the size of your window (the Enhanced Preset picks it).
+  With Original, a fixed Resolution (1x to 16x), the CRT filter or
+  supersampling, this row only opens up the thin black border. Picking the
+  Enhanced Preset turns it on, and you can turn it on or off here at any
+  time. Off keeps the original game's frame shape, with its thin black
+  border. With Video mode at 50 Hz the strip at the top and bottom is a
+  little taller.
 
 The Preset on the Display page sets Texture filtering, Full-height picture and Full pixel on this
 page too (Enhanced turns Full pixel on, Original turns it off), but it does not change the rest.
@@ -234,7 +238,8 @@ The six mouse rows do not show on phones and tablets.
 - **Touch controls, Touch size and Touch opacity** set up the buttons on a
   touch screen. They only show up on a device with one.
   [About touch controls](CONTROLS.md#touch-controls-phones-and-tablets).
-  Their size is real size, so they feel the same on every screen.
+  Their size is a real size, so they feel about the same on every screen
+  (smaller only when the screen cannot hold them).
 
 ## Gameplay
 
@@ -251,12 +256,11 @@ The first four are off unless you turn them on, on a phone too.
   of the ladder in the East Reflector. For a few seconds after you come
   through a door holding her hand, that door does not take you back.
   [Why this is needed](FAQ.md#ico-and-yorda-come-straight-back-out-of-a-doorway).
-- **Natural chains** changes how two chains look as they come down for
-  Ico: the one at the Stone Pillar and one underground, by the water
-  wheel. In the original game the links look squashed until the chain is
-  all the way down. With this on, the links stay the right size and more
-  of the chain shows as it comes down. It only changes the picture, not
-  the game.
+- **Natural chains** changes how two chains look as they come down for Ico:
+  the one at the Stone Pillar and one underground. In the original game the
+  links look squashed until the chain is all the way down. With this on, the
+  links stay the right size and more of the chain shows as it comes down. It
+  only changes the picture, not the game.
 
 Two more rows are the game's own, and only show up in the pause menu's
 Options once you have finished the game:
@@ -286,7 +290,7 @@ page, and it is the same setting in both places.
 ## Extras
 
 On the title screen's Options this page has Music, Models, Credits,
-Character Customization, Add to Steam (on a computer) and Achievement
+Character Customization, Add to Steam (on Windows and Linux) and Achievement
 pop-ups. In the pause menu's Options it has only Character Customization
 and Achievement pop-ups.
 
@@ -308,9 +312,10 @@ and Achievement pop-ups.
   (right-click it, then Exit Steam). If Steam has several accounts, the game goes to the one
   used last. It adds no pictures, so Steam shows its plain tile for it. If
   the game is already in your library, the row says so and changes
-  nothing; a copy of the old list is kept as `shortcuts.vdf.bak` in the
-  same folder. If you move the game to another folder, add it again from
-  there. The row is not on phones and tablets.
+  nothing. When it adds the game, it first keeps a copy of Steam's old
+  list, `shortcuts.vdf.bak`, beside Steam's own list. If you move the game
+  to another folder, add it again from there. The row is only on Windows
+  and Linux, the Steam Deck included.
 
 ### Character Customization
 
@@ -361,9 +366,10 @@ drawn from the camera with every effect the game has.
 
 ## Developer mode
 
-Developer mode brings back the menu the game's makers used while they
-built it. Leave it off for normal play. While it is on, you cannot earn
-achievements.
+Developer mode brings back the menu the game's makers used while they built
+it: while it is on, Select opens it. Leave it off for normal play. While it
+is on, you cannot earn achievements, and they stay off for the rest of that
+game even after you turn it off, until you go back to the title screen.
 
 With Developer mode on, two more rows show up under it. They are for
 people who make packs:
@@ -414,8 +420,8 @@ text file named `config.toml`, in the same folder as your saves
 2. Open `config.toml` in a text editor, such as Notepad.
 3. Find the line, change the value after the `=`, and save the file.
 
-Each line has a short note above it saying what it does. Lines that start
-with `#` are notes, or settings switched off. To switch one on, delete
+Most lines have a short note above them saying what they do. Lines that
+start with `#` are notes, or settings switched off. To switch one on, delete
 the `#` at the start of its line.
 
 If your `config.toml` has no such line, add it under the heading shown
@@ -483,12 +489,13 @@ On Android, under `[paths]`:
 
 ## Choosing the renderer on Windows
 
-The game draws with Vulkan unless you tell it otherwise. To try Direct3D 12 instead, add this line
-to `ico-pc.ini` next to the game (or `backend = "d3d12"` under `[video]` in `config.toml`):
+The game draws with Vulkan unless you tell it otherwise. To try Direct3D 12 instead, open
+`ico-pc.ini` in the `x64` folder, beside `ico_pc_x64.exe`, with Notepad and add this line
+(or `backend = "d3d12"` under `[video]` in `config.toml`):
 
 ```
 backend=d3d12
 ```
 
-Start the game; the first lines of `logs/ico-pc.log` then say `D3D12` instead of `Vulkan`. Delete
-the line to go back to Vulkan.
+Start the game; a line near the top of `logs/ico-pc.log` that starts with `window:` then says
+`D3D12` instead of `Vulkan`. Delete the line to go back to Vulkan.

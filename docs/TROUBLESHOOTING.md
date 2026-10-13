@@ -37,8 +37,8 @@ updating the graphics driver usually fixes it.
    [issues page](https://github.com/nathanialf/ico-pc/issues).
 2. Say what happened and what you were doing.
 3. Say which version of the game you have. A downloaded release shows it
-   in the top-right corner of the Options menu, and the log says it at the
-   top.
+   in the top-right corner of the Options menu's first page, and the log
+   says it at the top.
 4. Attach `ico-pc.log`.
 5. If you are asked for it, also attach `config.toml` from the folder with
    your saves ([where that is](PORTABLE_MODE.md#where-your-saves-are)).
@@ -52,9 +52,9 @@ perf_log = true
 ```
 
 If the file already has a `[dev]` line, add only the `perf_log = true` line
-under it. On Windows, Linux and Android the game then also writes
+under it. On every system except the iPhone the game then also writes
 `ico-pc-perf.csv` in the same `logs` folder as `ico-pc.log`, one line for
-each picture it draws (about 1 MB a minute). Play until the problem
+each picture it draws. Play until the problem
 shows, close the game, and attach that file with the log. Then delete what
 you added, so the game stops writing the file.
 
@@ -78,12 +78,16 @@ report, and do not share them anywhere else.
 
 ## Error messages
 
-The game shows a message box when it cannot go on. Here is what the
-common ones mean.
+When the game finds a problem it cannot get past, it shows a message box
+and closes, and the same text is in the log. Here is what the common ones
+mean.
 
 **"No ICO disc image was found or chosen."** The game needs your disc
 image the first time. Start it again and choose the file, or put the image
-beside the program named `Ico_PAL.iso`.
+beside the program named `Ico_PAL.iso` (on Windows inside the `x64`
+folder; on a Mac, add a line `iso=` with the image's full path to
+`ico-pc.ini` in the user folder instead,
+[where that is](PORTABLE_MODE.md#where-your-saves-are)).
 
 **"... is not the disc image this port needs."** The file is not the PAL
 version of ICO (SCES-50760), or it is damaged or changed. Other regions
@@ -109,7 +113,8 @@ game's graphics."** (on a phone) Your graphics driver or graphics chip does
 not support Vulkan 1.2, the way the game talks to the graphics. Updating
 the graphics driver usually fixes it. On a phone, install the latest
 system update. The lines in the log that mention Vulkan say what is
-missing.
+missing. If you added `backend=d3d12` to `ico-pc.ini` on Windows, delete
+that line and try again.
 
 **"ICO could not start the game's graphics with this phone's driver."**
 (on a phone) The phone's own graphics driver cannot run the game. The box
@@ -128,27 +133,42 @@ later in Options > Graphics driver. See
 without choosing a file. Start the game again and choose your ICO disc
 image.
 
+**"The graphics card stopped responding ..."** The graphics driver was
+reset, updated or crashed while you played, and the game has to close.
+Your last save is kept, and the log says why. Start the game again. This
+is usually a driver reset: if it keeps happening, update the graphics
+driver and send the log.
+
 ## The game closes by itself
 
-If the game closes with an error, the log ends with a block whose first
-line has `CRASH:` in it. Send the log. The developers can find where it
-happened from the numbers in that block.
+If the game closes with an error, Windows and Android show a message that
+says so; on Linux, the Steam Deck, a Mac and an iPhone the game just
+closes. Either way the log says why: near the end of the log there is a
+line of `=` signs, and the line after it has `CRASH:` in it. Send the log.
+The developers can find where it happened from the numbers in that block.
 
 **The game closes or restarts itself right after it starts.** Some graphics
-drivers crash while the game gets its graphics ready. When that happens the
-game notices and starts itself again, once or twice, each time trying a
-gentler way: on Windows it may switch to Direct3D 12, or get the graphics ready
-as you play instead of all at once. You need do nothing, and your settings
-are left as they are. If it still cannot start, a message says the graphics
-driver crashed. Updating the graphics driver usually fixes this. On Windows
-you can also add the line `backend=d3d12` to `ico-pc.ini` to always use
-Direct3D 12. If you report it, attach the log: it shows every attempt.
+drivers crash while the game gets its graphics ready. On Windows, Linux and
+Mac the game notices and starts itself again, up to three times, each time
+trying a gentler way: first without the graphics it saved last time, then
+(on Windows) with Direct3D 12, then getting the graphics ready as you play
+instead of all at once. You need do nothing, and your settings are left as
+they are. If it still cannot start, Windows shows a message that the
+graphics driver crashed; on Linux and Mac the game closes and the log says
+why. On an Android phone a message says the graphics driver crashed and
+the game closes; on an iPhone the game closes. Updating the graphics driver
+usually fixes this. On Windows you can also open `ico-pc.ini` in the `x64`
+folder with Notepad and add the line `backend=d3d12` at the end to always
+use Direct3D 12
+([how](OPTIONS.md#choosing-the-renderer-on-windows)). If you report it,
+attach the log: it shows every attempt.
 
 If the game stops responding, it closes itself after a while: 30 seconds
-while it is starting, 60 seconds once it is running. The log then has a
-block whose first line has `WATCHDOG:` in it, and it says what the game
-was doing. With [ReShade](RESHADE.md) loaded, the game gives itself 60
-seconds to start as well, as ReShade takes a while to get ready.
+while it is starting, 60 seconds once it is running. Windows and Android
+show a message that says so. The log then has a line of `=` signs, and the
+line after it has `WATCHDOG:` in it and says what the game was doing.
+With [ReShade](RESHADE.md) loaded, the game gives itself 60 seconds to
+start as well, as ReShade takes a while to get ready.
 
 ## Texture packs and model packs
 
@@ -158,22 +178,15 @@ were found and why a file was not used.
 [Texture packs](TEXTURE_PACKS.md#check-that-the-game-found-it),
 [model packs](MODEL_PACKS.md#when-a-replacement-is-not-used).
 
-## Known limits
-
-On a few graphics drivers (rare), surfaces that sit very close together
-may flicker.
-
 ## Linux
 
-The Linux version needs a fairly new system: SteamOS 3.5, Debian 13,
-Ubuntu 24.04 or newer. Keep `ico_pc` and `libSDL3.so.0` in the same
-folder.
+The Linux version needs a fairly new system: Debian 13, Ubuntu 24.04 or
+newer. Keep `ico_pc` and `libSDL3.so.0` in the same folder.
 
-The window that asks for your disc image comes from your desktop: its own
-file chooser, or one of the small programs `zenity` and `kdialog`. Most
-desktops have one of them. If no window shows up, put the image beside
-`ico_pc` named `Ico_PAL.iso` (or `Ico_PAL.chd`, `Ico_PAL.bin` or
-`Ico_PAL.cue`) instead.
+The window that asks for your disc image comes from your desktop's own
+file window, or from the small program `zenity`. If no window shows up,
+put the image beside `ico_pc` named `Ico_PAL.iso` (or `Ico_PAL.chd`,
+`Ico_PAL.bin` or `Ico_PAL.cue`) instead.
 
 ## Steam Deck
 
@@ -194,7 +207,8 @@ In Game Mode, the Deck shows the game on the whole screen, whatever the
 Window mode row in Options says.
 
 With Vertical sync off, the picture only tears if the Deck's "Allow
-Tearing" setting is on.
+Tearing" setting is on (in the Deck's Quick Access menu, under
+Performance).
 
 ## Android
 

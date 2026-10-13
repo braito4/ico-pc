@@ -106,29 +106,34 @@ system's package manager. Then start the game with vkBasalt switched on:
 - From Steam: right-click the game, choose **Properties**, and put this in
   **Launch options**: `ENABLE_VKBASALT=1 %command%`
 
-For depth effects, set `RESHADE_DEPTH_INPUT_IS_REVERSED=1` the same way.
-vkBasalt's own support for depth effects is still experimental, so those
-may not work.
+For depth effects, put `RESHADE_DEPTH_INPUT_IS_REVERSED=1` in the same
+launch line (before `./ico_pc` or `%command%`), and switch depth on in
+vkBasalt's own settings file with the line `depthCapture = on`. vkBasalt's
+support for depth effects is still experimental, so those may not work.
+
+To use a vkBasalt settings file (a `.conf` file) kept in the game's
+`reshade` folder, add `VKBASALT_CONFIG_FILE=` and the file's full path to
+the same launch line, for example
+`ENABLE_VKBASALT=1 VKBASALT_CONFIG_FILE=/home/you/ico-pc/reshade/my.conf ./ico_pc`.
 
 The game gives vkBasalt (and ReShade) the depth picture only when it
 finds one of them running. It never does this on Android.
 
-**Steam Deck.** SteamOS has no package manager for vkBasalt, and the
-vkBasalt in the Discover store is only for Flatpak apps, so it does not
-work with this game. Install it by hand, in Desktop Mode:
+**Steam Deck.** On SteamOS, install vkBasalt by hand, in Desktop Mode:
 
 1. Download the latest vkBasalt release (a `.tar.gz` file) from its page
    on GitHub, and unpack it.
 2. Copy the layer file (`vkBasalt.json`) into the folder
    `~/.local/share/vulkan/implicit_layer.d` (make the folder if it is not
    there).
-3. Copy the library (`libvkbasalt.so`) to the place the `library_path`
-   line inside that `.json` file points to, or change that line to where
-   you put the library.
+3. Copy the library (`libvkbasalt.so`) somewhere in your home folder. Open
+   `vkBasalt.json` in a text editor, find the line that starts with
+   `"library_path"`, and put the full path of `libvkbasalt.so` there.
 4. In Steam, put `ENABLE_VKBASALT=1 RESHADE_DEPTH_INPUT_IS_REVERSED=1 %command%`
    in the game's **Launch options**.
 
 ## The Steam overlay
 
-The Steam overlay (Shift+Tab) works with the game, with or without
-ReShade.
+The Steam overlay (Shift+Tab) can run with the game, with or without
+ReShade. When it is loaded (with Vulkan), the log has a line
+`window: an overlay is loaded (Steam overlay)`.

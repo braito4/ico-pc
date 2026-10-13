@@ -54,9 +54,10 @@ portable=1'
 # user folder (%APPDATA%\\ico-pc\\ico-pc); later starts do not need it.
 iso=$3
 
-# watchdog: if the game has not started this many seconds after launch, or
-# stops responding for twice as long later, the program writes what it was
-# doing to logs\\ico-pc.log and closes. 0 turns it off.
+# watchdog: if the game has not started this many seconds after launch
+# (twice as many while ReShade is loaded), or stops responding for twice as
+# long later, the program writes what it was doing to logs\\ico-pc.log and
+# closes. 0 turns it off.
 watchdog=30
 
 $portable_block
@@ -78,15 +79,17 @@ INI
 # .iso, a .chd, or a .bin with its .cue, for example
 # iso=/home/deck/Games/Ico_PAL.iso . A file named Ico_PAL.iso, Ico_PAL.chd,
 # Ico_PAL.bin or Ico_PAL.cue next to ico_pc is used before this line.
-# Leave it empty and the first start asks for the image (the file dialog
-# needs zenity), then saves your choice here. The image is read once, to
+# Leave it empty and the first start asks for the image (the file window
+# comes from your desktop, or from the small program zenity), then saves
+# your choice here. The image is read once, to
 # copy the game's data into your user folder (~/.local/share/ico-pc/ico-pc/);
 # later starts do not need it.
 iso=$3
 
-# watchdog: if the game has not started this many seconds after launch, or
-# stops responding for twice as long later, the program writes what it was
-# doing to logs/ico-pc.log and closes. 0 turns it off.
+# watchdog: if the game has not started this many seconds after launch
+# (twice as many while vkBasalt is loaded), or stops responding for twice as
+# long later, the program writes what it was doing to logs/ico-pc.log and
+# closes. 0 turns it off.
 watchdog=30
 
 $portable_block

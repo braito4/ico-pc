@@ -1,26 +1,27 @@
 # ico-pc
 
-This is **ICO** (Sony Computer Entertainment, 2001) made to run natively on
-a Windows or Linux PC, the Steam Deck, 64-bit ARM Linux handhelds,
-Android phones and tablets, iPhones and Apple-silicon Macs. It runs the
-game's own code, so it plays, sounds and feels like the PAL
-PlayStation 2 game. There are extras, such as a sharper picture,
-widescreen and smoother motion. The sharper picture, widescreen and the
-other picture extras stay off until you turn them on, and the frame rate is
-not held to the PS2's unless you choose Original. The mouse camera starts
-on.
+This is **ICO** (Sony Computer Entertainment, 2001) made to run as a normal
+program on a Windows or Linux PC, the Steam Deck, 64-bit ARM Linux
+handhelds, Android phones and tablets, iPhones and Apple-silicon Macs. It
+runs the game's own code, so it plays, sounds and feels like the PAL
+PlayStation 2 game. There are extras, such as a sharper picture, widescreen
+and smoother motion. The sharper picture, widescreen and the other picture
+extras stay off until you turn them on, and the frame rate is not held to
+the PS2's unless you choose Original. The mouse camera starts on.
 
 > [!IMPORTANT]
 > This project is not connected to Sony Interactive Entertainment or Team
 > Ico. *ICO* is a trademark of its owners. The game itself is not included
 > here or in the downloads. You need your own copy of the PAL disc
-> (SCES-50760), saved as a disc image file, and the program reads the game
-> from it. See
-> [`docs/LEGAL.md`](https://github.com/nathanialf/ico-pc/blob/main/docs/LEGAL.md).
+> (SCES-50760; the number is printed on the disc and on the case), saved as
+> a disc image file, and the program reads the game from it. More in the
+> [project's legal notes](https://github.com/nathanialf/ico-pc/blob/main/docs/LEGAL.md)
+> (written for developers).
 
 ## What you need
 
-- **Your own disc image of ICO, PAL version (SCES-50760).** A disc image is
+- **Your own disc image of ICO, PAL version (SCES-50760, the number printed
+  on the disc and on the case).** A disc image is
   one file that holds the whole disc. It ends in `.iso`, `.chd` or `.bin` (a
   `.bin` can come with a `.cue` file, which also works). Other regions and
   editions do not work.
@@ -41,8 +42,8 @@ on.
 
 | Device | Download | Status |
 |---|---|---|
-| Windows 10 or 11, 64-bit, with a graphics card from NVIDIA, AMD or Intel | `-win.zip` (or `-win-portable.zip`) | The main test machine. Every release is played on it before it goes out. Draws with Vulkan, or Direct3D 12 if you choose it ([how](docs/OPTIONS.md#choosing-the-renderer-on-windows)). |
-| Linux PC, 64-bit x86: SteamOS 3.5, Debian 13, Ubuntu 24.04 or newer | `-linux.tar.gz` (or `-linux-portable.tar.gz`) | Built and checked by the automatic tests for every release. |
+| Windows 10 or 11, 64-bit, with a graphics card from NVIDIA, AMD or Intel | `-win.zip` (or `-win-portable.zip`) | The main test machine. Draws with Vulkan, or Direct3D 12 if you choose it ([how](docs/OPTIONS.md#choosing-the-renderer-on-windows)). |
+| Linux PC, 64-bit x86: Debian 13, Ubuntu 24.04 or newer | `-linux.tar.gz` (or `-linux-portable.tar.gz`) | Built and checked by the automatic tests for every release. |
 | Steam Deck | `-linux.tar.gz` | Supported; [Steam Deck tips](docs/TROUBLESHOOTING.md#steam-deck). |
 | Linux handheld or board, 64-bit ARM: Debian 13, Ubuntu 24.04 or newer | `-linux-arm64.tar.gz` (or `-linux-arm64-portable.tar.gz`) | Built for every release. |
 | Android phone or tablet, 64-bit, Android 10 or newer (usually 2022 or newer) | `-android.apk` | Supported. It can be slower than on a PC. [The Android guide](docs/ANDROID.md). |
@@ -60,22 +61,26 @@ Download the file for your device from the
 ### Windows
 
 1. Download the file whose name ends in `-win.zip`.
-2. Unzip it into a folder you can write to, such as Documents or a Games
-   folder. Keep all the files together.
+2. Right-click the file and choose **Extract All**, then pick a folder you
+   can write to, such as Documents or a Games folder. Keep all the files
+   together.
 3. Open the `x64` folder and double-click `ico_pc_x64.exe`.
 
 ### Linux and Steam Deck
 
 1. Download the file whose name ends in `-linux.tar.gz`.
-2. Unpack it into a folder in your home folder.
-3. Double-click `ico_pc`, or run it from a terminal.
+2. Right-click the file and choose **Extract** (or **Extract Here**), into
+   a folder in your home folder.
+3. Double-click `ico_pc`, or run it from a terminal. If your file manager
+   asks, choose **Run** or **Execute**.
 
-The Linux version needs a fairly new system: SteamOS 3.5, Debian 13,
-Ubuntu 24.04 or newer. On a Steam Deck, unpack it in Desktop Mode and start it
-once there so it can ask for the disc image, then
-close Steam and choose Options > Extras > Add to Steam on the title screen (or add `ico_pc` by
-hand with Steam > Add a Non-Steam Game) and play in Game
-Mode. [Steam Deck tips](docs/TROUBLESHOOTING.md#steam-deck).
+The Linux version needs a fairly new system: Debian 13, Ubuntu 24.04 or
+newer. On a Steam Deck, unpack it in Desktop Mode and start it once there so
+it can ask for the disc image, then close Steam (right-click its icon in the
+taskbar and choose **Exit Steam**) and choose Options > Extras > Add to
+Steam on the title screen (or add `ico_pc` by hand with Steam > Add a
+Non-Steam Game) and play in Game Mode. [Steam Deck
+tips](docs/TROUBLESHOOTING.md#steam-deck).
 
 On a 64-bit ARM Linux handheld or board, download the file whose name ends
 in `-linux-arm64.tar.gz` instead and follow the same steps. It also needs
@@ -96,7 +101,8 @@ controls and where your saves are.
 
 1. Download the file whose name ends in `-macos-arm64.dmg` (or the one
    ending in `-macos-arm64.zip`, which holds the same app).
-2. Open it and drag **ICO** into your Applications folder.
+2. Open it. Open a second Finder window on Applications (**Go >
+   Applications**) and drag **ICO** into it.
 3. The first time, right-click **ICO** and choose **Open**, then **Open**
    again. Apple has not checked this app, so a plain double-click only
    shows a warning the first time. If your Mac still will not open it, go
@@ -117,8 +123,9 @@ up first with its own instructions.
 1. Download the file whose name ends in `-ios-unsigned.ipa` on your
    iPhone.
 2. Add it to LiveContainer and start **ICO** once. It says the game data
-   is missing and closes. That is expected: it has not seen your disc
-   image yet.
+   is missing and closes. (The message names a game data file; you do not
+   need it: your disc image does the same job.) That is expected: it has
+   not seen your disc image yet.
 3. Copy your disc image into ICO's **Documents** folder through
    LiveContainer's data-folder access, and name it `Ico_PAL.iso` (or
    `Ico_PAL.chd`, `Ico_PAL.bin` or `Ico_PAL.cue`). The iPhone version does
@@ -152,7 +159,8 @@ folder.
   Gameplay > Analogue stick fix** to run in any direction.
   [The full answer](docs/FAQ.md#ico-walks-instead-of-running).
 - **How do I use a texture pack?** Copy it into the `textures` folder that
-  comes with the game. [Step by step](docs/TEXTURE_PACKS.md).
+  comes with the game (on a Mac or an iPhone, the guide says where to make
+  one). [Step by step](docs/TEXTURE_PACKS.md).
 - **Can I turn off the blur or the glow?** Yes, in **Options > Effects**.
   [What each one does](docs/OPTIONS.md#effects).
 - **Where are my saves?** In a folder the game makes for you.
@@ -196,7 +204,7 @@ error messages and what to try first.
 ## How it differs from the PS2
 
 The title screen has an **Options** line and a **Quit to desktop** line
-(**Quit game** on Android); starting a New Game shows one more screen, with
+(**Quit game** on a phone); starting a New Game shows one more screen, with
 **Mirror mode** and **New Game+** ([more about them](docs/OPTIONS.md#starting-a-new-game));
 the language and 50/60 Hz questions the PS2 asks at first start live in
 Options instead, and the language can change in the middle of a game; the
@@ -205,13 +213,13 @@ pause menu shows your journey's numbers. Everything else is meant to match
 the PS2: if the picture or the timing is different from the console, that
 is a bug worth reporting. The full list of differences, written for people
 who work on the code, is in
-[`docs/port/DIVERGENCES.md`](docs/port/DIVERGENCES.md).
+[`docs/port/DIVERGENCES.md`](https://github.com/nathanialf/ico-pc/blob/main/docs/port/DIVERGENCES.md).
 
 ## Building it yourself
 
 See [`docs/BUILDING.md`](https://github.com/nathanialf/ico-pc/blob/main/docs/BUILDING.md).
 You do not need the disc image to build it. How the port works, for
-contributors: [`docs/port/ARCHITECTURE.md`](docs/port/ARCHITECTURE.md).
+contributors: [`docs/port/ARCHITECTURE.md`](https://github.com/nathanialf/ico-pc/blob/main/docs/port/ARCHITECTURE.md).
 
 ## Special thanks
 

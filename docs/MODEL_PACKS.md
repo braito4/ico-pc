@@ -23,7 +23,8 @@ the `textures` folder. It is already there, with a short note inside it.
 
    On Linux and the Steam Deck it is `models/SCES-50760/replacements/`
    next to `ico_pc`. On a Mac or an iPhone there is no such folder in the
-   download: make it in the folder with your saves, as below.
+   download: make it in the folder with your saves, as below. On Android,
+   [the Android guide](ANDROID.md#where-your-files-are) says where it goes.
 
 2. Copy the pack's files into `replacements`. The pack's own folders
    inside it can stay as they are.
@@ -37,14 +38,20 @@ cover stay as they are. The row is only on the title screen's Options.
 
 The pack can also go in a `models` folder in the same folder as your saves
 ([where that is](PORTABLE_MODE.md#where-your-saves-are)). On a Mac that is
+this folder (in Finder, choose **Go > Go to Folder** and type the path):
 
 ```
 ~/Library/Application Support/ico-pc/ico-pc/models/SCES-50760/replacements/
 ```
 
 and on an iPhone it is `models/SCES-50760/replacements` in the game's
-Documents folder, the same folder the disc image goes in. If a pack was
-copied one level too high, straight into `models`, the game finds it too.
+Documents folder, the same folder the disc image goes in, which you reach
+through LiveContainer.
+
+If the pack's files were copied loose straight into `models`, or its
+`replacements` folder was copied into `models`, the game finds them too.
+Other folders of the pack put straight into `models` are not searched:
+move them into `models/SCES-50760/replacements`.
 
 The game's log file, `ico-pc.log` ([where to find it](TROUBLESHOOTING.md#the-log-file)),
 says what it found, in a line such as:
@@ -62,45 +69,50 @@ models: no model pack (looked in ...)
 ## Make a model pack
 
 You need a 3D program that reads and writes glTF files. glTF is a common
-file type for 3D models. Blender is free and does this well, and these
-notes are written for it.
+file type for 3D models. Blender is free and reads and writes glTF, and
+these notes are written for it.
 
 ### Get the game's models out
 
-1. In Options, turn on **Developer mode**.
+1. Turn on the **Developer mode** row on the Options menu's first page.
 2. Then do one of these:
    - To save everything as you play: turn on **Dump models**, the row that
-     appears under Developer mode. Every model piece the game draws is
+     appears under Developer mode. Every model part the game draws is
      saved once. Parts that change shape every frame are not saved.
    - To save one model: open **Options > Extras > Models** on the title
-     screen, pick the model, and press **Select**. A message says how
+     screen, pick the model, and press **Select** (Backspace on a
+     keyboard). A message says how
      many files it saved and where.
 
 The files go in `models/SCES-50760/dumps` in the folder with your saves.
 
 You cannot earn achievements while Developer mode is on, so turn it off
-again when you are done.
+again when you are done. Achievements stay off until you go back to the
+title screen.
 
 ### What the files are
 
-Each model is made of parts, and the game saves each part as its own
-glTF file: a `.gltf` file and a `.bin` file with the same name. The name is
+Each model is made of parts, and the game saves each part, or each section
+of a part, as its own glTF file: a `.gltf` file and a `.bin` file with the same name. The name is
 a 16-character code, such as `3f9a07c2b1d4e865.gltf`. The code is how the
 game recognises the part, so a replacement must keep it.
 
-A list named `models.txt` in the same folder says which model and which
-part each code belongs to, and how many points, pieces and bones it has.
+A list named `models.txt` in the same folder says which model and part
+(and which section of it) each code belongs to, and how many points (the
+corners the shape is made of), pieces and bones it has. The number of
+pieces is in the column named `batches`.
 
-A part can have several **pieces**. Each piece is drawn with one of the
-game's textures. In Blender, each piece shows up as its own material.
+A part's file can have several **pieces**: the game splits a part into
+chunks. All pieces of one file use the same texture.
 
 ### Make a replacement
 
-1. Import the part's `.gltf` file into Blender.
+1. Import the part's `.gltf` file into Blender (**File > Import > glTF
+   2.0**).
 2. Change it.
-3. Export it as glTF, choosing either **glTF Binary (.glb)** or **glTF
-   Separate (.gltf + .bin)**. Do not choose glTF Embedded: the game does
-   not read that kind.
+3. Export it with **File > Export > glTF 2.0**, and in the **Format** list
+   choose either **glTF Binary (.glb)** or **glTF Separate (.gltf +
+   .bin)**. Do not choose glTF Embedded: the game does not read that kind.
 4. Give it the same name as the original, for example
    `3f9a07c2b1d4e865.glb`. You can put a word and a dash in front to keep
    track, for example `sword-3f9a07c2b1d4e865.glb`.
@@ -108,11 +120,13 @@ game's textures. In Blender, each piece shows up as its own material.
 
 ### What you can change
 
-- The shape: move, add or remove points and faces as you like.
+- The shape: move, add or remove points and faces (the flat surfaces
+  between points) as you like.
 - Where the texture sits on each face.
 - The colours painted on the points.
-- How the shape bends with the skeleton (the bone weights), for parts
-  that bend.
+- How the shape bends with the skeleton (the bones that move a part, such
+  as an arm): the bone weights, which say how strongly each bone pulls
+  each point, for parts that bend.
 
 ### What you cannot change
 
@@ -129,7 +143,8 @@ game's textures. In Blender, each piece shows up as its own material.
   skeleton. The dump does not save these, and the game uses the original
   for them. The log says so, with a line that
   ends in "changes shape every frame; the original is used".
-- **The rest pose of the skeleton.** The game uses its own starting
+- **The rest pose of the skeleton** (where the bones sit before any
+  animation moves them). The game uses its own starting
   positions for the bones. If the file has a different rest pose, the
   game uses its own anyway, and the log has a line that ends in "which
   differ from the game's; the game's are used".
@@ -144,8 +159,9 @@ game's textures. In Blender, each piece shows up as its own material.
   point. If a point has more, it keeps the two strongest.
 - **Colours can shift a little.** The game stores colours with less
   detail than Blender, so a colour can come back very slightly different.
-- **Keep the normals.** Blender exports them anyway. A part that the game
-  lights needs them.
+- **Keep the normals** (which way each point faces, for lighting). Leave
+  **Normals** ticked in Blender's export options (it is on by default). A
+  part that the game lights needs them.
 
 ### When a replacement is not used
 

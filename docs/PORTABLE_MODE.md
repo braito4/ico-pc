@@ -32,7 +32,10 @@ In the user folder:
 
 **Back up your saves** by copying the `memcard` folder somewhere safe.
 
-**To uninstall,** delete the program's folder and the user folder.
+**To uninstall,** delete the program's folder and the user folder. On a
+Mac, also drag ICO from Applications to the Bin; on an iPhone, remove it
+in LiveContainer; on Android, uninstall the app
+([copy your saves first](ANDROID.md#where-your-files-are)).
 
 ## Keep everything in one folder
 
@@ -45,7 +48,8 @@ Windows and Linux:
   folder, so there is nothing to turn on. A `portable=` line in
   `ico-pc.ini` is ignored there.
 - On a Mac, a `userdata` folder placed next to the ICO app is not used.
-  The game keeps everything in the folder above.
+  The game keeps everything in the folder above. Portable mode is not
+  available on a Mac: do not add `portable=1` to `ico-pc.ini` there.
 
 There are three ways to have it:
 
@@ -98,19 +102,25 @@ The game comes with a small tool, `mc_import`, that copies ICO's save out
 of a PS2 memory card file. It is in the `tools` folder of the download:
 `x64\tools\mc_import.exe` on Windows, `tools/mc_import` on Linux.
 
-It reads memory card files from emulators and save tools: `.ps2`, `.bin`
-and `.psu` files. It cannot read `.max` or `.cbs` files, so convert those
-to `.psu` first with a PS2 save tool.
+It reads memory card files from emulators and save tools: `.ps2` and `.bin`
+memory card files (not the disc image), and `.psu` files. It cannot read
+`.max` or `.cbs` files, so convert those to `.psu` first with a PS2 save
+tool.
 
-You run it from a command prompt (Windows) or a terminal (Linux). Tell it
-where your `memcard` folder is and which file to read. For example, on
-Windows:
+On Windows:
+
+1. Copy your memory card file (in PCSX2 it is in the `memcards` folder,
+   for example `Mcd001.ps2`) into the `x64\tools` folder.
+2. In File Explorer, open that folder, type `cmd` in the address bar and
+   press Enter. A command prompt opens in that folder.
+3. Type this and press Enter:
 
 ```
-x64\tools\mc_import.exe --to "%APPDATA%\ico-pc\ico-pc\memcard" Mcd001.ps2
+mc_import.exe --to "%APPDATA%\ico-pc\ico-pc\memcard" Mcd001.ps2
 ```
 
-and on Linux:
+On Linux, open a terminal in the game's folder and tell it where your
+`memcard` folder is and which file to read, for example:
 
 ```
 tools/mc_import --to ~/.local/share/ico-pc/ico-pc/memcard Mcd001.ps2
@@ -134,3 +144,6 @@ folder named `memcard2` beside the program:
 ```
 saves2 = "memcard2"
 ```
+
+On a Mac, give the full path instead, for example
+`saves2 = "/Users/you/Library/Application Support/ico-pc/ico-pc/memcard2"`.

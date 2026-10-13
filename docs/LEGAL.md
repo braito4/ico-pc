@@ -156,7 +156,8 @@ again until it is reviewed. They fall into four groups:
   `two_over_pi`; the MPEG-2 standard's default quantiser matrices in
   `sce/libmpeg/var.c`.
 - Game code members under `ico2/` whose own `.data` is a list of numbers
-  (motion numbers per interrupt kind, part index lists per enemy kind, font
+  (motion numbers per interrupt kind, placement lists (position indices)
+  per enemy kind, font
   metrics): written as typed C in the decompiled source, as every code
   member's data is; this is not one of the data-only members the section
   above keeps out.
@@ -232,8 +233,8 @@ disc does not:
   contains no source statements.
 - `TRFILE.TXT` / `TRTABLE.BIN`: an address-to-function/file/line table.
   `TRFILE.TXT` has one text line per address (111515 lines);
-  `TRTABLE.BIN` is a binary index of 111515 eight-byte entries, each an
-  address from `TRFILE.TXT` and a 32-bit offset.
+  `TRTABLE.BIN` is a binary index of eight-byte entries, each an address
+  from `TRFILE.TXT` and a 32-bit offset.
 
 These are officially distributed retail media that every buyer received.
 Symbol names, file boundaries and file paths read out of them are used as
@@ -269,8 +270,9 @@ source and leaked SDKs stay forbidden on every branch.
 You must legally own a copy of *ICO* for the PlayStation 2 and supply the
 PAL disc image yourself. The build needs no disc data. On its first run the
 program checks the image's SHA-1 (or, for a re-dump, the boot ELF's SHA-1
-and the manifest of the data file) and refuses any other file before it
-extracts the game's data into a local archive (`ico.o2r`); the
+and the manifest of the data file) and keeps no archive made from any
+other file: the game's data is written to a temporary file and kept as the
+local archive (`ico.o2r`) only when the check passes; the
 maintainers' ELF extraction checks `config/sha1sums.txt`. A SHA-1 is a
 fingerprint, not a copy of the work; the disc image and the ELF remain the
 property of their rightsholders.

@@ -25,8 +25,10 @@ pkg_stage_textures_readme() {
 This folder is for texture packs: pictures that replace the game's own
 textures. Playing the game needs nothing in it.
 Copy a pack here keeping the pack's own folders, so its files end up under
-textures/SCES-50760/replacements/ next to the program. A pack copied one
-level too high, into textures/, is found too.
+textures/SCES-50760/replacements/ next to the program. A pack whose
+replacements folder, or loose picture files, ended up straight in
+textures/ is found too; other folders of a pack put straight in textures/
+are not searched.
 Then start the game. Options > Display > Texture pack reads On, and
 logs/ico-pc.log says how many textures were found.
 With portable mode (a userdata folder next to the program) the pack may
@@ -50,12 +52,14 @@ pkg_stage_models_readme() {
 This folder is for model packs: 3D models that replace the game's own.
 Playing the game needs nothing in it.
 Copy a pack here keeping the pack's own folders, so its files end up under
-models/SCES-50760/replacements/ next to the program.
+models/SCES-50760/replacements/ next to the program. A pack whose
+replacements folder, or loose files, ended up straight in models/ is found
+too; other folders of a pack put straight in models/ are not searched.
 Then start the game. Options > Display > Model pack (from the title
 screen) reads On, and logs/ico-pc.log says how many models were found.
 With portable mode (a userdata folder next to the program) the pack may
 also go in userdata/models/SCES-50760/replacements/.
-To make a pack, see docs/MODEL_PACKS.md.
+To make a pack, see docs/MODEL_PACKS.md in the download's docs folder.
 TXT
     pkg_note_eol "$d/README.txt" "$eol"
 }
@@ -66,24 +70,26 @@ pkg_stage_reshade_readme() {
     mkdir -p "$d"
     if [[ "$eol" == crlf ]]; then
         cat > "$d/README.txt" <<'TXT'
-This folder is a place for your ReShade presets (.ini files) and shader
-packs, so they stay with the game. Playing the game needs nothing in it.
-ReShade itself installs next to the program: run its installer, pick
-ico_pc_x64.exe and choose Vulkan (or Direct3D 12 if you set backend=d3d12
-in ico-pc.ini). In ReShade's settings you can point it at the presets
-in this folder.
+This folder is a place for your ReShade presets (.ini files) and effect
+files, so they stay with the game. Playing the game needs nothing in it.
+Run ReShade's installer, pick ico_pc_x64.exe and choose Vulkan (or
+Direct3D 12 if you set backend=d3d12 in ico-pc.ini). In ReShade's settings
+you can point it at the presets in this folder.
 Depth effects work: set RESHADE_DEPTH_INPUT_IS_REVERSED to 1.
-For the full steps see docs/RESHADE.md.
+For the full steps see docs/RESHADE.md in the download's docs folder
+(beside the x64 folder).
 TXT
     else
         cat > "$d/README.txt" <<'TXT'
 On Linux this folder is a place for your vkBasalt presets (.conf files)
-and shader packs, so they stay with the game. Playing the game needs
+and effect files, so they stay with the game. Playing the game needs
 nothing in it.
-vkBasalt installs on your system, not here. Start the game with
-ENABLE_VKBASALT=1 and point vkBasalt's config at a preset in this folder.
-For depth effects, also set RESHADE_DEPTH_INPUT_IS_REVERSED=1.
-For the full steps see docs/RESHADE.md.
+vkBasalt installs on your system, not here. To use a preset from this
+folder, start the game with
+ENABLE_VKBASALT=1 VKBASALT_CONFIG_FILE=<this folder>/<your preset>.conf
+For depth effects, also set RESHADE_DEPTH_INPUT_IS_REVERSED=1 and put
+depthCapture = on in the preset.
+For the full steps see docs/RESHADE.md in the download's docs folder.
 TXT
     fi
     pkg_note_eol "$d/README.txt" "$eol"

@@ -33,15 +33,22 @@ not take you back. It is off unless you turn it on.
 **The window disappeared a moment after I started the game, then came back.
 Is something wrong?**
 
-Some graphics drivers crash while the game gets its graphics ready. When that
-happens, the game notices and starts itself again, trying a gentler way each
-time: on Windows it switches to Direct3D 12, or it gets the graphics ready as
-you play instead of all at once. You need do nothing, and your settings are
-left as they are. If the game still cannot start, a message says the
-graphics driver crashed; updating the driver from the maker's site (NVIDIA,
-AMD or Intel) usually fixes it. On Windows you can also add the line
-`backend=d3d12` to `ico-pc.ini` to always use Direct3D 12. If you report
-it, attach the log: it shows every attempt. See
+Some graphics drivers crash while the game gets its graphics ready. On
+Windows, Linux and Mac the game notices and starts itself again, up to three
+times, each time trying a gentler way: first without the graphics it saved
+last time, then (on Windows) with Direct3D 12, then getting the graphics
+ready as you play instead of all at once. You need do nothing, and your
+settings are left as they are. If it still cannot start, Windows shows a
+message that the graphics driver crashed; on Linux and Mac the game closes
+and the log says why. On an Android phone a message says the graphics
+driver crashed and the game closes; on an iPhone the game closes.
+
+Updating the graphics driver from the maker's site (NVIDIA, AMD or Intel)
+usually fixes it. On Windows you can also open `ico-pc.ini` in the `x64`
+folder with Notepad and add the line `backend=d3d12` at the end to always
+use Direct3D 12
+([how](OPTIONS.md#choosing-the-renderer-on-windows)). If you report it,
+attach the log: it shows every attempt. See
 [The game closes by itself](TROUBLESHOOTING.md#the-game-closes-by-itself).
 
 ## The screen stays black but I hear the game
@@ -108,7 +115,8 @@ stay smooth and still parts keep their full detail.
 
 ## How do I start the game from Steam?
 
-Close Steam, start the game, and choose Options > Extras > Add to Steam on the title screen.
+On Windows, Linux and the Steam Deck: close Steam, start the game, and choose
+Options > Extras > Add to Steam on the title screen.
 The game then shows in your Steam library, and on a Steam Deck in Game
 Mode. If Steam is open, the game tells you to close it first.
 [Details](OPTIONS.md#extras) and [Steam Deck tips](TROUBLESHOOTING.md#steam-deck).
@@ -120,11 +128,10 @@ browsers and Windows warn about any program they have not seen many people
 download. The warning is about the file having no history yet, not about
 anything found inside it.
 
-In Chrome or Edge, open the downloads list, choose the three dots next to
-the file and pick **Keep** (some Chrome versions word it **Keep dangerous
-file**), then **Keep anyway** if it asks again. In Edge, open the three
-dots next to the download, then pick **Keep**, **Show more**, **Keep
-anyway**. If Windows shows "Windows protected your
+In Chrome, open the downloads list, choose the three dots next to the file
+and pick **Keep** (or **Keep dangerous file**), then **Keep anyway**. In
+Edge, open the three dots next to the download, then pick **Keep**, **Show
+more**, **Keep anyway**. If Windows shows "Windows protected your
 PC" when you start the game, choose **More info**, then **Run anyway**.
 
 You can check the files yourself: upload the zip to [VirusTotal](https://www.virustotal.com/) and
@@ -181,7 +188,8 @@ it.
 
 Only the PAL version of ICO, numbered SCES-50760, as a `.iso`, `.chd` or `.bin` file (a `.cue` file
 that points to the `.bin` works too). The US, Japanese and later editions do not work. If the image
-is not the right one, the game says so when you start it.
+is not the right one, the game says so in a message when you start it, and
+the log says so too.
 
 ## How do I take a photo?
 

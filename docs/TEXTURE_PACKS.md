@@ -7,8 +7,7 @@ usually sharper ones made by fans. The game works fine without one.
 
 Packs made for PCSX2 work as they are. PCSX2 is a program that plays
 PS2 games on a PC, and most ICO packs are made for it. You do not need to
-rename or convert anything. The pack this was tested with is Sad Origami's
-ICO PAL HD pack.
+rename or convert anything. Sad Origami's ICO PAL HD pack works with it.
 
 ## Put a texture pack in
 
@@ -33,9 +32,11 @@ from the pack should end up at a place like this:
 x64\textures\SCES-50760\replacements\some-picture.dds
 ```
 
-The pack's own folders inside `replacements` can stay as they are. If you
-copy the pack one level too high, straight into `textures`, the game finds
-it there too.
+The pack's own folders inside `replacements` can stay as they are. If the
+pack's `replacements` folder ends up straight inside `textures`, or its
+picture files sit loose in `textures`, the game finds them too. Other
+folders of the pack put straight into `textures` are not searched: move
+them into `textures/SCES-50760/replacements`.
 
 Then:
 
@@ -50,7 +51,8 @@ cover stays as the game draws it.
 
 The game also looks in a `textures` folder in the same folder as your
 saves ([where that is](PORTABLE_MODE.md#where-your-saves-are)). For
-example, on Windows:
+example, on Windows (type the start of it, `%APPDATA%\ico-pc\ico-pc`,
+into the address bar of a File Explorer window and press Enter):
 
 ```
 %APPDATA%\ico-pc\ico-pc\textures\SCES-50760\replacements\
@@ -90,8 +92,8 @@ names the file, and the game shows its own texture there.
 ## Graphics cards
 
 Most packs keep their pictures squeezed into a special format that the
-graphics card unpacks. Every desktop graphics card and the Steam Deck can
-do this. If yours cannot, those pictures are skipped and the log says so:
+graphics card unpacks. If your graphics card cannot do this, those
+pictures are skipped and the log says so:
 
 ```
 textures: the graphics card has no compressed (BC) textures; the pack's DDS files of that kind are skipped
@@ -126,7 +128,7 @@ change one. If the file does not have these lines, add them under
 
 To see which file name the game expects for a texture:
 
-1. Turn on **Developer mode** in Options.
+1. Turn on the **Developer mode** row on the Options menu's first page.
 2. Turn on **Dump textures**, the row that appears under it.
 3. Play to the place where the texture appears.
 
@@ -136,4 +138,5 @@ your picture that name, put it in `replacements`, and the game uses it
 the next time you start it.
 
 You cannot earn achievements while Developer mode is on, so turn it off
-again when you are done.
+again when you are done. Achievements stay off until you go back to the
+title screen.
