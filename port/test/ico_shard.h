@@ -57,9 +57,14 @@ static const char *ico_shard_cur;
 
 static inline double ico_shard_now(void)
 {
+#if defined(_WIN32)
+    /* the mingw gcc toolchain's time.h has no timespec_get/TIME_UTC */
+    return (double)clock() / (double)CLOCKS_PER_SEC;
+#else
     struct timespec ts;
     timespec_get(&ts, TIME_UTC);
     return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
+#endif
 }
 
 static inline void ico_shard_assign(void)
