@@ -1,8 +1,9 @@
 # ico-pc
 
 This is **ICO** (Sony Computer Entertainment, 2001) made to run natively on
-a Windows or Linux PC, the Steam Deck, 64-bit ARM Linux handhelds, and
-Android phones and tablets. It
+a Windows or Linux PC, the Steam Deck, 64-bit ARM Linux handhelds,
+Android phones and tablets, and (new, contributed) iPhones and Apple-silicon
+Macs. It
 runs the game's own code, so it plays, sounds and feels like the PAL
 PlayStation 2 game. There are extras, such as a sharper picture,
 widescreen and smoother motion. The sharper picture, widescreen and the
@@ -32,9 +33,27 @@ on.
     driver (tested on one handheld so far);
   - or a 64-bit Android phone or tablet with Android 10 or later, usually
     one from 2022 or newer. Android support is experimental in this
-    version. [More about Android](docs/ANDROID.md).
+    version. [More about Android](docs/ANDROID.md);
+  - or an iPhone (iOS 15 or newer) or an Apple-silicon Mac (macOS 12 or
+    newer), both contributed and untested by the maintainer; see
+    [Supported platforms](#supported-platforms).
 - **About 1 GB of free space** for the game's files, which the first start
   copies out of the disc image.
+
+## Supported platforms
+
+| Device | Download | Status |
+|---|---|---|
+| Windows 10 or 11, 64-bit, with a graphics card from NVIDIA, AMD or Intel | `-win.zip` (or `-win-portable.zip`) | The main test machine. Every release is played on it before it goes out. Draws with Vulkan, or Direct3D 12 if you choose it ([how](docs/OPTIONS.md#choosing-the-renderer-on-windows)). |
+| Linux PC, 64-bit x86: SteamOS 3.5, Debian 13, Ubuntu 24.04 or newer | `-linux.tar.gz` (or `-linux-portable.tar.gz`) | Built and checked by the automatic tests for every release. |
+| Steam Deck | `-linux.tar.gz` | Supported; [Steam Deck tips](docs/TROUBLESHOOTING.md#steam-deck). |
+| Linux handheld or board, 64-bit ARM: Debian 13, Ubuntu 24.04 or newer | `-linux-arm64.tar.gz` | Tested on one handheld so far. |
+| Android phone or tablet, 64-bit, Android 10 or newer (usually 2022 or newer) | `-android.apk` | Experimental: it plays, but expect rough edges. [The Android guide](docs/ANDROID.md). |
+| iPhone, iOS 15 or newer, through [LiveContainer](https://github.com/LiveContainer/LiveContainer) | `-ios-unsigned.ipa` | Contributed by katsifolis. The maintainer has no Apple device, so these builds are not tested here; problem reports are welcome. |
+| Apple-silicon Mac, macOS 12 or newer | No download yet: build it yourself with `tools/package_macos.sh` ([Building](docs/BUILDING.md#macos-application)) | Contributed by katsifolis and braito4, untested by the maintainer. |
+
+Not supported: 32-bit systems, Windows 7 and 8, Intel Macs, and any disc
+other than the PAL release (SCES-50760).
 
 ## Install
 
