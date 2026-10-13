@@ -9,6 +9,7 @@
 
 ## Fixed
 
+- Linux: the computer no longer goes to sleep or locks the screen while you play with a controller.
 - With Vertical sync on and the frame-rate limit equal to your screen's refresh rate, turning the camera no longer shows an occasional repeated picture.
 - Mac: a save folder or second memory card set in `ico-pc.ini` is used.
 - Linux, Steam Deck and Mac: when the game cannot start, for example with the wrong disc image, it shows a message that says why instead of just closing.
