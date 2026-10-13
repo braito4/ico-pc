@@ -33,7 +33,7 @@
  *
  * Mips: an entry holds the one level the caller decodes (TexExt.level).
  * The replay builds and uploads the further levels the texture filter
- * samples (rd_replay.c uploadMips, rdtex_build_mip_chain).
+ * samples (rd_upload.c uploadMips, rdtex_build_mip_chain).
  *
  * All calls from the game fiber, like the rest of rd.
  */

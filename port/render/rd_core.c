@@ -692,7 +692,7 @@ static bool createNamedPass(bool stopOnSceneFail)
             }
             rd__log("could not create target %s", s_targetNames[i]);
         }
-        /* cleared at the first replay (rd_replay.c clearNewTargets): a new
+        /* cleared at the first replay (rd_upload.c rd__clear_new_targets): a new
            texture holds whatever the driver's memory held before, and the
            first frames of a start sample DISPLAY (the game's kept frame
            buffer) before anything has drawn into it */

@@ -50,7 +50,7 @@ extern const unsigned int ui_font_ttf_size;
    pixel sizes (an Enhanced 4K output rasterises the menu's 27 units at
    about 130 px, which four 512-texel pages could not hold), and PAGE_TRIM
    texels less high: not a power of two, so the Enhanced texture filter
-   never gives a page a mip chain (rd_replay.c texLevels), whose 2 x 2 box
+   never gives a page a mip chain (rd_upload.c texLevels), whose 2 x 2 box
    levels would average neighbouring glyphs across the gutter and scale
    their alpha (rdtex_keep_alpha_coverage). Glyph cells are GUTTER texels
    apart and from the page's edges: bilinear sampling inside a quad reaches
