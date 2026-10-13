@@ -82,9 +82,7 @@
 #include "host_fs.h"
 
 /* ------------------------------------------------------------- limits */
-/* Provisional until the first run on main with the blurred halo (after
-   HALOFIT): then each limit is re-measured, the largest measure plus 25 %.
-   The limits of testCompareItems, set from the run on main after the
+/* The limits of testCompareItems, set from the run on main after the
    geometry fit (the sheets' width UI_SHEET_WIDTH, the letters'
    weight, the table's em, anchor, capital middle, width and spacing per
    language fitted to each sheet, the halo per item, 8 levels; 100 items a
@@ -150,12 +148,12 @@ static const float kExpMassY[UI_LANG_COUNT] = {2.15f, 2.83f, 2.99f, 2.90f, 2.74f
 #define PROF_X 12
 #define PROF_Y 8
 /* the strips' halo mass (the first six texels, as kExpMassX / Y) against
-   the sheets' per language: what kSheetInk's rimGain is set from.
-   Provisional until the first run on main after HALOFIT. */
+   the sheets' per language: what kSheetInk's rimGain is set from (the run
+   on main with the blurred halo: within 0.26 on every language). */
 #define TOL_MODEL_MASS 0.30f
 /* the grain: the mean |alpha - its 3 x 3 mean| over the halo texels, strip /
-   sheet, per language.  Provisional until the first run on main (the band
-   is then the measured ratios plus 25 %). */
+   sheet, per language (the run on main with the blurred halo: 0.96 ..
+   1.14). */
 #define GRAIN_RATIO_LO 0.75f
 #define GRAIN_RATIO_HI 1.33f
 #define EXP_STEPS 3 /* the median number of antialiasing steps of a sheet's white */

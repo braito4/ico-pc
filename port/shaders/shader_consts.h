@@ -188,9 +188,9 @@ enum { ICO_TEXFMT_RGBA32 = 0, ICO_TEXFMT_RGB24 = 1, ICO_TEXFMT_RGBA16 = 2 };
 #define ICO_SHEET_KY_5 384
 #define ICO_SHEET_KY_6 256
 #define ICO_SHEET_KY_7 128
-#define ICO_SHEET_GAIN                                                                             \
-    185 /* the blur's gain, 64ths (2.89): the survey's
-                              English profile and halo mass (ctest menu_look) */
+/* the blur's gain, 64ths (2.89): the survey's English profile and halo
+   mass (ctest menu_look) */
+#define ICO_SHEET_GAIN 185
 /* the levels the opacity and the halo-to-fill mix are quantised to (the
    sheets' 16 colours hold a few antialiasing steps between none and full) */
 #define ICO_SHEET_LEVELS 6
