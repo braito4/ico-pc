@@ -18,6 +18,8 @@ The game comes with a folder for a pack:
 - Linux and Steam Deck: `textures/SCES-50760/replacements`, next to
   `ico_pc`
 - Android: see [the Android guide](ANDROID.md#where-your-files-are)
+- Mac and iPhone: the download has no such folder; make one as shown in
+  [Other places a pack can go](#other-places-a-pack-can-go)
 
 A note named `README.txt` sits inside it to show you the right place.
 SCES-50760 is the number of the PAL disc.
@@ -33,7 +35,7 @@ x64\textures\SCES-50760\replacements\some-picture.dds
 
 The pack's own folders inside `replacements` can stay as they are. If you
 copy the pack one level too high, straight into `textures`, the game finds
-it anyway.
+it there too.
 
 Then:
 
@@ -54,14 +56,23 @@ example, on Windows:
 %APPDATA%\ico-pc\ico-pc\textures\SCES-50760\replacements\
 ```
 
+On a Mac, make the folders here:
+
+```
+~/Library/Application Support/ico-pc/ico-pc/textures/SCES-50760/replacements/
+```
+
+On an iPhone, make them in the game's Documents folder, the same folder
+the disc image goes in: `textures/SCES-50760/replacements`.
+
 In portable mode, that folder is `userdata` beside the program, so a pack
 can also go in `userdata\textures\SCES-50760\replacements\`.
 [About portable mode](PORTABLE_MODE.md#keep-everything-in-one-folder).
 
 ## Check that the game found it
 
-The game's log file, `logs/ico-pc.log` beside the program, has a line for
-each folder it read, such as:
+The game's log file, `ico-pc.log` ([where to find it](TROUBLESHOOTING.md#the-log-file)),
+has a line for each folder it read, such as:
 
 ```
 textures: 883 replacements from ...
@@ -80,7 +91,11 @@ names the file, and the game shows its own texture there.
 
 Most packs keep their pictures squeezed into a special format that the
 graphics card unpacks. Every desktop graphics card and the Steam Deck can
-do this. If yours cannot, the log says so and those pictures are skipped.
+do this. If yours cannot, those pictures are skipped and the log says so:
+
+```
+textures: the graphics card has no compressed (BC) textures; the pack's DDS files of that kind are skipped
+```
 
 ## If the pack uses a lot of memory
 
@@ -89,24 +104,23 @@ Big packs can use a lot of memory. Three lines in `config.toml`, under
 [How to edit config.toml](OPTIONS.md#settings-you-can-only-change-in-a-file).
 
 These lines start with `#`, which switches them off. Delete the `#` to
-change one. If your `config.toml` is from an older version and does not
-have them, add the line under `[video]` yourself.
+change one. If the file does not have these lines, add them under
+`[video]`.
 
 - `texture_pack_budget_mb = 2048` is how much of the graphics card's
   memory, in MB, the pack may use. Textures past that stay the game's own,
   and the log says when that happens. If your card has more memory, raise
   it.
 - `texture_pack_precache = true` reads the whole pack into the computer's
-  memory in the background, starting with the subtitles and menus. The
-  pack's author recommends this. Without it, the game's own subtitle can
-  flash up for a moment before the pack's. Set it to `false` to read each
-  texture only when the game first needs it, which uses less memory.
+  memory in the background, starting with the subtitles and menus. Without
+  it, the game's own subtitle can flash up for a moment before the pack's.
+  Set it to `false` to read each texture only when the game first needs
+  it, which uses less memory.
 - `texture_pack_cache_mb = 0` is how much of the computer's memory, in MB,
   that reading ahead may use. `0` means up to half of it (on Android, an
   eighth of the phone's memory and never more than 512 MB). On a computer
-  with 16 GB that holds all of Sad Origami's pack (about 4 GB). On a
-  smaller one it still holds the subtitles and menus, and the rest is read
-  when the game needs it.
+  with 16 GB that is up to 8 GB. Whatever does not fit is read when the
+  game first needs it.
 
 ## Make a texture pack
 

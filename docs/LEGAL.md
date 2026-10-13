@@ -22,12 +22,15 @@ respective owners.
   how the data tables are read: the link order (kept as the source list), the
   linker script, the data-table index, the data-table schema (record types
   and counts, no values) and the SHA-1s of the expected files.
-- `config/ico.pal.yaml`, `config/symbol_addrs.pal.txt` and
-  `config/symbol_addrs.pal.data.txt`, kept as a record of the old split
-  layout; nothing in the build reads them. The two symbol lists hold the
-  names this tree defines and the addresses the link places them at, the
-  same facts `nm` prints over the decompilation's rebuilt ELF; they are a
-  record of that ELF, not a copy of a disc file.
+- `config/symbol_addrs.pal.txt` and `config/symbol_addrs.pal.data.txt`:
+  the names this tree defines and the addresses the link places them at,
+  the same facts `nm` prints over the decompilation's rebuilt ELF; they are
+  a record of that ELF, not a copy of a disc file. `tools/gen_data_desc.py`
+  reads them to name the addresses the data tables' pointer words hold, and
+  `tools/gen_data_c.py` reads them in the loader's reference test, a
+  maintainer step (`port/data/CMakeLists.txt`).
+- `config/ico.pal.yaml`, the splat layout (how the ELF is split into
+  members) of the same rebuilt ELF; nothing in the build reads it.
 
 ## What is not in this repository, and must never be added
 
@@ -37,7 +40,8 @@ respective owners.
   prototypes), or any part of it.
 - Audio, images, textures, models, text or other assets from the disc, and
   third-party texture packs or texture dumps (they are made from the disc's
-  textures; players install packs themselves, README "Texture packs").
+  textures; players install packs themselves, see
+  [Texture packs](TEXTURE_PACKS.md)).
 - The game's data tables (next section).
 - Symbol tables, map files or other identifier tables, and any debug string,
   asset or code blob, copied verbatim or in bulk out of the binary, the disc
@@ -267,7 +271,7 @@ You must legally own a copy of *ICO* for the PlayStation 2 and supply the
 PAL disc image yourself. The build needs no disc data. On its first run the
 program checks the image's SHA-1 (or, for a re-dump, the boot ELF's SHA-1
 and the manifest of the data file) and refuses any other file before it
-extracts the game's data into a local archive (``); the
+extracts the game's data into a local archive (`ico.o2r`); the
 maintainers' ELF extraction checks `config/sha1sums.txt`. A SHA-1 is a
 fingerprint, not a copy of the work; the disc image and the ELF remain the
 property of their rightsholders.

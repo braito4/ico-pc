@@ -22,7 +22,8 @@ the `textures` folder. It is already there, with a short note inside it.
    ```
 
    On Linux and the Steam Deck it is `models/SCES-50760/replacements/`
-   next to `ico_pc`.
+   next to `ico_pc`. On a Mac or an iPhone there is no such folder in the
+   download: make it in the folder with your saves, as below.
 
 2. Copy the pack's files into `replacements`. The pack's own folders
    inside it can stay as they are.
@@ -35,11 +36,18 @@ That row turns the pack on and off at once, so you can compare. It says
 cover stay as they are. The row is only on the title screen's Options.
 
 The pack can also go in a `models` folder in the same folder as your saves
-([where that is](PORTABLE_MODE.md#where-your-saves-are)). If a pack was
+([where that is](PORTABLE_MODE.md#where-your-saves-are)). On a Mac that is
+
+```
+~/Library/Application Support/ico-pc/ico-pc/models/SCES-50760/replacements/
+```
+
+and on an iPhone it is `models/SCES-50760/replacements` in the game's
+Documents folder, the same folder the disc image goes in. If a pack was
 copied one level too high, straight into `models`, the game finds it too.
 
-The game's log file, `logs/ico-pc.log`, says what it found, in a line
-such as:
+The game's log file, `ico-pc.log` ([where to find it](TROUBLESHOOTING.md#the-log-file)),
+says what it found, in a line such as:
 
 ```
 models: 12 replacements from ...
@@ -122,8 +130,9 @@ game's textures. In Blender, each piece shows up as its own material.
   for them. The log says so, with a line that
   ends in "changes shape every frame; the original is used".
 - **The rest pose of the skeleton.** The game uses its own starting
-  positions for the bones. If the file has a different rest pose, it is
-  ignored, and the log says so.
+  positions for the bones. If the file has a different rest pose, the
+  game uses its own anyway, and the log has a line that ends in "which
+  differ from the game's; the game's are used".
 - **Bending or not bending.** A part that bends with a skeleton must keep
   its bone weights. A part that does not bend must not get any.
 
@@ -141,10 +150,12 @@ game's textures. In Blender, each piece shows up as its own material.
 ### When a replacement is not used
 
 If the game cannot use a file, it draws the original and writes one line
-in the log that starts with `models:` and says why. For example:
+in the log that starts with `models:` and says why. A file the game cannot
+read at all gets a line with `skipped` in it. A file that does not match
+the original gets a line like this one:
 
 ```
-models: sword-3f9a07c2b1d4e865.glb not used for ...: it has 3 pieces and the original 2
+models: .../sword-3f9a07c2b1d4e865.glb not used for ...: it has 3 pieces and the original 2
 ```
 
 Look there first when a replacement does not show up.
