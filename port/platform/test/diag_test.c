@@ -315,8 +315,8 @@ int main(int argc, char **argv)
     CHECK(strstr(s, "CRASH: SIGSEGV") != NULL && strstr(s, "ico_pc: while:") != NULL &&
           strstr(s, "CRASH: SIGSEGV") < strstr(s, "ico_pc: while:") &&
           strstr(s, "faulting access") > strstr(s, "ico_pc: while:"));
-    CHECK(strstr(s, "the graphics driver crashed while preparing the shaders; the game cannot "
-                    "start itself again here") != NULL);
+    CHECK(strstr(s, "the graphics driver crashed while preparing the shaders: the game cannot "
+                    "start itself again on this system") != NULL);
     CHECK(strstr(s, "starts again with") == NULL);
     if (fails) {
         printf("--- segvnote log ---\n%s\n", s);
