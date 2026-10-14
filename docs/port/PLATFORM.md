@@ -30,7 +30,7 @@ run explain itself. [ARCHITECTURE.md](ARCHITECTURE.md) places this layer among t
 | `port/platform/window_lifecycle.c`, `window_lifecycle.h` | the steps run when a mobile system moves the app |
 | `port/platform/pace_policy.c`, `pace_policy.h` | the pacing decisions, free of SDL: the vsync lock, slow presents, the gap between presents |
 | `port/platform/display_clock.h`, `display_clock_win.c`, `display_clock_none.c`, `perf_block.c`, `perf_block.h` | the vsync lock's vblank clock and the replay blocks ([DISPLAY.md](DISPLAY.md#files)) |
-| `port/platform/startup_retry.c`, `startup_retry.h` | the steps the crash handler's relaunch takes after a graphics driver crash |
+| `port/platform/startup_retry.c`, `startup_retry.h` | the steps the relaunch takes after a graphics driver crash or a lost graphics device |
 | `port/platform/hotkeys.c`, `hotkeys.h` | F11 and F12 |
 | `port/platform/dump_zip.c`, `dump_zip.h` | F12's zip and the aspect sweep's zip |
 | `port/platform/steam_shortcut.c`, `steam_shortcut.h` | Settings > Extras > Add to Steam (Windows and Linux; not offered on macOS) |
@@ -390,6 +390,38 @@ unless the player chose one (`port/platform/main_host.c` (`host_main`);
 `port/platform/window_host.c` (`ico_window_open`); `port/platform/startup_retry.c`
 (`startup_retry_what`)). ctest `startup_retry` checks the steps and the relaunch's environment
 (`port/platform/test/startup_retry_test.c`).
+
+A lost graphics device (the driver reset the card, `DXGI_ERROR_DEVICE_HUNG`, `VK_ERROR_DEVICE_LOST`:
+`rhi_device_lost`, not a crash) restarts the program too, on Windows, Linux and macOS. The window
+logs the loss and the renderer's pass ring, then asks for the loss step
+(`port/platform/window_host.c` (`device_lost_quit`); `port/platform/diag_host.c`
+(`ico_diag_device_lost_restart`)); the steps come in order, each taken only when the run before
+lost the device: `blend` (the same backend with the fixed-function blend, `ICO_RD_BLEND=fixed`, so
+no fragment shader interlock or rasterizer-ordered view passes; skipped when the losing run already
+drew with it or the player chose the blending with `blend=` or `ICO_RD_BLEND`), `backend` (the
+other backend, Direct3D 12 from Vulkan or Vulkan from Direct3D 12, with the fixed-function blend; in
+a build with both, when the player named no backend and no blending other than `fixed`), then none
+(`port/platform/startup_retry.h` (`startup_retry_next`, `StartupRetryRun`); `port/platform/startup_retry.c`
+(`loss_next`)). With a step, the session ends through the normal quit path without a box (the
+settings are saved and the window, audio and files closed as at any quit) and the program starts
+again at exit, after the end-of-run steps, with `ICO_STARTUP_RETRY=blend:<backend>` or
+`backend:<backend>`; the relaunch is the same `relaunch_now` as the crash's, run from an `atexit`
+handler registered before the end-of-run steps (`port/platform/diag_host.c`
+(`loss_relaunch_at_exit`, `loss_relaunch_register`)). When it cannot start the program, Windows and
+Linux show a box. Without a step the window shows its box, which says the game already restarted
+itself with simpler blending when the run was a loss step's. Android and iOS keep the box. The new
+run starts at the title as a fresh launch (what was not saved was lost with the card, as at a quit),
+appends to the log, logs
+`ico_pc: restarted after the graphics card stopped responding: <what this run does>`, and gets
+`ICO_RD_BLEND=fixed` from `ico_ini_export`, which wins over `blend=` and over an `ICO_RD_BLEND` in
+the environment for that run (the step is never taken against a player's blending other than
+`fixed`) (`port/platform/host_config.c` (`ico_ini_export`, `ico_dev_env_export_value`)). When the
+`backend` step's Direct3D 12 cannot start, that run goes on with Vulkan itself
+(`port/platform/window_host.c` (`ico_window_open`)). The step only grows (the loss steps come after
+`lazy`), so a crash in a loss step's run ends with the crash box and every chain ends. Nothing is
+written to the user folder. ctest `startup_retry` checks both orders over every input
+and the loss values in the relaunch's environment; ctest `host_config` checks the `ICO_RD_BLEND`
+precedence (`port/platform/test/host_config_test.c` (`test_retry_blend`)).
 
 A heartbeat and a watchdog share one OS thread of their own, so a game thread that spins without a
 kernel call cannot stop them. Every 2 s the heartbeat logs one line of progress

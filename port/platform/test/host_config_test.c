@@ -2,7 +2,8 @@
  * port/platform/test/host_config_test.c
  *
  * ico-pc.ini parsing and rewriting, SHA-1 against FIPS 180 test vectors,
- * path joining, the [dev] keys exported as environment switches
+ * path joining, the [dev] keys exported as environment switches and the
+ * fixed blend of a run started again after a device loss
  * (port/platform/host_config.c). Built a second time with
  * ICO_HOST_FORCE_PORTABLE (host_config_portable_test, as the Android build
  * compiles host_config.c), where the user folder is always the executable's
@@ -502,6 +503,71 @@ static void test_dev_env(void)
     }
 }
 
+static void set_env(const char *name, const char *value)
+{
+#ifdef _WIN32
+    _putenv_s(name, value);
+#else
+    setenv(name, value, 1);
+#endif
+}
+
+/* ICO_RD_BLEND in a run started again after a device loss
+   (ICO_STARTUP_RETRY=blend:... or backend:..., startup_retry.h): the
+   restart's fixed blend wins over the ini's blend= and over an ICO_RD_BLEND
+   already in the environment, for that run; any other run (none, or a
+   crash step) keeps the order ini > environment > default */
+static void test_retry_blend(void)
+{
+    IcoIni ini;
+
+    /* the pure rule */
+    CHECK(strcmp(ico_dev_env_export_value("blend", NULL, "blend:vulkan"), "fixed") == 0);
+    CHECK(strcmp(ico_dev_env_export_value("blend", "exact", "backend:d3d12"), "fixed") == 0);
+    CHECK(strcmp(ico_dev_env_export_value("blend", "fixed", "blend:d3d12"), "fixed") == 0);
+    CHECK(ico_dev_env_export_value("blend", NULL, "lazy:vulkan") == NULL);
+    CHECK(ico_dev_env_export_value("blend", "exact", NULL) == NULL);
+    CHECK(strcmp(ico_dev_env_export_value("blend", "fixed", NULL), "fixed") == 0);
+    /* the other switches are not touched by the restart */
+    CHECK(ico_dev_env_export_value("fog_path", NULL, "blend:vulkan") == NULL);
+    CHECK(strcmp(ico_dev_env_export_value("gpu_robust", "1", "blend:vulkan"), "1") == 0);
+
+    /* the export: a loss restart with no blend= */
+    unset_env("ICO_RD_BLEND");
+    set_env("ICO_STARTUP_RETRY", "blend:vulkan");
+    ico_ini_parse(&ini, "audio=1\n");
+    ico_ini_export(&ini, "dev-env-test.ini", 0);
+    CHECK(env_is("ICO_RD_BLEND", "fixed"));
+    /* no ini at all (nothing else is exported then) */
+    unset_env("ICO_RD_BLEND");
+    memset(&ini, 0, sizeof(ini));
+    ico_ini_export(&ini, "dev-env-test.ini", -1);
+    CHECK(env_is("ICO_RD_BLEND", "fixed"));
+    /* blend=exact in the ini and another value in the environment: the
+       restart wins */
+    set_env("ICO_RD_BLEND", "storage");
+    set_env("ICO_STARTUP_RETRY", "backend:d3d12");
+    ico_ini_parse(&ini, "blend=exact\n");
+    ico_ini_export(&ini, "dev-env-test.ini", 0);
+    CHECK(env_is("ICO_RD_BLEND", "fixed"));
+    /* a crash restart: the ini and the environment as in a first run */
+    set_env("ICO_RD_BLEND", "storage");
+    set_env("ICO_STARTUP_RETRY", "lazy:vulkan");
+    ico_ini_parse(&ini, "audio=1\n");
+    ico_ini_export(&ini, "dev-env-test.ini", 0);
+    CHECK(env_is("ICO_RD_BLEND", "storage"));
+    ico_ini_parse(&ini, "blend=fixed\n");
+    ico_ini_export(&ini, "dev-env-test.ini", 0);
+    CHECK(env_is("ICO_RD_BLEND", "fixed"));
+    /* no restart */
+    unset_env("ICO_STARTUP_RETRY");
+    unset_env("ICO_RD_BLEND");
+    ico_ini_parse(&ini, "blend=exact\n");
+    ico_ini_export(&ini, "dev-env-test.ini", 0);
+    CHECK(env_is("ICO_RD_BLEND", NULL));
+    unset_env("ICO_RD_BLEND");
+}
+
 int main(void)
 {
     test_sha1();
@@ -512,6 +578,7 @@ int main(void)
     test_paths();
     test_portable_value();
     test_dev_env();
+    test_retry_blend();
 #ifdef ICO_HOST_FORCE_PORTABLE
     test_forced_portable();
 #else

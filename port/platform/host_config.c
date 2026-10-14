@@ -8,6 +8,7 @@
  */
 #include "host_config.h"
 #include "host_fs.h"
+#include "startup_retry.h"
 #include <ctype.h>
 #include <errno.h>
 #include <stdarg.h>
@@ -540,6 +541,18 @@ const char *ico_dev_env_value(const char *key, const char *value)
     return value_is(value, on) ? "1" : value_is(value, off) ? "0" : NULL;
 }
 
+const char *ico_dev_env_export_value(const char *key, const char *value, const char *retry)
+{
+    /* a run started again after the graphics card stopped responding draws
+       with the fixed-function blend (startup_retry.h, the loss steps); the
+       step is not taken against a player's blend= other than fixed, so this
+       never overrides a choice */
+    if (key != NULL && strcmp(key, "blend") == 0 && startup_retry_value_is_loss(retry)) {
+        return "fixed";
+    }
+    return ico_dev_env_value(key, value);
+}
+
 const char *ico_config_ini_key(const char *toml_path)
 {
     size_t i;
@@ -684,6 +697,17 @@ void ico_ini_export(const IcoIni *ini, const char *path, int r)
                     put_env(dev_env[i].env, v);
                 }
             }
+        }
+    }
+    /* a run started again after the graphics card stopped responding
+       (ICO_STARTUP_RETRY, startup_retry.h) draws with the fixed-function
+       blend: ICO_RD_BLEND=fixed over the ini's blend= and the environment,
+       with or without an ini (ico_dev_env_export_value) */
+    {
+        const char *v = ico_dev_env_export_value("blend", NULL, getenv(STARTUP_RETRY_ENV));
+
+        if (v != NULL) {
+            put_env("ICO_RD_BLEND", v);
         }
     }
 }

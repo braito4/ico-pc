@@ -1,8 +1,8 @@
 /*
  * port/platform/startup_retry.c
  *
- * The steps after a graphics driver crash while building a pipeline
- * (startup_retry.h).
+ * The steps after a graphics driver crash while building a pipeline or a
+ * device loss (startup_retry.h).
  */
 #include "startup_retry.h"
 #include <stdio.h>
@@ -21,24 +21,24 @@ static bool same_name(const char *a, const char *b)
     return *a == *b;
 }
 
-StartupRetry startup_retry_next(StartupRetry step, bool cacheWasLoaded, bool haveD3d12,
-                                bool backendExplicit, const char *backendName, char *reason,
-                                size_t reasonLen)
+/* the crash order (startup_retry.h) */
+static StartupRetry crash_next(const StartupRetryRun *run, const char *name, bool onD3d12,
+                               char *reason, size_t reasonLen)
 {
-    const char *name = backendName != NULL && backendName[0] != '\0' ? backendName : "vulkan";
-    const bool onD3d12 = same_name(name, "d3d12");
-    char dummy[1];
-    if (reason == NULL || reasonLen == 0) {
-        reason = dummy;
-        reasonLen = sizeof dummy;
+    const StartupRetry step = run->step;
+    if (startup_retry_is_loss(step)) {
+        snprintf(reason, reasonLen,
+                 "this run was already a restart after the graphics card stopped responding: "
+                 "nothing more is tried");
+        return STARTUP_RETRY_NONE;
     }
-    if (step < STARTUP_RETRY_CACHE && cacheWasLoaded) {
+    if (step < STARTUP_RETRY_CACHE && run->cacheWasLoaded) {
         snprintf(reason, reasonLen,
                  "the saved pipeline cache file was in use: it is deleted and %s tries again",
                  name);
         return STARTUP_RETRY_CACHE;
     }
-    if (step < STARTUP_RETRY_D3D12 && haveD3d12 && !backendExplicit && !onD3d12) {
+    if (step < STARTUP_RETRY_D3D12 && run->haveD3d12 && !run->backendExplicit && !onD3d12) {
         snprintf(reason, reasonLen, "%s crashed; the next try uses Direct3D 12", name);
         return STARTUP_RETRY_D3D12;
     }
@@ -47,7 +47,7 @@ StartupRetry startup_retry_next(StartupRetry step, bool cacheWasLoaded, bool hav
                  "the next try on %s builds the shaders as the game needs them, not all at "
                  "the start%s",
                  name,
-                 backendExplicit && haveD3d12 && !onD3d12
+                 run->backendExplicit && run->haveD3d12 && !onD3d12
                      ? " (Direct3D 12 is not tried: the settings choose the backend)"
                      : "");
         return STARTUP_RETRY_LAZY;
@@ -56,6 +56,50 @@ StartupRetry startup_retry_next(StartupRetry step, bool cacheWasLoaded, bool hav
              "it crashed even with the shaders built as the game needs them: nothing is left "
              "to try");
     return STARTUP_RETRY_NONE;
+}
+
+/* the loss order (startup_retry.h) */
+static StartupRetry loss_next(const StartupRetryRun *run, const char *name, bool onD3d12,
+                              char *reason, size_t reasonLen)
+{
+    const StartupRetry step = run->step;
+    const char *other = onD3d12 ? "vulkan" : "d3d12";
+    /* the backend step keeps the player's blending: only a fixed one */
+    const bool blendFree = !run->blendExplicit || run->blendWasFixed;
+    if (step < STARTUP_RETRY_LOSS_BLEND && !run->blendWasFixed && !run->blendExplicit) {
+        snprintf(reason, reasonLen, "the next run on %s draws with the simpler blending", name);
+        return STARTUP_RETRY_LOSS_BLEND;
+    }
+    if (step < STARTUP_RETRY_LOSS_BACKEND && run->haveD3d12 && !run->backendExplicit && blendFree) {
+        snprintf(reason, reasonLen, "the next run uses %s with the simpler blending", other);
+        return STARTUP_RETRY_LOSS_BACKEND;
+    }
+    snprintf(reason, reasonLen, "nothing is left to try on this computer%s%s",
+             run->blendExplicit && !run->blendWasFixed
+                 ? " (the settings choose the blending: blend=)"
+                 : "",
+             run->backendExplicit && run->haveD3d12
+                 ? " (the settings choose the graphics backend: backend=)"
+                 : "");
+    return STARTUP_RETRY_NONE;
+}
+
+StartupRetry startup_retry_next(const StartupRetryRun *run, char *reason, size_t reasonLen)
+{
+    const char *name =
+        run->backendName != NULL && run->backendName[0] != '\0' ? run->backendName : "vulkan";
+    const bool onD3d12 = same_name(name, "d3d12");
+    char dummy[1];
+    if (reason == NULL || reasonLen == 0) {
+        reason = dummy;
+        reasonLen = sizeof dummy;
+    }
+    if (!run->canRelaunch) {
+        snprintf(reason, reasonLen, "the game cannot start itself again on this system");
+        return STARTUP_RETRY_NONE;
+    }
+    return run->why == STARTUP_RETRY_LOSS ? loss_next(run, name, onD3d12, reason, reasonLen)
+                                          : crash_next(run, name, onD3d12, reason, reasonLen);
 }
 
 const char *startup_retry_name(StartupRetry step)
@@ -67,6 +111,10 @@ const char *startup_retry_name(StartupRetry step)
         return "d3d12";
     case STARTUP_RETRY_LAZY:
         return "lazy";
+    case STARTUP_RETRY_LOSS_BLEND:
+        return "blend";
+    case STARTUP_RETRY_LOSS_BACKEND:
+        return "backend";
     default:
         return "";
     }
@@ -75,19 +123,25 @@ const char *startup_retry_name(StartupRetry step)
 int startup_retry_value(StartupRetry next, const char *backendName, char *out, size_t size)
 {
     const char *name = backendName != NULL && backendName[0] != '\0' ? backendName : "vulkan";
+    const char *to = name;
     int n;
     if (next == STARTUP_RETRY_NONE || out == NULL || size == 0) {
         return -1;
     }
-    n = snprintf(out, size, "%s:%s", startup_retry_name(next),
-                 next == STARTUP_RETRY_D3D12 ? "d3d12" : name);
+    if (next == STARTUP_RETRY_D3D12) {
+        to = "d3d12";
+    } else if (next == STARTUP_RETRY_LOSS_BACKEND) {
+        to = same_name(name, "d3d12") ? "vulkan" : "d3d12";
+    }
+    n = snprintf(out, size, "%s:%s", startup_retry_name(next), to);
     return n > 0 && (size_t)n < size ? 0 : -1;
 }
 
 int startup_retry_parse(const char *value, StartupRetry *step, char *backend, size_t size)
 {
     static const StartupRetry steps[] = {STARTUP_RETRY_CACHE, STARTUP_RETRY_D3D12,
-                                         STARTUP_RETRY_LAZY};
+                                         STARTUP_RETRY_LAZY, STARTUP_RETRY_LOSS_BLEND,
+                                         STARTUP_RETRY_LOSS_BACKEND};
     const char *colon;
     size_t i, n;
     *step = STARTUP_RETRY_NONE;
@@ -128,6 +182,14 @@ const char *startup_retry_what(StartupRetry step)
         return "this run uses Direct3D 12";
     case STARTUP_RETRY_LAZY:
         return "this run builds the shaders as the game needs them, not all at the start";
+    case STARTUP_RETRY_LOSS_BLEND:
+        return "this run draws with the simpler blending on the same graphics backend; it "
+               "starts at the title as a fresh launch (what was not saved was lost when the "
+               "card stopped)";
+    case STARTUP_RETRY_LOSS_BACKEND:
+        return "this run uses the other graphics backend with the simpler blending; it starts "
+               "at the title as a fresh launch (what was not saved was lost when the card "
+               "stopped)";
     default:
         return "";
     }
