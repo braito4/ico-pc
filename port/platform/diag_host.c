@@ -1057,6 +1057,7 @@ static int driver_note(void)
 static int retry_step;
 static int retry_have_d3d12;
 static int retry_explicit;
+static int retry_blend_explicit;
 static char retry_backend[16] = "vulkan";
 static int retry_cache_loaded;
 static char retry_cache_path[1024];
@@ -1064,11 +1065,13 @@ static char retry_cache_path[1024];
 static wchar_t retry_cache_wpath[1024];
 #endif
 
-void ico_diag_set_startup_retry(int step, int have_d3d12, int backend_explicit, const char *backend)
+void ico_diag_set_startup_retry(int step, int have_d3d12, int backend_explicit, int blend_explicit,
+                                const char *backend)
 {
     retry_step = step;
     retry_have_d3d12 = have_d3d12 != 0;
     retry_explicit = backend_explicit != 0;
+    retry_blend_explicit = blend_explicit != 0;
     snprintf(retry_backend, sizeof retry_backend, "%s",
              backend != NULL && backend[0] != '\0' ? backend : "vulkan");
 }
@@ -1112,6 +1115,21 @@ void ico_diag_set_pipeline_cache(int loaded, const char *path)
 static int relaunch_ready;
 static char relaunch_value[48];
 
+#if !defined(__ANDROID__) && !defined(ICO_IOS)
+static void loss_relaunch_at_exit(void);
+static int loss_at_exit;
+
+/* the relaunch after a device loss runs at exit, after the end-of-run
+   steps, which main_host.c registers later (atexit runs the last
+   registered first) */
+static void loss_relaunch_register(void)
+{
+    if (!loss_at_exit && atexit(loss_relaunch_at_exit) == 0) {
+        loss_at_exit = 1;
+    }
+}
+#endif
+
 #if defined(_WIN32)
 
 /* the executable, the command line (CreateProcessW may write into it) and
@@ -1148,6 +1166,7 @@ void ico_diag_prepare_relaunch(int argc, char **argv)
     }
     relaunch_env_used = (size_t)used;
     relaunch_ready = 1;
+    loss_relaunch_register();
 }
 
 /* 0 when the new process was created */
@@ -1213,6 +1232,7 @@ void ico_diag_prepare_relaunch(int argc, char **argv)
         return;
     }
     relaunch_ready = 1;
+    loss_relaunch_register();
 }
 
 /* Replaces this process with the program again (the same process id, so
@@ -1281,18 +1301,20 @@ static const char driver_box_text[] =
 static void driver_crash_plan(void)
 {
     char reason[200];
-    const StartupRetry next =
-        startup_retry_next((StartupRetry)retry_step, retry_cache_loaded != 0, retry_have_d3d12 != 0,
-                           retry_explicit != 0, retry_backend, reason, sizeof reason);
+    const StartupRetryRun run = {
+        .why = STARTUP_RETRY_CRASH,
+        .step = (StartupRetry)retry_step,
+        .canRelaunch = relaunch_ready != 0,
+        .cacheWasLoaded = retry_cache_loaded != 0,
+        .haveD3d12 = retry_have_d3d12 != 0,
+        .backendExplicit = retry_explicit != 0,
+        .blendExplicit = retry_blend_explicit != 0,
+        .backendName = retry_backend,
+    };
+    const StartupRetry next = startup_retry_next(&run, reason, sizeof reason);
     relaunch_value[0] = '\0';
     if (next == STARTUP_RETRY_NONE) {
         flog("ico_pc: the graphics driver crashed while preparing the shaders: %s", reason);
-        return;
-    }
-    if (!relaunch_ready) {
-        flog("ico_pc: the graphics driver crashed while preparing the shaders; the game cannot "
-             "start itself again here (%s)",
-             reason);
         return;
     }
     if (startup_retry_value(next, retry_backend, relaunch_value, sizeof relaunch_value) != 0) {
@@ -1312,6 +1334,96 @@ static void driver_crash_plan(void)
          "again with %s=%s: %s",
          STARTUP_RETRY_ENV, relaunch_value, reason);
 }
+
+/* --- The relaunch after a device loss --------------------------------------------- */
+
+/* ico_diag_device_lost_restart: the loss step's value, kept for the
+   relaunch at exit (loss_relaunch_at_exit); "" when the run just ends.
+   Apart from relaunch_value, so a crash or watchdog end during the
+   shutdown still reports as one. */
+static char loss_value[48];
+#if defined(__ANDROID__) || defined(ICO_IOS)
+static const int loss_at_exit = 0; /* no relaunch */
+#endif
+
+int ico_diag_device_lost_restart(int blend_was_fixed)
+{
+    char reason[200];
+    const StartupRetryRun run = {
+        .why = STARTUP_RETRY_LOSS,
+        .step = (StartupRetry)retry_step,
+        .canRelaunch = relaunch_ready != 0 && loss_at_exit != 0,
+        .cacheWasLoaded = retry_cache_loaded != 0,
+        .haveD3d12 = retry_have_d3d12 != 0,
+        .backendExplicit = retry_explicit != 0,
+        .blendExplicit = retry_blend_explicit != 0,
+        .blendWasFixed = blend_was_fixed != 0,
+        .backendName = retry_backend,
+    };
+    const StartupRetry next = startup_retry_next(&run, reason, sizeof reason);
+    loss_value[0] = '\0';
+    if (next == STARTUP_RETRY_NONE) {
+        ico_diag_log("ico_pc: the graphics card stopped responding; the game does not start "
+                     "again: %s",
+                     reason);
+        return 0;
+    }
+    if (startup_retry_value(next, retry_backend, loss_value, sizeof loss_value) != 0) {
+        loss_value[0] = '\0';
+        return 0;
+    }
+    ico_diag_log("ico_pc: the graphics card stopped responding; the game starts again at the "
+                 "title when this run has closed, with %s=%s: %s",
+                 STARTUP_RETRY_ENV, loss_value, reason);
+    return 1;
+}
+
+#if !defined(__ANDROID__) && !defined(ICO_IOS)
+
+/* The box when the relaunch could not be made: the player is not left with
+   a game that just went */
+static const char loss_box_text[] =
+    "The graphics card stopped responding, and the game could not start itself again.\n\n"
+    "If the graphics card is overclocked, try its stock clocks first.";
+
+/* Last of the end-of-run steps (registered before them, atexit runs it
+   after them): the window, the audio and the files are closed; the
+   program starts again with the loss step. The normal path: stdio and the
+   heap are fine here. */
+static void loss_relaunch_at_exit(void)
+{
+    if (loss_value[0] == '\0') {
+        return;
+    }
+    ico_diag_log("ico_pc: starting the game again after the graphics card stopped responding");
+    fflush(NULL);
+#ifdef _WIN32
+    if (log_h != INVALID_HANDLE_VALUE) {
+        FlushFileBuffers(log_h);
+    }
+    if (relaunch_now(loss_value) == 0) {
+        ico_diag_log("ico_pc: started the game again");
+        return;
+    }
+    ico_diag_log("ico_pc: could not start the game again (error %lu)",
+                 (unsigned long)GetLastError());
+    {
+        char box[1024];
+        snprintf(box, sizeof box, "%s\n\nThe log is:\n%s", loss_box_text, ico_diag_log_path());
+        MessageBoxA(NULL, box, "ICO PC", MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
+    }
+#else
+    relaunch_now(loss_value); /* returns only when it failed */
+    ico_diag_log("ico_pc: could not start the game again");
+    if (fatal_box != NULL) {
+        char box[1024];
+        snprintf(box, sizeof box, "%s\n\nThe log is:\n%s", loss_box_text, ico_diag_log_path());
+        fatal_box(box);
+    }
+#endif
+}
+
+#endif
 
 /* --- The fatal end ------------------------------------------------------------------- */
 

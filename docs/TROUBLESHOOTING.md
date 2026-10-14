@@ -133,16 +133,27 @@ later in Options > Graphics driver. See
 without choosing a file. Start the game again and choose your ICO disc
 image.
 
+**The game closed and started again at the title screen.** The graphics
+card stopped responding while you played. On Windows, Linux and Mac the
+game then starts itself again with simpler blending, which some cards
+handle better when pushed hard; if that card stops again, on Windows it
+tries the other graphics driver type. It starts at the title screen, so
+anything you had not saved is lost, as when you quit. Nothing is changed
+in your settings: the next start is normal again. If it keeps happening,
+set an overclocked card back to its stock clocks (see below).
+
 **"The graphics card stopped responding ..."** The graphics driver was
 reset, updated or crashed while you played, and the game has to close.
-Your last save is kept, and the log says why. The message stays until you
-close it. Start the game again. This is usually a driver reset: if it
-keeps happening, update the graphics driver and send the log. If the graphics card is overclocked (its speed or
-memory raised above the maker's settings, in a tool such as MSI
-Afterburner), set it back to its stock clocks first and try again: a card
-pushed past what it can do steadily makes the driver reset, even in a game
-that asks little of it. The log also lists what the game was drawing when
-the card stopped.
+When the message also says the game restarted itself with simpler blending
+and the card still stopped, the game already tried that. Your last save is
+kept, and the log says why. The message stays until you close it. Start
+the game again. This is usually a driver reset: if it keeps happening,
+update the graphics driver and send the log. If the graphics card is
+overclocked (its speed or memory raised above the maker's settings, in a
+tool such as MSI Afterburner), set it back to its stock clocks first and
+try again: a card pushed past what it can do steadily makes the driver
+reset, even in a game that asks little of it. The log also lists what the
+game was drawing when the card stopped.
 
 If you report it, the developers may ask you to try a few lines in
 `ico-pc.ini` (on Windows in the `x64` folder; open it with Notepad, add the

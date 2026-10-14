@@ -979,6 +979,10 @@ static void window_activity(const char *note)
     }
 }
 
+/* the restart step this run is at (startup_retry.h; ico_window_open):
+   device_lost_quit's box says when a loss step's run lost the card too */
+static StartupRetry s_retry = STARTUP_RETRY_NONE;
+
 static bool window_have_d3d12(void)
 {
     const char *name;
@@ -1000,9 +1004,19 @@ int ico_window_open(unsigned int gsW, unsigned int gsH)
     const char *chosen = ico_config_get_string("video.backend", NULL);
     const bool backendExplicit = chosen != NULL && chosen[0] != '\0';
     const char *backend = backendExplicit ? chosen : "vulkan";
-    /* the crash handler started this run again after a graphics driver
-       crash while preparing the shaders (startup_retry.h): its step, and
-       its backend unless the player chose one */
+    /* the blending the player chose: [dev] blend / blend=, or ICO_RD_BLEND
+       from the environment the game was started with (a loss step's run
+       has its own ICO_RD_BLEND=fixed, host_config.c ico_ini_export, which
+       is not the player's) */
+    const char *blendKey = ico_config_get_string("dev.blend", NULL);
+    const char *blendEnv = getenv("ICO_RD_BLEND");
+    const bool retryLoss = startup_retry_value_is_loss(getenv(STARTUP_RETRY_ENV));
+    const bool blendExplicit = (blendKey != NULL && blendKey[0] != '\0') ||
+                               (!retryLoss && blendEnv != NULL && blendEnv[0] != '\0');
+    /* this run was started again after a graphics driver crash while
+       preparing the shaders or after the graphics card stopped responding
+       (startup_retry.h): its step, and its backend unless the player chose
+       one; a loss step's fixed-function blend is set by ico_ini_export */
     static char retryBackend[16];
     StartupRetry retry = STARTUP_RETRY_NONE;
     if (startup_retry_parse(getenv(STARTUP_RETRY_ENV), &retry, retryBackend,
@@ -1010,11 +1024,13 @@ int ico_window_open(unsigned int gsW, unsigned int gsH)
         if (!backendExplicit) {
             backend = retryBackend;
         }
-        fprintf(stderr,
-                "ico_pc: restarted after a graphics driver crash while preparing the shaders: "
-                "%s\n",
+        fprintf(stderr, "ico_pc: restarted after %s: %s\n",
+                startup_retry_is_loss(retry)
+                    ? "the graphics card stopped responding"
+                    : "a graphics driver crash while preparing the shaders",
                 startup_retry_what(retry));
     }
+    s_retry = retry;
     /* read (main_host.c read it before, for the log): nothing started
        from here inherits it */
     ico_diag_forget_startup_retry_env();
@@ -1024,7 +1040,8 @@ int ico_window_open(unsigned int gsW, unsigned int gsH)
         backend = "vulkan";
         rhi_create_backend(backend);
     }
-    ico_diag_set_startup_retry((int)retry, window_have_d3d12(), backendExplicit, backend);
+    ico_diag_set_startup_retry((int)retry, window_have_d3d12(), backendExplicit, blendExplicit,
+                               backend);
     /* the name the desktop shows for the game, e.g. in KDE's list of what
        keeps the computer awake (SDL's D-Bus inhibit sends it); Android and
        iOS set SDL_HINT_APP_NAME, which SDL prefers */
@@ -1128,21 +1145,29 @@ open_window:
         choose_driver();
 #endif
     }
-    if (!up && retry == STARTUP_RETRY_D3D12 && !backendExplicit &&
-        rhi_backend() == RHI_BACKEND_D3D12) {
-        /* the restart after a Vulkan driver crash found no Direct3D 12
-           (d3d12.dll missing, no device): nothing crashed, so this process
-           goes on to the next step itself, Vulkan with the pipelines built
-           as the frames need them. A new window: Vulkan needs one made
-           with SDL_WINDOW_VULKAN (window_flags) */
-        fprintf(stderr, "ico_pc: Direct3D 12 could not start after the restart; using Vulkan "
-                        "and building the shaders as the game needs them\n");
+    if (!up && (retry == STARTUP_RETRY_D3D12 || retry == STARTUP_RETRY_LOSS_BACKEND) &&
+        !backendExplicit && rhi_backend() == RHI_BACKEND_D3D12) {
+        /* the restart after a Vulkan driver crash or device loss found no
+           Direct3D 12 (d3d12.dll missing, no device): nothing crashed, so
+           this process goes on itself on Vulkan, after a crash with the
+           pipelines built as the frames need them (the lazy step), after a
+           loss with the fixed-function blend the loss step already set
+           (its step kept, so a further loss ends with the box). A new
+           window: Vulkan needs one made with SDL_WINDOW_VULKAN
+           (window_flags) */
+        fprintf(stderr, "ico_pc: Direct3D 12 could not start after the restart; using Vulkan%s\n",
+                retry == STARTUP_RETRY_D3D12 ? " and building the shaders as the game needs them"
+                                             : " with the simpler blending");
         SDL_DestroyWindow(s_window);
         s_window = NULL;
         backend = "vulkan";
         rhi_create_backend(backend);
-        retry = STARTUP_RETRY_LAZY;
-        ico_diag_set_startup_retry((int)retry, window_have_d3d12(), backendExplicit, backend);
+        if (retry == STARTUP_RETRY_D3D12) {
+            retry = STARTUP_RETRY_LAZY;
+        }
+        s_retry = retry;
+        ico_diag_set_startup_retry((int)retry, window_have_d3d12(), backendExplicit, blendExplicit,
+                                   backend);
         goto open_window;
     }
     if (!up) {
@@ -1408,12 +1433,15 @@ static void toggle_fullscreen(void)
 }
 
 /* The renderer's device was removed, reset or hung (the driver
-   crashed or was updated, the GPU was unplugged): nothing more can be drawn,
-   so instead of a frozen window the player gets one message and the session
-   ends through the normal quit path (atexit closes the window). The backend
-   logged the reason and its loss report (docs/port/RHI.md, "Device loss");
-   the renderer's pass ring follows it here, before the box, so the log names
-   what was being drawn (port/render/rd_passring.h). */
+   crashed or was updated, the GPU was unplugged, an overclocked card
+   stopped): nothing more can be drawn. The backend logged the reason and
+   its loss report (docs/port/RHI.md, "Device loss"); the renderer's pass
+   ring follows it here, so the log names what was being drawn
+   (port/render/rd_passring.h). Then, when startup_retry.h has a loss step
+   left (diag_host.c ico_diag_device_lost_restart), the session ends
+   through the normal quit path without a box and the program starts again
+   at exit with that step; otherwise the player gets one message and the
+   session ends through the normal quit path (atexit closes the window). */
 static int device_lost_quit(void)
 {
     static int s_shown;
@@ -1427,6 +1455,9 @@ static int device_lost_quit(void)
         fprintf(stderr, "window: the graphics device was lost; quitting\n");
         rd_passring_print(stderr, rd_perf_post_name);
         ico_host_log_flush();
+        if (ico_diag_device_lost_restart(rd_blend_exact() == RD_BLEND_EXACT_OFF)) {
+            return 1;
+        }
         /* the box is modal and the run ends when the player closes it: the
            time it stays open is not a hang (the watchdog's later limit
            would report one, the game standing since the loss), and the
@@ -1435,12 +1466,19 @@ static int device_lost_quit(void)
         ico_diag_watchdog_pause(1);
         const Uint64 t0 = SDL_GetTicksNS();
 
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "ICO PC",
-                                 "The graphics card stopped responding (its driver was reset or "
-                                 "updated, or the card was removed).\n\nThe game has to close. "
-                                 "Your last save is kept; the log says why.\n\nIf the graphics "
-                                 "card is overclocked, try its stock clocks first.",
-                                 s_window);
+        SDL_ShowSimpleMessageBox(
+            SDL_MESSAGEBOX_ERROR, "ICO PC",
+            startup_retry_is_loss(s_retry)
+                ? "The graphics card stopped responding (its driver was reset or updated, or "
+                  "the card was removed).\n\nThe game restarted itself with simpler blending "
+                  "and the card still stopped responding.\n\nThe game has to close. Your last "
+                  "save is kept; the log says why.\n\nIf the graphics card is overclocked, try "
+                  "its stock clocks first."
+                : "The graphics card stopped responding (its driver was reset or updated, or "
+                  "the card was removed).\n\nThe game has to close. Your last save is kept; "
+                  "the log says why.\n\nIf the graphics card is overclocked, try its stock "
+                  "clocks first.",
+            s_window);
         fprintf(stderr, "window: the message was closed after %.1f s\n",
                 (double)(SDL_GetTicksNS() - t0) / 1e9);
         ico_diag_watchdog_pause(0);

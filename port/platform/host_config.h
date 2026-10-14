@@ -134,6 +134,14 @@ const char *ico_config_ini_key(const char *toml_path);
    ico_ini_export sets them. */
 const char *ico_dev_env_name(const char *key);
 const char *ico_dev_env_value(const char *key, const char *value);
+/* The value ico_ini_export sets for key: ico_dev_env_value's, except that
+   blend gets "fixed" when retry (the ICO_STARTUP_RETRY value this run was
+   started with, NULL when none) names a device-loss step
+   (startup_retry.h): the restart's fixed-function blend wins over blend=
+   and over an ICO_RD_BLEND in the environment for that run. The restart
+   is never chosen against a player's blending other than fixed, so this
+   only ever replaces nothing or "fixed". */
+const char *ico_dev_env_export_value(const char *key, const char *value, const char *retry);
 /* Whether the clock should be fixed (ICO_FIXED_CLOCK): fixed_clock= when
    present, else true for the headless build, headless=1, or a trace written
    to an explicit path (trace= other than 0/none; the default trace of a

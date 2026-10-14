@@ -140,10 +140,20 @@ void ico_diag_clear_activity(void);
 const char *ico_diag_activity(void);
 /* The relaunch's inputs: the step this run is at (StartupRetry, 0 for the
    first run), whether the build has the D3D12 backend, whether the player
-   named the backend, and the backend in use; the window sets them before
-   the renderer starts. */
-void ico_diag_set_startup_retry(int step, int have_d3d12, int backend_explicit,
+   named the backend, whether the player named the blending (blend= /
+   [dev] blend or ICO_RD_BLEND), and the backend in use; the window sets
+   them before the renderer starts. */
+void ico_diag_set_startup_retry(int step, int have_d3d12, int backend_explicit, int blend_explicit,
                                 const char *backend);
+/* The graphics device was lost (window_host.c device_lost_quit; the normal
+   path, not a crash): the loss step of startup_retry.h this run takes
+   next, logged. 1 when there is one: the program then starts again with
+   it at exit, after the end-of-run steps (registered by
+   ico_diag_prepare_relaunch), and the window shows no box; 0 when nothing
+   is left, the platform cannot start the game again (Android, iOS) or the
+   relaunch was not prepared: the window shows its box. blend_was_fixed:
+   the run drew with the fixed-function blend (rd_blend_exact). */
+int ico_diag_device_lost_restart(int blend_was_fixed);
 /* Removes ICO_STARTUP_RETRY from this process's environment once the
    window has read it, so nothing started from here inherits the step (the
    relaunch's own environment was captured without it at start-up). */
@@ -156,8 +166,9 @@ void ico_diag_set_pipeline_cache(int loaded, const char *path);
    path, GetCommandLineW and the environment block; Linux and macOS: the
    executable's path, argv and the environment's pointers), so the crash
    path does not allocate. Call once after ico_diag_init with main's argc
-   and argv (kept: they must live as long as the process). Android and iOS:
-   nothing (no relaunch). */
+   and argv (kept: they must live as long as the process); registers the
+   relaunch after a device loss with atexit (ico_diag_device_lost_restart).
+   Android and iOS: nothing (no relaunch). */
 void ico_diag_prepare_relaunch(int argc, char **argv);
 
 /* Names a thread function for the thread lines; game threads are named by

@@ -28,10 +28,9 @@ To go through, open **Options > Gameplay** and turn on **East Reflector door fix
 few seconds after you come through a door holding her hand, that door does
 not take you back. It is off unless you turn it on.
 
-## The game closed and opened again right after starting
+## The game closed and opened again by itself
 
-**The window disappeared a moment after I started the game, then came back.
-Is something wrong?**
+**The window disappeared, then came back. Why?**
 
 Some graphics drivers crash while the game gets its graphics ready. On
 Windows, Linux and Mac the game notices and starts itself again, up to three
@@ -43,13 +42,17 @@ message that the graphics driver crashed; on Linux and Mac the game closes
 and the log says why. On an Android phone a message says the graphics
 driver crashed and the game closes; on an iPhone the game closes.
 
-Updating the graphics driver from the maker's site (NVIDIA, AMD or Intel)
-usually fixes it. On Windows you can also open `ico-pc.ini` in the `x64`
-folder with Notepad and add the line `backend=d3d12` at the end to always
-use Direct3D 12
-([how](OPTIONS.md#choosing-the-renderer-on-windows)). If you report it,
-attach the log: it shows every attempt. See
-[The game closes by itself](TROUBLESHOOTING.md#the-game-closes-by-itself).
+The game also starts itself again when the graphics card stops responding
+while you play (often a card running faster than its maker set it). It
+starts again with simpler blending, which can make a few see-through
+effects look very slightly different; if the card stops again, on
+Windows it then tries the other graphics driver type (Direct3D 12 or
+Vulkan). It starts at the title screen, as a fresh start: anything you had
+not saved is lost, as when you quit. Your settings are left as they are,
+and the next time you start the game it is back to normal. If the card
+still stops, a message says so and the game closes; see
+[the graphics card stopped responding](TROUBLESHOOTING.md). On a phone the
+message shows at once.
 
 ## The screen stays black but I hear the game
 
