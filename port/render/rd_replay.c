@@ -149,6 +149,26 @@ RhiShader rd__make_shader(const char *name)
  * Vulkan loader rhi_init fails and there is nothing to wait on or destroy). */
 static bool s_rhiUp;
 
+/* the slots of every layout made here, so bindGroup can count a group that
+ * leaves one without a binding (RdPerfRecord.unboundSlots) */
+typedef struct LayoutSlots {
+    uint32_t id, count;
+    const RhiBindSlot *slots;
+} LayoutSlots;
+
+static LayoutSlots s_layoutSlots[8];
+static uint32_t s_layoutSlotCount;
+
+static RhiBindGroupLayout makeLayout(const RhiBindSlot *slots, uint32_t count, const char *name)
+{
+    const RhiBindGroupLayout l =
+        rhi_create_bind_group_layout(&(RhiBindGroupLayoutDesc){slots, count, name});
+    if (l.id && s_layoutSlotCount < sizeof(s_layoutSlots) / sizeof(s_layoutSlots[0])) {
+        s_layoutSlots[s_layoutSlotCount++] = (LayoutSlots){l.id, count, slots};
+    }
+    return l;
+}
+
 bool rd__gpu_init(void *sdlWindow)
 {
     RhiDeviceDesc dd;
@@ -166,7 +186,10 @@ bool rd__gpu_init(void *sdlWindow)
         rd__log("device lacks stencil wrap");
         return false;
     }
-    const uint32_t VS = 1u << RHI_STAGE_VERTEX, FS = 1u << RHI_STAGE_FRAGMENT;
+
+    enum { VS = 1u << RHI_STAGE_VERTEX, FS = 1u << RHI_STAGE_FRAGMENT };
+
+    s_layoutSlotCount = 0;
     /* FrameCB, DrawCB, VuCB and VuBoneCB take dynamic offsets into the
      * ring, so each of these layouts has one group a replay (uniformGroup,
      * vuGroup) */
@@ -174,26 +197,26 @@ bool rd__gpu_init(void *sdlWindow)
         rd__log("device has %u dynamic uniform buffers, 4 needed", lim->maxDynamicUniforms);
         return false;
     }
-    const RhiBindSlot s0[1] = {{0, RHI_BIND_UNIFORM_BUFFER_DYNAMIC, VS | FS}};
+    static const RhiBindSlot s0[1] = {{0, RHI_BIND_UNIFORM_BUFFER_DYNAMIC, VS | FS}};
     /* b4: the menu text's grain tile (rd_tex.c rd__sheet_noise_binding) */
-    const RhiBindSlot s1[2] = {{1, RHI_BIND_UNIFORM_BUFFER_DYNAMIC, VS | FS},
-                               {ICO_SHEET_NOISE_SLOT, RHI_BIND_UNIFORM_BUFFER, FS}};
+    static const RhiBindSlot s1[2] = {{1, RHI_BIND_UNIFORM_BUFFER_DYNAMIC, VS | FS},
+                                      {ICO_SHEET_NOISE_SLOT, RHI_BIND_UNIFORM_BUFFER, FS}};
     /* t2: sprite_ps's DATE snapshot */
-    const RhiBindSlot s2[3] = {{1, RHI_BIND_SAMPLED_TEXTURE, FS},
-                               {1, RHI_BIND_SAMPLER, FS},
-                               {2, RHI_BIND_SAMPLED_TEXTURE, FS}};
-    const RhiBindSlot s3[2] = {{1, RHI_BIND_SAMPLED_TEXTURE, FS},
-                               {2, RHI_BIND_SAMPLED_TEXTURE, FS}};
-    g_rd.layoutFrame = rhi_create_bind_group_layout(&(RhiBindGroupLayoutDesc){s0, 1, "rd frame"});
-    g_rd.layoutDraw = rhi_create_bind_group_layout(&(RhiBindGroupLayoutDesc){s1, 2, "rd draw"});
-    g_rd.layoutTex = rhi_create_bind_group_layout(&(RhiBindGroupLayoutDesc){s2, 3, "rd tex"});
-    g_rd.layoutInt = rhi_create_bind_group_layout(&(RhiBindGroupLayoutDesc){s3, 2, "rd int"});
+    static const RhiBindSlot s2[3] = {{1, RHI_BIND_SAMPLED_TEXTURE, FS},
+                                      {1, RHI_BIND_SAMPLER, FS},
+                                      {2, RHI_BIND_SAMPLED_TEXTURE, FS}};
+    static const RhiBindSlot s3[2] = {{1, RHI_BIND_SAMPLED_TEXTURE, FS},
+                                      {2, RHI_BIND_SAMPLED_TEXTURE, FS}};
+    g_rd.layoutFrame = makeLayout(s0, 1, "rd frame");
+    g_rd.layoutDraw = makeLayout(s1, 2, "rd draw");
+    g_rd.layoutTex = makeLayout(s2, 3, "rd tex");
+    g_rd.layoutInt = makeLayout(s3, 2, "rd int");
     /* the VU programs' group 1 (vu_common.hlsli) */
-    const RhiBindSlot s4[4] = {{0, RHI_BIND_STORAGE_BUFFER, VS},
-                               {1, RHI_BIND_UNIFORM_BUFFER_DYNAMIC, VS | FS},
-                               {2, RHI_BIND_UNIFORM_BUFFER_DYNAMIC, VS},
-                               {3, RHI_BIND_UNIFORM_BUFFER_DYNAMIC, VS}};
-    g_rd.layoutVu = rhi_create_bind_group_layout(&(RhiBindGroupLayoutDesc){s4, 4, "rd vu"});
+    static const RhiBindSlot s4[4] = {{0, RHI_BIND_STORAGE_BUFFER, VS},
+                                      {1, RHI_BIND_UNIFORM_BUFFER_DYNAMIC, VS | FS},
+                                      {2, RHI_BIND_UNIFORM_BUFFER_DYNAMIC, VS},
+                                      {3, RHI_BIND_UNIFORM_BUFFER_DYNAMIC, VS}};
+    g_rd.layoutVu = makeLayout(s4, 4, "rd vu");
     bool ok = g_rd.layoutFrame.id && g_rd.layoutDraw.id && g_rd.layoutTex.id && g_rd.layoutInt.id &&
               g_rd.layoutVu.id;
     /* the exact blend's group 3 (rd_dst_read.c): the target as a storage
@@ -203,14 +226,12 @@ bool rd__gpu_init(void *sdlWindow)
     const bool dstStorage = lim->fragmentInterlock || lim->rov;
     const bool dstAttach = lim->rasterOrderAttachment;
     if (dstStorage) {
-        const RhiBindSlot sd[1] = {{0, RHI_BIND_STORAGE_TEXTURE, FS}};
-        g_rd.layoutDstStorage =
-            rhi_create_bind_group_layout(&(RhiBindGroupLayoutDesc){sd, 1, "rd dst storage"});
+        static const RhiBindSlot sd[1] = {{0, RHI_BIND_STORAGE_TEXTURE, FS}};
+        g_rd.layoutDstStorage = makeLayout(sd, 1, "rd dst storage");
     }
     if (dstAttach) {
-        const RhiBindSlot sa[1] = {{0, RHI_BIND_INPUT_ATTACHMENT, FS}};
-        g_rd.layoutDstAttach =
-            rhi_create_bind_group_layout(&(RhiBindGroupLayoutDesc){sa, 1, "rd dst attachment"});
+        static const RhiBindSlot sa[1] = {{0, RHI_BIND_INPUT_ATTACHMENT, FS}};
+        g_rd.layoutDstAttach = makeLayout(sa, 1, "rd dst attachment");
     }
     for (int i = 0; i < RD_VS_COUNT; i++) {
         g_rd.vs[i] = rd__make_shader(s_vsNames[i]);
@@ -451,6 +472,28 @@ void rd__transition(RhiCommandList cl, RhiTexture t, RhiState *cur, RhiState wan
     *cur = want;
 }
 
+/* the slots of layout (one of rd__gpu_init's) that b[0..n) leaves without a
+ * binding (matched by slot and type); 0 for a layout made elsewhere */
+static uint32_t unboundSlots(RhiBindGroupLayout layout, const RhiBinding *b, uint32_t n)
+{
+    for (uint32_t i = 0; i < s_layoutSlotCount; i++) {
+        const LayoutSlots *l = &s_layoutSlots[i];
+        if (l->id != layout.id) {
+            continue;
+        }
+        uint32_t missing = 0;
+        for (uint32_t k = 0; k < l->count; k++) {
+            bool found = false;
+            for (uint32_t j = 0; j < n && !found; j++) {
+                found = b[j].slot == l->slots[k].slot && b[j].type == l->slots[k].type;
+            }
+            missing += found ? 0u : 1u;
+        }
+        return missing;
+    }
+    return 0;
+}
+
 /* every transient bind group of the replay goes through here, timed into
  * the record's bind phase and counted by kind (texture or uniform: the
  * uniform layouts' groups are the frame, draw and VU ones) */
@@ -459,6 +502,7 @@ static RhiBindGroup bindGroup(RhiBindGroupLayout layout, const RhiBinding *b, ui
     const double t0 = rd__now_ms();
     const RhiBindGroup g = rhi_create_bind_group(&(RhiBindGroupDesc){layout, b, n});
     g_rdPerf.bindMs += rd__now_ms() - t0;
+    g_rdPerf.unboundSlots += unboundSlots(layout, b, n);
     if (g.id) {
         /* the exact blend's group (dstBind: the pass's target as a storage
          * texture or input attachment) is a texture group too */
@@ -1375,7 +1419,8 @@ static void msaaFrameBegin(Replay *r)
 }
 
 /* A fullscreen draw into the open pass of SCENE_MS: blit_vs with fs, src
- * bound at t1 (aspect) */
+ * bound at t1 (aspect); t2, which none of these shaders reads, holds the
+ * dummy as in rd__tex_group, so every slot of the layout has its texture */
 static void msaaFullscreen(RdFsId fs, RhiFormat colorFmt, RhiTexture src, RhiViewAspect aspect,
                            uint32_t w, uint32_t h)
 {
@@ -1403,7 +1448,7 @@ static void msaaFullscreen(RdFsId fs, RhiFormat colorFmt, RhiTexture src, RhiVie
     cb.tex[1] = (float)h;
     cb.tex[2] = 1.0f / (float)w;
     cb.tex[3] = 1.0f / (float)h;
-    RhiBinding b[2];
+    RhiBinding b[3];
     memset(b, 0, sizeof(b));
     b[0].slot = 1;
     b[0].type = RHI_BIND_SAMPLED_TEXTURE;
@@ -1412,7 +1457,10 @@ static void msaaFullscreen(RdFsId fs, RhiFormat colorFmt, RhiTexture src, RhiVie
     b[1].slot = 1;
     b[1].type = RHI_BIND_SAMPLER;
     b[1].sampler = rd__sampler(RD_FILTER_NEAREST, RD_FILTER_NEAREST, RD_WRAP_CLAMP, RD_WRAP_CLAMP);
-    const RhiBindGroup g2 = bindGroup(g_rd.layoutTex, b, 2);
+    b[2].slot = 2;
+    b[2].type = RHI_BIND_SAMPLED_TEXTURE;
+    b[2].texture = g_rd.dummy;
+    const RhiBindGroup g2 = bindGroup(g_rd.layoutTex, b, 3);
     if (!g2.id) {
         return;
     }

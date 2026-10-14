@@ -12,7 +12,8 @@
  *            anti-aliasing is one colour is the same byte for byte with
  *            MSAA4, some edge pixels differ, and the sprites' rectangles
  *            (two pixels round them) are byte-identical; the record says 4
- *            samples and one resolve;
+ *            samples and one resolve, and no bind group slot of the replays
+ *            without a binding (RdPerfRecord.unboundSlots);
  *   date     the same, then a DATE-tested sprite over it (the snapshot
  *            closes the epoch): again identical away from edges;
  *   fog      the fog self-test's grid fogged (cells at GS Z (n << 16) |
@@ -216,19 +217,20 @@ static void settings(RdPreset preset, int aa)
     rd_set_settings(&s);
 }
 
-static void drainPerf(uint32_t *samples, uint32_t *resolves)
+static void drainPerf(uint32_t *samples, uint32_t *resolves, uint32_t *unbound)
 {
     RdPerfRecord rec;
-    *samples = *resolves = 0;
+    *samples = *resolves = *unbound = 0;
     while (rd_perf_pop(&rec)) {
         *samples = rec.msaaSamples;
         *resolves = rec.msaaResolves;
+        *unbound += rec.unboundSlots;
     }
 }
 
 static void testScene(void)
 {
-    uint32_t samples = 0, resolves = 0;
+    uint32_t samples = 0, resolves = 0, unbound = 0;
     settings(RD_PRESET_ENHANCED, RD_AA_OFF);
     sceneFrame(0);
     if (!readScene(s_off)) {
@@ -243,9 +245,13 @@ static void testScene(void)
     for (int i = 0; i < RHI_FRAMES_IN_FLIGHT + 1; i++) {
         sceneFrame(0);
     }
-    drainPerf(&samples, &resolves);
-    printf("  scene: the last record: %u samples, %u resolves\n", samples, resolves);
+    drainPerf(&samples, &resolves, &unbound);
+    printf("  scene: the last record: %u samples, %u resolves; %u unbound slots\n", samples,
+           resolves, unbound);
     CHECK(samples == 4 && resolves == 1, "scene: 4 samples, 1 resolve (%u, %u)", samples, resolves);
+    /* the depth resolve's group (msaaFullscreen) binds every slot of the
+     * texture layout: Direct3D 12 logs a slot left out */
+    CHECK(unbound == 0, "scene: %u bind group slots without a binding", unbound);
     compareEdges("scene", 1);
     int spriteBad = 0;
     for (int k = 0; k < 2; k++) {

@@ -420,8 +420,14 @@ static RhiBindGroup dx_create_bind_group(const RhiBindGroupDesc *desc, bool quie
         }
         D3D12_CPU_DESCRIPTOR_HANDLE h = dx_cpu(g_dx.resCpu, g_dx.resInc, resBase + l->offset[i]);
         if (!b || !dx_write_resource(s, b, h)) {
-            if (!b && !quiet) {
-                DX_LOG("bind group: slot %u (type %d) has no binding", s->slot, (int)s->type);
+            /* a null view reads zeros; a slot the shader never reads
+             * (a layout shared by several entry points) is harmless, so
+             * the first one is enough to find the group */
+            static bool s_unboundLogged;
+            if (!b && !quiet && !s_unboundLogged) {
+                s_unboundLogged = true;
+                DX_LOG("bind group: slot %u (type %d) has no binding: a null view (reported once)",
+                       s->slot, (int)s->type);
             }
             dx_null_view(s, h);
         }

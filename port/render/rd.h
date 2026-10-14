@@ -1515,6 +1515,9 @@ typedef struct RdPerfRecord {
     /* MSAA (RdSettings.antiAlias): the replay's sample count (0 without)
      * and the epoch's resolves of SCENE (0 or 1 a replay) */
     uint32_t msaaSamples, msaaResolves;
+    /* the slots of the replay's bind groups left without a binding (each
+     * slot of rd's layouts gets one; 0 in every replay) */
+    uint32_t unboundSlots;
 } RdPerfRecord;
 
 /* The oldest finished record not yet popped (a queue of 64; the oldest are
