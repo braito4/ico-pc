@@ -1408,7 +1408,7 @@ static void loss_relaunch_at_exit(void)
     ico_diag_log("ico_pc: could not start the game again (error %lu)",
                  (unsigned long)GetLastError());
     {
-        char box[1024];
+        char box[2048]; /* the text (up to 1023) and a path (up to 1023) */
         snprintf(box, sizeof box, "%s\n\nThe log is:\n%s", loss_box_text, ico_diag_log_path());
         MessageBoxA(NULL, box, "ICO PC", MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
     }
@@ -1416,7 +1416,7 @@ static void loss_relaunch_at_exit(void)
     relaunch_now(loss_value); /* returns only when it failed */
     ico_diag_log("ico_pc: could not start the game again");
     if (fatal_box != NULL) {
-        char box[1024];
+        char box[2048]; /* the text (up to 1023) and a path (up to 1023) */
         snprintf(box, sizeof box, "%s\n\nThe log is:\n%s", loss_box_text, ico_diag_log_path());
         fatal_box(box);
     }
