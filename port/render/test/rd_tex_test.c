@@ -1361,12 +1361,12 @@ static void timeSheetRim(void)
         }
         double best = 1e9;
         for (int run = 0; run < 3; run++) {
-            struct timespec t0, t1;
-            timespec_get(&t0, TIME_UTC);
+            /* clock(): processor time, which every toolchain has (the
+               mingw cross build lacks timespec_get's TIME_UTC) */
+            const clock_t t0 = clock();
             rd_sheet_rim(cov, w, h, (uint32_t)s, 0, 0, (int32_t)w, (int32_t)h, rim);
-            timespec_get(&t1, TIME_UTC);
-            const double ms =
-                (double)(t1.tv_sec - t0.tv_sec) * 1e3 + (double)(t1.tv_nsec - t0.tv_nsec) / 1e6;
+            const clock_t t1 = clock();
+            const double ms = (double)(t1 - t0) * 1e3 / (double)CLOCKS_PER_SEC;
             best = ms < best ? ms : best;
         }
         printf("  halo time: %dx%d sheet texels at %dx (%ux%u): %.2f ms\n", kCase[c][0],
