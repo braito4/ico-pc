@@ -45,7 +45,7 @@ bool vu_prelit_strip_passes(uint kick)
     }
     bool i0 = vu_prelit_vertex(r.x, VU_CLIP_REGION, false).inside;
     bool i1 = vu_prelit_vertex(r.x + 1u, VU_CLIP_REGION, false).inside;
-    [loop] for (uint v = r.x + 2u; v < r.y; v++) {
+    [loop] for (uint v = r.x + 2u; v < vu_strip_end(r); v++) {
         bool i2 = vu_prelit_vertex(v, VU_CLIP_REGION, false).inside;
         if (i0 && i1 && i2) {
             return true;

@@ -104,7 +104,7 @@ bool vu_lit_strip_passes(uint kick, uint variant)
     }
     bool i0 = vu_lit_vertex(r.x, VU_CLIP_REGION, variant, false).inside;
     bool i1 = vu_lit_vertex(r.x + 1u, VU_CLIP_REGION, variant, false).inside;
-    [loop] for (uint v = r.x + 2u; v < r.y; v++) {
+    [loop] for (uint v = r.x + 2u; v < vu_strip_end(r); v++) {
         bool i2 = vu_lit_vertex(v, VU_CLIP_REGION, variant, false).inside;
         if (i0 && i1 && i2) {
             return true;

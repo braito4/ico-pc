@@ -174,7 +174,16 @@ above 1.0 does not survive the blender, so `DF_PREMUL` moves the multiply into t
 additive and subtractive forms. **The destination read** (`gs_dst_pixel`, `gs_dst_out`): the GS's
 `((A - B) * C >> 7) + D` computed exactly from the fragment's own pixel, with COLCLAMP, PABE, FBA
 and the write mask, written with blending off; `_dstrov` runs under `[earlydepthstencil]` with a
-globally coherent view. `GS_PS_OUT`, `GS_PS_ATTR` and `GS_RETURN` pick the output per build.
+globally coherent view. `GS_PS_OUT`, `GS_PS_ATTR`, `GS_RETURN` and `GS_DISCARD` pick the output
+per build. In `_dstrov` a `GS_DISCARD` marks the fragment (`g_dstKill`) instead of ending it, and
+`gs_dst_out` stores the pixel it read back unchanged: Vulkan's interlock requires every invocation
+to execute `OpBeginInvocationInterlockEXT` and `OpEndInvocationInterlockEXT` exactly once, in that
+order (SPV_EXT_fragment_shader_interlock, validation rules), and DXC puts an
+`OpEndInvocationInterlockEXT` before each `OpKill`, on paths that never began the section. The depth
+and stencil tests run before the shader and the pass has no colour attachment, so the unchanged store
+is the whole of a discard there. Each `_dstrov` entry compiles to one begin, one end, no kill, and a
+critical section of one load, the blend arithmetic (no loop) and one store
+(`port/shaders/common.hlsli`, gs_dst_out).
 **Vertex helpers**: `gs_px_to_ndc`, `gs_xy_to_ndc`, `gs_uv_norm`, `gs_stq_norm`, `gs_depth`,
 `fullscreen_triangle` (`port/shaders/common.hlsli`).
 
@@ -238,6 +247,31 @@ mobile GPU may keep in scratch memory. One path serves every scale: above 1x the
 Functions: `sheet_threshold`, `sheet_quantise`, `sheet_texel` (`port/shaders/sheet_text.hlsli`;
 `port/shaders/shader_consts.h`, the sheet constants). What a sheet texture is: `port/render/rd.h`
 (`rd_create_texture_sheet`).
+
+## Bounded loops
+
+Every loop in the shaders stops within a compile-time constant number of iterations, whatever its
+inputs: a GPU computing a wrong value (an unstable overclock) gives a wrong pixel, never a loop that
+runs until the driver resets the device. Loops with constant bounds: the B-spline's two axes
+(`port/shaders/common.hlsli`, gs_bspline_bilinear4), the CRT's blur taps and channels
+(`port/shaders/crt.hlsl`, crt_bloom_ps, crt_blur_ps, gainFadeOf), the deinterlacer's seven columns
+(`port/shaders/yuv.hlsl`, field_sample), the two ticks (`port/shaders/vu_common.hlsli`,
+vu_region_rule; `port/shaders/vu_particle.hlsl`, vu_particle_tick_shown) and the strip scans, which
+stop at `VU_STRIP_SCAN` (vu_strip_of). Loops whose count comes from a constant buffer, a stream or
+arithmetic are clamped to a constant that valid inputs never reach, so every picture is unchanged:
+
+| loop | clamp | valid inputs need at most |
+| --- | --- | --- |
+| above 1x taps (`port/shaders/sprite.hlsl`, sprite_above1x; `port/shaders/fx_sprite.hlsl`, fx_sprite_ps) | `GS_RS_TAPS_MAX` = 33 a side (`common.hlsli`) | 33: a 32-texel box over a texel boundary (gs_rs_count) |
+| strip tests (`vu_prelit.hlsl`, `vu_lit.hlsl`, `vu_skin.hlsl`, `vu_grid.hlsl`, *_strip_passes) | `vu_strip_end`, `VU_STRIP_SPAN_MAX` = 1024 vertices (`vu_common.hlsli`) | 515 on a flagged strip; a grid strip of `Mesh3D.stripLen` vertices, which VU1's 1024 data quadwords hold |
+| polygon cut corners (`vu_common.hlsli`, vu_clip_corners, vu_cut_reaches) | `VU_CUT_CORNERS` = 7 | 7 |
+| shadow count reduce (`port/shaders/blit.hlsl`, box_reduce_ps) | `BLIT_SPAN_MAX` = 258 texels an axis | 148 (a 32768-texel scene over 224 rows) |
+| supersampling reduce (`blit.hlsl`, aa_reduce_ps) | `BLIT_SPAN_MAX` = 258 texels an axis | 258 where its 32-bit sums are exact (256 texels a pixel) |
+| MSAA depth resolve (`blit.hlsl`, depth_resolve_ps) | 8 samples | 8 (`port/render/rd_core.c`, rd_aa_samples) |
+| CRT triad gain (`crt.hlsl`, triadGain) | `CRT_TRIAD_REACH_MAX` = 128 | 65 (a 32768-pixel box over 512 columns) |
+
+No shader waits on memory, spins on an atomic or uses recursion; the one ordered section is
+`gs_dst_out`'s (above).
 
 ## Tests
 

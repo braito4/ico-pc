@@ -79,12 +79,21 @@ BlitDepthOut blit_depth_ps(BlitVSOut i)
 // viewport the target. g_scale.z: a Full pixel source's left-out texels
 // (rd_replay.c shadowReduce; the GS pixel p is then [p f - z, (p + 1) f -
 // z), the texels outside the source not counted), else 0.
+// BLIT_SPAN_MAX: the most texels an output pixel's span covers on an
+// axis in box_reduce_ps and aa_reduce_ps, which clamp their loops' ends
+// to first + it so that an end the GPU computed wrong cannot lengthen
+// them. box_reduce_ps's f is the scene scale, at most 32768 texels over the
+// GS frame's 224 rows (146.3: 148 texels with the partial ones);
+// aa_reduce_ps's sums hold 32 bits up to 256 source texels a pixel on each
+// axis (255 * (16 * 256)^2 < 2^32: 258 texels with the partial ones).
+#define BLIT_SPAN_MAX 258
+
 float4 box_reduce_ps(BlitVSOut i) : SV_Target0
 {
     float2 lo = floor(i.pos.xy) * g_param.xy - float2(g_scale.z, 0.0);
     float2 hi = lo + g_param.xy;
     int2 first = max(int2(floor(lo)), int2(0, 0));
-    int2 last = min(int2(ceil(hi)), int2(g_param.zw));
+    int2 last = min(min(int2(ceil(hi)), int2(g_param.zw)), first + BLIT_SPAN_MAX);
     float4 sum = float4(0.0, 0.0, 0.0, 0.0);
     for (int y = first.y; y < last.y; y++) {
         float wy = min(hi.y, float(y + 1)) - max(lo.y, float(y));
@@ -110,7 +119,8 @@ float4 box_reduce_ps(BlitVSOut i) : SV_Target0
 //   g_blend x a, y b, z B, w c   (rows)
 //   g_mode.xy  the source's size in texels (reads stop at it)
 // Integer ratios (2x, 4x) are the exact box mean; others the mean over the
-// 1/16-texel grid. The sums fit 32 bits up to 64 source texels a pixel.
+// 1/16-texel grid. The sums fit 32 bits up to 256 source texels a pixel
+// on each axis (BLIT_SPAN_MAX).
 float4 aa_reduce_ps(BlitVSOut i) : SV_Target0
 {
     uint2 p = uint2(i.pos.xy);
@@ -121,7 +131,7 @@ float4 aa_reduce_ps(BlitVSOut i) : SV_Target0
     uint2 lo = c + p * a + (p * b) / bb;
     uint2 hi = c + (p + 1u) * a + ((p + 1u) * b) / bb;
     uint2 first = lo >> 4;
-    uint2 last = min((hi + 15u) >> 4, g_mode.xy);
+    uint2 last = min(min((hi + 15u) >> 4, g_mode.xy), first + uint(BLIT_SPAN_MAX));
     uint4 sum = uint4(0u, 0u, 0u, 0u);
     for (uint y = first.y; y < last.y; y++) {
         uint wy = min(hi.y, (y + 1u) * 16u) - max(lo.y, y * 16u);
@@ -157,7 +167,8 @@ float depth_resolve_ps(BlitVSOut i) : SV_Depth
     g_msDepth.GetDimensions(w, h, n);
     int2 p = int2(i.pos.xy);
     float d = 1.0;
-    for (uint s = 0u; s < n; s++) {
+    // the port's MSAA has 2, 4 or 8 samples (rd_core.c rd_aa_samples)
+    for (uint s = 0u; s < min(n, 8u); s++) {
         d = min(d, g_msDepth.Load(p, int(s)));
     }
     return d;

@@ -161,9 +161,10 @@ float4 fx_sprite_ps(float4 pos : SV_Position) : SV_Target0
             const GsAxis ay = gs_resample_axis(sv, int(steps & 4095u), lin);
             const uint dx = gs_resample_div(ax), dy = gs_resample_div(ay);
             uint4 sum = uint4(0u, 0u, 0u, 0u);
-            [loop] for (int j = 0; j < ay.count; j++) {
+            const int nx = min(ax.count, GS_RS_TAPS_MAX), ny = min(ay.count, GS_RS_TAPS_MAX);
+            [loop] for (int j = 0; j < ny; j++) {
                 uint4 row = uint4(0u, 0u, 0u, 0u);
-                [loop] for (int i = 0; i < ax.count; i++) {
+                [loop] for (int i = 0; i < nx; i++) {
                     row += fx_texel(int2(ax.first + i, ay.first + j), flags) *
                            gs_resample_weight(ax, i);
                 }
