@@ -849,9 +849,11 @@ static void vkr_pass_area_fits(uint32_t *w, uint32_t *h, VkrTexture *const *colo
                 *w, *h, n ? color[0]->width : 0u, n ? color[0]->height : 0u,
                 depth ? depth->width : 0u, depth ? depth->height : 0u, mw, mh);
     }
+    if (!s_passAreaNoAssert) { /* read outside the assert: the release build keeps it */
 #ifdef ICO_RHI_DEBUG_DEFAULT
-    assert(s_passAreaNoAssert && "render pass larger than an attachment");
+        assert(!"render pass larger than an attachment");
 #endif
+    }
     *w = mw;
     *h = mh;
 }
