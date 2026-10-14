@@ -309,9 +309,15 @@ float3 stripeGainFlat(float j, int sx, float v, float strength, out float3 gain,
 // rd__crt_triad_gain; the mean floored at 0.1): each triad keeps its own
 // pixel's light whether its stripes are 1 or 2 output pixels wide. Only
 // under x curvature (the flat face counts, stripeGainFlat).
+// The reach k0 is the box's pixels a source pixel plus one: at most 65
+// (a box 32768 pixels wide, the largest framebuffer, over the 512 columns of
+// the narrowest grid, rd_crt.c rd__crt_grid), clamped to
+// CRT_TRIAD_REACH_MAX so that a reach the GPU computed wrong cannot
+// lengthen the loop.
+#define CRT_TRIAD_REACH_MAX 128
 float3 triadGain(float2 px, int sx, float v, float strength, out float3 top)
 {
-    int k0 = int(ceil(c_box.x * c_src.z)) + 1;
+    int k0 = min(int(ceil(c_box.x * c_src.z)) + 1, CRT_TRIAD_REACH_MAX);
     float3 sum = float3(0.0, 0.0, 0.0);
     float n = 0.0;
     top = float3(0.0, 0.0, 0.0);

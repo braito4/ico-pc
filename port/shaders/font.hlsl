@@ -38,7 +38,7 @@ GS_PS_ATTR GS_PS_OUT font_ps(SpriteVSOut i)
 {
     if ((g_mode.x & DF_DATE) != 0u) {
         if (gs_date_discard(g_mode.x, g_dateSnap.Load(int3(int2(i.pos.xy), 0)))) {
-            discard;
+            GS_DISCARD;
         }
     }
     uint4 col = uint4(floor(i.col + 0.5));
@@ -47,7 +47,7 @@ GS_PS_ATTR GS_PS_OUT font_ps(SpriteVSOut i)
         col = gs_texture_function(uint4(255u, 255u, 255u, a), col, g_mode.x);
     }
     if (gs_alpha_discard(g_mode.z, g_mode.w, col.a)) {
-        discard;
+        GS_DISCARD;
     }
     GS_RETURN(col, i.pos);
 }
@@ -76,7 +76,7 @@ GS_PS_ATTR GS_PS_OUT font_sheet_ps(SpriteVSOut i)
 {
     if ((g_mode.x & DF_DATE) != 0u) {
         if (gs_date_discard(g_mode.x, g_dateSnap.Load(int3(int2(i.pos.xy), 0)))) {
-            discard;
+            GS_DISCARD;
         }
     }
     uint4 col = uint4(floor(i.col + 0.5));
@@ -106,7 +106,7 @@ GS_PS_ATTR GS_PS_OUT font_sheet_ps(SpriteVSOut i)
         col = gs_texture_function(uint4(gm.x, gm.x, gm.x, gm.y), col, g_mode.x);
     }
     if (gs_alpha_discard(g_mode.z, g_mode.w, col.a)) {
-        discard;
+        GS_DISCARD;
     }
     GS_RETURN(col, i.pos);
 }

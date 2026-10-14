@@ -437,9 +437,10 @@ void vu_clip_corners(inout float4 p[VU_CUT_CORNERS], inout uint n, float4 plane)
 {
     float4 q[VU_CUT_CORNERS] = p;
     uint m = 0u;
-    for (uint i = 0u; i < n; i++) {
+    const uint nc = min(n, VU_CUT_CORNERS);
+    for (uint i = 0u; i < nc; i++) {
         float4 a = p[i];
-        float4 b = p[i + 1u < n ? i + 1u : 0u];
+        float4 b = p[i + 1u < nc ? i + 1u : 0u];
         float da = dot(plane, a);
         float db = dot(plane, b);
         if (da >= 0.0 && m < VU_CUT_CORNERS) {
@@ -475,7 +476,7 @@ bool vu_cut_reaches(float4 a, float4 b, float4 c, float4 e)
     vu_clip_corners(p, n, float4(0.0, 1.0, 0.0, -e.w)); // y >= bottom * w
     float lo = 1e30;
     float hi = -1e30;
-    for (uint i = 0u; i < n; i++) {
+    for (uint i = 0u; i < min(n, VU_CUT_CORNERS); i++) {
         // a corner left at w = 0 (z = 0 there too) lies at infinity on its x's side
         float x = p[i].w > 0.0 ? p[i].x / p[i].w : (p[i].x >= 0.0 ? 1e30 : -1e30);
         lo = min(lo, x);
@@ -937,6 +938,20 @@ uint3 vu_strip_of(uint k, bool flagged)
     return uint3(s, e, n >= VU_STRIP_SCAN || m >= VU_STRIP_SCAN ? 1u : 0u);
 }
 
+// The most vertices a strip test walks (vu_strip_of's x .. y): a flagged
+// strip spans at most 2 * VU_STRIP_SCAN + 3 (the scans stop there), a
+// grid's strip is a batch of Mesh3D.stripLen vertices (rd_mesh.h
+// RdVuGridDraw), which VU1's 1024 data quadwords hold at two or three a
+// vertex. The loops stop at vu_strip_end, so a bound the GPU computed
+// wrong cannot run them past VU_STRIP_SPAN_MAX vertices (when x + the
+// span wraps the end is below the start and nothing runs).
+#define VU_STRIP_SPAN_MAX 1024u
+
+uint vu_strip_end(uint3 r)
+{
+    return min(r.y, r.x + VU_STRIP_SPAN_MAX);
+}
+
 // The triangle k-2, k-1, k: what the GS draws of it (vu_triangle_out),
 // without the planes; exact: every corner drawn at its GS position.
 VuVSOut vu_triangle_out_pos(VuVtx a, VuVtx b, VuVtx c, VuVtx me, uint mode, uint rule,
@@ -1138,11 +1153,11 @@ uint4 vu_pixel(VuVSOut i)
 {
     i = vu_pixel_attrs(i);
     if ((g_mode.x & DF_PLANE) != 0u && i.plane < 0.0) {
-        discard;
+        GS_DISCARD;
     }
     if ((g_mode.x & DF_DATE) != 0u) {
         if (gs_date_discard(g_mode.x, g_dateSnap.Load(int3(int2(i.pos.xy), 0)))) {
-            discard;
+            GS_DISCARD;
         }
     }
     uint4 col = uint4(floor(i.col + 0.5));
@@ -1153,7 +1168,7 @@ uint4 vu_pixel(VuVSOut i)
         col = gs_texture_function(t, col, g_mode.x);
     }
     if (gs_alpha_discard(g_mode.z, g_mode.w, col.a)) {
-        discard;
+        GS_DISCARD;
     }
     return col;
 }
@@ -1165,11 +1180,11 @@ uint4 vu_pixel_texa(VuVSOut i)
 {
     i = vu_pixel_attrs(i);
     if ((g_mode.x & DF_PLANE) != 0u && i.plane < 0.0) {
-        discard;
+        GS_DISCARD;
     }
     if ((g_mode.x & DF_DATE) != 0u) {
         if (gs_date_discard(g_mode.x, g_dateSnap.Load(int3(int2(i.pos.xy), 0)))) {
-            discard;
+            GS_DISCARD;
         }
     }
     uint4 col = uint4(floor(i.col + 0.5));
@@ -1181,7 +1196,7 @@ uint4 vu_pixel_texa(VuVSOut i)
         col = gs_texture_function(t, col, g_mode.x);
     }
     if (gs_alpha_discard(g_mode.z, g_mode.w, col.a)) {
-        discard;
+        GS_DISCARD;
     }
     return col;
 }

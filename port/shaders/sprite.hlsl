@@ -207,9 +207,10 @@ bool sprite_above1x(float2 uv, out uint4 t)
     const GsAxis ay = gs_resample_axis(c16.y, sy, true);
     const uint divx = gs_resample_div(ax), divy = gs_resample_div(ay);
     uint4 sum = uint4(0u, 0u, 0u, 0u);
-    [loop] for (int j = 0; j < ay.count; j++) {
+    const int nx = min(ax.count, GS_RS_TAPS_MAX), ny = min(ay.count, GS_RS_TAPS_MAX);
+    [loop] for (int j = 0; j < ny; j++) {
         uint4 row = uint4(0u, 0u, 0u, 0u);
-        [loop] for (int i = 0; i < ax.count; i++) {
+        [loop] for (int i = 0; i < nx; i++) {
             row += gs_texa_load(g_texture, int2(ax.first + i, ay.first + j), size, g_mode.x) *
                    gs_resample_weight(ax, i);
         }
@@ -226,7 +227,7 @@ GS_PS_ATTR GS_PS_OUT sprite_ps(SpriteVSOut i)
     i.uv = st.xy;
     if ((g_mode.x & DF_DATE) != 0u) {
         if (gs_date_discard(g_mode.x, g_dateSnap.Load(int3(int2(i.pos.xy), 0)))) {
-            discard;
+            GS_DISCARD;
         }
     }
     uint4 col = uint4(floor(i.col + 0.5));
@@ -242,7 +243,7 @@ GS_PS_ATTR GS_PS_OUT sprite_ps(SpriteVSOut i)
         col = gs_texture_function(t, col, g_mode.x);
     }
     if (gs_alpha_discard(g_mode.z, g_mode.w, col.a)) {
-        discard;
+        GS_DISCARD;
     }
     GS_RETURN(col, i.pos);
 }
@@ -259,7 +260,7 @@ GS_PS_ATTR GS_PS_OUT sprite_texa_ps(SpriteVSOut i)
     i.uv = st.xy;
     if ((g_mode.x & DF_DATE) != 0u) {
         if (gs_date_discard(g_mode.x, g_dateSnap.Load(int3(int2(i.pos.xy), 0)))) {
-            discard;
+            GS_DISCARD;
         }
     }
     uint4 col = uint4(floor(i.col + 0.5));
@@ -270,7 +271,7 @@ GS_PS_ATTR GS_PS_OUT sprite_texa_ps(SpriteVSOut i)
         col = gs_texture_function(t, col, g_mode.x);
     }
     if (gs_alpha_discard(g_mode.z, g_mode.w, col.a)) {
-        discard;
+        GS_DISCARD;
     }
     GS_RETURN(col, i.pos);
 }
@@ -283,7 +284,7 @@ uint4 sprite_colour(float4 pos, float4 vcol, float2 uv, float q)
 {
     if ((g_mode.x & DF_DATE) != 0u) {
         if (gs_date_discard(g_mode.x, g_dateSnap.Load(int3(int2(pos.xy), 0)))) {
-            discard;
+            GS_DISCARD;
         }
     }
     uint4 col = uint4(floor(vcol + 0.5));
@@ -355,7 +356,7 @@ GS_PS_ATTR GS_PS_OUT sprite_aa1_ps(SpriteAa1VSOut i)
         col.a = a;
     }
     if (gs_alpha_discard(g_mode.z, g_mode.w, col.a)) {
-        discard;
+        GS_DISCARD;
     }
     GS_RETURN(col, i.pos);
 }
@@ -430,7 +431,7 @@ GS_PS_ATTR GS_PS_OUT sprite_stq_ps(SpriteStqVSOut i)
     sprite_plane_attrs(i.pos, i.p0, i.p1, i.p2, i.p3, i.p4, i.p5, i.col, i.stq);
     uint4 col = sprite_colour(i.pos, i.col, i.stq.xy / i.stq.z, i.stq.z);
     if (gs_alpha_discard(g_mode.z, g_mode.w, col.a)) {
-        discard;
+        GS_DISCARD;
     }
     GS_RETURN(col, i.pos);
 }

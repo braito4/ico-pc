@@ -70,6 +70,10 @@
 #define GS_RS_BOX_MIN32 64      // above 2 texels a destination texel: the box
 #define GS_RS_BSPLINE_MAX32 16  // below half a texel: the B-spline
 #define GS_RS_BOX_MAX32 1024    // the box's widest: 32 texels
+// The most taps an axis has (gs_rs_count): 33, a box of 32 texels starting
+// part-way into a texel; the Load-based loops clamp the count to it, so a
+// count the GPU computed wrong cannot run a loop past it
+#define GS_RS_TAPS_MAX (GS_RS_BOX_MAX32 / 32 + 1)
 #define GS_RS_BSPLINE_DIV 24576 // 6 * 16^3: the B-spline's weights' sum
 
 // The 8x8 Bayer matrix at (x, y) (only the low three bits of each count):
@@ -855,13 +859,26 @@ uint4 gs_dst_pixel(uint4 col, uint4 dst, uint flags)
 #endif
 globallycoherent RasterizerOrderedTexture2D<unorm float4> g_dstRov : register(u0, space3);
 
+// A discard here (GS_DISCARD) marks the fragment instead of ending it:
+// the entry runs on to GS_RETURN, whose critical section stores the pixel
+// it read back unchanged. Vulkan's interlock wants every invocation to run
+// OpBeginInvocationInterlockEXT and OpEndInvocationInterlockEXT exactly
+// once, in that order (SPV_EXT_fragment_shader_interlock, validation
+// rules); DXC ends the section before each OpKill, on paths that never
+// began it. The depth and stencil tests and writes ran before the shader
+// ([earlydepthstencil]) and there is no colour attachment, so the store
+// left unchanged is all a discard did here.
+static bool g_dstKill = false;
+#define GS_DISCARD g_dstKill = true
+
 // UNORM8 holds k / 255 exactly: a load gives k back, a store of k / 255
 // stores k (as blend_int's and fx_sprite_ps's targets)
 void gs_dst_out(uint4 col, float4 pos)
 {
     const uint2 p = uint2(pos.xy);
     const uint4 dst = uint4(floor(g_dstRov[p] * 255.0 + 0.5));
-    g_dstRov[p] = float4(gs_dst_pixel(col, dst, g_mode.x)) * (1.0 / 255.0);
+    const uint4 o = g_dstKill ? dst : gs_dst_pixel(col, dst, g_mode.x);
+    g_dstRov[p] = float4(o) * (1.0 / 255.0);
 }
 
 #define GS_PS_OUT void
@@ -889,11 +906,13 @@ DstOut gs_dst_out(uint4 col)
 #define GS_PS_OUT DstOut
 #define GS_PS_ATTR
 #define GS_RETURN(col, pos) return gs_dst_out(col)
+#define GS_DISCARD discard
 #else
 // every other build of an entry: the fixed-function blend's outputs
 #define GS_PS_OUT DualOut
 #define GS_PS_ATTR
 #define GS_RETURN(col, pos) return gs_dual_out(col, g_mode.x, g_blend.y)
+#define GS_DISCARD discard
 #endif
 
 // ------------------------------------------------------- vertex helpers

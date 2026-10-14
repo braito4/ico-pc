@@ -143,7 +143,7 @@ GS_PS_ATTR GS_PS_OUT fog_lut_ps(FogPSIn i)
         }
         bool pass = ztst == FOG_ZTST_GEQUAL ? ds >= d : (ztst == FOG_ZTST_GREATER ? ds > d : false);
         if (!pass) {
-            discard;
+            GS_DISCARD;
         }
         // a pixel that passed has a Z at most the sprite's (GEQUAL) or below
         // it (GREATER): where the depth step rounds Z up past it (0xFFFFFF
@@ -174,7 +174,7 @@ GS_PS_ATTR GS_PS_OUT fog_lut_ps(FogPSIn i)
         col = gs_texture_function(t, col, g_mode.x);
     }
     if (gs_alpha_discard(g_mode.z, g_mode.w, col.a)) {
-        discard;
+        GS_DISCARD;
     }
     GS_RETURN(col, i.pos);
 }
