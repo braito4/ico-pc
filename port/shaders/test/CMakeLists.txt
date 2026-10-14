@@ -22,7 +22,7 @@ if(TARGET ico_rhi_vk)
     target_include_directories(shaders_pixel_test PRIVATE "${ICO_SHADER_DIR}"
                                "${CMAKE_SOURCE_DIR}/port/render/test")
     target_compile_options(shaders_pixel_test PRIVATE ${ICO_SEMANTIC_OPTIONS} ${ICO_PORT_WARNINGS})
-    target_link_libraries(shaders_pixel_test PRIVATE ico_shaders ico_rhi_vk)
+    target_link_libraries(shaders_pixel_test PRIVATE ico_shaders ico_rhi_vk m) # above1x_ref.c: floor
     ico_copy_sdl3_dll(shaders_pixel_test)
 endif()
 
