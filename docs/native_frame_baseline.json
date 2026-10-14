@@ -1,7 +1,7 @@
 {
  "version": 1,
  "what": "SHA-256 of the RGBA pixels (with the size) of every rd_replay_tool target; hashes only",
- "harness_commit": "be1e0d29147ee0ddee0945bb1e8e139431ab7e2b",
+ "harness_commit": "98f1381862375c90fd70df8ec2c2b38a3fe3c4a5",
  "harness_dirty": false,
  "settings": {
   "original_4x3_1x": {
