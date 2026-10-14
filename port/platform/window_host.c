@@ -3464,6 +3464,15 @@ static void pace(int hz)
     tick = tick < period ? period : (tick > 4 * period ? 4 * period : tick);
     for (;;) {
         now = SDL_GetTicksNS();
+        /* Each simulation step supplies one vsync of PCM. A mandatory
+           replay of every new frame while already late can keep the
+           simulation below real time, repeatedly emptying any audio
+           cushion. Catch up first when a sound device is active; the next
+           on-time present uses the latest frame. No game ticks or PCM are
+           discarded, only intermediate presentations. */
+        if (now >= s_deadline && ico_audio_sdl_active()) {
+            break;
+        }
         /* behind the deadline, or on a renderer slower than a vsync period
            per present (a software driver): one present per new frame, none
            more, so the presents never slow the simulation below the
