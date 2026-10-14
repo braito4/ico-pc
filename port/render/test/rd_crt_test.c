@@ -50,7 +50,8 @@
  *             4:3 run's at the same 3 output pixels a source pixel
  * Without a device, also:
  *   wide grid the grid at 512, 688 (16:9), 1376 (32:9), 2560 (60:9): the
- *             columns cropped (0, 3, 5, 0) and the grid's width, the films'
+ *             columns cropped with Full pixel on (0, 3, 5, 0; none off)
+ *             and the grid's width, the films'
  *             512, and the filter's box of the grid's shape: output pixels
  *             a source pixel the 4:3 run's at 768 and 1152 lines (the 4:3
  *             box itself at 512)
@@ -1252,10 +1253,11 @@ static void checkTopLayer(void)
 
 /* ------------------------------------------------------ the native frame
  *
- * The grid of a frame wider than 512: the native frame's columns its exact
- * width shows, the (gsW - wExact) / 2 past it at each side rounded to whole
- * GS pixels and left out, in a box of the grid's shape, so a source pixel
- * spans as many output pixels as in the 4:3 run; none of this at 512. */
+ * The grid of a frame wider than 512: with Full pixel on the native
+ * frame's columns its exact width shows, the (gsW - wExact) / 2 past it at
+ * each side rounded to whole GS pixels and left out; off, the whole frame;
+ * in a box of the grid's shape, so a source pixel spans as many output
+ * pixels as in the 4:3 run; none of this at 512. */
 static void checkWideGrid(void)
 {
     static const struct {
@@ -1269,18 +1271,25 @@ static void checkWideGrid(void)
         {2560, 384.0f * 60.0f / 9.0f, 0, 2560}, /* 60:9: the frame is the exact width */
     };
 
-    for (size_t i = 0; i < sizeof(kW) / sizeof(kW[0]); i++) {
+    for (size_t j = 0; j < 2 * sizeof(kW) / sizeof(kW[0]); j++) {
+        /* Full pixel on: the exact width; off: the whole frame, its border
+           included (rd__frame_wshown), nothing cropped */
+        const size_t i = j / 2;
+        const int on = (j % 2) == 0;
         if (!rd__init_record_only(kW[i].w, 512)) {
             CHECK(0, "wide grid: no record-only context at %u", kW[i].w);
             return;
         }
+        g_rd.settings.fullPixel = (uint8_t)on;
         g_rd.frameWExact = kW[i].we;
+        const uint32_t wantCrop = on ? kW[i].crop : 0u, wantW = on ? kW[i].vw : kW[i].w;
         uint32_t vw = 0, vh = 0, fw = 0, fh = 0;
         rd__crt_grid(&vw, &vh);
-        CHECK(rd__crt_crop() == kW[i].crop && vw == kW[i].vw && vh == 256,
-              "wide grid %u (exact %.2f): %u columns cropped a side, a %ux%u grid (want %u, "
-              "%ux256)",
-              kW[i].w, (double)kW[i].we, rd__crt_crop(), vw, vh, kW[i].crop, kW[i].vw);
+        CHECK(rd__crt_crop() == wantCrop && vw == wantW && vh == 256,
+              "wide grid %u (exact %.2f, full pixel %s): %u columns cropped a side, a %ux%u grid "
+              "(want %u, %ux256)",
+              kW[i].w, (double)kW[i].we, on ? "on" : "off", rd__crt_crop(), vw, vh, wantCrop,
+              wantW);
         /* the films keep the 4:3 tube whatever the frame's width */
         rd__crt_film_grid(448, &fw, &fh);
         CHECK(fw == 512 && fh == 224, "wide grid %u: the films' grid %ux%u (want 512x224)", kW[i].w,

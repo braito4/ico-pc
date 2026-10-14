@@ -1235,11 +1235,12 @@ void rd__msaa_free(void);
 /* The filter's source grid: the PS2 picture's pixels, vw across and vh
  * lines (DISPLAY's, 512 with full_height); the overlay's layer is vw x gsH
  * (the frame's lines).  vw is the native frame's width less rd__crt_crop
- * columns at each side: the columns of its exact width (rd__frame_wexact)
- * in whole GS pixels, 512 at 4:3.  rd__crt_box: the filter's box in an
+ * columns at each side: the columns the presenter shows (rd__frame_wshown:
+ * the exact width with Full pixel on, the whole frame off) in whole GS
+ * pixels, 512 at 4:3.  rd__crt_box: the filter's box in an
  * outW x outH output, of the grid's shape vw / 384 (the 4:3 box at 512),
- * so a source pixel spans as many output pixels as at 4:3 (the box of the
- * exact width, rd_present.c, differs from it by less than a column). */
+ * so a source pixel spans as many output pixels as at 4:3 (the present's
+ * box, rd_present.c outputBox, differs from it by less than a column). */
 void rd__crt_grid(uint32_t *vw, uint32_t *vh);
 uint32_t rd__crt_crop(void);
 void rd__crt_box(uint32_t outW, uint32_t outH, RhiRect *box);
@@ -1783,13 +1784,20 @@ uint32_t rd__reduction_crop(uint32_t gsH);
 /* The widest aspect the presenter shows is the native frame's,
  * ICO_FRAME_ASPECT_MAX (port/include/ico_frame.h, included above). */
 /* The frame's exact width in GS pixels, the columns the presenter shows
- * (ico_frame.h IcoFrame.wExact): exactly 512 when the scene is 512 wide (the
- * Original integer box, no crop); else the last replayed frame's own
- * (RdFrame.wExact), or 384 times the display aspect (its camera's, else
- * the aspect option) for a frame without one; at most gsW.  The
- * present box has the aspect wExact / 384, and the source rectangle drops
- * (gsW - wExact) / 2 GS pixels at each side (rd_present.c). */
+ * with Full pixel on (ico_frame.h IcoFrame.wExact): exactly 512 when the
+ * scene is 512 wide (the Original integer box, no crop); else the last
+ * replayed frame's own (RdFrame.wExact), or 384 times the display aspect
+ * (its camera's, else the aspect option) for a frame without one; at most
+ * gsW.  With Full pixel on the present box has the aspect wExact / 384,
+ * and the source rectangle drops (gsW - wExact) / 2 GS pixels at each side
+ * (rd_present.c). */
 float rd__frame_wexact(void);
+/* The frame's columns the presenter shows: its exact width with Full pixel
+ * on (rd__frame_wexact); with it off the whole native frame, gsW (512 at
+ * 4:3), so the reduction's border at the frame's edges is in the picture,
+ * as on the PS2.  The present box (rd_present.c outputBox), the UI box,
+ * the deferred text and the CRT grid (rd_crt.c rd__crt_crop) all take it. */
+float rd__frame_wshown(void);
 /* g_rd.settings -> g_rd.sceneSx/Sy, workScale,
  * outAspect, filterUpgrade, fullHeight (and the swapchain's vsync).  True
  * when a target scale changed (the caller recreates the named targets). */

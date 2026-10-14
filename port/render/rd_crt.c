@@ -9,9 +9,10 @@
  * The filter works on the source grid: the PS2 picture's pixels, 512
  * across at 4:3, and DISPLAY's lines (the PS2's field lines; 512 with
  * full_height).  On a wider frame the grid is the native frame's columns
- * that the picture shows: its exact width (rd__frame_wexact) in whole GS
- * pixels, the (gsW - wExact) / 2 columns past it at each side, rounded,
- * left out (rd__crt_crop; the box blit crops the same columns unrounded),
+ * that the picture shows (rd__frame_wshown): with Full pixel off the whole
+ * frame, its border included; on, its exact width in whole GS pixels, the
+ * (gsW - wExact) / 2 columns past it at each side, rounded, left out
+ * (rd__crt_crop; the box blit crops the same columns unrounded),
  * so a phosphor triad covers one of the picture's pixels at every aspect,
  * in a box of the grid's shape (rd__crt_box: a source pixel as many output
  * pixels across as at 4:3), and the mirror flips it about the native
@@ -348,12 +349,13 @@ float rd__crt_beam(float c, float d, float beamMin, float beamMax)
 
 uint32_t rd__crt_crop(void)
 {
-    /* (gsW - wExact) / 2 rounded to whole GS pixels; none at 512 (4:3) */
+    /* (gsW - wShown) / 2 rounded to whole GS pixels; none at 512 (4:3)
+       and with Full pixel off (the whole frame: rd__frame_wshown) */
     const uint32_t gw = g_rd.gsW ? g_rd.gsW : ICO_FRAME_BASE_W;
     if (gw == ICO_FRAME_BASE_W) {
         return 0;
     }
-    const float we = rd__frame_wexact();
+    const float we = rd__frame_wshown();
     if (!(we < (float)gw)) {
         return 0;
     }

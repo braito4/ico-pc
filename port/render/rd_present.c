@@ -7,10 +7,14 @@
  * horizontally.  Two blits:
  *   1. DISPLAY -> lines target (W x H), nearest: exact line doubling;
  *   2. lines target -> the box of the output, bilinear, black outside: the
- *      frame's exact width wExact (rd__frame_wexact; the box's aspect
- *      wExact / 384), the (W - wExact) / 2 columns past it at each side
- *      left out of the source rectangle (W a multiple of 16 overshoots
- *      512 k by less than 8 pixels a side; none at 4:3).
+ *      frame's shown width (rd__frame_wshown; the box's aspect
+ *      wShown / 384).  With Full pixel off that is the whole frame, W:
+ *      the PS2's picture with the reduction's black border on all four
+ *      sides, at the frame's own shape (a few rows of letterbox where W, a
+ *      multiple of 16, overshoots the aspect's 512 k).  With it on, the
+ *      exact width wExact (rd__frame_wexact), the (W - wExact) / 2 columns
+ *      past it at each side left out of the source rectangle (less than
+ *      8 pixels a side; none at 4:3 or 48:9).
  * The output is the swapchain backbuffer with a window, or a headless RGBA8
  * texture of RdSettings.outputWidth x outputHeight (tests, the replay tool;
  * none when either is 0).
@@ -165,12 +169,35 @@ float rd__frame_wexact(void)
     return wexactFor(g_rd.frameAspect > 0.0f ? g_rd.frameAspect : g_rd.outAspect);
 }
 
-/* step 2's box in an outW x outH output: the frame's exact width over its
- * height, wExact / 384 (4:3 exactly at 512) */
+float rd__frame_wshown(void)
+{
+    if (g_rd.settings.fullPixel) {
+        return rd__frame_wexact();
+    }
+    return (float)(g_rd.gsW ? g_rd.gsW : ICO_FRAME_BASE_W);
+}
+
+/* step 2's box in an outW x outH output: the frame's shown width over its
+ * height, wShown / 384 (rd__frame_wshown; 4:3 exactly at 512) */
 static void outputBox(uint32_t outW, uint32_t outH, RhiRect *box)
 {
-    const float we = rd__frame_wexact();
-    rd__present_box(outW, outH, we == (float)ICO_FRAME_BASE_W ? RD_ASPECT_43 : we / 384.0f, box);
+    const float ws = rd__frame_wshown();
+    rd__present_box(outW, outH, ws == (float)ICO_FRAME_BASE_W ? RD_ASPECT_43 : ws / 384.0f, box);
+}
+
+/* rd__apply_display's view of outputBox, from the options: the box of the
+ * aspect's exact width, or, with Full pixel off and a frame wider than
+ * that width, the whole frame's (gsW / 384); *shown the columns it shows */
+static void optionsBox(const RdSettings *st, float aspect, RhiRect *b, float *shown)
+{
+    const float gw = (float)g_rd.gsW, we = wexactFor(aspect);
+    if (!st->fullPixel && we < gw) {
+        rd__present_box(st->outputWidth, st->outputHeight, gw / 384.0f, b);
+        *shown = gw;
+    } else {
+        rd__present_box(st->outputWidth, st->outputHeight, aspect, b);
+        *shown = we;
+    }
 }
 
 /* the UI box's left edge and width in a presentation box, exactly: the
@@ -214,9 +241,10 @@ void rd__ui_box(uint32_t outW, uint32_t outH, RhiRect *box)
 }
 
 /* The texels of a source sw wide that step 2 leaves out at each side: the
- * frame's columns past its exact width, (gsW - wExact) / 2 GS pixels at
+ * frame's columns past its shown width, (gsW - wShown) / 2 GS pixels at
  * sw / gsW texels each (the CRT filter crops the same columns rounded to
- * whole GS pixels: rd_crt.c rd__crt_grid).  0 at 512 (4:3).  disp:
+ * whole GS pixels: rd_crt.c rd__crt_grid).  0 at 512 (4:3) and with Full
+ * pixel off, which shows the whole frame (rd__frame_wshown).  disp:
  * DISPLAY, of which the source is a copy as wide (sw texels); a Full pixel
  * DISPLAY (ox) holds the exact width and its guard texels, which are left
  * out (RD_FULL_PIXEL_GUARD each side, rd__target_scale_of). */
@@ -226,7 +254,7 @@ static float sourceCrop(const RdTargetRec *disp, uint32_t sw)
         return (float)RD_FULL_PIXEL_GUARD * (float)sw / (float)disp->tw;
     }
     const uint32_t gw = g_rd.gsW ? g_rd.gsW : ICO_FRAME_BASE_W;
-    const float we = rd__frame_wexact();
+    const float we = rd__frame_wshown();
     /* Full pixel (frameCropWe) where DISPLAY is not cropped (no ox:
      * rd__target_scale_of crops a scaled target only): nothing is left out
      * but what a narrower frame than the targets were made for leaves (none
@@ -273,11 +301,14 @@ bool rd__apply_display(void)
         /* "window": the presentation box, one texel an output pixel.  Only
          * with the Enhanced flag, so a zeroed RdSettings (the tests', the
          * replay tool's default) stays the GS size; the host sends scale 1
-         * for the Original rows.  The box shows the frame's exact width, so
-         * the texture is gsW / wExact of the box across (1 at 4:3); the
-         * box keeps the PS2's pixel shape (7:6 at 448 lines) */
+         * for the Original rows.  The box shows the frame's shown width
+         * (optionsBox: the whole frame with Full pixel off, the exact width
+         * on), so the texture is gsW / shown of the box across (1 at 4:3
+         * and with Full pixel off); the box keeps the PS2's pixel shape
+         * (7:6 at 448 lines) */
         RhiRect b;
-        rd__present_box(st->outputWidth, st->outputHeight, aspect, &b);
+        float shown;
+        optionsBox(st, aspect, &b, &shown);
         const float we = wexactFor(aspect);
         if (st->fullPixel && we < gw) {
             /* the frame's width at the box's scale: b.w / we texels a GS
@@ -292,11 +323,12 @@ bool rd__apply_display(void)
             w = (float)((double)gw * k);
             cropWe = we;
         } else {
-            w = we == gw ? (float)b.w : (float)b.w * gw / we;
-            /* a whole texel count: the box's width over the exact width is a
-             * fraction of a texel off at 16:9 (1934.99..), and the presenter
-             * snaps its source window to whole texels only when the scene's
-             * density is the box's (snapWindow) */
+            /* Full pixel off: the box shows the whole frame (optionsBox, the
+             * frame's own shape gsW / 384 where it is wider than the
+             * aspect's exact width), one texel an output pixel: w is the
+             * box's width.  On, where the frame is its exact width (4:3,
+             * 48:9), the same */
+            w = shown == gw ? (float)b.w : (float)b.w * gw / shown;
             w = floorf(w + 0.5f);
         }
         h = (float)b.h;
@@ -319,13 +351,14 @@ bool rd__apply_display(void)
          * the factor's texels an output pixel both ways is supersampled
          * as it stands (8x at 48:9 on a 3840x2160 display is over 4 texels
          * a pixel each way).  The rule: t = the smaller of the two axes'
-         * texels an output pixel (across: the frame's exact width of w over
+         * texels an output pixel (across: the frame's shown width of w over
          * the box's width; down: DISPLAY's rows, h or h / 2 at half
          * height, over the box's height); the factor applied is
          * ceil(factor / t), at least 1 and at most the factor */
         RhiRect b;
-        rd__present_box(st->outputWidth, st->outputHeight, aspect, &b);
-        const float tx = w * (wexactFor(aspect) / gw) / (float)b.w;
+        float shown;
+        optionsBox(st, aspect, &b, &shown);
+        const float tx = w * (shown / gw) / (float)b.w;
         const float ty = (st->fullHeightScene ? h : h * 0.5f) / (float)b.h;
         perPx = tx < ty ? tx : ty;
         if (perPx > 0.0f) {
@@ -1187,15 +1220,16 @@ static bool textRegion(const TextPending *t, const TextSeg *g, RhiRect *out)
     float y1 = by + (float)(t->sc[3] + 1) * bh / H;
     /* the reduction's crop (rd_post.c postReduction): 2 pixels left and
      * right of the native frame, 8 lines of DISPLAY's H / 2 top and bottom
-     * (2 below 512), which the picture holds black.  The box shows the
-     * frame's exact width we, (W - we) / 2 columns left out at each side
-     * (sourceCrop), so what is left of the 2 columns is 2 less that, none
-     * once the crop passes them (all of them at 4:3).  With full pixel on
-     * the reduction draws the whole frame (rd_replay.c), so there is no
-     * black strip to keep the text out of */
+     * (2 below 512), which the picture holds black.  With full pixel off
+     * the box shows the whole frame (rd__frame_wshown: we is W), so the 2
+     * columns are at the box's sides; a frame shown narrower than W would
+     * leave (W - we) / 2 columns out at each side (sourceCrop), and of the
+     * 2 columns only what that leaves.  With full pixel on the reduction
+     * draws the whole frame (rd_replay.c), so there is no black strip to
+     * keep the text out of */
     if (!g_rd.settings.fullPixel) {
         const float crop = (float)rd__reduction_crop(t->gsH), half = H * 0.5f;
-        const float wf = rd__frame_wexact();
+        const float wf = rd__frame_wshown();
         const float we = wf > 0.0f && wf < W ? wf : W;
         const float edge = fmaxf(0.0f, 2.0f - (W - we) * 0.5f);
         x0 = fmaxf(x0, bx + bw * edge / we);

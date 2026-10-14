@@ -1162,7 +1162,11 @@ int main(int argc, char **argv)
     if (pw && crop) {
         rd__present_box(pw, ph, reqAspect, &want);
         oh = (uint32_t)want.h;
-        ow = (uint32_t)((float)oh * recAspect + 0.5f);
+        /* the recorded picture's box fills that output: its exact width
+         * with Full pixel on, the whole frame at its own shape off
+         * (rd_present.c rd__frame_wshown) */
+        const float shape = s.fullPixel || gw == ICO_FRAME_BASE_W ? recAspect : (float)gw / 384.0f;
+        ow = (uint32_t)((float)oh * shape + 0.5f);
     }
     /* --pass-dump renders the targets with no output, as --target did, and
      * the present in a second context */

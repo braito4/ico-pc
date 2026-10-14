@@ -489,13 +489,25 @@ static void testField(void)
 
 /* the movie's box is the 2D layer's 4:3 box inside the picture's box
  * (rd_present.c rd__ui_box): the 4:3 pillar of a 16:9 picture on a 16:9
- * output, the picture's own 4:3 part when the output is another shape */
+ * output, the picture's own 4:3 part when the output is another shape.
+ * With Full pixel on the picture is the frame's exact width; off, the
+ * whole 688-column frame at its shape (1920 x 1072 at y 4 on 1920 x 1080),
+ * whose 4:3 part the movie takes */
 static void testMovieBox(void)
 {
     const uint32_t gsW = g_rd.gsW;
     const float fw = g_rd.frameWExact, fa = g_rd.frameAspect;
+    const uint8_t fp = g_rd.settings.fullPixel;
     RhiRect a, b;
     g_rd.gsW = 688;
+    g_rd.settings.fullPixel = 0;
+    g_rd.frameWExact = 0.0f;
+    g_rd.frameAspect = 16.0f / 9.0f;
+    rd__ui_box(1920, 1080, &a);
+    CHECK(a.x == 245 && a.y == 4 && a.w == 1429 && a.h == 1072,
+          "movie box: full pixel off: the whole frame's 4:3 part (%d,%d %ux%u)", a.x, a.y, a.w,
+          a.h);
+    g_rd.settings.fullPixel = 1;
     g_rd.frameWExact = 0.0f;
     g_rd.frameAspect = 16.0f / 9.0f;
     rd__ui_box(1920, 1080, &a);
@@ -513,6 +525,7 @@ static void testMovieBox(void)
     g_rd.gsW = gsW;
     g_rd.frameWExact = fw;
     g_rd.frameAspect = fa;
+    g_rd.settings.fullPixel = fp;
 }
 
 /* The film's present draws the overlay (Android's touch controls and the
